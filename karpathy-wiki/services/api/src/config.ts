@@ -64,3 +64,11 @@ export async function loadConfig(): Promise<AppConfig> {
     healthCheck: { ...defaults.healthCheck, ...parsed.healthCheck },
   };
 }
+
+// §12.3-7 配置热加载：重新读取 config.json 并返回新配置。
+// 热加载作用域：llm.model/budget/healthCheck.staleDays 可即时生效（运行时参数）。
+// 需重启生效项：adapter/vaultPath/server（涉及实例重建或端口绑定）。
+// 调用方需自行判断哪些字段可热更新。
+export async function reloadConfig(): Promise<AppConfig> {
+  return loadConfig();
+}

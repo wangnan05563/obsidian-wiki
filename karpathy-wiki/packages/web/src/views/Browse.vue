@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { TreeNode, FileContent } from '../types';
+import { Search } from '@element-plus/icons-vue';
+import type { TreeNode, FileContent, SearchHit } from '../types';
 import RobotAvatar from '../components/RobotAvatar.vue';
 
 const treeData = ref<TreeNode[]>([]);
@@ -10,6 +11,12 @@ const fileContent = ref<FileContent | null>(null);
 const loading = ref(false);
 const editing = ref(false);
 const editBuffer = ref('');
+
+// 搜索状态
+const searchQuery = ref('');
+const searchHits = ref<SearchHit[]>([]);
+const searching = ref(false);
+const showSearchResults = ref(false);
 
 // el-tree 的 props 配置：label 显示名称，children 取子节点
 const treeProps = {
@@ -26,6 +33,54 @@ async function loadTree() {
     treeData.value = data.tree ?? [];
   } catch (err) {
     ElMessage.error('加载目录树失败：' + (err as Error).message);
+  }
+}
+
+// 执行全文检索。GET /api/search?q=keyword
+async function doSearch() {
+  const q = searchQuery.value.trim();
+  if (!q) {
+    showSearchResults.value = false;
+    searchHits.value = [];
+    return;
+  }
+  searching.value = true;
+  showSearchResults.value = true;
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    searchHits.value = data.hits ?? [];
+  } catch (err) {
+    ElMessage.error('搜索失败：' + (err as Error).message);
+    searchHits.value = [];
+  } finally {
+    searching.value = false;
+  }
+}
+
+// 清除搜索，回到目录树视图
+function clearSearch() {
+  searchQuery.value = '';
+  searchHits.value = [];
+  showSearchResults.value = false;
+}
+
+// 点击搜索结果：读取对应文件
+async function handleSearchHit(hit: SearchHit) {
+  currentNode.value = hit.path;
+  editing.value = false;
+  loading.value = true;
+  try {
+    const res = await fetch(`/api/files?path=${encodeURIComponent(hit.path)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    fileContent.value = await res.json();
+    editBuffer.value = fileContent.value?.content ?? '';
+  } catch (err) {
+    ElMessage.error('读取文件失败：' + (err as Error).message);
+    fileContent.value = null;
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -140,29 +195,65 @@ watch(fileContent, () => {
       </div>
 
       <div class="browse-body">
-        <!-- 左侧目录树 -->
+        <!-- 左侧目录树 + 搜索 -->
         <div class="tree-panel">
-          <div class="panel-title">目录</div>
-          <el-tree
-            :data="treeData"
-            :props="treeProps"
-            node-key="path"
-            @node-click="handleNodeClick"
-            :default-expand-all="false"
-            :expand-on-click-node="true"
-            :highlight-current="true"
-          >
-            <template #default="{ data }">
-              <span class="tree-node" :class="{ 'is-file': data.type === 'file' }">
-                <span v-if="data.type === 'dir'">📁</span>
-                <span v-else>📄</span>
-                {{ data.name }}
-              </span>
-            </template>
-          </el-tree>
-          <div v-if="treeData.length === 0" class="tree-empty">
-            知识库还是空的，先去投递资料吧
+          <!-- 搜索框 -->
+          <div class="search-box">
+            <el-input
+              v-model="searchQuery"
+              placeholder="搜索知识库…"
+              size="small"
+              :prefix-icon="Search"
+              clearable
+              @keyup.enter="doSearch"
+              @clear="clearSearch"
+            />
           </div>
+
+          <!-- 搜索结果列表 -->
+          <div v-if="showSearchResults" class="search-results">
+            <div class="search-header">
+              <span class="search-count">{{ searchHits.length }} 条结果</span>
+              <el-button size="small" text @click="clearSearch">返回目录</el-button>
+            </div>
+            <div v-if="searching" class="search-loading">搜索中…</div>
+            <div v-else-if="searchHits.length === 0" class="search-empty">未找到匹配页面</div>
+            <div
+              v-for="hit in searchHits"
+              :key="hit.path"
+              class="search-hit-item"
+              @click="handleSearchHit(hit)"
+            >
+              <div class="hit-title">{{ hit.title }}</div>
+              <div class="hit-path">{{ hit.path }}</div>
+              <div class="hit-snippet">{{ hit.snippet }}</div>
+            </div>
+          </div>
+
+          <!-- 目录树 -->
+          <template v-else>
+            <div class="panel-title">目录</div>
+            <el-tree
+              :data="treeData"
+              :props="treeProps"
+              node-key="path"
+              @node-click="handleNodeClick"
+              :default-expand-all="false"
+              :expand-on-click-node="true"
+              :highlight-current="true"
+            >
+              <template #default="{ data }">
+                <span class="tree-node" :class="{ 'is-file': data.type === 'file' }">
+                  <span v-if="data.type === 'dir'">📁</span>
+                  <span v-else>📄</span>
+                  {{ data.name }}
+                </span>
+              </template>
+            </el-tree>
+            <div v-if="treeData.length === 0" class="tree-empty">
+              知识库还是空的，先去投递资料吧
+            </div>
+          </template>
         </div>
 
         <!-- 右侧内容区 -->
@@ -268,6 +359,76 @@ watch(fileContent, () => {
   padding: 12px;
   background: rgba(255, 255, 255, 0.4);
   border-radius: var(--radius-card);
+}
+
+.search-box {
+  margin-bottom: 10px;
+}
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.search-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0 8px;
+  border-bottom: 1px dashed rgba(74, 59, 71, 0.15);
+  margin-bottom: 6px;
+}
+
+.search-count {
+  font-size: 12px;
+  color: var(--color-text-soft);
+  font-weight: 600;
+}
+
+.search-loading,
+.search-empty {
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-soft);
+  padding: 20px 0;
+}
+
+.search-hit-item {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.search-hit-item:hover {
+  background: var(--color-cyan);
+  transform: translateX(2px);
+}
+
+.hit-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 2px;
+}
+
+.hit-path {
+  font-size: 11px;
+  color: var(--color-text-soft);
+  font-family: 'Courier New', monospace;
+  margin-bottom: 4px;
+}
+
+.hit-snippet {
+  font-size: 11px;
+  color: var(--color-text-soft);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .panel-title {

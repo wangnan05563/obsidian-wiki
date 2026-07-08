@@ -77,4 +77,51 @@ export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapte
       reply.raw.end();
     }
   });
+
+  // §11.2 断点续传：POST /api/compile/resume/:runId
+  // 从中断点恢复编译，SSE 流式返回进度事件（同 /api/compile 格式）
+  app.post<{ Params: { runId: string } }>(
+    '/api/compile/resume/:runId',
+    async (request, reply) => {
+      const { runId } = request.params;
+      // 防路径穿越：只允许 UUID 格式的 runId
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
+        return reply.code(400).send({ error: '无效的 runId' });
+      }
+
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      const send = (event: string, data: unknown) => {
+        reply.raw.write(`event: ${event}\n`);
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      try {
+        await withCompileLock(async () => {
+          for await (const ev of adapter.resumeCompile(runId)) {
+            if (ev.step === 'done') {
+              send('done', ev);
+            } else if (ev.data?.path && ev.data?.title) {
+              send('page', ev);
+            } else {
+              send('progress', ev);
+            }
+          }
+        });
+      } catch (err: unknown) {
+        send('error', {
+          step: 'done',
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        reply.raw.end();
+      }
+    },
+  );
 }

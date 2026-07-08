@@ -5,7 +5,9 @@ import type {
   DoneData,
   IngestPayload,
   ProgressData,
-  TimelineItem
+  TimelineItem,
+  RunSummary,
+  RunLogEntry
 } from '../types';
 
 // 步骤展示名映射：后端用英文 step 标识，前端需要友好中文
@@ -26,8 +28,16 @@ export const useCompileStore = defineStore('compile', () => {
   const isDone = ref(false);
   const errorMessage = ref<string>('');
   const result = ref<DoneData | null>(null);
+  // §11.2 done 事件的 message，用于展示"编译完成"或"缓存命中"等提示
+  const doneMessage = ref<string>('');
   // 保存本次投递的载荷，进度页需要据此发起请求
   const pendingPayload = ref<IngestPayload | null>(null);
+  // §11.2 历史编译任务列表（空状态时展示）
+  const runs = ref<RunSummary[]>([]);
+  const loadingRuns = ref(false);
+  // §12.3-8 日志查看
+  const logEntries = ref<RunLogEntry[]>([]);
+  const loadingLog = ref(false);
 
   // 步骤中文名
   const stepLabel = computed(() => (s: CompileStep | null) =>
@@ -49,6 +59,7 @@ export const useCompileStore = defineStore('compile', () => {
     isDone.value = false;
     errorMessage.value = '';
     result.value = null;
+    doneMessage.value = '';
     pendingPayload.value = null;
   }
 
@@ -72,7 +83,16 @@ export const useCompileStore = defineStore('compile', () => {
         timestamp: Date.now()
       });
     } else if (eventType === 'done') {
-      result.value = data as DoneData;
+      // 后端 done 事件发送的是完整 ProgressEvent：{ step, status, message, data: { path, cached? } }
+      // 从中提取 cached 标识和 message 供前端展示
+      const d = data as { message?: string; data?: { cached?: boolean; path?: string } };
+      result.value = {
+        pages: [],
+        indexUpdated: false,
+        cached: d.data?.cached,
+      };
+      // 缓存命中时 message 存在 errorMessage 上会误导，单独存到 doneMessage
+      doneMessage.value = d.message ?? '';
       isCompiling.value = false;
       isDone.value = true;
       currentStep.value = null;
@@ -84,6 +104,36 @@ export const useCompileStore = defineStore('compile', () => {
     }
   }
 
+  // §11.2 加载历史编译任务列表
+  async function loadRuns() {
+    loadingRuns.value = true;
+    try {
+      const res = await fetch('/api/compile/runs');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      runs.value = data.runs ?? [];
+    } catch {
+      runs.value = [];
+    } finally {
+      loadingRuns.value = false;
+    }
+  }
+
+  // §12.3-8 加载某个 run 的技术日志
+  async function loadLog(runId: string) {
+    loadingLog.value = true;
+    try {
+      const res = await fetch(`/api/compile/runs/${runId}/log`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      logEntries.value = data.entries ?? [];
+    } catch {
+      logEntries.value = [];
+    } finally {
+      loadingLog.value = false;
+    }
+  }
+
   return {
     timeline,
     currentStep,
@@ -91,11 +141,18 @@ export const useCompileStore = defineStore('compile', () => {
     isDone,
     errorMessage,
     result,
+    doneMessage,
     pendingPayload,
     generatedPages,
     stepLabel,
+    runs,
+    loadingRuns,
+    logEntries,
+    loadingLog,
     reset,
     prepareCompile,
-    handleEvent
+    handleEvent,
+    loadRuns,
+    loadLog
   };
 });

@@ -70,7 +70,8 @@ async function sendQuestion(question: string) {
           } else if (eventType === 'refs') {
             store.setRefs(parsed.refs || []);
           } else if (eventType === 'done') {
-            store.finalizeAnswer();
+            // done 事件附带 sessionId + messageIndex，供归档使用
+            store.finalizeAnswer(parsed.sessionId, parsed.messageIndex);
           } else if (eventType === 'error') {
             store.handleError(parsed.message || '问答出错');
             ElMessage.error(parsed.message || '问答出错');
@@ -80,7 +81,7 @@ async function sendQuestion(question: string) {
         }
       }
     }
-    // 流正常结束但未收到 done 事件时，兜底收尾
+    // 流正常结束但未收到 done 事件时，兜底收尾（无 sessionId，不可归档）
     if (store.isLoading && store.streamingAnswer) {
       store.finalizeAnswer();
     }
@@ -113,6 +114,28 @@ function handleKeydown(e: KeyboardEvent) {
 function handleNewSession() {
   store.reset();
   inputQuestion.value = '';
+}
+
+// 归档问答到 Vault。POST /api/query/archive，服务端从会话存储取答案（防篡改）。
+async function archiveMessage(idx: number) {
+  const msg = store.messages[idx];
+  if (!msg || !msg.sessionId || msg.messageIndex === undefined || msg.archived) return;
+  try {
+    const res = await fetch('/api/query/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: msg.sessionId, messageIndex: msg.messageIndex }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    ElMessage.success(`已归档到 ${data.path}`);
+    store.markArchived(idx);
+  } catch (err) {
+    ElMessage.error('归档失败：' + (err as Error).message);
+  }
 }
 
 onBeforeUnmount(() => {
@@ -164,6 +187,17 @@ onBeforeUnmount(() => {
               <div v-if="msg.refs && msg.refs.length > 0" class="msg-refs">
                 <span class="refs-label">引用：</span>
                 <span v-for="r in msg.refs" :key="r" class="ref-chip">[[{{ r }}]]</span>
+              </div>
+              <!-- 归档按钮：仅 assistant 消息且有 sessionId 时显示 -->
+              <div v-if="msg.role === 'assistant' && msg.sessionId" class="msg-actions">
+                <el-button
+                  size="small"
+                  text
+                  :disabled="msg.archived"
+                  @click="archiveMessage(idx)"
+                >
+                  {{ msg.archived ? '已归档' : '归档' }}
+                </el-button>
               </div>
             </div>
           </div>
@@ -369,6 +403,11 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--color-primary-deep);
   font-family: 'Courier New', monospace;
+}
+
+.msg-actions {
+  margin-top: 6px;
+  text-align: right;
 }
 
 .input-bar {

@@ -1036,11 +1036,287 @@ Tauri 打包：用 `bun build --compile` 将 Fastify 后端编译为单 binary�
 1. TRAE CLI Skill stdout 协议 PoC 验证结果落地
 2. 图谱 1000 节点 vis.js benchmark 与降级方案
 3. 响应式小屏图谱视图降级方案
-4. MCP Server 接口详细协议
+4. MCP Server 接口详细协议（✅ 已落地，详见 §12.4）
 5. **【A-7 并发控制】**：多个 compile 请求并发时 `index.md`/`log.md` 追加竞态的处理方案（队列串行化 vs 文件锁 vs 内存缓冲批量写）
 6. **【A-7 部分失败事务性】**：compile 中途失败时已生成页面的回滚策略（标记 `.partial` 待清理 vs Git 回滚 vs 不回滚标记为 draft）
 7. **【A-7 配置热加载边界】**：`config.json` 修改 `budget`/`llm.model`/`adapter` 后是否需重启服务，热加载作用域与时机
 8. **【A-7 harness 运行日志与 log.md 关系】**：`log.md` 是业务日志，harness 自身运行日志（step/token/error）的去向（`.harness/logs/` vs 控制台 vs 合并到 log.md）
+
+### 12.4 §12.3-4 MCP Server 接口详细协议
+
+#### 12.4.1 定位与当前状态
+
+**定位**：MCP（Model Context Protocol）Server 模式原为 §4.4.1 S-1 风险缓解的第 3 备选方案——当 TRAE CLI Skill 的 stdout JSON 行协议不可控时，作为事件流订阅的替代通道。本节给出该模式的完整接口规范。
+
+**当前状态（V1.3 决策后）**：
+- V1.3 用户决策跳过阶段1（TRAE CLI 验证），直接进入阶段2 自研 `@wiki/harness`，`TraeCliAdapter` 移除，主路径改为 `HarnessAdapter` 通过 `import` 直接调用 harness，**无子进程边界、无 stdout 解析需求**。
+- 因此 MCP Server 模式在当前阶段**不实施**，本节仅作为接口规范保留，服务于两类未来场景：
+  1. **场景 A（harness 跨进程复用）**：当 `@wiki/harness` 需被非 Node.js 项目（如 Python/Rust 客户端）或外部 IDE 调用时，将 harness 包装为 MCP Server 暴露。
+  2. **场景 B（TRAE CLI 回归）**：若未来 TRAE CLI 原生支持 MCP Server 模式，桥接 API 切换为 MCP Client 订阅事件，替代 stdout 解析。
+
+**触发条件**：满足以下任一条件时启动本节实施：
+- 出现非 Node.js 客户端需要调用 harness 的需求；
+- TRAE CLI 官方发布 MCP Server 模式且经评估优于 stdout 方案；
+- harness 需要跨主机部署（MCP over SSE 支持远程，stdout 仅本地）。
+
+#### 12.4.2 协议基础
+
+MCP 基于 **JSON-RPC 2.0**，传输层支持两种：
+
+| 传输 | 方向 | 适用场景 | 本项目选用 |
+| --- | --- | --- | --- |
+| stdio | 双向（请求-响应 + 通知） | 本地子进程，桥接 API spawn harness-mcp 进程 | 场景 A/B 默认 |
+| SSE + HTTP POST | Server → Client 推进度，Client → Server 推请求 | 远程跨主机、Web 客户端 | 场景 A 远程扩展 |
+
+**消息类型**：
+- `request`：含 `id`，需响应 `result`/`error`
+- `notification`：无 `id`，单向推送（如进度事件）
+- `response`：对应某 `request` 的结果
+
+#### 12.4.3 三类原语映射
+
+MCP 定义三类原语，harness 业务能力映射如下：
+
+| MCP 原语 | 方向 | harness 映射 | 用途 |
+| --- | --- | --- | --- |
+| `tools` | Client → Server | compile / query / health-check-fix / search | LLM 主动调用的工具 |
+| `resources` | 双向 | Vault 文件 / SCHEMA.md / index.md / log.md / `.harness/state/*` | 客户端按 URI 读取或订阅变更 |
+| `prompts` | Client → Server | compile/query/health-check-fix prompt 模板 | 客户端获取标准 prompt（保证等价性 M-3） |
+
+> 注：`notifications/resources/*` 由 Server 推送，用于文件变更通知（如 compile 完成后 index.md 变更），桥接 API 据此刷新前端缓存。
+
+#### 12.4.4 接口定义
+
+##### 12.4.4.1 工具接口（tools）
+
+**tools/list** — 列出可用工具
+
+```jsonc
+// → Request
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
+
+// ← Response
+{
+  "jsonrpc": "2.0", "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "compile",
+        "description": "编译原始资料为结构化 Markdown 页面",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "rawPath": { "type": "string", "description": "raw/ 下相对路径" }
+          },
+          "required": ["rawPath"]
+        }
+      },
+      {
+        "name": "query",
+        "description": "基于知识库的问答",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "question": { "type": "string" },
+            "sessionId": { "type": "string", "description": "复用会话上下文" }
+          },
+          "required": ["question"]
+        }
+      },
+      {
+        "name": "health_check_fix",
+        "description": "修复孤立页/断链",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "issueType": { "enum": ["broken_link", "orphan_page"] },
+            "target": { "type": ["string", "object"] }
+          },
+          "required": ["issueType", "target"]
+        }
+      },
+      {
+        "name": "search",
+        "description": "全文检索",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "query": { "type": "string" } },
+          "required": ["query"]
+        }
+      }
+    ]
+  }
+}
+```
+
+**tools/call** — 调用工具（流式进度通过 notification 推送）
+
+```jsonc
+// → Request
+{
+  "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+  "params": {
+    "name": "compile",
+    "arguments": { "rawPath": "raw/moe-notes.md" }
+  }
+}
+
+// ← Notification（Server 主动推送，多次）
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/progress",
+  "params": {
+    "progressToken": "compile-run-abc123",   // 与 tools/call 的 _meta.progressToken 对应
+    "step": "read_schema",
+    "status": "done",
+    "ts": 1720412345678
+  }
+}
+
+// ← Response（最终结果）
+{
+  "jsonrpc": "2.0", "id": 2,
+  "result": {
+    "content": [
+      { "type": "text", "text": "编译完成，生成 4 个页面" }
+    ],
+    "isError": false
+  }
+}
+```
+
+> 进度关联机制：Client 在 `tools/call` 的 `_meta.progressToken` 中传入唯一 token，Server 在 `notifications/progress` 中回传相同 token，Client 据此将进度事件路由到对应 SSE 流。
+
+##### 12.4.4.2 资源接口（resources）
+
+**resources/list** — 列出 Vault 资源
+
+```jsonc
+// ← Response
+{
+  "result": {
+    "resources": [
+      { "uri": "vault://schema.md", "name": "SCHEMA", "mimeType": "text/markdown" },
+      { "uri": "vault://index.md", "name": "索引", "mimeType": "text/markdown" },
+      { "uri": "vault://concepts/moe.md", "name": "MoE 概念页", "mimeType": "text/markdown" },
+      { "uri": "harness://state/abc123", "name": "运行状态 abc123", "mimeType": "application/json" }
+    ]
+  }
+}
+```
+
+**resources/read** — 读取资源内容
+
+```jsonc
+// → Request
+{ "method": "resources/read", "params": { "uri": "vault://schema.md" } }
+
+// ← Response
+{
+  "result": {
+    "contents": [
+      { "uri": "vault://schema.md", "mimeType": "text/markdown", "text": "# SCHEMA\n..." }
+    ]
+  }
+}
+```
+
+**resources/subscribe** — 订阅资源变更（compile 完成后 index.md 变更自动推送）
+
+```jsonc
+// → Request
+{ "method": "resources/subscribe", "params": { "uri": "vault://index.md" } }
+
+// ← Notification（资源变更时）
+{
+  "method": "notifications/resources/updated",
+  "params": { "uri": "vault://index.md" }
+}
+```
+
+##### 12.4.4.3 Prompt 模板接口（prompts）
+
+**prompts/list** 与 **prompts/get** 保证客户端获取与 harness 内部 `beforeLoop` 注入完全一致的 prompt（M-3 等价性）。
+
+```jsonc
+// → Request
+{ "method": "prompts/get", "params": { "name": "compile" } }
+
+// ← Response
+{
+  "result": {
+    "description": "compile 工作流 system prompt",
+    "messages": [
+      { "role": "user", "content": { "type": "text", "text": "<prompts/compile.md 内容>" } }
+    ]
+  }
+}
+```
+
+#### 12.4.5 桥接 API 作为 MCP Client 的实现
+
+启用 MCP 模式时，`EngineAdapter` 接口不变，仅替换实现：
+
+```typescript
+// src/engine/mcp-adapter.ts（未来扩展点，当前不实现）
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+export class McpAdapter implements EngineAdapter {
+  private client: Client;
+
+  constructor(private config: { command: string; args?: string[] }) {
+    const transport = new StdioClientTransport({ command, args });
+    this.client = new Client({ name: 'karpathy-wiki-bridge', version: '1.0.0' }, { capabilities: {} });
+    // 连接时完成 initialize 握手 + capabilities 协商
+  }
+
+  async compile(input: CompileInput): AsyncIterable<ProgressEvent> {
+    const token = `compile-${Date.now()}`;
+    // 注册 progressToken → 事件队列
+    // 调用 tools/call，期间消费 notifications/progress 转为 ProgressEvent yield
+    // 收到最终 response 后清理队列
+  }
+
+  async query(input: QueryInput): AsyncIterable<QueryEvent> { /* 同模式 */ }
+  async healthCheckFix(input: FixInput): AsyncIterable<FixEvent> { /* 同模式 */ }
+}
+```
+
+**事件路由**：`notifications/progress.progressToken` 是路由键，McpAdapter 内部维护 `Map<progressToken, AsyncQueue<ProgressEvent>>`，每个 `tools/call` 创建独立队列，桥接 API 从队列消费转 SSE。
+
+#### 12.4.6 与 stdout JSON 行方案对比
+
+| 维度 | stdout JSON 行（§4.4.1 方案1） | MCP Server（本节） |
+| --- | --- | --- |
+| 协议复杂度 | 低（按行 JSON） | 中（JSON-RPC 2.0 + 握手） |
+| 双向通信 | 否（仅 Server→Client） | 是（Client 可调 tools/resources） |
+| 资源订阅 | 否（需轮询） | 是（resources/subscribe） |
+| 跨语言 | 受限（依赖 stdout 编码） | 原生支持（SDK 多语言） |
+| 跨主机 | 否 | 是（SSE 传输） |
+| 依赖 | 零 | `@modelcontextprotocol/sdk` |
+| 当前实施 | 否（V1.3 跳过阶段1） | 否（保留扩展点） |
+
+#### 12.4.7 错误处理与降级
+
+| 错误类型 | MCP 错误码 | 处理策略 |
+| --- | --- | --- |
+| 工具参数校验失败 | -32602 (Invalid params) | 返回 `isError: true` + 错误描述，不重试 |
+| LLM 调用超时 | -32001 (Server error) | harness 内部重试（§3.3.4），仍失败则返回 |
+| 预算耗尽 | -32002 (Server error) | 返回部分结果 + `status: budget_exceeded`（AC-08-8） |
+| 进程崩溃 | 连接断开 | Client 检测 EOF → 转为 SSE error 事件 → 前端提示重试 |
+| 握手失败 | -32603 (Internal error) | Client 不重试，记录日志并降级到 stdout 模式（若可用） |
+
+#### 12.4.8 实施清单（触发时执行）
+
+当 §12.4.1 触发条件满足时，按以下顺序实施：
+
+1. 新增 `services/api/src/engine/mcp-adapter.ts`（实现 `EngineAdapter`）
+2. 新增 `wiki-harness/src/mcp/server.ts`（harness 包装为 MCP Server，复用 `examples/` 中的工具 schema）
+3. `config.json` 新增 `adapter: "mcp"` 选项与 `mcp: { command, args }` 配置
+4. 在 `index.ts` 启动时根据 `adapter` 字段实例化 `McpAdapter`
+5. 端到端验证：compile/query/health-check-fix 三工作流通过 MCP 通道完成
+6. 更新 DELIVERY.md 记录 MCP 适配实施
 
 ---
 

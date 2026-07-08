@@ -10,6 +10,7 @@
     "@wiki/harness": "file:../../../wiki-harness",
     "fastify": "^4.26.0",
     "@fastify/multipart": "^8.1.0",
+    "@fastify/static": "^7.0.0",
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {

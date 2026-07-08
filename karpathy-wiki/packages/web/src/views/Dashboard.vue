@@ -11,6 +11,7 @@ const emit = defineEmits<{
 
 const stats = ref<StatsData | null>(null);
 const loading = ref(false);
+const initializing = ref(false);
 
 // 目录中文名映射
 const DIR_LABELS: Record<string, string> = {
@@ -34,6 +35,25 @@ async function loadStats() {
     ElMessage.error('加载统计失败：' + (err as Error).message);
   } finally {
     loading.value = false;
+  }
+}
+
+// §6.9 演示模式：初始化 Vault 目录结构
+// 调用 POST /api/vault/init 创建标准目录（entities/concepts/comparisons/queries）
+async function initVault() {
+  initializing.value = true;
+  try {
+    const res = await fetch('/api/vault/init', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    ElMessage.success('知识库已初始化，开始投递资料吧');
+    await loadStats();
+  } catch (err) {
+    ElMessage.error('初始化失败：' + (err as Error).message);
+  } finally {
+    initializing.value = false;
   }
 }
 
@@ -134,8 +154,11 @@ onMounted(() => {
     <!-- 空状态引导 -->
     <div v-if="!hasContent && !loading" class="glass-card empty-guide">
       <RobotAvatar :size="80" />
-      <p class="guide-text">知识库还是空的，点击「投递资料」开始构建吧</p>
-      <el-button type="primary" @click="emit('navigate', 'ingest')">立即投递</el-button>
+      <p class="guide-text">知识库还是空的，先初始化目录结构，再投递第一份资料</p>
+      <div class="guide-actions">
+        <el-button type="primary" :loading="initializing" @click="initVault">初始化知识库</el-button>
+        <el-button @click="emit('navigate', 'ingest')">立即投递</el-button>
+      </div>
     </div>
   </div>
 </template>
@@ -327,5 +350,10 @@ onMounted(() => {
   margin: 0;
   color: var(--color-text-soft);
   font-size: 14px;
+}
+
+.guide-actions {
+  display: flex;
+  gap: 12px;
 }
 </style>

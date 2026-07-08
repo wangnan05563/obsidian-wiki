@@ -5,6 +5,7 @@ import type { ToolDefinition, HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
 import type { QueryInput, AnswerChunk } from '../types.js';
+import { searchPages } from '../search-util.js';
 
 // 加载 query prompt 单点存储。与 compile 共用 prompts/ 目录，保证两阶段等价（M-3）。
 async function loadQueryPrompt(): Promise<string> {
@@ -50,51 +51,6 @@ export function createQueryTools(vault: VaultService): ToolDefinition[] {
       },
     },
   ];
-}
-
-// 简单全文搜索：扫描所有页面目录，按关键词匹配标题与正文。
-// 垂直切片阶段用最朴素的 includes 匹配，后续可替换为倒排索引或向量化检索。
-async function searchPages(
-  vault: VaultService,
-  keywords: string,
-): Promise<Array<{ path: string; title: string; snippet: string }>> {
-  const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
-  const terms = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-  const results: Array<{ path: string; title: string; snippet: string }> = [];
-
-  for (const d of pageDirs) {
-    const dirFull = path.join(vault.getVaultPath(), d);
-    let entries: string[] = [];
-    try {
-      entries = await fs.readdir(dirFull);
-    } catch {
-      continue;
-    }
-    for (const f of entries) {
-      if (!f.endsWith('.md')) continue;
-      const rel = `${d}/${f}`;
-      let content = '';
-      try {
-        content = await vault.readFile(rel);
-      } catch {
-        continue;
-      }
-      const lower = content.toLowerCase();
-      // 任一关键词命中即收录，命中数越多排序越靠前（简单的相关性）
-      const hits = terms.filter((t) => lower.includes(t));
-      if (hits.length === 0) continue;
-      const title = f.slice(0, -3);
-      // 摘要取首个关键词出现位置前后 60 字符
-      const firstIdx = lower.indexOf(terms[0]);
-      const start = Math.max(0, firstIdx - 30);
-      const snippet = content.slice(start, start + 120).replace(/\n/g, ' ');
-      results.push({ path: rel, title, snippet });
-    }
-  }
-
-  // 命中数多的优先，同命中数按路径字典序
-  results.sort((a, b) => b.title.localeCompare(a.title));
-  return results.slice(0, 10);
 }
 
 // 从最终答案文本中提取 [[页面名]] 引用，去重后作为 refs 返回。

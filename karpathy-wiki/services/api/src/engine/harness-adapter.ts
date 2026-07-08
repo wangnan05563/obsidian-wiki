@@ -1,10 +1,12 @@
 import type { HarnessConfig } from '@wiki/harness';
 import fs from 'fs/promises';
 import path from 'path';
-import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport } from '../types.js';
+import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { compileWorkflow } from '../workflows/compile-workflow.js';
+import { resumeCompileWorkflow } from '../workflows/compile-workflow.js';
 import { queryWorkflow } from '../workflows/query-workflow.js';
+import { healthCheckFixWorkflow } from '../workflows/health-check-fix-workflow.js';
 
 // HarnessAdapter：阶段2 默认实现。
 // healthCheck 绕过 harness 直接走确定性逻辑（M-2），compile/query 通过工作流调用 harness。
@@ -19,16 +21,46 @@ export class HarnessAdapter implements EngineAdapter {
     this.staleDays = staleDays;
   }
 
+  // §12.3-7 配置热加载：更新运行时可变参数。
+  // model/budget/staleDays 即时生效；provider/baseUrl/apiKey 变更需重启（涉及 LLM 实例重建）。
+  updateConfig(updates: { model?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number }): void {
+    if (updates.model) {
+      this.harnessConfig.llm.model = updates.model;
+    }
+    if (updates.maxSteps || updates.tokenBudget) {
+      // harnessConfig.budget 在类型上是可选的，热加载前需保证字段存在
+      const prev = this.harnessConfig.budget ?? { maxSteps: 20, tokenBudget: 50000 };
+      this.harnessConfig.budget = {
+        maxSteps: updates.maxSteps ?? prev.maxSteps,
+        tokenBudget: updates.tokenBudget ?? prev.tokenBudget,
+      };
+    }
+    if (updates.staleDays) {
+      this.staleDays = updates.staleDays;
+    }
+  }
+
   async *compile(input: CompileInput): AsyncIterable<ProgressEvent> {
     // 工具集与 hooks 由 compileWorkflow 内部注入，确保每次编译持有最新 vault 引用
     yield* compileWorkflow(this.harnessConfig, this.vault, input);
+  }
+
+  // §11.2 断点续传：从中断点恢复编译，复用相同的 harness 事件桥接逻辑
+  async *resumeCompile(runId: string): AsyncIterable<ProgressEvent> {
+    yield* resumeCompileWorkflow(this.harnessConfig, this.vault, runId);
   }
 
   async *query(input: QueryInput): AsyncIterable<AnswerChunk> {
     yield* queryWorkflow(this.harnessConfig, this.vault, input);
   }
 
+  // §4.6 一键修复：通过 LLM 修复断链/孤立页面，SSE 流式返回修复进度
+  async *healthCheckFix(input: FixInput): AsyncIterable<FixProgressEvent> {
+    yield* healthCheckFixWorkflow(this.harnessConfig, this.vault, input);
+  }
+
   // 纯确定性逻辑，不调 LLM。检测孤立页/断链/过期页（4.6 health-check 工作流）。
+  // §11.2 并发体检：断链扫描与过期检测并行化，提升大规模知识库体检速度。
   async healthCheck(): Promise<HealthReport> {
     const graph = await this.vault.buildLinkGraph();
 
@@ -44,15 +76,17 @@ export class HarnessAdapter implements EngineAdapter {
       const base = path.basename(rel, '.md');
       nameToPath.set(base, rel);
     }
-    const brokenLinks: Array<{ from: string; to: string }> = [];
+
+    // §11.2：4 个目录并行扫描断链，Promise.all 等待全部完成
     const wikilinkRe = /\[\[([^\]]+)\]\]/g;
-    for (const d of pageDirs) {
+    const scanDir = async (d: string): Promise<Array<{ from: string; to: string }>> => {
+      const results: Array<{ from: string; to: string }> = [];
       const dirFull = path.join(this.vault.getVaultPath(), d);
       let entries: string[] = [];
       try {
         entries = await fs.readdir(dirFull);
       } catch {
-        continue;
+        return results;
       }
       for (const f of entries) {
         if (!f.endsWith('.md')) continue;
@@ -64,28 +98,37 @@ export class HarnessAdapter implements EngineAdapter {
           continue;
         }
         let m: RegExpExecArray | null;
+        wikilinkRe.lastIndex = 0; // 复用正则需重置 lastIndex
         while ((m = wikilinkRe.exec(content)) !== null) {
           const target = m[1].trim();
           if (!nameToPath.has(target)) {
-            brokenLinks.push({ from: fromRel, to: target });
+            results.push({ from: fromRel, to: target });
           }
         }
       }
-    }
+      return results;
+    };
 
-    // 过期页面：frontmatter.updated 距今超过 staleDays
-    const stale: string[] = [];
+    // 过期检测也并行：每个节点独立 getPageUpdated
     const now = Date.now();
     const thresholdMs = this.staleDays * 24 * 60 * 60 * 1000;
-    for (const node of graph.nodes) {
+    const checkStale = async (node: string): Promise<string | null> => {
       const updated = await this.vault.getPageUpdated(node);
-      if (!updated) continue;
+      if (!updated) return null;
       const ts = Date.parse(updated);
-      if (Number.isNaN(ts)) continue;
-      if (now - ts > thresholdMs) {
-        stale.push(node);
-      }
-    }
+      if (Number.isNaN(ts)) return null;
+      if (now - ts > thresholdMs) return node;
+      return null;
+    };
+
+    // 两类检测并行执行
+    const [brokenByDir, staleResults] = await Promise.all([
+      Promise.all(pageDirs.map(scanDir)),
+      Promise.all(graph.nodes.map(checkStale)),
+    ]);
+
+    const brokenLinks = brokenByDir.flat();
+    const stale = staleResults.filter((n): n is string => n !== null);
 
     return { orphans, brokenLinks, stale };
   }

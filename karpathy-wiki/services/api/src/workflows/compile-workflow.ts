@@ -174,8 +174,30 @@ ${schema}
 原始资料类型: ${input.type}
 `;
 
-  // 4. 事件队列：afterStep hook 推入，AsyncGenerator yield 出去。
-  //    finished 标志避免 generator 提前退出时 harness 仍在写队列导致事件丢失。
+  // 5. 桥接 harness 到事件流：compile 和 resume 共用此逻辑（§11.2）
+  yield* bridgeHarnessToEvents(
+    harnessConfig,
+    vault,
+    (harness) => harness.run({ task, context: { rawPath, schema } }),
+    rawPath,
+    cache,
+    rawContent,
+  );
+}
+
+// 通用 harness 事件桥接：构造 afterStep hook → 事件队列 → AsyncGenerator yield。
+// compileWorkflow 传入 harness.run，resumeCompileWorkflow 传入 harness.resume，
+// 两者共享相同的事件推送、draft 标记、日志双写逻辑，避免闭包重建代码重复。
+async function* bridgeHarnessToEvents(
+  harnessConfig: HarnessConfig,
+  vault: VaultService,
+  runFn: (harness: Harness) => Promise<import('@wiki/harness').RunResult>,
+  rawPath: string,
+  cache: CompileCache | null,
+  rawContent: string | null,
+): AsyncIterable<ProgressEvent> {
+  // 事件队列：afterStep hook 推入，AsyncGenerator yield 出去。
+  // finished 标志避免 generator 提前退出时 harness 仍在写队列导致事件丢失。
   const queue: ProgressEvent[] = [];
   let resolveWaiter: (() => void) | null = null;
   let finished = false;
@@ -194,8 +216,8 @@ ${schema}
     }
   };
 
-  // 5. 构造 harness，注入 afterStep hook。
-  //    hook 根据工具调用名映射为前端可读步骤，推入事件队列，同时写入运行日志。
+  // 构造 harness，注入 afterStep hook。
+  // hook 根据工具调用名映射为前端可读步骤，推入事件队列，同时写入运行日志。
   const harness = new Harness({
     ...harnessConfig,
     tools: createCompileTools(vault),
@@ -240,9 +262,8 @@ ${schema}
     },
   });
 
-  // 6. 启动 harness.run（非阻塞），完成后 push done 事件 + 记录终态日志
-  const runPromise = harness
-    .run({ task, context: { rawPath, schema } })
+  // 启动 harness（run 或 resume），完成后 push done 事件 + 记录终态日志
+  const runPromise = runFn(harness)
     .then(async (result) => {
       const isError = result.status === 'failed';
       pushEvent({
@@ -251,14 +272,14 @@ ${schema}
         message: isError
           ? `编译失败: ${result.finalContent || '未知错误'}`
           : `编译完成，共 ${result.step} 步`,
-        data: { path: rawPath },
+        data: { path: rawPath || undefined },
       });
       // §12.3-6：失败时给已生成页面标记 draft，保留半成品供用户决策
       if (isError && generatedPages.length > 0) {
         await markPagesAsDraft(vault, generatedPages);
       }
-      // §11.2：编译成功后记录缓存，下次相同内容跳过
-      if (!isError) {
+      // §11.2：编译成功后记录缓存，下次相同内容跳过（resume 时不记录，避免覆盖）
+      if (!isError && cache && rawContent) {
         await cache.record(rawContent, rawPath);
       }
       await logger.log({
@@ -303,7 +324,7 @@ ${schema}
       }
     });
 
-  // 7. yield 队列中的事件，直到 finished 且队列空
+  // yield 队列中的事件，直到 finished 且队列空
   while (!finished || queue.length > 0) {
     if (queue.length === 0) {
       await new Promise<void>((resolve) => {
@@ -317,4 +338,26 @@ ${schema}
   }
 
   await runPromise;
+}
+
+// §11.2 断点续传：从中断点恢复编译。
+// harness.resume 从 FileStateStore 加载 messages/step/tokenUsed，继续未完成的循环。
+// afterStep hook 重新绑定——generatedPages 从空开始（之前的页面已在 vault 中），
+// 事件队列重新创建，logger 以 append 模式继续写入同一个 {runId}.log 文件。
+// 不记录缓存（rawContent 无法从 state 恢复），不重新存档原始资料。
+export async function* resumeCompileWorkflow(
+  harnessConfig: HarnessConfig,
+  vault: VaultService,
+  runId: string,
+): AsyncIterable<ProgressEvent> {
+  yield { step: 'archive', status: 'done', message: `正在恢复编译任务: ${runId.slice(0, 8)}` };
+
+  yield* bridgeHarnessToEvents(
+    harnessConfig,
+    vault,
+    (harness) => harness.resume(runId),
+    '',
+    null,
+    null,
+  );
 }

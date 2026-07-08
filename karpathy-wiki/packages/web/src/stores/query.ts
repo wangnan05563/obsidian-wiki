@@ -25,12 +25,15 @@ export const useQueryStore = defineStore('query', () => {
   }
 
   // 处理 SSE done 事件：把流式缓冲落为一条 assistant 消息
-  function finalizeAnswer() {
+  // sessionId/messageIndex 由后端 done 事件附带，供归档使用
+  function finalizeAnswer(sessionId?: string, messageIndex?: number) {
     if (streamingAnswer.value) {
       messages.value.push({
         role: 'assistant',
         content: streamingAnswer.value,
         refs: currentRefs.value.length > 0 ? [...currentRefs.value] : undefined,
+        sessionId,
+        messageIndex,
       });
     }
     streamingAnswer.value = '';
@@ -71,6 +74,13 @@ export const useQueryStore = defineStore('query', () => {
     isLoading.value = false;
   }
 
+  // 标记某条消息已归档
+  function markArchived(index: number) {
+    if (messages.value[index]) {
+      messages.value[index].archived = true;
+    }
+  }
+
   return {
     messages,
     streamingAnswer,
@@ -83,5 +93,6 @@ export const useQueryStore = defineStore('query', () => {
     submitQuestion,
     handleError,
     reset,
+    markArchived,
   };
 });
