@@ -1,73 +1,73 @@
 @echo off
-chcp 65001 >nul 2>&1
-REM è„šæœ¬ä½äºŽ scripts/ å­ç›®å½•ï¼Œåˆ‡å›žé¡¹ç›®æ ¹ç›®å½•
+chcp 936 >nul 2>&1
+REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬ÇÐ»ØÏîÄ¿¸ùÄ¿Â¼
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo   åœæ­¢ Karpathy-Wiki æœåŠ¡...
+echo   Í£Ö¹ Karpathy-Wiki ·þÎñ...
 echo ========================================
 
-REM [1/3] åœæ­¢åŽç«¯ APIï¼ˆç«¯å£ 3000ï¼‰
-echo [1/3] åœæ­¢åŽç«¯ API...
+REM [1/3] Í£Ö¹ºó¶Ë API£¨¶Ë¿Ú 3000£©
+echo [1/3] Í£Ö¹ºó¶Ë API...
 
 set API_KILLED=0
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000.*LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
     if not errorlevel 1 (
-        echo   [OK] åŽç«¯ API å·²åœæ­¢ (PID %%a)
+        echo   [OK] ºó¶Ë API ÒÑÍ£Ö¹ (PID %%a)
         set API_KILLED=1
     )
 )
 if "!API_KILLED!"=="0" (
-    echo   [è·³è¿‡] ç«¯å£ 3000 æ— è¿›ç¨‹è¿è¡Œ
+    echo   [Ìø¹ý] ¶Ë¿Ú 3000 ÎÞ½ø³ÌÔËÐÐ
 )
 
-REM [2/3] åœæ­¢å‰ç«¯ Webï¼ˆç«¯å£ 5173ï¼‰
-echo [2/3] åœæ­¢å‰ç«¯ Web...
+REM [2/3] Í£Ö¹Ç°¶Ë Web£¨¶Ë¿Ú 5173£©
+echo [2/3] Í£Ö¹Ç°¶Ë Web...
 
 set WEB_KILLED=0
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173.*LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
     if not errorlevel 1 (
-        echo   [OK] å‰ç«¯ Web å·²åœæ­¢ (PID %%a)
+        echo   [OK] Ç°¶Ë Web ÒÑÍ£Ö¹ (PID %%a)
         set WEB_KILLED=1
     )
 )
 if "!WEB_KILLED!"=="0" (
-    echo   [è·³è¿‡] ç«¯å£ 5173 æ— è¿›ç¨‹è¿è¡Œ
+    echo   [Ìø¹ý] ¶Ë¿Ú 5173 ÎÞ½ø³ÌÔËÐÐ
 )
 
-REM æ€æŽ‰æ®‹ç•™çš„ node è¿›ç¨‹ï¼ˆä»…æ€ç”±æœ¬é¡¹ç›®å¯åŠ¨çš„ï¼Œé€šè¿‡çª—å£æ ‡é¢˜åŒ¹é…ï¼‰
+REM É±µô²ÐÁôµÄ node ½ø³Ì£¨½öÉ±ÓÉ±¾ÏîÄ¿Æô¶¯µÄ£¬Í¨¹ý´°¿Ú±êÌâÆ¥Åä£©
 taskkill /F /FI "WINDOWTITLE eq KarpathyWiki-API*" >nul 2>&1
 taskkill /F /FI "WINDOWTITLE eq KarpathyWiki-Web*" >nul 2>&1
 
 timeout /t 1 >nul 2>&1
 
-REM [3/3] éªŒè¯ç«¯å£å·²é‡Šæ”¾
-echo [3/3] éªŒè¯åœæ­¢ç»“æžœ...
+REM [3/3] ÑéÖ¤¶Ë¿ÚÒÑÊÍ·Å
+echo [3/3] ÑéÖ¤Í£Ö¹½á¹û...
 
 set ALL_FREE=1
 netstat -aon | findstr ":3000.*LISTENING" >nul 2>&1
 if not errorlevel 1 (
     set ALL_FREE=0
-    echo   [è­¦å‘Š] ç«¯å£ 3000 ä»è¢«å ç”¨
+    echo   [¾¯¸æ] ¶Ë¿Ú 3000 ÈÔ±»Õ¼ÓÃ
 )
 netstat -aon | findstr ":5173.*LISTENING" >nul 2>&1
 if not errorlevel 1 (
     set ALL_FREE=0
-    echo   [è­¦å‘Š] ç«¯å£ 5173 ä»è¢«å ç”¨
+    echo   [¾¯¸æ] ¶Ë¿Ú 5173 ÈÔ±»Õ¼ÓÃ
 )
 
 if "!ALL_FREE!"=="1" (
-    echo   [OK] æ‰€æœ‰æœåŠ¡å·²åœæ­¢
+    echo   [OK] ËùÓÐ·þÎñÒÑÍ£Ö¹
 ) else (
-    echo   [è­¦å‘Š] éƒ¨åˆ†è¿›ç¨‹å¯èƒ½ä»åœ¨è¿è¡Œï¼Œè¯·æ£€æŸ¥ä»»åŠ¡ç®¡ç†å™¨
+    echo   [¾¯¸æ] ²¿·Ö½ø³Ì¿ÉÄÜÈÔÔÚÔËÐÐ£¬Çë¼ì²éÈÎÎñ¹ÜÀíÆ÷
 )
 
 echo.
 echo ========================================
-echo   æœåŠ¡å·²åœæ­¢
+echo   ·þÎñÒÑÍ£Ö¹
 echo ========================================
 echo.
 timeout /t 2 >nul 2>&1

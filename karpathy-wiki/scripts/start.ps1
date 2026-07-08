@@ -1,26 +1,26 @@
-ï»¿# Karpathy-AI + Obsidian çŸ¥è¯†åº“å¯åŠ¨è„šæœ¬
-# åŠ è½½ .env ç¯å¢ƒå˜é‡ â†’ å¯åŠ¨åç«¯ API + å‰ç«¯ Web
-# ç”¨æ³•ï¼š.\scripts\start.ps1
-# åœæ­¢ï¼šå…³é—­å¼¹å‡ºçš„ä¸¤ä¸ªç»ˆç«¯çª—å£ï¼Œæˆ–åœ¨çª—å£å†…æŒ‰ Ctrl+C
+# Karpathy-AI + Obsidian ÖªÊ¶¿âÆô¶¯½Å±¾
+# ¼ÓÔØ .env »·¾³±äÁ¿ ¡ú Æô¶¯ºó¶Ë API + Ç°¶Ë Web
+# ÓÃ·¨£º.\scripts\start.ps1
+# Í£Ö¹£º¹Ø±Õµ¯³öµÄÁ½¸öÖÕ¶Ë´°¿Ú£¬»òÔÚ´°¿ÚÄÚ°´ Ctrl+C
 
 param(
-    [switch]$ApiOnly,   # ä»…å¯åŠ¨åç«¯
-    [switch]$WebOnly    # ä»…å¯åŠ¨å‰ç«¯
+    [switch]$ApiOnly,   # ½öÆô¶¯ºó¶Ë
+    [switch]$WebOnly    # ½öÆô¶¯Ç°¶Ë
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 
 # ============================================================
-# åŠ è½½ .env æ–‡ä»¶ï¼ˆM-7ï¼šAPI Key å­˜äºæ­¤ï¼Œä¸è½ç›˜ config.jsonï¼‰
-# å°† .env ä¸­çš„ KEY=VALUE æ³¨å…¥å½“å‰è¿›ç¨‹ç¯å¢ƒå˜é‡ï¼Œå­è¿›ç¨‹è‡ªåŠ¨ç»§æ‰¿
+# ¼ÓÔØ .env ÎÄ¼ş£¨M-7£ºAPI Key ´æÓÚ´Ë£¬²»ÂäÅÌ config.json£©
+# ½« .env ÖĞµÄ KEY=VALUE ×¢Èëµ±Ç°½ø³Ì»·¾³±äÁ¿£¬×Ó½ø³Ì×Ô¶¯¼Ì³Ğ
 # ============================================================
 $EnvFile = Join-Path $Root "services\api\.env"
 if (Test-Path $EnvFile) {
-    Write-Host "[å¯åŠ¨] åŠ è½½ .envï¼š$EnvFile" -ForegroundColor Cyan
+    Write-Host "[Æô¶¯] ¼ÓÔØ .env£º$EnvFile" -ForegroundColor Cyan
     Get-Content $EnvFile | ForEach-Object {
         $line = $_.Trim()
-        # è·³è¿‡ç©ºè¡Œå’Œæ³¨é‡Šè¡Œ
+        # Ìø¹ı¿ÕĞĞºÍ×¢ÊÍĞĞ
         if ($line -and -not $line.StartsWith('#')) {
             if ($line -match "^([^=]+)=(.*)$") {
                 $key = $matches[1].Trim()
@@ -29,38 +29,38 @@ if (Test-Path $EnvFile) {
             }
         }
     }
-    Write-Host "[å®Œæˆ] ç¯å¢ƒå˜é‡å·²åŠ è½½" -ForegroundColor Green
+    Write-Host "[Íê³É] »·¾³±äÁ¿ÒÑ¼ÓÔØ" -ForegroundColor Green
 } else {
-    Write-Host "[è­¦å‘Š] æœªæ‰¾åˆ° .env æ–‡ä»¶ï¼ŒAPI Key å¯èƒ½ç¼ºå¤±ã€‚è‹¥é—®ç­”æŠ¥é”™è¯·å…ˆè¿è¡Œ .\scripts\install.ps1" -ForegroundColor Yellow
+    Write-Host "[¾¯¸æ] Î´ÕÒµ½ .env ÎÄ¼ş£¬API Key ¿ÉÄÜÈ±Ê§¡£ÈôÎÊ´ğ±¨´íÇëÏÈÔËĞĞ .\scripts\install.ps1" -ForegroundColor Yellow
 }
 
-# æ£€æµ‹åŒ…ç®¡ç†å™¨
+# ¼ì²â°ü¹ÜÀíÆ÷
 $UsePnpm = $false
 try { $null = pnpm --version; $UsePnpm = $true } catch { }
 
 function Get-DevCommand {
-    param([string]$Target)  # 'api' æˆ– 'web'
+    param([string]$Target)  # 'api' »ò 'web'
     if ($UsePnpm) { return "pnpm dev:$Target" } else { return "npm run dev:$Target" }
 }
 
 # ============================================================
-# å¯åŠ¨æœåŠ¡ï¼ˆåœ¨æ–° PowerShell çª—å£ä¸­å¯åŠ¨ï¼Œä¾¿äºæŸ¥çœ‹å®æ—¶æ—¥å¿—ï¼‰
+# Æô¶¯·şÎñ£¨ÔÚĞÂ PowerShell ´°¿ÚÖĞÆô¶¯£¬±ãÓÚ²é¿´ÊµÊ±ÈÕÖ¾£©
 # ============================================================
 if (-not $WebOnly) {
     $apiCmd = Get-DevCommand 'api'
-    Write-Host "[å¯åŠ¨] åç«¯ APIï¼š$apiCmd" -ForegroundColor Cyan
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$Root'; Write-Host 'åç«¯ API - http://localhost:3000' -ForegroundColor Green; $apiCmd"
+    Write-Host "[Æô¶¯] ºó¶Ë API£º$apiCmd" -ForegroundColor Cyan
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$Root'; Write-Host 'ºó¶Ë API - http://localhost:3000' -ForegroundColor Green; $apiCmd"
 }
 
 if (-not $ApiOnly) {
     $webCmd = Get-DevCommand 'web'
-    Write-Host "[å¯åŠ¨] å‰ç«¯ Webï¼š$webCmd" -ForegroundColor Cyan
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$Root'; Write-Host 'å‰ç«¯ Web - http://localhost:5173' -ForegroundColor Green; $webCmd"
+    Write-Host "[Æô¶¯] Ç°¶Ë Web£º$webCmd" -ForegroundColor Cyan
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$Root'; Write-Host 'Ç°¶Ë Web - http://localhost:5173' -ForegroundColor Green; $webCmd"
 }
 
 Write-Host ""
-Write-Host "======== å¯åŠ¨å®Œæˆ ========" -ForegroundColor Green
-Write-Host "  åç«¯ APIï¼šhttp://localhost:3000"
-Write-Host "  å‰ç«¯ Webï¼šhttp://localhost:5173"
+Write-Host "======== Æô¶¯Íê³É ========" -ForegroundColor Green
+Write-Host "  ºó¶Ë API£ºhttp://localhost:3000"
+Write-Host "  Ç°¶Ë Web£ºhttp://localhost:5173"
 Write-Host ""
-Write-Host "åœæ­¢æœåŠ¡ï¼šå…³é—­å¼¹å‡ºçš„ç»ˆç«¯çª—å£å³å¯" -ForegroundColor Gray
+Write-Host "Í£Ö¹·şÎñ£º¹Ø±Õµ¯³öµÄÖÕ¶Ë´°¿Ú¼´¿É" -ForegroundColor Gray

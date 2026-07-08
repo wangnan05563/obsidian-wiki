@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import RobotAvatar from './components/RobotAvatar.vue';
 import Dashboard from './views/Dashboard.vue';
 import Ingest from './views/Ingest.vue';
@@ -14,84 +14,72 @@ import { useCompileStore } from './stores/compile';
 type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config';
 
 const store = useCompileStore();
-// Dashboard 作为默认首页，提供全局概览与快捷入口
 const currentView = ref<ViewName>('dashboard');
+
+// 滚动视差：监听滚动位置，通过 CSS 变量驱动背景层位移
+const scrollY = ref(0);
+function handleScroll() {
+  // 使用 rAF 节流，避免高频触发导致掉帧
+  scrollY.value = window.scrollY;
+}
 
 function go(view: ViewName) {
   currentView.value = view;
 }
 
-// Dashboard 快捷入口跳转
 function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health') {
   currentView.value = view;
 }
+
+onMounted(() => {
+  window.addEventListener('scroll', handleScroll, { passive: true });
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', handleScroll);
+});
 </script>
 
 <template>
+  <!-- 视差背景层：4 层叠加，通过 scrollY 驱动不同速率位移 -->
+  <div class="bg-layer base" :style="{ transform: `translateY(${scrollY * 0.15}px)` }"></div>
+  <div class="bg-layer grid" :style="{ transform: `translateY(${scrollY * 0.08}px)` }"></div>
+  <div class="bg-layer noise"></div>
+  <div class="bg-layer orbs parallax" :style="{ transform: `translateY(${scrollY * 0.25}px)` }"></div>
+
   <div class="app-shell">
+    <!-- 不对称导航：左侧 Logo + 右侧标签，破格倾斜装饰 -->
     <header class="nav glass-card">
+      <div class="nav-deco"></div>
       <div class="nav-left" @click="go('dashboard')">
-        <RobotAvatar :size="44" />
-        <span class="title">AI 知识库</span>
-        <span class="subtitle">Karpathy Wiki</span>
+        <RobotAvatar :size="46" />
+        <div class="nav-title-wrap">
+          <span class="title grad-text">AI 知识库</span>
+          <span class="subtitle">KARPATHY WIKI</span>
+        </div>
       </div>
       <nav class="nav-tabs">
         <button
-          class="tab-btn"
-          :class="{ active: currentView === 'dashboard' }"
-          @click="go('dashboard')"
+          v-for="tab in [
+            { key: 'dashboard', label: '仪表盘' },
+            { key: 'ingest', label: '投递资料' },
+            { key: 'progress', label: '编译进度' },
+            { key: 'browse', label: '知识浏览' },
+            { key: 'query', label: '知识问答' },
+            { key: 'graph', label: '图谱' },
+            { key: 'health', label: '体检' },
+            { key: 'config', label: '配置' },
+          ]"
+          :key="tab.key"
+          class="tab-btn hover-glow"
+          :class="{
+            active: currentView === tab.key,
+            disabled: tab.key === 'progress' && !store.isCompiling && !store.isDone
+          }"
+          :disabled="tab.key === 'progress' && !store.isCompiling && !store.isDone"
+          @click="go(tab.key as ViewName)"
         >
-          仪表盘
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: currentView === 'ingest' }"
-          @click="go('ingest')"
-        >
-          投递资料
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: currentView === 'progress', disabled: !store.isCompiling && !store.isDone }"
-          :disabled="!store.isCompiling && !store.isDone"
-          @click="go('progress')"
-        >
-          编译进度
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: currentView === 'browse' }"
-          @click="go('browse')"
-        >
-          知识浏览
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: currentView === 'query' }"
-          @click="go('query')"
-        >
-          知识问答
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: currentView === 'graph' }"
-          @click="go('graph')"
-        >
-          图谱
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: currentView === 'health' }"
-          @click="go('health')"
-        >
-          体检
-        </button>
-        <button
-          class="tab-btn"
-          :class="{ active: currentView === 'config' }"
-          @click="go('config')"
-        >
-          配置
+          <span class="tab-label">{{ tab.label }}</span>
         </button>
       </nav>
     </header>
@@ -108,7 +96,9 @@ function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health') {
     </main>
 
     <footer class="footer">
-      <span>powered by Karpathy AI · 知识库垂直切片</span>
+      <span class="footer-line"></span>
+      <span class="footer-text">POWERED BY KARPATHY AI · 知识库垂直切片</span>
+      <span class="footer-line"></span>
     </footer>
   </div>
 </template>
@@ -118,82 +108,165 @@ function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health') {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  padding: 20px;
-  gap: 20px;
-  max-width: 1100px;
+  padding: 24px;
+  gap: 24px;
+  max-width: 1280px;
   margin: 0 auto;
+  position: relative;
 }
 
+/* 导航：不对称布局，左侧 Logo 偏大，右侧标签紧凑 */
 .nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 22px;
+  padding: 16px 28px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 破格装饰：右下角倾斜渐变块 */
+.nav-deco {
+  position: absolute;
+  top: -20px;
+  right: -20px;
+  width: 180px;
+  height: 180px;
+  background: var(--grad-fire);
+  opacity: 0.08;
+  transform: rotate(25deg);
+  border-radius: 32px;
+  pointer-events: none;
 }
 
 .nav-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   cursor: pointer;
+  z-index: 1;
+  transition: transform 0.3s ease;
+}
+
+.nav-left:hover {
+  transform: translateX(4px);
+}
+
+.nav-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .title {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  line-height: 1;
 }
 
 .subtitle {
-  font-size: 12px;
-  color: var(--color-text-soft);
-  padding: 2px 10px;
-  background: var(--color-cyan);
-  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--neon-cyan);
+  letter-spacing: 3px;
+  opacity: 0.8;
 }
 
 .nav-tabs {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
+  z-index: 1;
 }
 
 .tab-btn {
+  position: relative;
   border: none;
   background: transparent;
-  padding: 8px 14px;
-  font-size: 14px;
+  padding: 8px 16px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--color-text-soft);
+  font-family: var(--font-body);
+  color: var(--text-soft);
   border-radius: var(--radius-btn);
   cursor: pointer;
-  transition: all 0.2s ease;
-  font-family: inherit;
+  transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  letter-spacing: 0.5px;
+  overflow: hidden;
 }
 
 .tab-btn:hover:not(.disabled) {
-  background: var(--color-pink);
-  color: var(--color-text);
+  color: var(--neon-cyan);
+  background: rgba(0, 245, 255, 0.08);
+  transform: translateY(-2px);
+  text-shadow: 0 0 12px rgba(0, 245, 255, 0.6);
 }
 
+/* 激活态：渐变背景 + 发光 */
 .tab-btn.active {
-  background: var(--color-primary);
+  background: var(--grad-fire);
   color: #fff;
+  box-shadow: 0 4px 20px rgba(255, 0, 110, 0.4);
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+}
+
+.tab-btn.active::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 3s infinite;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
 }
 
 .tab-btn.disabled {
-  opacity: 0.4;
+  opacity: 0.3;
   cursor: not-allowed;
 }
 
 .content {
   flex: 1;
+  position: relative;
+  z-index: 1;
 }
 
+/* 页脚：赛博风分割线 */
 .footer {
-  text-align: center;
-  color: var(--color-text-soft);
-  font-size: 12px;
-  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+}
+
+.footer-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--neon-purple), transparent);
+}
+
+.footer-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  white-space: nowrap;
+}
+
+/* 响应式：窄屏导航堆叠 */
+@media (max-width: 900px) {
+  .nav {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .nav-tabs {
+    justify-content: center;
+  }
 }
 </style>

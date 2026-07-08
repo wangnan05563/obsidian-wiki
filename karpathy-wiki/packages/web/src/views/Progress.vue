@@ -13,11 +13,9 @@ const emit = defineEmits<{
 const store = useCompileStore();
 let abortController: AbortController | null = null;
 
-// §12.3-8 日志查看 dialog
 const logDialogVisible = ref(false);
 const viewingRunId = ref<string>('');
 
-// 步骤中文名映射，与后端 step 标识对齐
 const STEP_LABEL: Record<string, string> = {
   archive: '存档原始资料',
   read_schema: '读取 SCHEMA',
@@ -34,10 +32,8 @@ const robotMood = computed<string>(() => {
   return 'thinking';
 });
 
-// §11.2 是否展示历史任务列表（空闲态时展示）
 const showRunsList = computed(() => !store.isCompiling && !store.isDone && !store.errorMessage);
 
-// SSE 流式解析：按 \n\n 切分事件块，每块内再按行解析 event/data
 async function startCompile(payload: IngestPayload) {
   const isFormData = payload instanceof FormData;
   abortController = new AbortController();
@@ -55,7 +51,6 @@ async function startCompile(payload: IngestPayload) {
 
     await consumeSSE(response);
   } catch (err) {
-    // 用户主动取消（abort）不算错误
     if ((err as Error).name === 'AbortError') return;
     store.handleEvent('error', { message: (err as Error).message });
     ElMessage.error('编译请求失败：' + (err as Error).message);
@@ -64,7 +59,6 @@ async function startCompile(payload: IngestPayload) {
   }
 }
 
-// §11.2 断点续传：从失败的 run 恢复编译
 async function startResume(runId: string) {
   store.reset();
   store.isCompiling = true;
@@ -90,7 +84,6 @@ async function startResume(runId: string) {
   }
 }
 
-// 通用 SSE 消费：解析 event/data 并分发到 store
 async function consumeSSE(response: Response) {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -100,7 +93,6 @@ async function consumeSSE(response: Response) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    // SSE 协议：事件以空行（\n\n）分隔
     const events = buffer.split('\n\n');
     buffer = events.pop() || '';
     for (const evt of events) {
@@ -115,7 +107,7 @@ async function consumeSSE(response: Response) {
         try {
           store.handleEvent(eventType, JSON.parse(data));
         } catch {
-          // 后端偶发非 JSON 数据时跳过这一条，避免整条流崩溃
+          // 非 JSON 数据跳过
         }
       }
     }
@@ -123,23 +115,19 @@ async function consumeSSE(response: Response) {
 }
 
 onMounted(() => {
-  // 进入进度页立即发起请求；payload 由 Ingest 页预先存入 store
   if (store.pendingPayload && !store.isDone) {
     void startCompile(store.pendingPayload);
   } else {
-    // §11.2 空闲态加载历史任务列表
     void store.loadRuns();
   }
 });
 
-// §12.3-8 打开日志查看 dialog
 async function openLogDialog(run: RunSummary) {
   viewingRunId.value = run.runId;
   logDialogVisible.value = true;
   await store.loadLog(run.runId);
 }
 
-// 格式化时间戳为可读格式
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -149,7 +137,6 @@ function formatTime(iso: string): string {
   }
 }
 
-// run 状态对应的标签类型
 function runStatusType(status: string): 'success' | 'danger' | 'warning' {
   if (status === 'done') return 'success';
   if (status === 'failed') return 'danger';
@@ -163,7 +150,6 @@ function runStatusLabel(status: string): string {
 }
 
 onBeforeUnmount(() => {
-  // 离开页面时中断未完成的请求，避免内存泄漏
   abortController?.abort();
 });
 
@@ -185,15 +171,18 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 <template>
   <div class="progress-page">
-    <div class="glass-card progress-card">
+    <div class="glass-card progress-card fade-up">
+      <div class="card-deco"></div>
+      <!-- 不对称头部：机器人 + 状态文字 -->
       <div class="progress-head">
-        <RobotAvatar :size="96" :floating="store.isCompiling" />
+        <RobotAvatar :size="100" :floating="store.isCompiling" />
         <div class="head-text">
+          <span class="head-tag">// COMPILE ENGINE</span>
           <h2 class="head-title">
-            <template v-if="store.isCompiling">机器人正在编译…</template>
-            <template v-else-if="store.isDone">编译完成 🎉</template>
-            <template v-else-if="store.errorMessage">出错了 :(</template>
-            <template v-else>准备就绪</template>
+            <span v-if="store.isCompiling" class="grad-text">机器人正在编译…</span>
+            <span v-else-if="store.isDone" class="grad-text">编译完成</span>
+            <span v-else-if="store.errorMessage">出错了</span>
+            <span v-else>准备就绪</span>
           </h2>
           <p class="head-tip">
             <template v-if="robotMood === 'thinking'">小提示：编译过程是流式的，可实时查看每一步</template>
@@ -225,7 +214,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             </div>
             <div class="tl-message">{{ item.message }}</div>
             <div v-if="item.page" class="tl-page">
-              📄 {{ item.page.title }}
+              <span class="page-icon">◈</span> {{ item.page.title }}
               <code>{{ item.page.path }}</code>
             </div>
           </div>
@@ -233,18 +222,19 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       </el-timeline>
 
       <div v-else class="empty-progress">
+        <span class="empty-dots">● ● ●</span>
         <p>等待编译开始…</p>
       </div>
 
-      <!-- §11.2 缓存命中提示 -->
+      <!-- 缓存命中提示 -->
       <div v-if="store.isDone && store.result?.cached" class="cache-hit-banner">
         <span class="cache-icon">⚡</span>
         <span class="cache-text">内容已编译过（缓存命中），已跳过本次编译</span>
       </div>
 
       <div v-if="store.isDone && store.result" class="done-section">
-        <div class="result-card glass-card">
-          <div class="result-title">📦 本次编译结果</div>
+        <div class="result-card">
+          <div class="result-title">本次编译结果</div>
           <div v-if="store.doneMessage" class="done-message">{{ store.doneMessage }}</div>
           <ul v-if="store.result.pages.length > 0" class="result-list">
             <li v-for="p in store.result.pages" :key="p">
@@ -268,16 +258,18 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
         </el-button>
       </div>
 
-      <!-- §11.2 历史编译任务列表（空闲态展示） -->
+      <!-- 历史编译任务列表 -->
       <div v-if="showRunsList" class="runs-section">
         <div class="runs-head">
-          <h3 class="runs-title">📜 历史编译任务</h3>
+          <h3 class="runs-title">
+            <span class="title-bracket">[</span> 历史编译任务 <span class="title-bracket">]</span>
+          </h3>
           <el-button size="small" :loading="store.loadingRuns" @click="store.loadRuns()">刷新</el-button>
         </div>
-        <div v-if="store.loadingRuns" class="section-loading">加载中…</div>
+        <div v-if="store.loadingRuns" class="section-loading">LOADING...</div>
         <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务</div>
         <div v-else class="runs-list">
-          <div v-for="run in store.runs" :key="run.runId" class="run-item">
+          <div v-for="run in store.runs" :key="run.runId" class="run-item hover-glow">
             <div class="run-info" @click="openLogDialog(run)">
               <span class="run-id">{{ run.runId.slice(0, 8) }}</span>
               <el-tag :type="runStatusType(run.status)" size="small">{{ runStatusLabel(run.status) }}</el-tag>
@@ -299,9 +291,9 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       </div>
     </div>
 
-    <!-- §12.3-8 日志查看 Dialog -->
+    <!-- 日志查看 Dialog -->
     <el-dialog v-model="logDialogVisible" title="编译运行日志" width="700px" class="log-dialog">
-      <div v-if="store.loadingLog" class="section-loading">加载中…</div>
+      <div v-if="store.loadingLog" class="section-loading">LOADING...</div>
       <div v-else-if="store.logEntries.length === 0" class="runs-empty">暂无日志</div>
       <div v-else class="log-list">
         <div v-for="(entry, idx) in store.logEntries" :key="idx" class="log-line" :class="entry.event">
@@ -324,247 +316,346 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 }
 
 .progress-card {
-  padding: 28px 32px;
+  padding: 32px 36px;
+  position: relative;
+  overflow: hidden;
 }
 
+.card-deco {
+  position: absolute;
+  top: -50px;
+  left: -50px;
+  width: 240px;
+  height: 240px;
+  background: var(--grad-cool);
+  opacity: 0.08;
+  transform: rotate(-15deg);
+  border-radius: 40px;
+  pointer-events: none;
+}
+
+/* 不对称头部 */
 .progress-head {
   display: flex;
   align-items: center;
-  gap: 20px;
-  margin-bottom: 20px;
+  gap: 24px;
+  margin-bottom: 24px;
+  position: relative;
+  z-index: 1;
+}
+
+.head-text {
+  flex: 1;
+}
+
+.head-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+  letter-spacing: 2px;
+  display: block;
+  margin-bottom: 6px;
 }
 
 .head-title {
-  margin: 0 0 6px;
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--color-text);
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 900;
+  color: var(--text-bright);
+  letter-spacing: 1px;
 }
 
 .head-tip {
   margin: 0;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   font-size: 13px;
 }
 
 .timeline {
   padding-left: 4px;
-  margin-top: 8px;
+  margin-top: 12px;
+  position: relative;
+  z-index: 1;
 }
 
 .tl-row {
-  padding-bottom: 4px;
+  padding-bottom: 6px;
 }
 
 .tl-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .tl-step {
-  font-weight: 600;
-  color: var(--color-text);
+  font-weight: 700;
+  color: var(--text-bright);
+  font-family: var(--font-body);
+  font-size: 14px;
 }
 
 .tl-status {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
-  padding: 2px 10px;
-  border-radius: 12px;
-  background: var(--color-cyan);
-  color: var(--color-text);
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  letter-spacing: 1px;
+  text-transform: uppercase;
 }
 
 .tl-status.done {
-  background: var(--color-success);
-  color: #fff;
+  background: rgba(0, 245, 255, 0.15);
+  color: var(--neon-cyan);
+  border: 1px solid rgba(0, 245, 255, 0.4);
 }
 
 .tl-status.error {
-  background: var(--color-error);
-  color: #fff;
+  background: rgba(255, 0, 110, 0.15);
+  color: var(--neon-magenta);
+  border: 1px solid rgba(255, 0, 110, 0.4);
 }
 
 .tl-status.running {
-  background: var(--color-yellow);
-  color: var(--color-text);
+  background: rgba(255, 62, 201, 0.15);
+  color: var(--neon-pink);
+  border: 1px solid rgba(255, 62, 201, 0.4);
 }
 
 .tl-message {
-  margin-top: 4px;
-  color: var(--color-text-soft);
+  margin-top: 6px;
+  color: var(--text-soft);
   font-size: 13px;
 }
 
 .tl-page {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 13px;
-  color: var(--color-text);
+  color: var(--text-base);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.page-icon {
+  color: var(--neon-cyan);
 }
 
 .tl-page code {
-  margin-left: 6px;
-  padding: 2px 8px;
-  background: var(--color-pink);
-  border-radius: 8px;
+  padding: 3px 10px;
+  background: rgba(176, 38, 255, 0.15);
+  border: 1px solid rgba(176, 38, 255, 0.3);
+  border-radius: 6px;
   font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--neon-purple);
 }
 
 .empty-progress {
   text-align: center;
-  color: var(--color-text-soft);
-  padding: 40px 0;
+  color: var(--text-dim);
+  padding: 48px 0;
+  font-family: var(--font-mono);
+}
+
+.empty-dots {
+  display: block;
+  color: var(--neon-purple);
+  letter-spacing: 8px;
+  font-size: 20px;
+  margin-bottom: 12px;
+  animation: neon-pulse 1.5s ease-in-out infinite;
 }
 
 .done-section {
-  margin-top: 24px;
+  margin-top: 28px;
 }
 
 .result-card {
-  padding: 18px 22px;
-  background: rgba(255, 241, 184, 0.45);
+  padding: 20px 24px;
+  background: rgba(0, 245, 255, 0.05);
+  border: 1px solid rgba(0, 245, 255, 0.2);
+  border-radius: var(--radius-card);
+  position: relative;
+  overflow: hidden;
+}
+
+.result-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--grad-cool);
 }
 
 .result-title {
+  font-family: var(--font-display);
   font-weight: 700;
-  margin-bottom: 10px;
-  color: var(--color-text);
+  margin-bottom: 12px;
+  color: var(--neon-cyan);
+  letter-spacing: 1px;
+  font-size: 14px;
 }
 
 .result-list {
   list-style: none;
   padding: 0;
-  margin: 0 0 10px;
+  margin: 0 0 12px;
 }
 
 .result-list li {
-  padding: 4px 0;
+  padding: 6px 0;
   font-size: 13px;
 }
 
 .result-list code {
-  padding: 3px 10px;
-  background: var(--color-pink);
-  border-radius: 8px;
+  padding: 4px 12px;
+  background: rgba(176, 38, 255, 0.15);
+  border: 1px solid rgba(176, 38, 255, 0.3);
+  border-radius: 6px;
   font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--neon-purple);
 }
 
 .result-meta {
   font-size: 13px;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
+}
+
+.result-meta strong {
+  color: var(--neon-magenta);
 }
 
 .restart-bar {
-  margin-top: 20px;
+  margin-top: 24px;
   display: flex;
   justify-content: center;
 }
 
-/* §11.2 缓存命中提示 */
+/* 缓存命中提示 */
 .cache-hit-banner {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 16px;
-  padding: 12px 20px;
-  background: var(--color-cyan);
+  gap: 12px;
+  margin-top: 20px;
+  padding: 14px 22px;
+  background: rgba(0, 245, 255, 0.08);
+  border: 1px solid rgba(0, 245, 255, 0.3);
   border-radius: var(--radius-card);
   font-size: 14px;
-  color: var(--color-text);
+  color: var(--neon-cyan);
 }
 
 .cache-icon {
-  font-size: 20px;
+  font-size: 22px;
+  text-shadow: var(--glow-cyan);
 }
 
-/* §11.2 历史任务列表 */
+/* 历史任务列表 */
 .runs-section {
-  margin-top: 28px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(74, 59, 71, 0.1);
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(176, 38, 255, 0.15);
+  position: relative;
+  z-index: 1;
 }
 
 .runs-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .runs-title {
   margin: 0;
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 14px;
   font-weight: 700;
-  color: var(--color-text);
+  color: var(--text-bright);
+  letter-spacing: 1px;
+}
+
+.title-bracket {
+  color: var(--neon-magenta);
+  font-weight: 400;
 }
 
 .runs-empty {
   text-align: center;
-  color: var(--color-text-soft);
-  padding: 30px 0;
+  color: var(--text-dim);
+  padding: 32px 0;
   font-size: 13px;
+  font-family: var(--font-mono);
 }
 
 .runs-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .run-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 16px;
-  background: rgba(255, 255, 255, 0.5);
+  padding: 12px 18px;
+  background: rgba(176, 38, 255, 0.05);
+  border: 1px solid rgba(176, 38, 255, 0.15);
   border-radius: var(--radius-card);
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: all 0.3s ease;
 }
 
 .run-item:hover {
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(176, 38, 255, 0.12);
+  border-color: var(--neon-purple);
 }
 
 .run-info {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-size: 13px;
   cursor: pointer;
   flex: 1;
 }
 
 .run-id {
-  font-family: 'Courier New', monospace;
-  font-weight: 600;
-  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--neon-cyan);
 }
 
 .run-meta {
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   font-size: 12px;
+  font-family: var(--font-mono);
 }
 
 .run-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .run-time {
-  font-size: 12px;
-  color: var(--color-text-soft);
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
 }
 
-/* §12.3-8 日志 dialog */
+/* 日志 */
 .log-list {
   max-height: 500px;
   overflow-y: auto;
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -572,57 +663,67 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 4px 0;
-  border-bottom: 1px solid rgba(74, 59, 71, 0.05);
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(176, 38, 255, 0.08);
 }
 
 .log-line.error {
-  color: var(--color-error);
+  color: var(--neon-magenta);
 }
 
 .log-line.done {
-  color: var(--color-success);
+  color: var(--neon-cyan);
 }
 
 .log-ts {
-  color: var(--color-text-soft);
+  color: var(--text-dim);
   flex-shrink: 0;
 }
 
 .log-step {
-  color: var(--color-primary-deep);
+  color: var(--neon-purple);
   flex-shrink: 0;
   font-weight: 600;
 }
 
 .log-tool {
-  padding: 1px 6px;
-  background: var(--color-pink);
+  padding: 1px 8px;
+  background: rgba(176, 38, 255, 0.15);
   border-radius: 4px;
   flex-shrink: 0;
+  color: var(--neon-purple);
 }
 
 .log-token {
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   flex-shrink: 0;
 }
 
 .log-msg {
   flex: 1;
-  color: var(--color-text);
+  color: var(--text-base);
 }
 
 .log-err {
-  color: var(--color-error);
+  color: var(--neon-magenta);
   flex-shrink: 0;
 }
 
 .done-message {
   font-size: 13px;
-  color: var(--color-text);
-  margin-bottom: 8px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.5);
+  color: var(--text-base);
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
   border-radius: 8px;
+}
+
+.section-loading {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 24px 0;
+  text-align: center;
+  letter-spacing: 2px;
 }
 </style>

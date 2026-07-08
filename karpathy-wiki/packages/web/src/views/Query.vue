@@ -11,7 +11,6 @@ const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 let abortController: AbortController | null = null;
 
-// 自动滚动到底部，保证流式输出可见
 function scrollToBottom() {
   nextTick(() => {
     if (chatBodyRef.value) {
@@ -25,10 +24,8 @@ watch(
   scrollToBottom,
 );
 
-// SSE 流式请求。POST 不能用 EventSource，用 fetch + ReadableStream 手动解析。
 async function sendQuestion(question: string) {
   abortController = new AbortController();
-  // 历史对话只取 role/content，避免传输冗余字段
   const history = store.messages.map((m) => ({ role: m.role, content: m.content }));
 
   try {
@@ -51,7 +48,6 @@ async function sendQuestion(question: string) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      // SSE 协议：事件以空行（\n\n）分隔
       const events = buffer.split('\n\n');
       buffer = events.pop() || '';
       for (const evt of events) {
@@ -70,18 +66,16 @@ async function sendQuestion(question: string) {
           } else if (eventType === 'refs') {
             store.setRefs(parsed.refs || []);
           } else if (eventType === 'done') {
-            // done 事件附带 sessionId + messageIndex，供归档使用
             store.finalizeAnswer(parsed.sessionId, parsed.messageIndex);
           } else if (eventType === 'error') {
             store.handleError(parsed.message || '问答出错');
             ElMessage.error(parsed.message || '问答出错');
           }
         } catch {
-          // 后端偶发非 JSON 数据时跳过这一条，避免整条流崩溃
+          // 非 JSON 数据跳过
         }
       }
     }
-    // 流正常结束但未收到 done 事件时，兜底收尾（无 sessionId，不可归档）
     if (store.isLoading && store.streamingAnswer) {
       store.finalizeAnswer();
     }
@@ -104,7 +98,6 @@ function handleSubmit() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  // Ctrl/Cmd + Enter 发送，避免单 Enter 误触
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
     handleSubmit();
@@ -116,7 +109,6 @@ function handleNewSession() {
   inputQuestion.value = '';
 }
 
-// 归档问答到 Vault。POST /api/query/archive，服务端从会话存储取答案（防篡改）。
 async function archiveMessage(idx: number) {
   const msg = store.messages[idx];
   if (!msg || !msg.sessionId || msg.messageIndex === undefined || msg.archived) return;
@@ -139,18 +131,20 @@ async function archiveMessage(idx: number) {
 }
 
 onBeforeUnmount(() => {
-  // 离开页面时中断未完成的请求，避免内存泄漏
   abortController?.abort();
 });
 </script>
 
 <template>
   <div class="query-page">
-    <div class="glass-card query-card">
+    <div class="glass-card query-card fade-up">
+      <div class="card-deco"></div>
+      <!-- 不对称头部 -->
       <div class="query-head">
-        <RobotAvatar :size="64" :floating="store.isLoading" />
+        <RobotAvatar :size="60" :floating="store.isLoading" />
         <div class="head-text">
-          <h2 class="head-title">知识库问答</h2>
+          <span class="head-tag">// AI QUERY ENGINE</span>
+          <h2 class="head-title grad-text">知识库问答</h2>
           <p class="head-tip">向机器人提问，它会基于知识库页面回答</p>
         </div>
         <el-button
@@ -165,7 +159,7 @@ onBeforeUnmount(() => {
       <div ref="chatBodyRef" class="chat-body">
         <div v-if="store.messages.length === 0 && !store.streamingAnswer" class="chat-empty">
           <RobotAvatar :size="120" :floating="true" />
-          <p class="empty-tip">还没有对话，试试问个问题吧</p>
+          <p class="empty-tip">// 还没有对话，试试问个问题吧</p>
           <div class="empty-suggestions">
             <span class="suggestion-chip" @click="inputQuestion = '什么是 LLM Wiki？'">
               什么是 LLM Wiki？
@@ -180,15 +174,14 @@ onBeforeUnmount(() => {
           <div class="msg-row" :class="msg.role">
             <div class="msg-avatar">
               <RobotAvatar v-if="msg.role === 'assistant'" :size="36" />
-              <div v-else class="user-avatar">我</div>
+              <div v-else class="user-avatar">ME</div>
             </div>
             <div class="msg-bubble" :class="msg.role">
               <div class="msg-content">{{ msg.content }}</div>
               <div v-if="msg.refs && msg.refs.length > 0" class="msg-refs">
-                <span class="refs-label">引用：</span>
+                <span class="refs-label">REFS:</span>
                 <span v-for="r in msg.refs" :key="r" class="ref-chip">[[{{ r }}]]</span>
               </div>
-              <!-- 归档按钮：仅 assistant 消息且有 sessionId 时显示 -->
               <div v-if="msg.role === 'assistant' && msg.sessionId" class="msg-actions">
                 <el-button
                   size="small"
@@ -208,10 +201,10 @@ onBeforeUnmount(() => {
           <div class="msg-avatar">
             <RobotAvatar :size="36" />
           </div>
-          <div class="msg-bubble assistant">
+          <div class="msg-bubble assistant streaming">
             <div class="msg-content">{{ store.streamingAnswer }}</div>
             <div v-if="store.currentRefs.length > 0" class="msg-refs">
-              <span class="refs-label">引用：</span>
+              <span class="refs-label">REFS:</span>
               <span v-for="r in store.currentRefs" :key="r" class="ref-chip">[[{{ r }}]]</span>
             </div>
           </div>
@@ -250,44 +243,74 @@ onBeforeUnmount(() => {
 }
 
 .query-card {
-  padding: 24px 28px;
+  padding: 28px 32px;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 220px);
+  height: calc(100vh - 240px);
   min-height: 480px;
+  position: relative;
+  overflow: hidden;
 }
 
+.card-deco {
+  position: absolute;
+  bottom: -60px;
+  left: -60px;
+  width: 260px;
+  height: 260px;
+  background: var(--grad-aurora);
+  opacity: 0.08;
+  transform: rotate(-20deg);
+  border-radius: 40px;
+  pointer-events: none;
+}
+
+/* 不对称头部 */
 .query-head {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 18px;
+  margin-bottom: 18px;
+  position: relative;
+  z-index: 1;
 }
 
 .head-text {
   flex: 1;
 }
 
+.head-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--neon-cyan);
+  letter-spacing: 2px;
+  display: block;
+  margin-bottom: 4px;
+}
+
 .head-title {
   margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 1px;
 }
 
 .head-tip {
   margin: 0;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   font-size: 13px;
 }
 
 .chat-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 4px;
+  padding: 14px 4px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+  position: relative;
+  z-index: 1;
 }
 
 .chat-empty {
@@ -296,40 +319,46 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  gap: 18px;
 }
 
 .empty-tip {
   margin: 0;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   font-size: 14px;
+  font-family: var(--font-mono);
 }
 
 .empty-suggestions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
 }
 
 .suggestion-chip {
-  padding: 6px 14px;
-  background: var(--color-cyan);
-  border-radius: 16px;
+  padding: 8px 16px;
+  background: rgba(176, 38, 255, 0.08);
+  border: 1px solid rgba(176, 38, 255, 0.3);
+  border-radius: var(--radius-pill);
   font-size: 13px;
-  color: var(--color-text);
+  color: var(--text-base);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
+  font-family: var(--font-body);
 }
 
 .suggestion-chip:hover {
-  background: var(--color-pink);
+  background: rgba(176, 38, 255, 0.18);
+  border-color: var(--neon-purple);
+  color: var(--neon-cyan);
   transform: translateY(-2px);
+  box-shadow: var(--glow-purple);
 }
 
 .msg-row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: flex-start;
 }
 
@@ -348,32 +377,53 @@ onBeforeUnmount(() => {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: var(--color-primary);
+  background: var(--grad-fire);
   color: #fff;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-family: var(--font-mono);
+  box-shadow: var(--glow-magenta);
 }
 
+/* 消息气泡：不对称圆角 + 渐变 */
 .msg-bubble {
   max-width: 75%;
-  padding: 12px 16px;
-  border-radius: 16px;
+  padding: 14px 18px;
+  border-radius: 20px;
   font-size: 14px;
-  line-height: 1.6;
-  color: var(--color-text);
+  line-height: 1.7;
+  color: var(--text-base);
+  position: relative;
 }
 
 .msg-bubble.assistant {
-  background: var(--color-cyan);
+  background: rgba(0, 245, 255, 0.06);
+  border: 1px solid rgba(0, 245, 255, 0.25);
   border-top-left-radius: 4px;
+  backdrop-filter: var(--blur);
+}
+
+.msg-bubble.assistant::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--neon-cyan), transparent);
 }
 
 .msg-bubble.user {
-  background: var(--color-pink);
+  background: var(--grad-fire);
   border-top-right-radius: 4px;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(255, 0, 110, 0.3);
+}
+
+/* 流式输出时的脉动效果 */
+.msg-bubble.streaming {
+  animation: neon-pulse 1.5s ease-in-out infinite;
 }
 
 .msg-content {
@@ -382,9 +432,9 @@ onBeforeUnmount(() => {
 }
 
 .msg-refs {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed rgba(74, 59, 71, 0.15);
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(176, 38, 255, 0.2);
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -392,29 +442,34 @@ onBeforeUnmount(() => {
 }
 
 .refs-label {
-  font-size: 12px;
-  color: var(--color-text-soft);
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  letter-spacing: 1px;
 }
 
 .ref-chip {
-  padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.6);
-  border-radius: 10px;
-  font-size: 12px;
-  color: var(--color-primary-deep);
-  font-family: 'Courier New', monospace;
+  padding: 3px 10px;
+  background: rgba(176, 38, 255, 0.12);
+  border: 1px solid rgba(176, 38, 255, 0.3);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  color: var(--neon-purple);
+  font-family: var(--font-mono);
 }
 
 .msg-actions {
-  margin-top: 6px;
+  margin-top: 8px;
   text-align: right;
 }
 
 .input-bar {
-  margin-top: 16px;
+  margin-top: 18px;
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: flex-end;
+  position: relative;
+  z-index: 1;
 }
 
 .input-bar .el-input {

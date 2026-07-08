@@ -161,10 +161,14 @@ onMounted(() => {
 <template>
   <div class="config-page">
     <div class="glass-card config-card">
+      <!-- 不对称装饰块：旋转青蓝渐变 -->
+      <div class="card-deco"></div>
+
       <div class="config-head">
         <RobotAvatar :size="56" />
         <div class="head-text">
-          <h2 class="head-title">配置中心</h2>
+          <span class="head-tag">// CONTROL PANEL</span>
+          <h2 class="head-title grad-text">配置中心</h2>
           <p class="head-tip">编辑页面规范 SCHEMA.md 与查看系统配置</p>
         </div>
       </div>
@@ -176,19 +180,19 @@ onMounted(() => {
             <div class="action-bar">
               <span class="section-desc">页面规范文件，控制 AI 编译时的页面结构与约束</span>
               <div class="actions">
-                <el-button v-if="!editingSchema" size="small" type="primary" @click="editingSchema = true">
+                <el-button v-if="!editingSchema" size="small" class="neon-btn" @click="editingSchema = true">
                   编辑
                 </el-button>
                 <template v-else>
-                  <el-button size="small" type="primary" :loading="savingSchema" @click="saveSchema">
+                  <el-button size="small" class="neon-btn-primary" :loading="savingSchema" @click="saveSchema">
                     保存
                   </el-button>
-                  <el-button size="small" @click="cancelEdit">取消</el-button>
+                  <el-button size="small" class="neon-btn" @click="cancelEdit">取消</el-button>
                 </template>
               </div>
             </div>
 
-            <div v-if="loadingSchema" class="section-loading">加载中…</div>
+            <div v-if="loadingSchema" class="section-loading">// 加载中…</div>
 
             <el-input
               v-else-if="editingSchema"
@@ -204,13 +208,13 @@ onMounted(() => {
             <!-- §6.X 版本历史（Git log） -->
             <div class="history-section">
               <div class="history-head">
-                <span class="section-desc">版本历史（Git）</span>
-                <el-button size="small" text :loading="loadingHistory" @click="loadHistory">刷新</el-button>
+                <span class="section-desc">// 版本历史（Git）</span>
+                <el-button size="small" class="neon-btn" text :loading="loadingHistory" @click="loadHistory">刷新</el-button>
               </div>
               <div v-if="!gitEnabled" class="history-disabled">
                 Vault 未启用 Git，无法查看版本历史。在 Vault 目录执行 <code>git init</code> 即可启用。
               </div>
-              <div v-else-if="commits.length === 0" class="history-empty">暂无提交记录</div>
+              <div v-else-if="commits.length === 0" class="history-empty">▸ 暂无提交记录</div>
               <div v-else class="commit-list">
                 <div
                   v-for="c in commits"
@@ -235,7 +239,7 @@ onMounted(() => {
                   </span>
                   <el-button
                     size="small"
-                    type="primary"
+                    class="neon-btn-primary"
                     :disabled="!selectedFrom"
                     :loading="loadingDiff"
                     @click="loadDiff"
@@ -244,7 +248,7 @@ onMounted(() => {
                   </el-button>
                 </div>
                 <div v-if="showDiff && !loadingDiff" class="diff-result">
-                  <div v-if="diffLines.length === 0" class="diff-empty">无差异</div>
+                  <div v-if="diffLines.length === 0" class="diff-empty">▸ 无差异</div>
                   <div v-else class="diff-lines">
                     <div
                       v-for="(line, idx) in diffLines"
@@ -270,7 +274,7 @@ onMounted(() => {
             <!-- §12.3-7 热加载操作栏 -->
             <div class="reload-bar">
               <span class="section-desc">修改 config.json 后点击热加载，无需重启服务即可应用运行时参数</span>
-              <el-button size="small" type="primary" :loading="reloading" @click="reloadConfig">
+              <el-button size="small" class="neon-btn-primary" :loading="reloading" @click="reloadConfig">
                 热加载配置
               </el-button>
             </div>
@@ -285,15 +289,15 @@ onMounted(() => {
                 <span class="applied-tag">staleDays: {{ reloadResult.applied.staleDays }}</span>
               </div>
               <div v-if="reloadResult.requireRestart.length > 0" class="reload-warn">
-                以下字段变更需重启服务才能生效：{{ reloadResult.requireRestart.join(', ') }}
+                ⚠ 以下字段变更需重启服务才能生效：{{ reloadResult.requireRestart.join(', ') }}
               </div>
             </div>
 
-            <div v-if="loadingConfig" class="section-loading">加载中…</div>
+            <div v-if="loadingConfig" class="section-loading">// 加载中…</div>
             <div v-else-if="config" class="config-grid">
               <!-- LLM 配置 -->
-              <div class="config-block">
-                <h3 class="block-title">LLM 模型</h3>
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> LLM 模型 <span class="block-bracket">]</span></h3>
                 <div class="config-row">
                   <span class="config-label">服务商</span>
                   <span class="config-value">{{ PROVIDER_LABELS[config.llm.provider] || config.llm.provider }}</span>
@@ -318,8 +322,8 @@ onMounted(() => {
               </div>
 
               <!-- 运行参数 -->
-              <div class="config-block">
-                <h3 class="block-title">运行参数</h3>
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 运行参数 <span class="block-bracket">]</span></h3>
                 <div class="config-row">
                   <span class="config-label">引擎</span>
                   <span class="config-value">{{ config.adapter }}</span>
@@ -339,8 +343,8 @@ onMounted(() => {
               </div>
 
               <!-- 服务配置 -->
-              <div class="config-block">
-                <h3 class="block-title">服务</h3>
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 服务 <span class="block-bracket">]</span></h3>
                 <div class="config-row">
                   <span class="config-label">监听地址</span>
                   <span class="config-value">{{ config.server.host }}</span>
@@ -361,7 +365,7 @@ onMounted(() => {
 
               <!-- API Key 提示 -->
               <div v-if="!config.llm.apiKeySet" class="key-warning">
-                <div class="warning-icon">⚠️</div>
+                <div class="warning-icon">⚠</div>
                 <div class="warning-text">
                   <strong>API Key 未设置</strong>
                   <p>请设置环境变量 <code>{{ config.llm.apiKeyRef }}</code> 后重启服务，否则编译与问答将返回 401 错误。</p>
@@ -382,10 +386,30 @@ onMounted(() => {
 }
 
 .config-card {
+  position: relative;
   padding: 24px 28px;
+  overflow: hidden;
+}
+
+/* 不对称装饰块：旋转青蓝渐变 */
+.card-deco {
+  position: absolute;
+  bottom: -50px;
+  right: -40px;
+  width: 220px;
+  height: 220px;
+  background: var(--grad-cool);
+  filter: blur(60px);
+  opacity: 0.3;
+  transform: rotate(-18deg);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .config-head {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -396,21 +420,54 @@ onMounted(() => {
   flex: 1;
 }
 
+.head-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--neon-cyan);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
 .head-title {
   margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
 }
 
 .head-tip {
   margin: 0;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   font-size: 13px;
 }
 
+/* Tab 标签霓虹化 */
 .config-tabs {
-  --el-color-primary: var(--color-primary-deep);
+  position: relative;
+  z-index: 1;
+}
+
+.config-tabs :deep(.el-tabs__item) {
+  font-family: var(--font-mono);
+  letter-spacing: 0.05em;
+  color: var(--text-soft) !important;
+}
+
+.config-tabs :deep(.el-tabs__item.is-active) {
+  color: var(--neon-cyan) !important;
+  text-shadow: 0 0 8px rgba(0, 245, 255, 0.5);
+}
+
+.config-tabs :deep(.el-tabs__active-bar) {
+  background: var(--grad-neon);
+  height: 2px;
+}
+
+.config-tabs :deep(.el-tabs__nav-wrap::after) {
+  background-color: rgba(176, 38, 255, 0.15);
 }
 
 .schema-section,
@@ -426,8 +483,10 @@ onMounted(() => {
 }
 
 .section-desc {
-  font-size: 13px;
-  color: var(--color-text-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
 }
 
 .actions {
@@ -435,27 +494,72 @@ onMounted(() => {
   gap: 8px;
 }
 
-.section-loading {
-  text-align: center;
-  color: var(--color-text-soft);
-  padding: 60px 0;
+/* 霓虹按钮：透明底 */
+.neon-btn {
+  background: var(--bg-glass) !important;
+  border: 1px solid rgba(176, 38, 255, 0.4) !important;
+  color: var(--text-bright) !important;
+  font-family: var(--font-mono) !important;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease !important;
 }
 
+.neon-btn:hover:not(.is-disabled) {
+  border-color: var(--neon-cyan) !important;
+  box-shadow: var(--glow-cyan) !important;
+  color: var(--neon-cyan) !important;
+}
+
+/* 主按钮：渐变填充 */
+.neon-btn-primary {
+  background: var(--grad-fire) !important;
+  border: none !important;
+  color: #fff !important;
+  font-family: var(--font-mono) !important;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease !important;
+}
+
+.neon-btn-primary:hover:not(.is-disabled) {
+  box-shadow: var(--glow-magenta) !important;
+  transform: translateY(-1px);
+}
+
+.section-loading {
+  text-align: center;
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  padding: 60px 0;
+  letter-spacing: 0.1em;
+}
+
+/* SCHEMA 编辑器：暗色背景 + 霓虹边框 */
 .schema-editor :deep(.el-textarea__inner) {
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.8;
+  background: rgba(5, 0, 16, 0.6) !important;
+  color: var(--text-bright) !important;
+  border: 1px solid rgba(0, 245, 255, 0.25) !important;
+  border-radius: var(--radius-input) !important;
+}
+
+.schema-editor :deep(.el-textarea__inner):focus {
+  border-color: var(--neon-cyan) !important;
+  box-shadow: 0 0 16px rgba(0, 245, 255, 0.3) !important;
 }
 
 .schema-view {
   margin: 0;
   padding: 18px 24px;
-  background: rgba(74, 59, 71, 0.05);
+  background: rgba(5, 0, 16, 0.6);
+  border: 1px solid rgba(176, 38, 255, 0.2);
   border-radius: var(--radius-card);
   font-size: 13px;
   line-height: 1.8;
-  color: var(--color-text);
-  font-family: 'Courier New', monospace;
+  color: var(--text-base);
+  font-family: var(--font-mono);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 500px;
@@ -465,22 +569,31 @@ onMounted(() => {
 .config-grid {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
 }
 
 .config-block {
   padding: 18px 22px;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(5, 0, 16, 0.5);
+  border: 1px solid rgba(176, 38, 255, 0.2);
   border-radius: var(--radius-card);
+  transition: all 0.3s ease;
 }
 
 .block-title {
   margin: 0 0 14px;
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 15px;
   font-weight: 700;
-  color: var(--color-text);
-  padding-bottom: 8px;
-  border-bottom: 2px solid var(--color-pink);
+  color: var(--text-bright);
+  letter-spacing: 0.05em;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(0, 245, 255, 0.2);
+}
+
+.block-bracket {
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px rgba(0, 245, 255, 0.5);
 }
 
 .config-row {
@@ -491,73 +604,93 @@ onMounted(() => {
 
 .config-label {
   width: 120px;
-  color: var(--color-text-soft);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
   flex-shrink: 0;
 }
 
 .config-value {
-  color: var(--color-text);
+  color: var(--text-base);
   font-weight: 500;
   display: flex;
   align-items: center;
   gap: 8px;
+  font-family: var(--font-mono);
 }
 
 .key-status {
-  padding: 2px 10px;
-  border-radius: 10px;
-  font-size: 12px;
-  font-weight: 600;
+  padding: 2px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid;
 }
 
 .key-status.set {
-  background: var(--color-cyan);
-  color: var(--color-text);
+  background: rgba(0, 245, 255, 0.15);
+  border-color: rgba(0, 245, 255, 0.5);
+  color: var(--neon-cyan);
 }
 
 .key-status.unset {
-  background: var(--color-error);
-  color: #fff;
+  background: rgba(255, 0, 110, 0.15);
+  border-color: rgba(255, 0, 110, 0.5);
+  color: var(--neon-magenta);
+  box-shadow: 0 0 10px rgba(255, 0, 110, 0.3);
 }
 
 .env-name {
-  padding: 2px 8px;
-  background: var(--color-pink);
+  padding: 2px 10px;
+  background: rgba(176, 38, 255, 0.12);
+  border: 1px solid rgba(176, 38, 255, 0.3);
   border-radius: 6px;
-  font-size: 12px;
-  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--neon-purple);
 }
 
 .key-warning {
   display: flex;
   gap: 14px;
   padding: 16px 20px;
-  background: var(--color-yellow);
+  background: linear-gradient(135deg, rgba(255, 0, 110, 0.18), rgba(255, 0, 110, 0.05));
+  border: 1px solid rgba(255, 0, 110, 0.4);
   border-radius: var(--radius-card);
+  box-shadow: 0 0 24px rgba(255, 0, 110, 0.15);
 }
 
 .warning-icon {
-  font-size: 28px;
+  font-size: 26px;
+  color: var(--neon-magenta);
+  text-shadow: 0 0 12px var(--neon-magenta);
 }
 
 .warning-text strong {
-  color: var(--color-text);
+  color: var(--neon-magenta);
+  font-family: var(--font-mono);
   font-size: 14px;
+  letter-spacing: 0.04em;
 }
 
 .warning-text p {
   margin: 6px 0 0;
-  font-size: 13px;
-  color: var(--color-text);
+  font-size: 12px;
+  color: var(--text-base);
   line-height: 1.6;
+  font-family: var(--font-mono);
 }
 
 .warning-text code {
-  padding: 2px 6px;
-  background: rgba(255, 255, 255, 0.6);
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: 'Courier New', monospace;
+  padding: 2px 8px;
+  background: rgba(0, 245, 255, 0.12);
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
 }
 
 .reload-bar {
@@ -566,14 +699,16 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 16px;
   padding: 12px 18px;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(5, 0, 16, 0.5);
+  border: 1px solid rgba(176, 38, 255, 0.2);
   border-radius: var(--radius-card);
 }
 
 .reload-result {
   margin-bottom: 16px;
   padding: 14px 18px;
-  background: var(--color-cyan);
+  background: linear-gradient(135deg, rgba(0, 245, 255, 0.12), rgba(0, 245, 255, 0.03));
+  border: 1px solid rgba(0, 245, 255, 0.35);
   border-radius: var(--radius-card);
 }
 
@@ -582,29 +717,38 @@ onMounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  color: var(--color-text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-base);
+}
+
+.reload-applied strong {
+  color: var(--neon-cyan);
 }
 
 .applied-tag {
-  padding: 2px 10px;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 10px;
-  font-size: 12px;
-  font-family: 'Courier New', monospace;
+  padding: 2px 12px;
+  background: rgba(0, 245, 255, 0.1);
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
 }
 
 .reload-warn {
-  margin-top: 8px;
+  margin-top: 10px;
   font-size: 12px;
-  color: var(--color-text-soft);
+  font-family: var(--font-mono);
+  color: var(--neon-magenta);
 }
 
 /* §6.X 版本历史与 diff */
 .history-section {
   margin-top: 20px;
   padding: 16px 20px;
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(5, 0, 16, 0.5);
+  border: 1px solid rgba(176, 38, 255, 0.2);
   border-radius: var(--radius-card);
 }
 
@@ -616,22 +760,27 @@ onMounted(() => {
 }
 
 .history-disabled {
-  font-size: 13px;
-  color: var(--color-text-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-soft);
   padding: 10px 0;
+  line-height: 1.7;
 }
 
 .history-disabled code {
-  padding: 2px 6px;
-  background: var(--color-pink);
-  border-radius: 4px;
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
+  padding: 2px 8px;
+  background: rgba(176, 38, 255, 0.12);
+  border: 1px solid rgba(176, 38, 255, 0.3);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-purple);
 }
 
 .history-empty {
+  font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--color-text-soft);
+  color: var(--neon-lime);
   padding: 10px 0;
 }
 
@@ -646,27 +795,32 @@ onMounted(() => {
 .commit-item {
   display: flex;
   gap: 12px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.5);
+  padding: 9px 12px;
+  background: rgba(176, 38, 255, 0.06);
+  border: 1px solid rgba(176, 38, 255, 0.2);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.25s ease;
 }
 
 .commit-item:hover {
-  background: var(--color-cyan);
+  background: rgba(0, 245, 255, 0.1);
+  border-color: rgba(0, 245, 255, 0.35);
+  transform: translateX(4px);
 }
 
 .commit-item.selected {
-  background: var(--color-pink);
-  border: 2px solid var(--color-primary);
+  background: rgba(255, 0, 110, 0.12);
+  border-color: rgba(255, 0, 110, 0.5);
+  box-shadow: 0 0 12px rgba(255, 0, 110, 0.25);
 }
 
 .commit-hash {
   font-size: 11px;
-  font-family: 'Courier New', monospace;
-  color: var(--color-primary-deep);
-  background: rgba(255, 255, 255, 0.7);
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
+  background: rgba(0, 245, 255, 0.1);
+  border: 1px solid rgba(0, 245, 255, 0.25);
   padding: 2px 8px;
   border-radius: 6px;
   flex-shrink: 0;
@@ -680,13 +834,14 @@ onMounted(() => {
 
 .commit-message {
   font-size: 13px;
-  color: var(--color-text);
+  color: var(--text-base);
   margin-bottom: 2px;
 }
 
 .commit-meta {
   font-size: 11px;
-  color: var(--color-text-soft);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
 }
 
 .diff-section {
@@ -702,7 +857,8 @@ onMounted(() => {
 
 .diff-result {
   padding: 12px 16px;
-  background: rgba(74, 59, 71, 0.05);
+  background: rgba(5, 0, 16, 0.7);
+  border: 1px solid rgba(176, 38, 255, 0.2);
   border-radius: 10px;
   max-height: 300px;
   overflow-y: auto;
@@ -710,8 +866,9 @@ onMounted(() => {
 
 .diff-empty {
   text-align: center;
+  font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--color-text-soft);
+  color: var(--neon-lime);
   padding: 16px 0;
 }
 
@@ -723,38 +880,38 @@ onMounted(() => {
 
 .diff-line {
   display: flex;
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
 }
 
 .diff-line.add {
-  background: rgba(76, 175, 80, 0.15);
+  background: rgba(0, 245, 255, 0.12);
 }
 
 .diff-line.del {
-  background: rgba(244, 67, 54, 0.15);
+  background: rgba(255, 0, 110, 0.12);
 }
 
 .line-prefix {
-  width: 20px;
+  width: 22px;
   text-align: center;
   flex-shrink: 0;
   font-weight: 700;
 }
 
 .diff-line.add .line-prefix {
-  color: #4caf50;
+  color: var(--neon-cyan);
 }
 
 .diff-line.del .line-prefix {
-  color: #f44336;
+  color: var(--neon-magenta);
 }
 
 .line-content {
   flex: 1;
   white-space: pre-wrap;
   word-break: break-all;
-  color: var(--color-text);
+  color: var(--text-base);
 }
 </style>

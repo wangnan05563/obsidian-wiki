@@ -1,85 +1,85 @@
 @echo off
-chcp 65001 >nul 2>&1
-REM è„šæœ¬ä½äº scripts/ å­ç›®å½•ï¼Œåˆ‡å›é¡¹ç›®æ ¹ç›®å½•
+chcp 936 >nul 2>&1
+REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬ÇĞ»ØÏîÄ¿¸ùÄ¿Â¼
 cd /d "%~dp0.."
 
 echo ============================================
-echo   Karpathy-Wiki å‰ç«¯æ„å»º
+echo   Karpathy-Wiki Ç°¶Ë¹¹½¨
 echo ============================================
 echo.
 
-REM æ˜¾ç¤º Node.js ç‰ˆæœ¬
+REM ÏÔÊ¾ Node.js °æ±¾
 echo Node:
 node --version
 echo.
 
-REM [1/3] æ£€æŸ¥ä¾èµ–
-echo [1/3] æ£€æŸ¥ä¾èµ–...
+REM [1/3] ¼ì²éÒÀÀµ
+echo [1/3] ¼ì²éÒÀÀµ...
 
 where node >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] æœªæ£€æµ‹åˆ° Node.jsï¼
-    echo è¯·å…ˆè¿è¡Œ scripts\ç¯å¢ƒé…ç½®.bat
+    echo [ERROR] Î´¼ì²âµ½ Node.js£¡
+    echo ÇëÏÈÔËĞĞ scripts\»·¾³ÅäÖÃ.bat
     pause
     exit /b 1
 )
 
-REM æ£€æµ‹åŒ…ç®¡ç†å™¨
+REM ¼ì²â°ü¹ÜÀíÆ÷
 set PKG_CMD=npm
 where pnpm >nul 2>&1
 if not errorlevel 1 set PKG_CMD=pnpm
-echo ä½¿ç”¨åŒ…ç®¡ç†å™¨ï¼š%PKG_CMD%
+echo Ê¹ÓÃ°ü¹ÜÀíÆ÷£º%PKG_CMD%
 
-REM æ£€æŸ¥ node_modules
+REM ¼ì²é node_modules
 if not exist "node_modules" (
-    echo [ERROR] node_modules ä¸å­˜åœ¨ï¼
-    echo è¯·å…ˆè¿è¡Œ scripts\ç¯å¢ƒé…ç½®.bat
+    echo [ERROR] node_modules ²»´æÔÚ£¡
+    echo ÇëÏÈÔËĞĞ scripts\»·¾³ÅäÖÃ.bat
     pause
     exit /b 1
 )
 
-REM [2/3] æ¸…ç†æ—§æ„å»ºäº§ç‰©
+REM [2/3] ÇåÀí¾É¹¹½¨²úÎï
 echo.
-echo [2/3] æ¸…ç†æ—§æ„å»ºäº§ç‰©...
+echo [2/3] ÇåÀí¾É¹¹½¨²úÎï...
 
-REM vite.config.ts ä¸­ outDir æŒ‡å‘ services/api/public
-REM emptyOutDir: true ä¼šè‡ªåŠ¨æ¸…ç†ï¼Œè¿™é‡Œä»…æç¤º
+REM vite.config.ts ÖĞ outDir Ö¸Ïò services/api/public
+REM emptyOutDir: true »á×Ô¶¯ÇåÀí£¬ÕâÀï½öÌáÊ¾
 if exist "services\api\public" (
-    echo   æ—§äº§ç‰©ç›®å½• services\api\public å°†ç”± vite è‡ªåŠ¨æ¸…ç†
+    echo   ¾É²úÎïÄ¿Â¼ services\api\public ½«ÓÉ vite ×Ô¶¯ÇåÀí
 )
 
-REM [3/3] æ„å»ºå‰ç«¯
+REM [3/3] ¹¹½¨Ç°¶Ë
 echo.
-echo [3/3] æ„å»ºå‰ç«¯ SPA...
+echo [3/3] ¹¹½¨Ç°¶Ë SPA...
 
 %PKG_CMD% run build
 if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo [ERROR] æ„å»ºå¤±è´¥ï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹é”™è¯¯ä¿¡æ¯
+    echo [ERROR] ¹¹½¨Ê§°Ü£¬Çë¼ì²éÉÏ·½´íÎóĞÅÏ¢
     pause
     exit /b 1
 )
 
-REM éªŒè¯æ„å»ºäº§ç‰©
+REM ÑéÖ¤¹¹½¨²úÎï
 if not exist "services\api\public\index.html" (
     echo.
-    echo [ERROR] æ„å»ºå®Œæˆä½†æœªæ‰¾åˆ° index.html
-    echo è¯·æ£€æŸ¥ vite.config.ts çš„ outDir é…ç½®
+    echo [ERROR] ¹¹½¨Íê³Éµ«Î´ÕÒµ½ index.html
+    echo Çë¼ì²é vite.config.ts µÄ outDir ÅäÖÃ
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================
-echo   æ„å»ºå®Œæˆï¼
+echo   ¹¹½¨Íê³É£¡
 echo ============================================
-echo   äº§ç‰©ç›®å½•ï¼šservices\api\public\
-echo   äº§ç‰©å…¥å£ï¼šservices\api\public\index.html
+echo   ²úÎïÄ¿Â¼£ºservices\api\public\
+echo   ²úÎïÈë¿Ú£ºservices\api\public\index.html
 echo.
-echo   åç»­æ“ä½œï¼š
-echo   - å¼€å‘æ¨¡å¼ï¼šè¿è¡Œ scripts\å¯åŠ¨æœåŠ¡.bat
-echo   - ç”Ÿäº§æ¨¡å¼ï¼šåç«¯ Fastify ä¼šè‡ªåŠ¨æ‰˜ç®¡ services\api\public\
-echo   - æ‰“åŒ… EXEï¼šè¿è¡Œ scripts\æ„å»ºæ‰“åŒ….bat
+echo   ºóĞø²Ù×÷£º
+echo   - ¿ª·¢Ä£Ê½£ºÔËĞĞ scripts\Æô¶¯·şÎñ.bat
+echo   - Éú²úÄ£Ê½£ººó¶Ë Fastify »á×Ô¶¯ÍĞ¹Ü services\api\public\
+echo   - ´ò°ü EXE£ºÔËĞĞ scripts\¹¹½¨´ò°ü.bat
 echo ============================================
 echo.
 pause

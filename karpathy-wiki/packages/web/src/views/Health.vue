@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Warning, CircleCheck, Loading, Tools } from '@element-plus/icons-vue';
+import { Warning, CircleCheck, Tools } from '@element-plus/icons-vue';
 import RobotAvatar from '../components/RobotAvatar.vue';
 import type { HealthReport, FixRequest, FixProgressEvent } from '../types';
 
@@ -109,22 +109,26 @@ onMounted(() => {
 <template>
   <div class="health-page">
     <div class="glass-card health-card">
+      <!-- 不对称装饰块：旋转品红渐变 -->
+      <div class="card-deco"></div>
+
       <div class="health-head">
         <RobotAvatar :size="56" :floating="loading" />
         <div class="head-text">
-          <h2 class="head-title">知识库体检</h2>
+          <span class="head-tag">// SYSTEM DIAGNOSTIC</span>
+          <h2 class="head-title grad-text">知识库体检</h2>
           <p class="head-tip">检测孤立页面、断链与过期内容</p>
         </div>
-        <el-button size="small" :loading="loading" @click="runCheck">重新体检</el-button>
+        <el-button size="small" class="neon-btn" :loading="loading" @click="runCheck">重新体检</el-button>
       </div>
 
-      <!-- 体检结果摘要 -->
+      <!-- 体检结果摘要：霓虹状态徽章 -->
       <div v-if="report" class="summary-bar">
         <div class="summary-item" :class="healthStatus">
           <el-icon v-if="healthStatus === 'healthy'"><CircleCheck /></el-icon>
           <el-icon v-else><Warning /></el-icon>
           <span class="summary-text">
-            {{ healthStatus === 'healthy' ? '知识库状态良好' : `发现 ${totalIssues} 个问题` }}
+            {{ healthStatus === 'healthy' ? '系统状态良好 · ALL CLEAR' : `发现 ${totalIssues} 个问题 · NEEDS ATTENTION` }}
           </span>
         </div>
       </div>
@@ -132,15 +136,15 @@ onMounted(() => {
       <!-- 加载中 -->
       <div v-if="loading" class="health-loading">
         <RobotAvatar :size="100" :floating="true" />
-        <p>正在体检中…</p>
+        <p class="loading-text">// 扫描中…</p>
       </div>
 
       <!-- 体检详情 -->
       <div v-else-if="report" class="health-body">
         <!-- 孤立页面 -->
-        <div class="issue-section">
+        <div class="issue-section hover-glow">
           <div class="section-head">
-            <span class="section-icon">🏝️</span>
+            <span class="section-icon icon-orphan">◈</span>
             <span class="section-title">孤立页面</span>
             <span class="section-count" :class="{ 'has-issue': orphanCount > 0 }">
               {{ orphanCount }}
@@ -152,7 +156,7 @@ onMounted(() => {
               <code>{{ p }}</code>
               <el-button
                 size="small"
-                type="primary"
+                class="neon-btn"
                 :loading="fixingKey === `orphan:${p}`"
                 :disabled="fixingKey !== ''"
                 :icon="Tools"
@@ -162,13 +166,13 @@ onMounted(() => {
               </el-button>
             </div>
           </div>
-          <div v-else class="no-issue">无孤立页面</div>
+          <div v-else class="no-issue">▸ 无孤立页面</div>
         </div>
 
         <!-- 断链 -->
-        <div class="issue-section">
+        <div class="issue-section hover-glow">
           <div class="section-head">
-            <span class="section-icon">🔗</span>
+            <span class="section-icon icon-broken">⟶</span>
             <span class="section-title">断开链接</span>
             <span class="section-count" :class="{ 'has-issue': brokenCount > 0 }">
               {{ brokenCount }}
@@ -178,11 +182,11 @@ onMounted(() => {
           <div v-if="brokenCount > 0" class="issue-list">
             <div v-for="(b, idx) in report.brokenLinks" :key="idx" class="issue-item broken">
               <code>{{ b.from }}</code>
-              <span class="arrow">→</span>
+              <span class="arrow">⟶</span>
               <code class="broken-target">[[{{ b.to }}]]</code>
               <el-button
                 size="small"
-                type="primary"
+                class="neon-btn"
                 :loading="fixingKey === `broken:${idx}`"
                 :disabled="fixingKey !== ''"
                 :icon="Tools"
@@ -192,13 +196,13 @@ onMounted(() => {
               </el-button>
             </div>
           </div>
-          <div v-else class="no-issue">无断链</div>
+          <div v-else class="no-issue">▸ 无断链</div>
         </div>
 
         <!-- 过期页面 -->
-        <div class="issue-section">
+        <div class="issue-section hover-glow">
           <div class="section-head">
-            <span class="section-icon">⏰</span>
+            <span class="section-icon icon-stale">⏱</span>
             <span class="section-title">过期页面</span>
             <span class="section-count" :class="{ 'has-issue': staleCount > 0 }">
               {{ staleCount }}
@@ -210,13 +214,13 @@ onMounted(() => {
               <code>{{ p }}</code>
             </div>
           </div>
-          <div v-else class="no-issue">无过期页面</div>
+          <div v-else class="no-issue">▸ 无过期页面</div>
         </div>
 
         <!-- 修复进度日志 -->
         <div v-if="fixLogs.length > 0" class="fix-log-section">
           <div class="section-head">
-            <span class="section-icon">🔧</span>
+            <span class="section-icon icon-fix">⚡</span>
             <span class="section-title">修复进度</span>
           </div>
           <div class="fix-log-list">
@@ -244,10 +248,30 @@ onMounted(() => {
 }
 
 .health-card {
+  position: relative;
   padding: 24px 28px;
+  overflow: hidden;
+}
+
+/* 不对称装饰块：旋转品红渐变 */
+.card-deco {
+  position: absolute;
+  top: -50px;
+  right: -30px;
+  width: 200px;
+  height: 200px;
+  background: var(--grad-fire);
+  filter: blur(55px);
+  opacity: 0.3;
+  transform: rotate(20deg);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .health-head {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -258,62 +282,112 @@ onMounted(() => {
   flex: 1;
 }
 
+.head-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--neon-cyan);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
 .head-title {
   margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
 }
 
 .head-tip {
   margin: 0;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   font-size: 13px;
 }
 
+.neon-btn {
+  background: var(--bg-glass) !important;
+  border: 1px solid rgba(176, 38, 255, 0.4) !important;
+  color: var(--text-bright) !important;
+  font-family: var(--font-mono) !important;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease !important;
+}
+
+.neon-btn:hover:not(.is-disabled) {
+  border-color: var(--neon-cyan) !important;
+  box-shadow: var(--glow-cyan) !important;
+  color: var(--neon-cyan) !important;
+}
+
+/* 摘要徽章：健康=青蓝渐变，警告=品红渐变 */
 .summary-bar {
+  position: relative;
+  z-index: 1;
   margin-bottom: 24px;
 }
 
 .summary-item {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  border-radius: 16px;
-  font-size: 15px;
-  font-weight: 600;
+  gap: 10px;
+  padding: 10px 22px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid;
 }
 
 .summary-item.healthy {
-  background: var(--color-cyan);
-  color: var(--color-text);
+  background: linear-gradient(135deg, rgba(0, 245, 255, 0.2), rgba(0, 245, 255, 0.05));
+  border-color: rgba(0, 245, 255, 0.5);
+  color: var(--neon-cyan);
+  box-shadow: 0 0 20px rgba(0, 245, 255, 0.3);
 }
 
 .summary-item.warning {
-  background: var(--color-yellow);
-  color: var(--color-text);
+  background: linear-gradient(135deg, rgba(255, 0, 110, 0.2), rgba(255, 0, 110, 0.05));
+  border-color: rgba(255, 0, 110, 0.5);
+  color: var(--neon-magenta);
+  box-shadow: 0 0 20px rgba(255, 0, 110, 0.3);
 }
 
 .health-loading {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 16px;
   padding: 60px 0;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
+}
+
+.loading-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--neon-cyan);
+  letter-spacing: 0.1em;
 }
 
 .health-body {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
 }
 
 .issue-section {
   padding: 18px 22px;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(5, 0, 16, 0.5);
+  border: 1px solid rgba(176, 38, 255, 0.2);
   border-radius: var(--radius-card);
+  transition: all 0.3s ease;
 }
 
 .section-head {
@@ -324,33 +398,50 @@ onMounted(() => {
 }
 
 .section-icon {
-  font-size: 20px;
+  font-size: 18px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
 }
 
+/* 不同问题类型用不同霓虹色 */
+.icon-orphan { color: var(--neon-magenta); text-shadow: 0 0 8px var(--neon-magenta); }
+.icon-broken { color: var(--neon-purple); text-shadow: 0 0 8px var(--neon-purple); }
+.icon-stale { color: var(--neon-cyan); text-shadow: 0 0 8px var(--neon-cyan); }
+.icon-fix { color: var(--neon-lime); text-shadow: 0 0 8px var(--neon-lime); }
+
 .section-title {
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 15px;
   font-weight: 700;
-  color: var(--color-text);
+  color: var(--text-bright);
+  letter-spacing: 0.03em;
+  flex: 1;
 }
 
 .section-count {
-  padding: 2px 12px;
-  border-radius: 12px;
+  padding: 2px 14px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 700;
-  background: var(--color-cyan);
-  color: var(--color-text);
+  background: rgba(0, 245, 255, 0.15);
+  border: 1px solid rgba(0, 245, 255, 0.4);
+  color: var(--neon-cyan);
 }
 
 .section-count.has-issue {
-  background: var(--color-error);
-  color: #fff;
+  background: rgba(255, 0, 110, 0.15);
+  border-color: rgba(255, 0, 110, 0.5);
+  color: var(--neon-magenta);
+  box-shadow: 0 0 12px rgba(255, 0, 110, 0.4);
 }
 
 .section-desc {
+  font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--color-text-soft);
+  color: var(--text-dim);
   margin-bottom: 12px;
+  letter-spacing: 0.02em;
 }
 
 .issue-list {
@@ -362,39 +453,55 @@ onMounted(() => {
 .issue-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--color-pink);
-  border-radius: 10px;
+  gap: 10px;
+  padding: 9px 14px;
+  background: rgba(176, 38, 255, 0.08);
+  border: 1px solid rgba(176, 38, 255, 0.2);
+  border-radius: var(--radius-input);
   font-size: 13px;
+  transition: all 0.25s ease;
+}
+
+.issue-item:hover {
+  background: rgba(176, 38, 255, 0.15);
+  border-color: rgba(176, 38, 255, 0.4);
+  transform: translateX(4px);
 }
 
 .issue-item code {
-  padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.7);
+  padding: 3px 10px;
+  background: rgba(0, 245, 255, 0.1);
+  border: 1px solid rgba(0, 245, 255, 0.25);
   border-radius: 6px;
   font-size: 12px;
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
 }
 
 .issue-item.broken .arrow {
-  color: var(--color-text-soft);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
 }
 
 .broken-target {
-  color: var(--color-error) !important;
+  color: var(--neon-magenta) !important;
+  border-color: rgba(255, 0, 110, 0.4) !important;
+  background: rgba(255, 0, 110, 0.1) !important;
   font-weight: 600;
 }
 
 .no-issue {
+  font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--color-text-soft);
+  color: var(--neon-lime);
   padding: 8px 0;
+  letter-spacing: 0.03em;
 }
 
 .fix-log-section {
   padding: 18px 22px;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(5, 0, 16, 0.6);
+  border: 1px solid rgba(193, 255, 62, 0.25);
   border-radius: var(--radius-card);
 }
 
@@ -408,39 +515,45 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px;
-  background: var(--color-cyan);
+  padding: 7px 14px;
+  background: rgba(193, 255, 62, 0.08);
+  border: 1px solid rgba(193, 255, 62, 0.2);
   border-radius: 8px;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
 .fix-log-item.error {
-  background: var(--color-pink);
+  background: rgba(255, 0, 110, 0.12);
+  border-color: rgba(255, 0, 110, 0.35);
 }
 
 .fix-log-item.done {
-  background: var(--color-cyan);
+  background: rgba(0, 245, 255, 0.1);
+  border-color: rgba(0, 245, 255, 0.35);
 }
 
 .log-step {
-  padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 8px;
-  font-weight: 600;
+  padding: 2px 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  font-weight: 700;
   font-size: 11px;
   flex-shrink: 0;
+  color: var(--text-bright);
 }
 
 .log-message {
   flex: 1;
-  color: var(--color-text);
+  color: var(--text-base);
 }
 
 .log-tool {
-  padding: 2px 6px;
-  background: rgba(255, 255, 255, 0.6);
+  padding: 2px 8px;
+  background: rgba(0, 245, 255, 0.1);
+  border: 1px solid rgba(0, 245, 255, 0.25);
   border-radius: 6px;
-  font-family: 'Courier New', monospace;
+  color: var(--neon-cyan);
   font-size: 11px;
   flex-shrink: 0;
 }

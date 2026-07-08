@@ -1,33 +1,33 @@
 @echo off
-chcp 65001 >nul 2>&1
-REM è„šæœ¬ä½äº scripts/ å­ç›®å½•ï¼Œè°ƒç”¨åŒç›®å½•ä¸‹ build-exe.ps1
+chcp 936 >nul 2>&1
+REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬µ÷ÓÃÍ¬Ä¿Â¼ÏÂ build-exe.ps1
 cd /d "%~dp0.."
 
 echo ============================================
-echo   Karpathy-Wiki EXE ä¸€é”®æ„å»ºï¼ˆè°ƒç”¨ PowerShell è„šæœ¬ï¼‰
+echo   Karpathy-Wiki EXE Ò»¼ü¹¹½¨£¨µ÷ÓÃ PowerShell ½Å±¾£©
 echo ============================================
 echo.
-echo æ„å»ºæµç¨‹ï¼š
-echo   1. æ£€æŸ¥ä¾èµ–ï¼ˆNode.js / pnpm / @yao-pkg/pkg / esbuildï¼‰
-echo   2. æ„å»º @wiki/harnessï¼ˆå¦‚å­˜åœ¨æœ¬åœ°åŒ…ï¼‰
-echo   3. æ„å»º SPAï¼ˆvite buildï¼‰
-echo   4. esbuild æ‰“åŒ…åç«¯ TS â†’ CJS å•æ–‡ä»¶
-echo   5. @yao-pkg/pkg æ‰“åŒ… â†’ exe
-echo   6. å¤åˆ¶å¤–ç½®èµ„æºï¼ˆSPA + config + vault é»˜è®¤ç»“æ„ + promptsï¼‰
-echo   7. åˆ¶ä½œå®‰è£…åŒ…ï¼ˆInno Setupï¼Œæœªå®‰è£…æ—¶è‡ªåŠ¨å®‰è£…ï¼‰
+echo ¹¹½¨Á÷³Ì£º
+echo   1. ¼ì²éÒÀÀµ£¨Node.js / pnpm / @yao-pkg/pkg / esbuild£©
+echo   2. ¹¹½¨ @wiki/harness£¨Èç´æÔÚ±¾µØ°ü£©
+echo   3. ¹¹½¨ SPA£¨vite build£©
+echo   4. esbuild ´ò°üºó¶Ë TS ¡ú CJS µ¥ÎÄ¼ş
+echo   5. @yao-pkg/pkg ´ò°ü ¡ú exe
+echo   6. ¸´ÖÆÍâÖÃ×ÊÔ´£¨SPA + config + vault Ä¬ÈÏ½á¹¹ + prompts£©
+echo   7. ÖÆ×÷°²×°°ü£¨Inno Setup£¬Î´°²×°Ê±×Ô¶¯°²×°£©
 echo.
-echo äº§ç‰©ï¼šdist\karpathy-wiki\karpathy-wiki.exe
+echo ²úÎï£ºdist\karpathy-wiki\karpathy-wiki.exe
 echo.
 
-REM -NoProfileï¼šé¿å…ç”¨æˆ·è‡ªå®šä¹‰ profile å¹²æ‰°
-REM -ExecutionPolicy Bypassï¼šç»•è¿‡æ‰§è¡Œç­–ç•¥é™åˆ¶
-REM -Fileï¼šæŒ‡å®šè¦æ‰§è¡Œçš„ ps1 è„šæœ¬ï¼Œ%* é€ä¼ æ‰€æœ‰å‘½ä»¤è¡Œå‚æ•°ï¼ˆä¾‹å¦‚ -SkipSPA -SkipDepsï¼‰
+REM -NoProfile£º±ÜÃâÓÃ»§×Ô¶¨Òå profile ¸ÉÈÅ
+REM -ExecutionPolicy Bypass£ºÈÆ¹ıÖ´ĞĞ²ßÂÔÏŞÖÆ
+REM -File£ºÖ¸¶¨ÒªÖ´ĞĞµÄ ps1 ½Å±¾£¬%* Í¸´«ËùÓĞÃüÁîĞĞ²ÎÊı£¨ÀıÈç -SkipSPA -SkipDeps£©
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build-exe.ps1" %*
 
-REM PowerShell è„šæœ¬é€€å‡ºç é€ä¼ 
+REM PowerShell ½Å±¾ÍË³öÂëÍ¸´«
 if errorlevel 1 (
     echo.
-    echo [ERROR] æ„å»ºå¤±è´¥ï¼Œè¯·æŸ¥çœ‹ä¸Šæ–¹é”™è¯¯ä¿¡æ¯
+    echo [ERROR] ¹¹½¨Ê§°Ü£¬Çë²é¿´ÉÏ·½´íÎóĞÅÏ¢
     echo.
     pause
     exit /b 1
@@ -35,15 +35,15 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo   æ„å»ºå®Œæˆï¼
+echo   ¹¹½¨Íê³É£¡
 echo ============================================
-echo   è¾“å‡ºç›®å½•ï¼šdist\karpathy-wiki\
-echo   ä¸»ç¨‹åºï¼š  dist\karpathy-wiki\karpathy-wiki.exe
+echo   Êä³öÄ¿Â¼£ºdist\karpathy-wiki\
+echo   Ö÷³ÌĞò£º  dist\karpathy-wiki\karpathy-wiki.exe
 echo.
-echo   äº§ç‰©ï¼š
-echo   - EXEï¼šdist\karpathy-wiki\karpathy-wiki.exe
-echo   - å®‰è£…åŒ…ï¼šdist\KarpathyWiki-Setup-v*.exeï¼ˆéœ€ Inno Setupï¼‰
-echo   - å¯ç›´æ¥è¿è¡Œ dist\karpathy-wiki\karpathy-wiki.exe å¯åŠ¨
+echo   ²úÎï£º
+echo   - EXE£ºdist\karpathy-wiki\karpathy-wiki.exe
+echo   - °²×°°ü£ºdist\KarpathyWiki-Setup-v*.exe£¨Ğè Inno Setup£©
+echo   - ¿ÉÖ±½ÓÔËĞĞ dist\karpathy-wiki\karpathy-wiki.exe Æô¶¯
 echo ============================================
 echo.
 pause

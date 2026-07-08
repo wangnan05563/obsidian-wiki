@@ -16,16 +16,13 @@ const urlInput = ref('');
 const textInput = ref('');
 const selectedFile = ref<File | null>(null);
 
-// 是否可以投递：每种方式各自校验
 const canSubmit = computed(() => {
   if (activeTab.value === 'file') return !!selectedFile.value;
   if (activeTab.value === 'url') return urlInput.value.trim().length > 0;
   return textInput.value.trim().length > 0;
 });
 
-// el-upload 选择文件后保存到 ref，不真正上传
 function handleFileChange(file: UploadFile) {
-  // raw 才是真正的 File 对象
   selectedFile.value = file.raw ?? null;
 }
 
@@ -33,7 +30,6 @@ function handleFileRemove() {
   selectedFile.value = null;
 }
 
-// 控制是否手动上传：返回 false 阻止 element-plus 自动上传
 function disableAutoUpload(): boolean {
   return false;
 }
@@ -61,13 +57,11 @@ function handleSubmit() {
     ElMessage.warning('请先准备好要投递的资料');
     return;
   }
-  // 载荷预存到 store，进度页据此发起 SSE 请求
   store.prepareCompile(payload);
   emit('start');
 }
 
 function resetInputs() {
-  // 投递成功切到进度页后，清空当前页输入便于下次重新投递
   selectedFile.value = null;
   urlInput.value = '';
   textInput.value = '';
@@ -76,15 +70,23 @@ function resetInputs() {
 
 <template>
   <div class="ingest-page">
-    <div class="empty-hero">
-      <RobotAvatar :size="160" :floating="true" />
-      <h2 class="hero-title">投递第一篇资料</h2>
-      <p class="hero-tip">
-        上传文件、粘贴 URL 或直接贴文本，机器人会按 SCHEMA 编译为知识库页面
-      </p>
+    <!-- 不对称英雄区：机器人偏左，标题偏右 -->
+    <div class="hero-section fade-up">
+      <div class="hero-orb"></div>
+      <div class="hero-left">
+        <RobotAvatar :size="150" :floating="true" />
+      </div>
+      <div class="hero-right">
+        <span class="hero-tag">// INGEST PIPELINE</span>
+        <h2 class="hero-title grad-text">投递第一篇资料</h2>
+        <p class="hero-tip">
+          上传文件、粘贴 URL 或直接贴文本，机器人会按 SCHEMA 编译为知识库页面
+        </p>
+      </div>
     </div>
 
-    <div class="glass-card ingest-card">
+    <div class="glass-card ingest-card fade-up" style="animation-delay: 0.2s">
+      <div class="card-deco"></div>
       <el-tabs v-model="activeTab" class="ingest-tabs">
         <el-tab-pane label="文件上传" name="file">
           <el-upload
@@ -97,9 +99,9 @@ function resetInputs() {
             accept=".md,.txt,.pdf,.html,.json"
           >
             <div class="upload-inner">
-              <div class="upload-emoji">📎</div>
+              <div class="upload-icon">↓</div>
               <div class="upload-text">将文件拖到此处，或点击上传</div>
-              <div class="upload-hint">支持 md / txt / pdf / html / json</div>
+              <div class="upload-hint">SUPPORT: md / txt / pdf / html / json</div>
             </div>
           </el-upload>
         </el-tab-pane>
@@ -111,7 +113,7 @@ function resetInputs() {
             clearable
             size="large"
           >
-            <template #prepend>🔗</template>
+            <template #prepend>URI</template>
           </el-input>
           <p class="input-hint">机器人会抓取该 URL 内容并编译</p>
         </el-tab-pane>
@@ -147,70 +149,135 @@ function resetInputs() {
 .ingest-page {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 28px;
 }
 
-.empty-hero {
+/* 英雄区：不对称布局 + 发光球装饰 */
+.hero-section {
+  position: relative;
+  padding: 36px 40px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  text-align: center;
-  padding: 32px 0 8px;
+  gap: 36px;
+  overflow: hidden;
+}
+
+.hero-orb {
+  position: absolute;
+  top: -80px;
+  left: 40%;
+  width: 280px;
+  height: 280px;
+  background: radial-gradient(circle, var(--neon-purple), transparent 70%);
+  filter: blur(60px);
+  opacity: 0.3;
+  pointer-events: none;
+  animation: orb-float-1 12s ease-in-out infinite;
+}
+
+.hero-left {
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.hero-right {
+  z-index: 1;
+}
+
+.hero-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+  letter-spacing: 2px;
+  display: block;
+  margin-bottom: 10px;
 }
 
 .hero-title {
-  margin: 16px 0 8px;
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--color-text);
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  line-height: 1.1;
 }
 
 .hero-tip {
   margin: 0;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
   max-width: 480px;
-  line-height: 1.6;
+  line-height: 1.7;
+  font-size: 14px;
 }
 
 .ingest-card {
-  padding: 24px 28px;
+  padding: 28px 32px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 卡片装饰：倾斜渐变块 */
+.card-deco {
+  position: absolute;
+  bottom: -40px;
+  right: -40px;
+  width: 200px;
+  height: 200px;
+  background: var(--grad-cool);
+  opacity: 0.08;
+  transform: rotate(20deg);
+  border-radius: 32px;
+  pointer-events: none;
 }
 
 .ingest-tabs {
-  --el-color-primary: var(--color-primary-deep);
+  --el-color-primary: var(--neon-magenta);
+  position: relative;
+  z-index: 1;
 }
 
 .upload-inner {
-  padding: 24px 0;
+  padding: 32px 0;
 }
 
-.upload-emoji {
-  font-size: 40px;
-  margin-bottom: 8px;
+.upload-icon {
+  font-size: 48px;
+  color: var(--neon-cyan);
+  margin-bottom: 12px;
+  font-family: var(--font-display);
+  text-shadow: var(--glow-cyan);
+  animation: neon-pulse 2s ease-in-out infinite;
 }
 
 .upload-text {
   font-size: 15px;
-  color: var(--color-text);
+  color: var(--text-bright);
   font-weight: 600;
+  font-family: var(--font-body);
 }
 
 .upload-hint {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--color-text-soft);
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  letter-spacing: 2px;
 }
 
 .input-hint {
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   font-size: 12px;
-  color: var(--color-text-soft);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  letter-spacing: 0.5px;
 }
 
 .submit-bar {
-  margin-top: 20px;
+  margin-top: 24px;
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 14px;
+  position: relative;
+  z-index: 1;
 }
 </style>

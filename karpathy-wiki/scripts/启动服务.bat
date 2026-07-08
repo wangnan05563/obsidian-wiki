@@ -1,6 +1,6 @@
 @echo off
-chcp 65001 >nul 2>&1
-REM è„šæœ¬ä½äºŽ scripts/ å­ç›®å½•ï¼Œåˆ‡å›žé¡¹ç›®æ ¹ç›®å½•
+chcp 936 >nul 2>&1
+REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬ÇÐ»ØÏîÄ¿¸ùÄ¿Â¼
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
@@ -8,55 +8,55 @@ echo ========================================
 echo   Karpathy-Wiki Starting...
 echo ========================================
 
-REM [1/4] æ¸…ç†æ—§è¿›ç¨‹ï¼ˆé€šè¿‡ PID æ–‡ä»¶ + ç«¯å£æ‰«æï¼‰
-echo [1/4] æ¸…ç†æ—§è¿›ç¨‹...
+REM [1/4] ÇåÀí¾É½ø³Ì£¨Í¨¹ý PID ÎÄ¼þ + ¶Ë¿ÚÉ¨Ãè£©
+echo [1/4] ÇåÀí¾É½ø³Ì...
 
 if not exist "logs" mkdir logs
 
-REM æ€æŽ‰å ç”¨ 3000 ç«¯å£çš„è¿›ç¨‹ï¼ˆåŽç«¯ APIï¼‰
+REM É±µôÕ¼ÓÃ 3000 ¶Ë¿ÚµÄ½ø³Ì£¨ºó¶Ë API£©
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000.*LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
 )
 
-REM æ€æŽ‰å ç”¨ 5173 ç«¯å£çš„è¿›ç¨‹ï¼ˆå‰ç«¯ Viteï¼‰
+REM É±µôÕ¼ÓÃ 5173 ¶Ë¿ÚµÄ½ø³Ì£¨Ç°¶Ë Vite£©
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173.*LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
 )
 
 timeout /t 1 >nul 2>&1
 
-REM [2/4] æ£€æŸ¥ä¾èµ–
-echo [2/4] æ£€æŸ¥ä¾èµ–...
+REM [2/4] ¼ì²éÒÀÀµ
+echo [2/4] ¼ì²éÒÀÀµ...
 
 where node >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] æœªæ£€æµ‹åˆ° Node.jsï¼
-    echo è¯·è¿è¡Œ scripts\çŽ¯å¢ƒé…ç½®.bat ä¸€é”®å®‰è£…çŽ¯å¢ƒ
+    echo [ERROR] Î´¼ì²âµ½ Node.js£¡
+    echo ÇëÔËÐÐ scripts\»·¾³ÅäÖÃ.bat Ò»¼ü°²×°»·¾³
     pause
     exit /b 1
 )
 
-REM æ£€æµ‹åŒ…ç®¡ç†å™¨ï¼ˆpnpm ä¼˜å…ˆï¼Œå›žé€€ npmï¼‰
+REM ¼ì²â°ü¹ÜÀíÆ÷£¨pnpm ÓÅÏÈ£¬»ØÍË npm£©
 set PKG_CMD=npm
 where pnpm >nul 2>&1
 if not errorlevel 1 set PKG_CMD=pnpm
 
-REM æ£€æŸ¥ node_modules æ˜¯å¦å­˜åœ¨
+REM ¼ì²é node_modules ÊÇ·ñ´æÔÚ
 if not exist "node_modules" (
-    echo [ERROR] node_modules ä¸å­˜åœ¨ï¼
-    echo è¯·å…ˆè¿è¡Œ scripts\çŽ¯å¢ƒé…ç½®.bat
+    echo [ERROR] node_modules ²»´æÔÚ£¡
+    echo ÇëÏÈÔËÐÐ scripts\»·¾³ÅäÖÃ.bat
     pause
     exit /b 1
 )
 
-REM [3/4] å¯åŠ¨åŽç«¯ API + å‰ç«¯ Web
-echo [3/4] å¯åŠ¨æœåŠ¡ï¼ˆä½¿ç”¨ %PKG_CMD%ï¼‰...
+REM [3/4] Æô¶¯ºó¶Ë API + Ç°¶Ë Web
+echo [3/4] Æô¶¯·þÎñ£¨Ê¹ÓÃ %PKG_CMD%£©...
 
-REM å¯åŠ¨åŽç«¯ APIï¼ˆæ–°çª—å£ï¼‰
+REM Æô¶¯ºó¶Ë API£¨ÐÂ´°¿Ú£©
 start "KarpathyWiki-API" cmd /c "%PKG_CMD% dev:api 2>&1 & pause"
 
-REM ç­‰å¾…åŽç«¯ç«¯å£å°±ç»ªï¼ˆæœ€å¤š 30 ç§’ï¼‰
-echo ç­‰å¾…åŽç«¯ API å°±ç»ª...
+REM µÈ´ýºó¶Ë¶Ë¿Ú¾ÍÐ÷£¨×î¶à 30 Ãë£©
+echo µÈ´ýºó¶Ë API ¾ÍÐ÷...
 set /a tries=0
 :wait_api
 set /a tries+=1
@@ -64,17 +64,17 @@ ping -n 2 127.0.0.1 >nul 2>&1
 netstat -aon | findstr ":3000.*LISTENING" >nul 2>&1
 if errorlevel 1 (
     if !tries! lss 15 goto wait_api
-    echo [ERROR] åŽç«¯ API 30 ç§’å†…æœªå¯åŠ¨ï¼
-    echo è¯·æ£€æŸ¥ services\api ç›®å½•ä¸‹çš„é…ç½®
+    echo [ERROR] ºó¶Ë API 30 ÃëÄÚÎ´Æô¶¯£¡
+    echo Çë¼ì²é services\api Ä¿Â¼ÏÂµÄÅäÖÃ
     pause
     exit /b 1
 )
-echo   åŽç«¯ API å·²å¯åŠ¨ï¼šhttp://localhost:3000
+echo   ºó¶Ë API ÒÑÆô¶¯£ºhttp://localhost:3000
 
-REM å¯åŠ¨å‰ç«¯ Webï¼ˆæ–°çª—å£ï¼‰
+REM Æô¶¯Ç°¶Ë Web£¨ÐÂ´°¿Ú£©
 start "KarpathyWiki-Web" cmd /c "%PKG_CMD% dev:web 2>&1 & pause"
 
-REM ç­‰å¾…å‰ç«¯ç«¯å£å°±ç»ªï¼ˆæœ€å¤š 15 ç§’ï¼‰
+REM µÈ´ýÇ°¶Ë¶Ë¿Ú¾ÍÐ÷£¨×î¶à 15 Ãë£©
 set /a tries=0
 :wait_web
 set /a tries+=1
@@ -82,30 +82,30 @@ ping -n 2 127.0.0.1 >nul 2>&1
 netstat -aon | findstr ":5173.*LISTENING" >nul 2>&1
 if errorlevel 1 (
     if !tries! lss 10 goto wait_web
-    echo [WARN] å‰ç«¯ Web å¯åŠ¨è¾ƒæ…¢ï¼Œå¯ç¨åŽæ‰‹åŠ¨è®¿é—®
+    echo [WARN] Ç°¶Ë Web Æô¶¯½ÏÂý£¬¿ÉÉÔºóÊÖ¶¯·ÃÎÊ
 ) else (
-    echo   å‰ç«¯ Web å·²å¯åŠ¨ï¼šhttp://localhost:5173
+    echo   Ç°¶Ë Web ÒÑÆô¶¯£ºhttp://localhost:5173
 )
 
-REM [4/4] éªŒè¯æœåŠ¡
-echo [4/4] éªŒè¯æœåŠ¡...
+REM [4/4] ÑéÖ¤·þÎñ
+echo [4/4] ÑéÖ¤·þÎñ...
 
 netstat -aon | findstr ":3000.*LISTENING" >nul 2>&1
 if not errorlevel 1 (
-    echo   [OK] åŽç«¯ API è¿è¡Œä¸­
+    echo   [OK] ºó¶Ë API ÔËÐÐÖÐ
 ) else (
-    echo   [FAIL] åŽç«¯ API æœªè¿è¡Œ
+    echo   [FAIL] ºó¶Ë API Î´ÔËÐÐ
 )
 
 echo.
 echo ========================================
-echo   æœåŠ¡å·²å¯åŠ¨ï¼
+echo   ·þÎñÒÑÆô¶¯£¡
 echo ========================================
-echo   åŽç«¯ APIï¼šhttp://localhost:3000
-echo   å‰ç«¯ Webï¼šhttp://localhost:5173
-echo   å¥åº·æ£€æŸ¥ï¼šhttp://localhost:3000/health
+echo   ºó¶Ë API£ºhttp://localhost:3000
+echo   Ç°¶Ë Web£ºhttp://localhost:5173
+echo   ½¡¿µ¼ì²é£ºhttp://localhost:3000/health
 echo.
-echo åœæ­¢æœåŠ¡ï¼šåŒå‡» scripts\åœæ­¢æœåŠ¡.bat
+echo Í£Ö¹·þÎñ£ºË«»÷ scripts\Í£Ö¹·þÎñ.bat
 echo.
 
 start "" http://localhost:5173

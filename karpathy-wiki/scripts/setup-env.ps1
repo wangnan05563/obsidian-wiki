@@ -1,32 +1,32 @@
 <#
 .SYNOPSIS
-    Karpathy-Wiki ä¸€é”®ç¯å¢ƒé…ç½®è„šæœ¬ï¼ˆå¢å¼ºç‰ˆï¼‰
+    Karpathy-Wiki Ò»¼ü»·¾³ÅäÖÃ½Å±¾£¨ÔöÇ¿°æ£©
 .DESCRIPTION
-    åœ¨æ–° PC ä¸Šè‡ªåŠ¨æ£€æµ‹ã€å®‰è£…é¡¹ç›®æ‰€éœ€çš„å…¨éƒ¨ä¾èµ–ï¼Œå¹¶å®Œæˆé¡¹ç›®åˆå§‹åŒ–ã€‚
-    è¦†ç›–ï¼šNode.js 18+ / pnpm / @wiki/harness / å‰åç«¯ä¾èµ– / Vault åˆå§‹åŒ– / å‘å¯¼å¼é…ç½®ã€‚
-    é»˜è®¤ä»…å®‰è£…ç¼ºå¤±é¡¹ï¼Œå·²å­˜åœ¨ä¸”ç‰ˆæœ¬è¾¾æ ‡çš„ä¾èµ–ä¼šè·³è¿‡ï¼Œå¯é‡å¤æ‰§è¡Œã€‚
-    æœ¬è„šæœ¬åœ¨ install.ps1 åŸºç¡€ä¸Šå¢å¼ºï¼šæ–°å¢ç³»ç»Ÿçº§è½¯ä»¶è‡ªåŠ¨å®‰è£…ï¼ˆwingetï¼‰ã€‚
+    ÔÚĞÂ PC ÉÏ×Ô¶¯¼ì²â¡¢°²×°ÏîÄ¿ËùĞèµÄÈ«²¿ÒÀÀµ£¬²¢Íê³ÉÏîÄ¿³õÊ¼»¯¡£
+    ¸²¸Ç£ºNode.js 18+ / pnpm / @wiki/harness / Ç°ºó¶ËÒÀÀµ / Vault ³õÊ¼»¯ / Ïòµ¼Ê½ÅäÖÃ¡£
+    Ä¬ÈÏ½ö°²×°È±Ê§Ïî£¬ÒÑ´æÔÚÇÒ°æ±¾´ï±êµÄÒÀÀµ»áÌø¹ı£¬¿ÉÖØ¸´Ö´ĞĞ¡£
+    ±¾½Å±¾ÔÚ install.ps1 »ù´¡ÉÏÔöÇ¿£ºĞÂÔöÏµÍ³¼¶Èí¼ş×Ô¶¯°²×°£¨winget£©¡£
 .PARAMETER SkipSystem
-    è·³è¿‡ç³»ç»Ÿçº§è½¯ä»¶ï¼ˆNode.js/pnpmï¼‰çš„å®‰è£…ï¼Œä»…åšé¡¹ç›®çº§åˆå§‹åŒ–ã€‚
-    é€‚ç”¨åœºæ™¯ï¼šå·²æ‰‹åŠ¨å®‰è£…å¥½è¿è¡Œæ—¶ï¼Œæˆ–æ— ç®¡ç†å‘˜æƒé™æ— æ³•å®‰è£…ç³»ç»Ÿè½¯ä»¶ã€‚
+    Ìø¹ıÏµÍ³¼¶Èí¼ş£¨Node.js/pnpm£©µÄ°²×°£¬½ö×öÏîÄ¿¼¶³õÊ¼»¯¡£
+    ÊÊÓÃ³¡¾°£ºÒÑÊÖ¶¯°²×°ºÃÔËĞĞÊ±£¬»òÎŞ¹ÜÀíÔ±È¨ÏŞÎŞ·¨°²×°ÏµÍ³Èí¼ş¡£
 .PARAMETER SkipWizard
-    è·³è¿‡å‘å¯¼å¼åˆå§‹åŒ–ï¼ˆVault è·¯å¾„ / æ¨¡å‹é€‰æ‹© / API Keyï¼‰ã€‚
+    Ìø¹ıÏòµ¼Ê½³õÊ¼»¯£¨Vault Â·¾¶ / Ä£ĞÍÑ¡Ôñ / API Key£©¡£
 .PARAMETER StartService
-    å…¨éƒ¨å®Œæˆåè‡ªåŠ¨å¯åŠ¨æœåŠ¡ã€‚
+    È«²¿Íê³Éºó×Ô¶¯Æô¶¯·şÎñ¡£
 .PARAMETER VaultPath
-    è‡ªå®šä¹‰ Vault è·¯å¾„ï¼Œé»˜è®¤ ./vault
+    ×Ô¶¨Òå Vault Â·¾¶£¬Ä¬ÈÏ ./vault
 .EXAMPLE
     .\setup-env.ps1
-    æ ‡å‡†æ‰§è¡Œï¼šæ£€æµ‹å¹¶è¡¥é½ç¼ºå¤±ä¾èµ–ï¼Œå®Œæˆé¡¹ç›®åˆå§‹åŒ–ã€‚
+    ±ê×¼Ö´ĞĞ£º¼ì²â²¢²¹ÆëÈ±Ê§ÒÀÀµ£¬Íê³ÉÏîÄ¿³õÊ¼»¯¡£
 .EXAMPLE
     .\setup-env.ps1 -SkipSystem
-    è·³è¿‡ç³»ç»Ÿçº§è½¯ä»¶å®‰è£…ï¼Œä»…åšé¡¹ç›®å†…åˆå§‹åŒ–ã€‚
+    Ìø¹ıÏµÍ³¼¶Èí¼ş°²×°£¬½ö×öÏîÄ¿ÄÚ³õÊ¼»¯¡£
 .EXAMPLE
     .\setup-env.ps1 -StartService
-    åˆå§‹åŒ–å®Œæˆåç«‹å³å¯åŠ¨æœåŠ¡ã€‚
+    ³õÊ¼»¯Íê³ÉºóÁ¢¼´Æô¶¯·şÎñ¡£
 .NOTES
-    é€‚ç”¨ï¼šWindows 10/11 x64ï¼ŒPowerShell 5.1+
-    ä½œè€…ï¼šKarpathy-Wiki
+    ÊÊÓÃ£ºWindows 10/11 x64£¬PowerShell 5.1+
+    ×÷Õß£ºKarpathy-Wiki
 #>
 #Requires -Version 5.0
 
@@ -38,12 +38,12 @@ param(
     [string]$VaultPath = "./vault"
 )
 
-# å¼ºåˆ¶é‡é”™å³åœ
+# Ç¿ÖÆÓö´í¼´Í£
 $ErrorActionPreference = "Stop"
 $Script:StepPrefix = "[KW-Setup]"
 
 # ============================================================
-# å·¥å…·å‡½æ•°ï¼ˆä¸ install.ps1 ä¿æŒä¸€è‡´çš„é£æ ¼ï¼‰
+# ¹¤¾ßº¯Êı£¨Óë install.ps1 ±£³ÖÒ»ÖÂµÄ·ç¸ñ£©
 # ============================================================
 
 function Write-Step { param($msg) Write-Host "$StepPrefix $msg" -ForegroundColor Cyan }
@@ -86,19 +86,19 @@ function Test-WingetAvailable {
 
 function Install-WithWinget {
     param([string]$PackageId, [string]$DisplayName)
-    Write-Step "é€šè¿‡ winget å®‰è£… $DisplayName ($PackageId) ..."
+    Write-Step "Í¨¹ı winget °²×° $DisplayName ($PackageId) ..."
     try {
         $wingetArgs = @('install', '--id', $PackageId, '--accept-package-agreements', '--accept-source-agreements', '--silent')
         & winget @wingetArgs
         if ($LASTEXITCODE -eq 0) {
-            Write-Ok "$DisplayName å®‰è£…å®Œæˆ"
+            Write-Ok "$DisplayName °²×°Íê³É"
             return $true
         } else {
-            Write-Warn "winget è¿”å›éé›¶é€€å‡ºç  $LASTEXITCODE"
+            Write-Warn "winget ·µ»Ø·ÇÁãÍË³öÂë $LASTEXITCODE"
             return $false
         }
     } catch {
-        Write-Err "winget å®‰è£… $DisplayName å¤±è´¥ï¼š$_"
+        Write-Err "winget °²×° $DisplayName Ê§°Ü£º$_"
         return $false
     }
 }
@@ -108,15 +108,15 @@ function Invoke-Safe {
     try {
         $global:LASTEXITCODE = 0
         & $Block
-        if ($LASTEXITCODE -ne 0) { throw "é€€å‡ºç  $LASTEXITCODE" }
+        if ($LASTEXITCODE -ne 0) { throw "ÍË³öÂë $LASTEXITCODE" }
     } catch {
-        Write-Err "$Description å¤±è´¥ï¼š$_"
+        Write-Err "$Description Ê§°Ü£º$_"
         throw
     }
 }
 
 # ============================================================
-# è·¯å¾„å¸¸é‡
+# Â·¾¶³£Á¿
 # ============================================================
 
 $Script:ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path
@@ -125,31 +125,31 @@ $Script:EnvFile = Join-Path $ProjectRoot "services\api\.env"
 $Script:ConfigFile = Join-Path $ProjectRoot "services\api\config.json"
 $Script:LogsDir = Join-Path $ProjectRoot "logs"
 
-# ç‰ˆæœ¬é—¨æ§›ï¼šä¸ package.json engines å¯¹é½
+# °æ±¾ÃÅ¼÷£ºÓë package.json engines ¶ÔÆë
 $Script:NodeMinMajor = 18
 $Script:NodeMinMinor = 0
 
 # ============================================================
-# ä¸»æµç¨‹
+# Ö÷Á÷³Ì
 # ============================================================
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor DarkCyan
-Write-Host "  Karpathy-Wiki ä¸€é”®ç¯å¢ƒé…ç½®" -ForegroundColor Cyan
-Write-Host "  é¡¹ç›®ç›®å½•: $ProjectRoot" -ForegroundColor DarkGray
+Write-Host "  Karpathy-Wiki Ò»¼ü»·¾³ÅäÖÃ" -ForegroundColor Cyan
+Write-Host "  ÏîÄ¿Ä¿Â¼: $ProjectRoot" -ForegroundColor DarkGray
 Write-Host "============================================================" -ForegroundColor DarkCyan
 Write-Host ""
 
-# ---------- Step 1: ç³»ç»Ÿçº§è½¯ä»¶ï¼ˆNode.js / pnpmï¼‰ ----------
+# ---------- Step 1: ÏµÍ³¼¶Èí¼ş£¨Node.js / pnpm£© ----------
 
 if ($SkipSystem) {
-    Write-Step "[1/7] è·³è¿‡ç³»ç»Ÿçº§è½¯ä»¶å®‰è£…ï¼ˆ-SkipSystemï¼‰"
+    Write-Step "[1/7] Ìø¹ıÏµÍ³¼¶Èí¼ş°²×°£¨-SkipSystem£©"
 } else {
-    Write-Step "[1/7] æ£€æµ‹å¹¶å®‰è£…ç³»ç»Ÿçº§è½¯ä»¶ï¼ˆNode.js / pnpmï¼‰"
+    Write-Step "[1/7] ¼ì²â²¢°²×°ÏµÍ³¼¶Èí¼ş£¨Node.js / pnpm£©"
 
     $wingetOk = Test-WingetAvailable
     if (-not $wingetOk) {
-        Write-Warn "winget ä¸å¯ç”¨ï¼Œå°†ä»…æ£€æµ‹å·²æœ‰è½¯ä»¶ï¼›ç¼ºå¤±é¡¹éœ€æ‰‹åŠ¨å®‰è£…"
+        Write-Warn "winget ²»¿ÉÓÃ£¬½«½ö¼ì²âÒÑÓĞÈí¼ş£»È±Ê§ÏîĞèÊÖ¶¯°²×°"
     }
 
     # --- Node.js ---
@@ -159,20 +159,20 @@ if ($SkipSystem) {
         if ($ver -and (Test-VersionSatisfy $ver $NodeMinMajor $NodeMinMinor)) {
             $nodeExe = 'node'
         } else {
-            Write-Warn "æ£€æµ‹åˆ° Node.js $($ver.Major).$($ver.Minor)ï¼Œä½†éœ€è¦ >= $NodeMinMajor.$NodeMinMinor"
+            Write-Warn "¼ì²âµ½ Node.js $($ver.Major).$($ver.Minor)£¬µ«ĞèÒª >= $NodeMinMajor.$NodeMinMinor"
         }
     }
 
     if ($nodeExe) {
         $ver = Get-NodeVersion $nodeExe
-        Write-Ok "Node.js å·²å°±ç»ª: $nodeExe ($($ver.Major).$($ver.Minor).$($ver.Patch))"
+        Write-Ok "Node.js ÒÑ¾ÍĞ÷: $nodeExe ($($ver.Major).$($ver.Minor).$($ver.Patch))"
     } else {
-        Write-Warn "æœªæ‰¾åˆ° Node.js >= $NodeMinMajor.$NodeMinMinor"
+        Write-Warn "Î´ÕÒµ½ Node.js >= $NodeMinMajor.$NodeMinMinor"
         if ($wingetOk) {
-            # é€‰æ‹© LTS ç‰ˆæœ¬ï¼šç¨³å®šä¸”å…¼å®¹æ€§å¥½
+            # Ñ¡Ôñ LTS °æ±¾£ºÎÈ¶¨ÇÒ¼æÈİĞÔºÃ
             $installed = Install-WithWinget 'OpenJS.NodeJS.LTS' 'Node.js LTS'
             if ($installed) {
-                # winget å®‰è£…åå½“å‰ä¼šè¯ PATH æœªåˆ·æ–°ï¼Œéœ€ä¸»åŠ¨åˆ·æ–°
+                # winget °²×°ºóµ±Ç°»á»° PATH Î´Ë¢ĞÂ£¬ĞèÖ÷¶¯Ë¢ĞÂ
                 $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
                 if (Test-CommandAvailable 'node') {
                     $nodeExe = 'node'
@@ -180,34 +180,34 @@ if ($SkipSystem) {
             }
         }
         if (-not $nodeExe) {
-            Write-Err "Node.js å®‰è£…å¤±è´¥ã€‚è¯·æ‰‹åŠ¨å®‰è£… Node.js 18+ åé‡è·‘æ­¤è„šæœ¬ï¼ˆå¯åŠ  -SkipSystem è·³è¿‡ï¼‰"
-            throw "Node.js ä¸å¯ç”¨"
+            Write-Err "Node.js °²×°Ê§°Ü¡£ÇëÊÖ¶¯°²×° Node.js 18+ ºóÖØÅÜ´Ë½Å±¾£¨¿É¼Ó -SkipSystem Ìø¹ı£©"
+            throw "Node.js ²»¿ÉÓÃ"
         }
         $ver = Get-NodeVersion $nodeExe
-        Write-Ok "Node.js å®‰è£…å®Œæˆ: $nodeExe ($($ver.Major).$($ver.Minor).$($ver.Patch))"
+        Write-Ok "Node.js °²×°Íê³É: $nodeExe ($($ver.Major).$($ver.Minor).$($ver.Patch))"
     }
 
-    # --- pnpmï¼ˆå¯é€‰ï¼Œæœªå®‰è£…åˆ™å›é€€ npmï¼‰ ---
+    # --- pnpm£¨¿ÉÑ¡£¬Î´°²×°Ôò»ØÍË npm£© ---
     if (Test-CommandAvailable 'pnpm') {
         $pnpmVer = (pnpm --version).Trim()
-        Write-Ok "pnpm å·²å°±ç»ª: $pnpmVer"
+        Write-Ok "pnpm ÒÑ¾ÍĞ÷: $pnpmVer"
     } else {
-        Write-Warn "æœªæ£€æµ‹åˆ° pnpmï¼Œå°è¯•è‡ªåŠ¨å®‰è£…..."
+        Write-Warn "Î´¼ì²âµ½ pnpm£¬³¢ÊÔ×Ô¶¯°²×°..."
         try {
-            Invoke-Safe { & npm install -g pnpm } "å®‰è£… pnpm"
-            # åˆ·æ–° PATH
+            Invoke-Safe { & npm install -g pnpm } "°²×° pnpm"
+            # Ë¢ĞÂ PATH
             $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
             if (Test-CommandAvailable 'pnpm') {
                 $pnpmVer = (pnpm --version).Trim()
-                Write-Ok "pnpm å®‰è£…å®Œæˆ: $pnpmVer"
+                Write-Ok "pnpm °²×°Íê³É: $pnpmVer"
             }
         } catch {
-            Write-Warn "pnpm å®‰è£…å¤±è´¥ï¼Œå°†å›é€€ npmã€‚å»ºè®®æ‰‹åŠ¨å®‰è£…ï¼šnpm install -g pnpm"
+            Write-Warn "pnpm °²×°Ê§°Ü£¬½«»ØÍË npm¡£½¨ÒéÊÖ¶¯°²×°£ºnpm install -g pnpm"
         }
     }
 }
 
-# æ£€æµ‹æœ€ç»ˆä½¿ç”¨çš„åŒ…ç®¡ç†å™¨
+# ¼ì²â×îÖÕÊ¹ÓÃµÄ°ü¹ÜÀíÆ÷
 $UsePnpm = $false
 try { $null = pnpm --version; $UsePnpm = $true } catch { }
 
@@ -215,37 +215,37 @@ function Invoke-Install {
     if ($UsePnpm) { pnpm install } else { npm install }
 }
 
-# ---------- Step 2: å®‰è£…æ ¹ç›®å½•ä¾èµ– ----------
+# ---------- Step 2: °²×°¸ùÄ¿Â¼ÒÀÀµ ----------
 
-Write-Step "[2/7] å®‰è£…æ ¹ç›®å½•ä¾èµ–..."
+Write-Step "[2/7] °²×°¸ùÄ¿Â¼ÒÀÀµ..."
 Push-Location $ProjectRoot
 try {
     Invoke-Install
 } finally {
     Pop-Location
 }
-Write-Ok "æ ¹ç›®å½•ä¾èµ–å®‰è£…å®Œæˆ"
+Write-Ok "¸ùÄ¿Â¼ÒÀÀµ°²×°Íê³É"
 
-# ---------- Step 3: å®‰è£…å¹¶æ„å»º @wiki/harness ----------
+# ---------- Step 3: °²×°²¢¹¹½¨ @wiki/harness ----------
 
 if (Test-Path (Join-Path $HarnessPath "package.json")) {
-    Write-Step "[3/7] å®‰è£… @wiki/harness ä¾èµ–..."
+    Write-Step "[3/7] °²×° @wiki/harness ÒÀÀµ..."
     Push-Location $HarnessPath
     try {
         Invoke-Install
-        Write-Step "æ„å»º @wiki/harness..."
+        Write-Step "¹¹½¨ @wiki/harness..."
         if ($UsePnpm) { pnpm run build } else { npm run build }
     } finally {
         Pop-Location
     }
-    Write-Ok "@wiki/harness æ„å»ºå®Œæˆ"
+    Write-Ok "@wiki/harness ¹¹½¨Íê³É"
 } else {
-    Write-Warn "[3/7] æœªæ‰¾åˆ°æœ¬åœ° wiki-harness ç›®å½•ï¼ˆ$HarnessPathï¼‰ã€‚è‹¥å·²å‘å¸ƒåˆ° npm å¯å¿½ç•¥æ­¤è­¦å‘Š"
+    Write-Warn "[3/7] Î´ÕÒµ½±¾µØ wiki-harness Ä¿Â¼£¨$HarnessPath£©¡£ÈôÒÑ·¢²¼µ½ npm ¿ÉºöÂÔ´Ë¾¯¸æ"
 }
 
-# ---------- Step 4: åˆå§‹åŒ– Vault ç›®å½• ----------
+# ---------- Step 4: ³õÊ¼»¯ Vault Ä¿Â¼ ----------
 
-Write-Step "[4/7] åˆå§‹åŒ– Vault ç›®å½•ï¼ˆ$VaultPathï¼‰..."
+Write-Step "[4/7] ³õÊ¼»¯ Vault Ä¿Â¼£¨$VaultPath£©..."
 $VaultFull = if ([System.IO.Path]::IsPathRooted($VaultPath)) { $VaultPath } else { Join-Path $ProjectRoot $VaultPath }
 $PageDirs = @('raw', 'entities', 'concepts', 'comparisons', 'queries')
 foreach ($d in $PageDirs) {
@@ -254,21 +254,21 @@ foreach ($d in $PageDirs) {
         New-Item -ItemType Directory -Path $dirPath -Force | Out-Null
     }
 }
-Write-Ok "Vault ç›®å½•å°±ç»ªï¼š$VaultFull"
+Write-Ok "Vault Ä¿Â¼¾ÍĞ÷£º$VaultFull"
 
-# ---------- Step 5: å‘å¯¼å¼åˆå§‹åŒ– ----------
+# ---------- Step 5: Ïòµ¼Ê½³õÊ¼»¯ ----------
 
 $ApiKey = $null
 if (-not $SkipWizard) {
     Write-Host ""
-    Write-Host "======== å‘å¯¼å¼åˆå§‹åŒ– ========" -ForegroundColor Magenta
+    Write-Host "======== Ïòµ¼Ê½³õÊ¼»¯ ========" -ForegroundColor Magenta
 
-    # --- æ­¥éª¤1ï¼šVault è·¯å¾„ ---
-    Write-Host "æ­¥éª¤ 1/4ï¼šVault è·¯å¾„" -ForegroundColor Cyan
-    Write-Host "  å½“å‰è·¯å¾„ï¼š$VaultFull"
-    $confirm = Read-Host "  æ˜¯å¦ä½¿ç”¨æ­¤è·¯å¾„ï¼Ÿ[Y/n]"
+    # --- ²½Öè1£ºVault Â·¾¶ ---
+    Write-Host "²½Öè 1/4£ºVault Â·¾¶" -ForegroundColor Cyan
+    Write-Host "  µ±Ç°Â·¾¶£º$VaultFull"
+    $confirm = Read-Host "  ÊÇ·ñÊ¹ÓÃ´ËÂ·¾¶£¿[Y/n]"
     if ($confirm -ne '' -and $confirm.ToLower() -ne 'y') {
-        $customPath = Read-Host "  è¯·è¾“å…¥ Vault è·¯å¾„"
+        $customPath = Read-Host "  ÇëÊäÈë Vault Â·¾¶"
         if ($customPath) {
             $VaultPath = $customPath
             $VaultFull = if ([System.IO.Path]::IsPathRooted($customPath)) { $customPath } else { Join-Path $ProjectRoot $customPath }
@@ -276,16 +276,16 @@ if (-not $SkipWizard) {
                 $dirPath = Join-Path $VaultFull $d
                 if (-not (Test-Path $dirPath)) { New-Item -ItemType Directory -Path $dirPath -Force | Out-Null }
             }
-            Write-Ok "Vault è·¯å¾„å·²æ›´æ–°ï¼š$VaultFull"
+            Write-Ok "Vault Â·¾¶ÒÑ¸üĞÂ£º$VaultFull"
         }
     }
 
-    # --- æ­¥éª¤2ï¼šæ¨¡å‹é€‰æ‹© + API Key ---
-    Write-Host "æ­¥éª¤ 2/4ï¼šé€‰æ‹©æ¨¡å‹" -ForegroundColor Cyan
-    Write-Host "  1) æ™ºè°± GLMï¼ˆé»˜è®¤ï¼Œglm-4-plusï¼‰"
-    Write-Host "  2) é€šä¹‰åƒé—® Qwenï¼ˆqwen-plusï¼‰"
-    Write-Host "  3) DeepSeekï¼ˆdeepseek-chatï¼‰"
-    $choice = Read-Host "  è¯·é€‰æ‹© [1-3ï¼Œé»˜è®¤1]"
+    # --- ²½Öè2£ºÄ£ĞÍÑ¡Ôñ + API Key ---
+    Write-Host "²½Öè 2/4£ºÑ¡ÔñÄ£ĞÍ" -ForegroundColor Cyan
+    Write-Host "  1) ÖÇÆ× GLM£¨Ä¬ÈÏ£¬glm-4-plus£©"
+    Write-Host "  2) Í¨ÒåÇ§ÎÊ Qwen£¨qwen-plus£©"
+    Write-Host "  3) DeepSeek£¨deepseek-chat£©"
+    $choice = Read-Host "  ÇëÑ¡Ôñ [1-3£¬Ä¬ÈÏ1]"
 
     $Provider = 'glm'
     $BaseUrl = 'https://open.bigmodel.cn/api/paas/v4'
@@ -307,8 +307,8 @@ if (-not $SkipWizard) {
         }
     }
 
-    Write-Host "  å·²é€‰æ‹©ï¼š$Provider / $Model" -ForegroundColor Gray
-    $ApiKey = Read-Host "  è¯·è¾“å…¥ $Provider API Keyï¼ˆç›´æ¥å›è½¦è·³è¿‡ï¼Œç¨åå¯æ‰‹åŠ¨é…ç½®ï¼‰"
+    Write-Host "  ÒÑÑ¡Ôñ£º$Provider / $Model" -ForegroundColor Gray
+    $ApiKey = Read-Host "  ÇëÊäÈë $Provider API Key£¨Ö±½Ó»Ø³µÌø¹ı£¬ÉÔºó¿ÉÊÖ¶¯ÅäÖÃ£©"
 
     if ($ApiKey) {
         $envLines = @()
@@ -317,9 +317,9 @@ if (-not $SkipWizard) {
         }
         $envLines += "$ApiKeyRef=$ApiKey"
         $envLines | Set-Content $EnvFile -Encoding UTF8
-        Write-Ok "API Key å·²å†™å…¥ services/api/.envï¼ˆå·²æ’é™¤ git è·Ÿè¸ªï¼‰"
+        Write-Ok "API Key ÒÑĞ´Èë services/api/.env£¨ÒÑÅÅ³ı git ¸ú×Ù£©"
     } else {
-        Write-Warn "æœªé…ç½® API Keyï¼Œé—®ç­”åŠŸèƒ½æš‚ä¸å¯ç”¨ã€‚å¯ç¨åç¼–è¾‘ services/api/.env æ·»åŠ  $ApiKeyRef=ä½ çš„Key"
+        Write-Warn "Î´ÅäÖÃ API Key£¬ÎÊ´ğ¹¦ÄÜÔİ²»¿ÉÓÃ¡£¿ÉÉÔºó±à¼­ services/api/.env Ìí¼Ó $ApiKeyRef=ÄãµÄKey"
     }
 
     $Config = @{
@@ -337,23 +337,23 @@ if (-not $SkipWizard) {
         healthCheck = @{ staleDays = 30 }
     }
     $Config | ConvertTo-Json -Depth 5 | Set-Content $ConfigFile -Encoding UTF8
-    Write-Ok "é…ç½®å·²å†™å…¥ services/api/config.json"
+    Write-Ok "ÅäÖÃÒÑĞ´Èë services/api/config.json"
 
-    # --- æ­¥éª¤3ï¼šSCHEMA.md ---
-    Write-Host "æ­¥éª¤ 3/4ï¼šSCHEMA.md" -ForegroundColor Cyan
+    # --- ²½Öè3£ºSCHEMA.md ---
+    Write-Host "²½Öè 3/4£ºSCHEMA.md" -ForegroundColor Cyan
     $schemaFile = Join-Path $VaultFull "SCHEMA.md"
     if (Test-Path $schemaFile) {
-        Write-Host "  SCHEMA.md å·²å­˜åœ¨ï¼Œä¿æŒä¸å˜"
+        Write-Host "  SCHEMA.md ÒÑ´æÔÚ£¬±£³Ö²»±ä"
     } else {
-        Write-Host "  é»˜è®¤ SCHEMA.md å°†åœ¨ API é¦–æ¬¡å¯åŠ¨æ—¶è‡ªåŠ¨ç”Ÿæˆ"
+        Write-Host "  Ä¬ÈÏ SCHEMA.md ½«ÔÚ API Ê×´ÎÆô¶¯Ê±×Ô¶¯Éú³É"
     }
 
-    Write-Host "æ­¥éª¤ 4/4ï¼šåˆå§‹åŒ–å®Œæˆï¼" -ForegroundColor Green
+    Write-Host "²½Öè 4/4£º³õÊ¼»¯Íê³É£¡" -ForegroundColor Green
 }
 
 # ---------- Step 6: .gitignore ----------
 
-Write-Step "[6/7] æ£€æŸ¥ .gitignore..."
+Write-Step "[6/7] ¼ì²é .gitignore..."
 $Gitignore = Join-Path $ProjectRoot ".gitignore"
 $ignoreRules = @('.env', 'node_modules/', 'dist/', 'vault/raw/', 'services/api/public/')
 $existing = if (Test-Path $Gitignore) { Get-Content $Gitignore } else { @() }
@@ -365,34 +365,34 @@ foreach ($rule in $ignoreRules) {
 }
 if ($updated -ne $existing) {
     $updated | Set-Content $Gitignore -Encoding UTF8
-    Write-Ok "å·²æ›´æ–° .gitignore"
+    Write-Ok "ÒÑ¸üĞÂ .gitignore"
 } else {
-    Write-Ok ".gitignore å·²æ˜¯æœ€æ–°"
+    Write-Ok ".gitignore ÒÑÊÇ×îĞÂ"
 }
 
-# ---------- Step 7: ç¯å¢ƒè‡ªæ£€ ----------
+# ---------- Step 7: »·¾³×Ô¼ì ----------
 
-Write-Step "[7/7] ç¯å¢ƒè‡ªæ£€..."
+Write-Step "[7/7] »·¾³×Ô¼ì..."
 
 $checklist = @(
     @{ Name = "Node.js"; Test = { Test-CommandAvailable 'node' } },
-    @{ Name = "æ ¹ç›®å½• node_modules"; Test = { Test-Path (Join-Path $ProjectRoot "node_modules") } },
+    @{ Name = "¸ùÄ¿Â¼ node_modules"; Test = { Test-Path (Join-Path $ProjectRoot "node_modules") } },
     @{ Name = "@wiki/harness"; Test = { Test-Path (Join-Path $HarnessPath "dist") } },
     @{ Name = "services/api/config.json"; Test = { Test-Path $ConfigFile } },
-    @{ Name = "Vault ç›®å½•"; Test = { Test-Path $VaultFull } }
+    @{ Name = "Vault Ä¿Â¼"; Test = { Test-Path $VaultFull } }
 )
 
 $allPass = $true
 foreach ($item in $checklist) {
     if (& $item.Test) {
-        Write-Ok "$($item.Name) âœ“"
+        Write-Ok "$($item.Name) ¡Ì"
     } else {
-        Write-Err "$($item.Name) âœ—"
+        Write-Err "$($item.Name) ¡Á"
         $allPass = $false
     }
 }
 
-# åˆ›å»º logs ç›®å½•
+# ´´½¨ logs Ä¿Â¼
 if (-not (Test-Path $LogsDir)) {
     New-Item -ItemType Directory -Path $LogsDir -Force | Out-Null
 }
@@ -400,30 +400,30 @@ if (-not (Test-Path $LogsDir)) {
 Write-Host ""
 if ($allPass) {
     Write-Host "============================================================" -ForegroundColor Green
-    Write-Host "  ç¯å¢ƒé…ç½®å®Œæˆï¼" -ForegroundColor Green
+    Write-Host "  »·¾³ÅäÖÃÍê³É£¡" -ForegroundColor Green
     Write-Host "============================================================" -ForegroundColor Green
 } else {
     Write-Host "============================================================" -ForegroundColor Yellow
-    Write-Host "  éƒ¨åˆ†æ£€æŸ¥æœªé€šè¿‡ï¼Œè¯·æŒ‰ä¸Šè¿°æç¤ºä¿®å¤åé‡è·‘" -ForegroundColor Yellow
+    Write-Host "  ²¿·Ö¼ì²éÎ´Í¨¹ı£¬Çë°´ÉÏÊöÌáÊ¾ĞŞ¸´ºóÖØÅÜ" -ForegroundColor Yellow
     Write-Host "============================================================" -ForegroundColor Yellow
 }
 
 Write-Host ""
-Write-Host "ä¸‹ä¸€æ­¥æ“ä½œï¼š" -ForegroundColor Cyan
-Write-Host "  1. å¯åŠ¨æœåŠ¡ï¼šåŒå‡» scripts\å¯åŠ¨æœåŠ¡.bat"
-Write-Host "  2. è®¿é—®ï¼šhttp://localhost:5173"
-Write-Host "  3. æ„å»ºå‰ç«¯ï¼šåŒå‡» scripts\å‰ç«¯æ„å»º.bat"
-Write-Host "  4. æ‰“åŒ… EXEï¼šåŒå‡» scripts\æ„å»ºæ‰“åŒ….bat"
+Write-Host "ÏÂÒ»²½²Ù×÷£º" -ForegroundColor Cyan
+Write-Host "  1. Æô¶¯·şÎñ£ºË«»÷ scripts\Æô¶¯·şÎñ.bat"
+Write-Host "  2. ·ÃÎÊ£ºhttp://localhost:5173"
+Write-Host "  3. ¹¹½¨Ç°¶Ë£ºË«»÷ scripts\Ç°¶Ë¹¹½¨.bat"
+Write-Host "  4. ´ò°ü EXE£ºË«»÷ scripts\¹¹½¨´ò°ü.bat"
 Write-Host ""
 
 if (-not $ApiKey) {
-    Write-Warn "æé†’ï¼šå°šæœªé…ç½® API Keyï¼Œé—®ç­”åŠŸèƒ½å°†è¿”å›é”™è¯¯ã€‚è¯·ç¼–è¾‘ services/api/.env æ·»åŠ åé‡å¯ã€‚"
+    Write-Warn "ÌáĞÑ£ºÉĞÎ´ÅäÖÃ API Key£¬ÎÊ´ğ¹¦ÄÜ½«·µ»Ø´íÎó¡£Çë±à¼­ services/api/.env Ìí¼ÓºóÖØÆô¡£"
 }
 
-# ---------- å¯é€‰ï¼šå¯åŠ¨æœåŠ¡ ----------
+# ---------- ¿ÉÑ¡£ºÆô¶¯·şÎñ ----------
 
 if ($StartService -and $allPass) {
-    Write-Step "å¯åŠ¨æœåŠ¡ï¼ˆ-StartServiceï¼‰"
+    Write-Step "Æô¶¯·şÎñ£¨-StartService£©"
     & "$PSScriptRoot\start.ps1"
 }
 
