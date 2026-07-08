@@ -1,0 +1,29 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+*.tsbuildinfo
+
+# 环境变量与密钥（切勿提交）
+.env
+.env.local
+.env.*.local
+
+# 运行时状态（harness 执行状态文件，属本地运行产物，任意层级）
+**/.harness/state/
+
+# 日志
+*.log
+logs/
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 锁文件保留（package-lock.json / pnpm-lock.yaml 需提交以保证可复现安装）
