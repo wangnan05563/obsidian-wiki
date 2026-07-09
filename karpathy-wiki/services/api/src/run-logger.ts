@@ -1,55 +1,57 @@
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
-// Â§12.3-8 å†³ç­–ï¼šharness è¿è¡Œæ—¥å¿—åŒå†™â€”â€”æ§åˆ¶å°ä¾› dev å®æ—¶æŸ¥çœ‹ï¼Œ.harness/logs/ ä¾›äº‹åæ’æŸ¥ã€‚
-// log.md æ˜¯ä¸šåŠ¡æ—¥å¿—ï¼ˆç”¨æˆ·è§†è§’ï¼‰ï¼Œharness æ—¥å¿—æ˜¯æŠ€æœ¯æ—¥å¿—ï¼ˆå¼€å‘è€…è§†è§’ï¼‰ï¼Œåˆ†ç¦»é¿å…è¯­ä¹‰æ··æ·†ã€‚
+// ¡ì12.3-8 ¾ö²ß£ºharness ÔËĞĞÈÕÖ¾Ë«Ğ´¡ª¡ª¿ØÖÆÌ¨¹© dev ÊµÊ±²é¿´£¬.harness/logs/ ¹©ÊÂºóÅÅ²é¡£
+// log.md ÊÇÒµÎñÈÕÖ¾£¨ÓÃ»§ÊÓ½Ç£©£¬harness ÈÕÖ¾ÊÇ¼¼ÊõÈÕÖ¾£¨¿ª·¢ÕßÊÓ½Ç£©£¬·ÖÀë±ÜÃâÓïÒå»ìÏı¡£
 //
-// æ—¥å¿—æ ¼å¼ï¼šJSONLï¼ˆæ¯è¡Œä¸€ä¸ª JSON å¯¹è±¡ï¼‰ï¼Œä¾¿äº grep ä¸ç¨‹åºåŒ–åˆ†æã€‚
-// æ–‡ä»¶å‘½åï¼š{runId}.logï¼Œä¸ .harness/state/{runId}.json å¯¹åº”ã€‚
+// ÈÕÖ¾¸ñÊ½£ºJSONL£¨Ã¿ĞĞÒ»¸ö JSON ¶ÔÏó£©£¬±ãÓÚ grep Óë³ÌĞò»¯·ÖÎö¡£
+// ÎÄ¼şÃüÃû£º{runId}.log£¬Óë .harness/state/{runId}.json ¶ÔÓ¦¡£
 
 export interface RunLogEntry {
-  ts: string;          // ISO æ—¶é—´æˆ³
+  ts: string;          // ISO Ê±¼ä´Á
   runId: string;
   step: number;
   event: 'step' | 'done' | 'error';
-  tool?: string;       // step äº‹ä»¶æ—¶å¡«å……
+  tool?: string;       // step ÊÂ¼şÊ±Ìî³ä
   tokenUsed?: number;
   message: string;
-  error?: string;      // error äº‹ä»¶æ—¶å¡«å……
+  error?: string;      // error ÊÂ¼şÊ±Ìî³ä
 }
 
 export class RunLogger {
-  private logDir: string;
+  private readonly logDir: string;
 
   constructor(logDir: string) {
     this.logDir = logDir;
   }
 
-  // ç¡®ä¿ .harness/logs/ ç›®å½•å­˜åœ¨ï¼Œå¹‚ç­‰
+  // È·±£ .harness/logs/ Ä¿Â¼´æÔÚ£¬ÃİµÈ
   async ensureDir(): Promise<void> {
     await fs.mkdir(this.logDir, { recursive: true });
   }
 
-  // å†™å…¥å•æ¡æ—¥å¿—ã€‚æ§åˆ¶å°åŒæ—¶è¾“å‡ºæ‘˜è¦ï¼Œæ–‡ä»¶å†™å…¥å®Œæ•´ JSONLã€‚
-  // å†™æ–‡ä»¶å¤±è´¥ä¸æŠ›å¼‚å¸¸â€”â€”æ—¥å¿—ä¸åº”é˜»æ–­ä¸šåŠ¡æµç¨‹ã€‚
+  // Ğ´Èëµ¥ÌõÈÕÖ¾¡£¿ØÖÆÌ¨Í¬Ê±Êä³öÕªÒª£¬ÎÄ¼şĞ´ÈëÍêÕû JSONL¡£
+  // Ğ´ÎÄ¼şÊ§°Ü²»Å×Òì³£¡ª¡ªÈÕÖ¾²»Ó¦×è¶ÏÒµÎñÁ÷³Ì¡£
   async log(entry: RunLogEntry): Promise<void> {
-    // æ§åˆ¶å°æ‘˜è¦ï¼š[runId çŸ­å‰ç¼€] step N tool: msg
+    // ¿ØÖÆÌ¨ÕªÒª£º[runId ¶ÌÇ°×º] step N tool: msg
     const shortId = entry.runId.slice(0, 8);
-    const consoleMsg = `[harness ${shortId}] step ${entry.step} ${entry.event}${entry.tool ? ` ${entry.tool}` : ''}: ${entry.message}`;
+    // ÌáÈ¡Ç¶Ì×Ä£°åµ½±äÁ¿£¬½µµÍÄ£°å¸´ÔÓ¶È£¨S4624£©
+    const toolPart = entry.tool ? ` ${entry.tool}` : '';
+    const consoleMsg = `[harness ${shortId}] step ${entry.step} ${entry.event}${toolPart}: ${entry.message}`;
     if (entry.event === 'error') {
       console.error(consoleMsg);
     } else {
       console.log(consoleMsg);
     }
 
-    // æ–‡ä»¶å†™å…¥ï¼šJSONL æ ¼å¼ï¼Œappend æ¨¡å¼
+    // ÎÄ¼şĞ´Èë£ºJSONL ¸ñÊ½£¬append Ä£Ê½
     try {
       await this.ensureDir();
       const filePath = path.join(this.logDir, `${entry.runId}.log`);
       await fs.appendFile(filePath, JSON.stringify(entry) + '\n', 'utf8');
     } catch {
-      // æ—¥å¿—å†™å…¥å¤±è´¥ä¸å½±å“ä¸šåŠ¡ï¼Œä»…æ§åˆ¶å°å‘Šè­¦
-      console.warn(`[harness] æ—¥å¿—æ–‡ä»¶å†™å…¥å¤±è´¥ï¼ŒrunId=${entry.runId}`);
+      // ÈÕÖ¾Ğ´ÈëÊ§°Ü²»Ó°ÏìÒµÎñ£¬½ö¿ØÖÆÌ¨¸æ¾¯
+      console.warn(`[harness] ÈÕÖ¾ÎÄ¼şĞ´ÈëÊ§°Ü£¬runId=${entry.runId}`);
     }
   }
 }

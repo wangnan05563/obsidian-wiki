@@ -1,0 +1,341 @@
+/* ============================================================
+ * 电商/零售主题 · E-commerce Theme
+ * 干净明亮扁平化，卡片式布局，高质量产品图片风格
+ * 营造舒适、可信的购物体验
+ * ============================================================ */
+
+[data-theme="ecommerce"] {
+  /* 电商主色：活力橙 + 信任蓝 */
+  --neon-purple: #0066cc;
+  --neon-magenta: #ff6b35;
+  --neon-cyan: #00a8e8;
+  --neon-violet: #6c5ce7;
+  --neon-pink: #ff8c42;
+  --neon-lime: #4caf50;
+
+  /* 明亮背景 */
+  --bg-void: #ffffff;
+  --bg-deep: #fafbfc;
+  --bg-mid: #f4f6f8;
+  --bg-card: rgba(255, 255, 255, 0.95);
+  --bg-card-solid: #ffffff;
+  --bg-glass: rgba(255, 255, 255, 0.8);
+
+  /* 深色文字 */
+  --text-bright: #1a1a2e;
+  --text-base: #2d2d3f;
+  --text-soft: #6b6b7d;
+  --text-dim: #a8a8b8;
+
+  /* 明亮渐变 */
+  --grad-neon: linear-gradient(135deg, #ff6b35 0%, #ff8c42 50%, #00a8e8 100%);
+  --grad-fire: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%);
+  --grad-cool: linear-gradient(135deg, #00a8e8 0%, #0066cc 100%);
+  --grad-aurora: linear-gradient(120deg, #00a8e8 0%, #6c5ce7 40%, #ff6b35 80%, #ff8c42 100%);
+
+  /* 柔和阴影 */
+  --glow-purple: 0 4px 16px rgba(0, 102, 204, 0.15);
+  --glow-magenta: 0 4px 16px rgba(255, 107, 53, 0.15);
+  --glow-cyan: 0 4px 16px rgba(0, 168, 232, 0.15);
+  --glow-soft: 0 4px 24px rgba(0, 0, 0, 0.06);
+
+  /* 明亮边框 */
+  --border-neon: 1px solid rgba(255, 107, 53, 0.3);
+  --border-glass: 1px solid rgba(0, 0, 0, 0.06);
+
+  /* 适中圆角 */
+  --radius-card: 16px;
+  --radius-btn: 12px;
+  --radius-input: 8px;
+  --radius-pill: 999px;
+
+  --blur: blur(8px);
+
+  /* 现代字体 */
+  --font-display: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-body: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Robot IP & Graph colors: theme-aware */
+  --robot-head-1: #fff5f0;
+  --robot-head-2: #ffe8db;
+  --robot-head-3: #e8f4f8;
+  --robot-body-1: #ff6b35;
+  --robot-body-2: #00a8e8;
+  --robot-accent: #ff6b35;
+  --robot-eye: #00a8e8;
+  --robot-eye-deep: #0088bb;
+  --robot-antenna: #ff8c42;
+  --robot-glow: rgba(255, 107, 53, 0.3);
+  --graph-entities: #ff6b35;
+  --graph-concepts: #00a8e8;
+  --graph-comparisons: #6c5ce7;
+  --graph-queries: #ff8c42;
+  --graph-entities-border: #ff8c42;
+  --graph-concepts-border: #3dc4ff;
+  --graph-comparisons-border: #8b7df0;
+  --graph-queries-border: #ffa86b;
+  --graph-edge: rgba(255, 107, 53, 0.35);
+  --graph-edge-highlight: #00a8e8;
+  --graph-label: #1a1a2e;
+
+  /* Scene backgrounds: container depth area (code blocks, tree, stat card) */
+  --bg-scene: #fafbfc;
+  --border-accent: rgba(255, 107, 53, 0.3);
+
+  /* Accent semi-transparent colors (auto-derived from theme base) */
+  --accent-purple-base: #6c5ce7;
+  --accent-cyan-base: #00a8e8;
+  --accent-pink-base: #ff6b35;
+  --accent-magenta-base: #ff8c42;
+  --accent-purple-a05: rgba(108, 92, 231, 0.05);
+  --accent-cyan-a05: rgba(0, 168, 232, 0.05);
+  --accent-pink-a05: rgba(255, 107, 53, 0.05);
+  --accent-magenta-a05: rgba(255, 140, 66, 0.05);
+  --accent-purple-a06: rgba(108, 92, 231, 0.06);
+  --accent-cyan-a06: rgba(0, 168, 232, 0.06);
+  --accent-pink-a06: rgba(255, 107, 53, 0.06);
+  --accent-magenta-a06: rgba(255, 140, 66, 0.06);
+  --accent-purple-a08: rgba(108, 92, 231, 0.08);
+  --accent-cyan-a08: rgba(0, 168, 232, 0.08);
+  --accent-pink-a08: rgba(255, 107, 53, 0.08);
+  --accent-magenta-a08: rgba(255, 140, 66, 0.08);
+  --accent-purple-a10: rgba(108, 92, 231, 0.1);
+  --accent-cyan-a10: rgba(0, 168, 232, 0.1);
+  --accent-pink-a10: rgba(255, 107, 53, 0.1);
+  --accent-magenta-a10: rgba(255, 140, 66, 0.1);
+  --accent-purple-a12: rgba(108, 92, 231, 0.12);
+  --accent-cyan-a12: rgba(0, 168, 232, 0.12);
+  --accent-pink-a12: rgba(255, 107, 53, 0.12);
+  --accent-magenta-a12: rgba(255, 140, 66, 0.12);
+  --accent-purple-a15: rgba(108, 92, 231, 0.15);
+  --accent-cyan-a15: rgba(0, 168, 232, 0.15);
+  --accent-pink-a15: rgba(255, 107, 53, 0.15);
+  --accent-magenta-a15: rgba(255, 140, 66, 0.15);
+  --accent-purple-a18: rgba(108, 92, 231, 0.18);
+  --accent-cyan-a18: rgba(0, 168, 232, 0.18);
+  --accent-pink-a18: rgba(255, 107, 53, 0.18);
+  --accent-magenta-a18: rgba(255, 140, 66, 0.18);
+  --accent-purple-a25: rgba(108, 92, 231, 0.25);
+  --accent-cyan-a25: rgba(0, 168, 232, 0.25);
+  --accent-pink-a25: rgba(255, 107, 53, 0.25);
+  --accent-magenta-a25: rgba(255, 140, 66, 0.25);
+  --accent-purple-a50: rgba(108, 92, 231, 0.5);
+  --accent-cyan-a50: rgba(0, 168, 232, 0.5);
+  --accent-pink-a50: rgba(255, 107, 53, 0.5);
+  --accent-magenta-a50: rgba(255, 140, 66, 0.5);
+  --accent-purple-a60: rgba(108, 92, 231, 0.6);
+  --accent-cyan-a60: rgba(0, 168, 232, 0.6);
+  --accent-pink-a60: rgba(255, 107, 53, 0.6);
+  --accent-magenta-a60: rgba(255, 140, 66, 0.6);
+  --accent-purple-a70: rgba(108, 92, 231, 0.7);
+  --accent-cyan-a70: rgba(0, 168, 232, 0.7);
+  --accent-pink-a70: rgba(255, 107, 53, 0.7);
+  --accent-magenta-a70: rgba(255, 140, 66, 0.7);
+
+  /* Additional alpha variants for ecommerce theme */
+  --accent-purple-a20: rgba(108, 92, 231, 0.2);
+  --accent-cyan-a20: rgba(0, 168, 232, 0.2);
+  --accent-pink-a20: rgba(255, 107, 53, 0.2);
+  --accent-magenta-a20: rgba(255, 140, 66, 0.2);
+  --accent-purple-a30: rgba(108, 92, 231, 0.3);
+  --accent-cyan-a30: rgba(0, 168, 232, 0.3);
+  --accent-pink-a30: rgba(255, 107, 53, 0.3);
+  --accent-magenta-a30: rgba(255, 140, 66, 0.3);
+  --accent-purple-a40: rgba(108, 92, 231, 0.4);
+  --accent-cyan-a40: rgba(0, 168, 232, 0.4);
+  --accent-pink-a40: rgba(255, 107, 53, 0.4);
+  --accent-magenta-a40: rgba(255, 140, 66, 0.4);
+
+  /* Additional alpha variants for ecommerce theme */
+  --accent-purple-a04: rgba(108, 92, 231, 0.04);
+  --accent-cyan-a04: rgba(0, 168, 232, 0.04);
+  --accent-pink-a04: rgba(255, 107, 53, 0.04);
+  --accent-magenta-a04: rgba(255, 140, 66, 0.04);
+  --accent-purple-a45: rgba(108, 92, 231, 0.45);
+  --accent-cyan-a45: rgba(0, 168, 232, 0.45);
+  --accent-pink-a45: rgba(255, 107, 53, 0.45);
+  --accent-magenta-a45: rgba(255, 140, 66, 0.45);
+
+  /* Additional alpha variants for ecommerce theme */
+  --accent-purple-a03: rgba(108, 92, 231, 0.03);
+  --accent-cyan-a03: rgba(0, 168, 232, 0.03);
+  --accent-pink-a03: rgba(255, 107, 53, 0.03);
+  --accent-magenta-a03: rgba(255, 140, 66, 0.03);
+  --accent-purple-a35: rgba(108, 92, 231, 0.35);
+  --accent-cyan-a35: rgba(0, 168, 232, 0.35);
+  --accent-pink-a35: rgba(255, 107, 53, 0.35);
+  --accent-magenta-a35: rgba(255, 140, 66, 0.35);
+}
+
+/* 电商背景层：纯白 + 柔和彩色光晕 */
+[data-theme="ecommerce"] .bg-layer.base {
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%, rgba(255, 107, 53, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse 70% 50% at 85% 20%, rgba(0, 168, 232, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse 90% 70% at 50% 95%, rgba(108, 92, 231, 0.06) 0%, transparent 55%),
+    var(--bg-deep);
+}
+
+[data-theme="ecommerce"] .bg-layer.grid {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  animation: grid-drift 40s linear infinite;
+}
+
+[data-theme="ecommerce"] .bg-layer.noise {
+  opacity: 0.08;
+  mix-blend-mode: multiply;
+}
+
+[data-theme="ecommerce"] .bg-layer.orbs::before {
+  background: radial-gradient(circle, #ff6b35, transparent 70%);
+  opacity: 0.2;
+}
+
+[data-theme="ecommerce"] .bg-layer.orbs::after {
+  background: radial-gradient(circle, #00a8e8, transparent 70%);
+  opacity: 0.2;
+}
+
+/* 卡片顶部橙色高光线 */
+[data-theme="ecommerce"] .glass-card::before {
+  background: linear-gradient(90deg, transparent, #ff6b35, #00a8e8, transparent);
+  opacity: 0.5;
+}
+
+/* 3D 悬停改为卡片上浮 */
+[data-theme="ecommerce"] .hover-3d:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+}
+
+/* Element Plus 适配：电商风格 */
+[data-theme="ecommerce"] .el-button--primary {
+  background: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%) !important;
+  box-shadow: 0 4px 16px rgba(255, 107, 53, 0.3) !important;
+}
+
+[data-theme="ecommerce"] .el-button--primary:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 6px 24px rgba(255, 107, 53, 0.4) !important;
+}
+
+[data-theme="ecommerce"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success) {
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="ecommerce"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
+  background: rgba(255, 107, 53, 0.08) !important;
+  border-color: #ff6b35 !important;
+  color: #c43c0e !important;
+  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.15) !important;
+}
+
+[data-theme="ecommerce"] .el-input__wrapper,
+[data-theme="ecommerce"] .el-textarea__inner {
+  background: #ffffff !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1) inset !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="ecommerce"] .el-input__wrapper:hover,
+[data-theme="ecommerce"] .el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px rgba(255, 107, 53, 0.4) inset !important;
+}
+
+[data-theme="ecommerce"] .el-input__wrapper.is-focus,
+[data-theme="ecommerce"] .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px #ff6b35 inset, 0 0 0 3px rgba(255, 107, 53, 0.1) !important;
+}
+
+[data-theme="ecommerce"] .el-input__inner {
+  color: var(--text-bright) !important;
+}
+
+[data-theme="ecommerce"] .el-input__inner::placeholder {
+  color: var(--text-dim) !important;
+}
+
+[data-theme="ecommerce"] .el-tabs__item {
+  color: var(--text-soft) !important;
+}
+
+[data-theme="ecommerce"] .el-tabs__item:hover {
+  color: #ff6b35 !important;
+}
+
+[data-theme="ecommerce"] .el-tabs__item.is-active {
+  color: #ff6b35 !important;
+  text-shadow: none;
+  font-weight: 700;
+}
+
+[data-theme="ecommerce"] .el-tabs__active-bar {
+  background: linear-gradient(90deg, #ff6b35, #ff8c42) !important;
+}
+
+[data-theme="ecommerce"] .el-tabs__nav-wrap::after {
+  background-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+[data-theme="ecommerce"] .el-tree {
+  color: var(--text-base) !important;
+}
+
+[data-theme="ecommerce"] .el-tree-node__content:hover {
+  background: rgba(255, 107, 53, 0.06) !important;
+}
+
+[data-theme="ecommerce"] .el-tree-node.is-current > .el-tree-node__content {
+  background: rgba(255, 107, 53, 0.1) !important;
+}
+
+[data-theme="ecommerce"] .el-dialog {
+  background: var(--bg-card-solid) !important;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.15) !important;
+}
+
+[data-theme="ecommerce"] .el-dialog__title {
+  color: var(--text-bright) !important;
+}
+
+[data-theme="ecommerce"] .el-dialog__body {
+  color: var(--text-base) !important;
+}
+
+[data-theme="ecommerce"] .el-upload-dragger {
+  background: #fafbfc !important;
+  border: 2px dashed rgba(0, 0, 0, 0.15) !important;
+}
+
+[data-theme="ecommerce"] .el-upload-dragger:hover {
+  border-color: #ff6b35 !important;
+  box-shadow: 0 4px 16px rgba(255, 107, 53, 0.15) !important;
+}
+
+[data-theme="ecommerce"] .el-message {
+  background: #ffffff !important;
+  color: var(--text-bright) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
+}
+
+[data-theme="ecommerce"] ::-webkit-scrollbar-track {
+  background: #f4f6f8;
+}
+
+[data-theme="ecommerce"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #ff6b35, #ff8c42);
+  border: 2px solid #f4f6f8;
+}
+
+[data-theme="ecommerce"] ::selection {
+  background: rgba(255, 107, 53, 0.25);
+  color: var(--text-bright);
+}

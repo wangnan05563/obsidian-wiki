@@ -26,20 +26,27 @@ const degraded = computed(() => isLarge.value || isHuge.value);
 const isNarrowScreen = ref(false);
 const listView = ref(false);
 
-// 霓虹目录颜色映射：每个目录对应一种霓虹色，节点带发光描边
-const DIR_COLORS: Record<string, string> = {
-  entities: '#ff006e',    // 品红
-  concepts: '#00f5ff',    // 青蓝
-  comparisons: '#b026ff', // 电光紫
-  queries: '#ff3ec9',     // 粉紫
-};
-// 节点描边色（比填充更亮的同色系，制造发光感）
-const DIR_BORDER: Record<string, string> = {
-  entities: '#ff4d94',
-  concepts: '#7afaff',
-  comparisons: '#d366ff',
-  queries: '#ff7ad9',
-};
+// Read theme color from CSS variable (theme-aware)
+function getThemeVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#b026ff';
+}
+// Directory color mapping: read from CSS vars so nodes follow the active theme
+function getDirColors(): Record<string, string> {
+  return {
+    entities: getThemeVar('--graph-entities'),
+    concepts: getThemeVar('--graph-concepts'),
+    comparisons: getThemeVar('--graph-comparisons'),
+    queries: getThemeVar('--graph-queries'),
+  };
+}
+function getDirBorders(): Record<string, string> {
+  return {
+    entities: getThemeVar('--graph-entities-border'),
+    concepts: getThemeVar('--graph-concepts-border'),
+    comparisons: getThemeVar('--graph-comparisons-border'),
+    queries: getThemeVar('--graph-queries-border'),
+  };
+}
 
 // 检测屏幕宽度，窄屏（<768px）自动切换列表视图
 function checkScreenSize() {
@@ -105,25 +112,24 @@ function buildListData(data: GraphData): ListGroup[] {
   // 转为数组
   return Array.from(groups.entries()).map(([dir, pages]) => ({
     dir,
-    color: DIR_COLORS[dir] ?? '#b026ff',
+    color: getDirColors()[dir] ?? getThemeVar('--graph-comparisons'),
     pages: pages.sort((a, b) => b.links - a.links),
   }));
 }
 
-// 将后端 nodes/edges 转为 vis-network 格式
-function renderGraph(data: GraphData) {
-  if (!containerRef.value) return;
+// 构建节点：根据降级级别调整样式，霓虹色 + 发光阴影；大图模式简化样式降低 GPU 开销
+function buildNodes(data: GraphData, huge: boolean, large: boolean) {
+  // 提前计算节点尺寸，避免嵌套三元运算符
+  let nodeSize = 16;
+  if (large) nodeSize = 12;
+  if (huge) nodeSize = 8;
 
-  const huge = isHuge.value;
-  const large = isLarge.value;
-
-  // 节点：霓虹色 + 发光阴影；大图模式简化样式降低 GPU 开销
-  const nodes = data.nodes.map((path) => {
+  return data.nodes.map((path) => {
     const parts = path.split('/');
     const dir = parts[0] ?? 'default';
     const label = parts[parts.length - 1]?.replace('.md', '') ?? path;
-    const bg = DIR_COLORS[dir] ?? '#b026ff';
-    const border = DIR_BORDER[dir] ?? '#d366ff';
+    const bg = getDirColors()[dir] ?? getThemeVar('--graph-comparisons');
+    const border = getDirBorders()[dir] ?? getThemeVar('--graph-comparisons-border');
     return {
       id: path,
       // 超大图隐藏标签，仅悬停显示，减少 DOM 开销
@@ -131,29 +137,35 @@ function renderGraph(data: GraphData) {
       title: label,
       color: { background: bg, border: border, highlight: { background: border, border: bg } },
       shape: 'dot',
-      size: huge ? 8 : large ? 12 : 16,
-      font: { size: huge ? 10 : 12, color: '#f3e9ff', face: 'Rajdhani' },
+      size: nodeSize,
+      font: { size: huge ? 10 : 12, color: getThemeVar('--graph-label'), face: 'Rajdhani' },
       // 发光阴影：用节点同色系，营造霓虹辉光
       shadow: huge ? false : { enabled: true, size: 18, color: bg + 'aa' },
     };
   });
+}
 
-  // 边：半透明霓虹紫，大图模式关闭平滑曲线减少 Canvas 绘制
-  const edges = data.edges.map((e, idx) => ({
+// 构建边：半透明霓虹紫，大图模式关闭平滑曲线减少 Canvas 绘制
+function buildEdges(data: GraphData, huge: boolean, large: boolean) {
+  return data.edges.map((e, idx) => ({
     id: idx,
     from: e.from,
     to: e.to,
     arrows: 'to' as const,
-    color: { color: 'rgba(176, 38, 255, 0.45)', highlight: '#00f5ff', opacity: huge ? 0.25 : 0.5 },
+    color: { color: getThemeVar('--graph-edge'), highlight: getThemeVar('--graph-edge-highlight'), opacity: huge ? 0.25 : 0.5 },
     width: huge ? 1 : 1.5,
     smooth: !large && !huge,
   }));
+}
 
-  const nodesDS = new DataSet(nodes);
-  const edgesDS = new DataSet(edges);
+// vis-network 配置：根据节点数自适应降级
+function buildGraphOptions(huge: boolean, large: boolean): Options {
+  // 提前计算迭代次数，避免嵌套三元运算符
+  let stabilizationIterations = 100;
+  if (large) stabilizationIterations = 80;
+  if (huge) stabilizationIterations = 50;
 
-  // vis-network 配置：根据节点数自适应降级
-  const options: Options = {
+  return {
     nodes: {
       borderWidth: huge ? 1 : 2,
     },
@@ -164,7 +176,7 @@ function renderGraph(data: GraphData) {
     physics: {
       enabled: true,
       // 超大图减少稳定迭代次数，快速进入静态布局
-      stabilization: { iterations: huge ? 50 : large ? 80 : 100 },
+      stabilization: { iterations: stabilizationIterations },
       barnesHut: {
         gravitationalConstant: huge ? -5000 : -3000,
         springLength: huge ? 80 : 120,
@@ -177,6 +189,20 @@ function renderGraph(data: GraphData) {
       zoomView: true,
     },
   };
+}
+
+// 将后端 nodes/edges 转为 vis-network 格式
+function renderGraph(data: GraphData) {
+  if (!containerRef.value) return;
+
+  const huge = isHuge.value;
+  const large = isLarge.value;
+
+  const nodes = buildNodes(data, huge, large);
+  const edges = buildEdges(data, huge, large);
+  const nodesDS = new DataSet(nodes);
+  const edgesDS = new DataSet(edges);
+  const options = buildGraphOptions(huge, large);
 
   if (network) {
     network.destroy();
@@ -267,16 +293,16 @@ watch(loading, () => {
       <!-- 图例：霓虹色点带发光 -->
       <div v-if="!listView" class="legend-bar">
         <span class="legend-item">
-          <span class="legend-dot" style="background: #ff006e; box-shadow: 0 0 10px #ff006e"></span>实体
+          <span class="legend-dot" style="background: var(--graph-entities); box-shadow: 0 0 10px var(--graph-entities)"></span>实体
         </span>
         <span class="legend-item">
-          <span class="legend-dot" style="background: #00f5ff; box-shadow: 0 0 10px #00f5ff"></span>概念
+          <span class="legend-dot" style="background: var(--graph-concepts); box-shadow: 0 0 10px var(--graph-concepts)"></span>概念
         </span>
         <span class="legend-item">
-          <span class="legend-dot" style="background: #b026ff; box-shadow: 0 0 10px #b026ff"></span>对比
+          <span class="legend-dot" style="background: var(--graph-comparisons); box-shadow: 0 0 10px var(--graph-comparisons)"></span>对比
         </span>
         <span class="legend-item">
-          <span class="legend-dot" style="background: #ff3ec9; box-shadow: 0 0 10px #ff3ec9"></span>问答
+          <span class="legend-dot" style="background: var(--graph-queries); box-shadow: 0 0 10px var(--graph-queries)"></span>问答
         </span>
       </div>
 
@@ -403,7 +429,7 @@ watch(loading, () => {
   gap: 4px;
   padding: 6px 14px;
   background: var(--bg-glass);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  border: 1px solid var(--accent-purple-a30);
   border-radius: var(--radius-pill);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -438,7 +464,7 @@ watch(loading, () => {
 /* 霓虹按钮：透明底 + 紫色边框 + 悬停发光 */
 .neon-btn {
   background: var(--bg-glass) !important;
-  border: 1px solid rgba(176, 38, 255, 0.4) !important;
+  border: 1px solid var(--accent-purple-a40) !important;
   color: var(--text-bright) !important;
   font-family: var(--font-mono) !important;
   letter-spacing: 0.05em;
@@ -458,8 +484,8 @@ watch(loading, () => {
   gap: 18px;
   padding: 10px 16px;
   margin-bottom: 12px;
-  background: rgba(5, 0, 16, 0.5);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-input);
   flex-wrap: wrap;
 }
@@ -485,8 +511,8 @@ watch(loading, () => {
   position: relative;
   z-index: 1;
   flex: 1;
-  background: rgba(5, 0, 16, 0.6);
-  border: 1px solid rgba(0, 245, 255, 0.15);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-cyan-a15);
   border-radius: var(--radius-card);
   overflow: hidden;
 }
@@ -497,8 +523,8 @@ watch(loading, () => {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(176, 38, 255, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 245, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(var(--accent-purple-a04) 1px, transparent 1px),
+    linear-gradient(90deg, var(--accent-cyan-a03) 1px, transparent 1px);
   background-size: 40px 40px;
   pointer-events: none;
   z-index: 0;
@@ -547,8 +573,8 @@ watch(loading, () => {
   gap: 10px;
   padding: 10px 16px;
   margin-bottom: 12px;
-  background: linear-gradient(90deg, rgba(255, 0, 110, 0.18), rgba(176, 38, 255, 0.12));
-  border: 1px solid rgba(255, 0, 110, 0.35);
+  background: linear-gradient(90deg, var(--accent-pink-a18), var(--accent-purple-a12));
+  border: 1px solid var(--accent-pink-a35);
   border-radius: var(--radius-input);
   font-size: 12px;
   font-family: var(--font-mono);
@@ -582,8 +608,8 @@ watch(loading, () => {
 }
 
 .list-group {
-  background: rgba(5, 0, 16, 0.5);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-card);
   padding: 14px 18px;
   transition: all 0.3s ease;
@@ -595,7 +621,7 @@ watch(loading, () => {
   gap: 10px;
   padding-bottom: 10px;
   margin-bottom: 10px;
-  border-bottom: 1px dashed rgba(0, 245, 255, 0.2);
+  border-bottom: 1px dashed var(--accent-cyan-a20);
 }
 
 .group-dot {
@@ -619,8 +645,8 @@ watch(loading, () => {
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--neon-cyan);
-  background: rgba(0, 245, 255, 0.1);
-  border: 1px solid rgba(0, 245, 255, 0.3);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a30);
   padding: 2px 10px;
   border-radius: var(--radius-pill);
 }
@@ -640,7 +666,7 @@ watch(loading, () => {
 }
 
 .page-item:hover {
-  background: rgba(176, 38, 255, 0.12);
+  background: var(--accent-purple-a12);
   transform: translateX(4px);
 }
 

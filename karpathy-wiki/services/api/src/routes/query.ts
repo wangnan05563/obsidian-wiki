@@ -1,12 +1,12 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 import matter from 'gray-matter';
 import type { EngineAdapter, QueryInput } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 
-// Â§5.1 L-7 é˜²ç¯¡æ”¹å½’æ¡£ï¼šä¼šè¯å­˜å‚¨ã€‚
-// å†…å­˜ Map å­˜å‚¨é—®ç­”å¯¹ï¼Œarchive è·¯ç”±ä»æœåŠ¡ç«¯å­˜å‚¨å–ç­”æ¡ˆï¼Œä¸ä¿¡ä»»å®¢æˆ·ç«¯ä¼ å†…å®¹ã€‚
-// è¿›ç¨‹é‡å¯ä¸¢å¤±ï¼ˆå‚ç›´åˆ‡ç‰‡å¯æ¥å—ï¼›åç»­å¯æ¢ SQLite æŒä¹…åŒ–ï¼‰ã€‚
+// ¡ì5.1 L-7 ·À´Û¸Ä¹éµµ£º»á»°´æ´¢¡£
+// ÄÚ´æ Map ´æ´¢ÎÊ´ğ¶Ô£¬archive Â·ÓÉ´Ó·şÎñ¶Ë´æ´¢È¡´ğ°¸£¬²»ĞÅÈÎ¿Í»§¶Ë´«ÄÚÈİ¡£
+// ½ø³ÌÖØÆô¶ªÊ§£¨´¹Ö±ÇĞÆ¬¿É½ÓÊÜ£»ºóĞø¿É»» SQLite ³Ö¾Ã»¯£©¡£
 interface QaRecord {
   question: string;
   answer: string;
@@ -15,14 +15,14 @@ interface QaRecord {
 }
 const sessions = new Map<string, QaRecord[]>();
 
-// æ³¨å†Œ POST /api/query è·¯ç”±ã€‚
-// è¯·æ±‚ä½“ï¼š{ question: string, history?: Array<{role, content}> }
-// å“åº”ä¸º SSE æµï¼Œdone äº‹ä»¶é™„å¸¦ sessionIdï¼ˆä¾›å½’æ¡£ç”¨ï¼‰ã€‚
+// ×¢²á POST /api/query Â·ÓÉ¡£
+// ÇëÇóÌå£º{ question: string, history?: Array<{role, content}> }
+// ÏìÓ¦Îª SSE Á÷£¬done ÊÂ¼ş¸½´ø sessionId£¨¹©¹éµµÓÃ£©¡£
 export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter) {
   app.post('/api/query', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { question?: string; history?: QueryInput['history'] };
     if (!body || !body.question || typeof body.question !== 'string') {
-      return reply.code(400).send({ error: 'è¯·æ±‚ä½“é¡»å« question å­—æ®µ' });
+      return reply.code(400).send({ error: 'ÇëÇóÌåĞëº¬ question ×Ö¶Î' });
     }
 
     const input: QueryInput = {
@@ -30,7 +30,7 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
       history: body.history,
     };
 
-    // ä¸ºæœ¬æ¬¡é—®ç­”åˆ†é… sessionIdï¼Œå­˜å…¥ä¼šè¯å­˜å‚¨ä¾› archive é˜²ç¯¡æ”¹å–ç”¨
+    // Îª±¾´ÎÎÊ´ğ·ÖÅä sessionId£¬´æÈë»á»°´æ´¢¹© archive ·À´Û¸ÄÈ¡ÓÃ
     const sessionId = randomUUID();
     const answerBuffer: string[] = [];
     let refs: string[] = [];
@@ -50,11 +50,11 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
     try {
       for await (const chunk of adapter.query(input)) {
         if (chunk.done) {
-          if (chunk.refs && chunk.refs.length > 0) {
-            refs = chunk.refs;
+          if ((chunk.refs?.length ?? 0) > 0) {
+            refs = chunk.refs ?? [];
             send('refs', { refs });
           }
-          // å­˜å…¥ä¼šè¯å­˜å‚¨ï¼Œä¾› archive é˜²ç¯¡æ”¹å–ç”¨
+          // ´æÈë»á»°´æ´¢£¬¹© archive ·À´Û¸ÄÈ¡ÓÃ
           const records = sessions.get(sessionId) ?? [];
           const messageIndex = records.length;
           records.push({
@@ -64,9 +64,9 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
             ts: new Date().toISOString(),
           });
           sessions.set(sessionId, records);
-          // done äº‹ä»¶é™„å¸¦ sessionId + messageIndexï¼Œå®¢æˆ·ç«¯ä¿å­˜ä¾›å½’æ¡£ç”¨
+          // done ÊÂ¼ş¸½´ø sessionId + messageIndex£¬¿Í»§¶Ë±£´æ¹©¹éµµÓÃ
           send('done', { sessionId, messageIndex });
-        } else if (chunk.refs && chunk.refs.length > 0) {
+        } else if ((chunk.refs?.length ?? 0) > 0) {
           send('refs', { refs: chunk.refs });
         } else if (chunk.text) {
           answerBuffer.push(chunk.text);
@@ -83,54 +83,56 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
   });
 }
 
-// ç‹¬ç«‹å¯¼å‡ºå½’æ¡£è·¯ç”±æ³¨å†Œå‡½æ•°ï¼Œåœ¨ index.ts ä¸­ä¸ query è·¯ç”±ä¸€èµ·æ³¨å†Œã€‚
-// æ‹†åˆ†æ˜¯å› ä¸º archive éœ€è¦ vault æ³¨å…¥ï¼Œè€Œ query éœ€è¦ adapterã€‚
+// ¶ÀÁ¢µ¼³ö¹éµµÂ·ÓÉ×¢²áº¯Êı£¬ÔÚ index.ts ÖĞÓë query Â·ÓÉÒ»Æğ×¢²á¡£
+// ²ğ·ÖÊÇÒòÎª archive ĞèÒª vault ×¢Èë£¬¶ø query ĞèÒª adapter¡£
 export function registerQueryArchiveRoute(app: FastifyInstance, vault: VaultService) {
   app.post('/api/query/archive', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { sessionId?: string; messageIndex?: number };
     if (!body || !body.sessionId || typeof body.messageIndex !== 'number') {
-      return reply.code(400).send({ error: 'è¯·æ±‚ä½“é¡»å« sessionId ä¸ messageIndex' });
+      return reply.code(400).send({ error: 'ÇëÇóÌåĞëº¬ sessionId Óë messageIndex' });
     }
 
     const records = sessions.get(body.sessionId);
     if (!records || body.messageIndex < 0 || body.messageIndex >= records.length) {
-      return reply.code(404).send({ error: 'ä¼šè¯æˆ–æ¶ˆæ¯ä¸å­˜åœ¨ï¼ˆå¯èƒ½å·²è¿‡æœŸï¼‰' });
+      return reply.code(404).send({ error: '»á»°»òÏûÏ¢²»´æÔÚ£¨¿ÉÄÜÒÑ¹ıÆÚ£©' });
     }
 
     const record = records[body.messageIndex];
-    // ç”Ÿæˆå½’æ¡£é¡µé¢æ–‡ä»¶åï¼šqueries/qa-{timestamp}-{çŸ­éšæœº}.md
+    // Éú³É¹éµµÒ³ÃæÎÄ¼şÃû£ºqueries/qa-{timestamp}-{¶ÌËæ»ú}.md
     const shortId = body.sessionId.slice(0, 8);
     const dateStr = new Date(record.ts).toISOString().slice(0, 10);
     const relPath = `queries/qa-${dateStr}-${shortId}.md`;
 
-    // æ„é€  frontmatter + æ­£æ–‡ã€‚type: query ç¬¦åˆ SCHEMA è§„èŒƒ
+    // ¹¹Ôì frontmatter + ÕıÎÄ¡£type: query ·ûºÏ SCHEMA ¹æ·¶
     const frontmatter = {
-      title: `é—®ç­”å½’æ¡£ï¼š${record.question.slice(0, 30)}${record.question.length > 30 ? 'â€¦' : ''}`,
+      title: `ÎÊ´ğ¹éµµ£º${record.question.slice(0, 30)}${record.question.length > 30 ? '¡­' : ''}`,
       type: 'query',
       created: dateStr,
       updated: dateStr,
       source: 'qa-archive',
-      tags: ['é—®ç­”å½’æ¡£', ...record.refs],
+      tags: ['ÎÊ´ğ¹éµµ', ...record.refs],
     };
 
+    // ÌáÈ¡Ç¶Ì×Ä£°åµ½±äÁ¿£¬½µµÍÄ£°å¸´ÔÓ¶È£¨S4624£©
+    const refLines = record.refs.map((r) => `- [[${r}]]`).join('\n');
     const refsSection = record.refs.length > 0
-      ? `\n\n## å¼•ç”¨é¡µé¢\n${record.refs.map((r) => `- [[${r}]]`).join('\n')}`
+      ? `\n\n## ÒıÓÃÒ³Ãæ\n${refLines}`
       : '';
 
     const content = matter.stringify(
-      `# é—®ç­”å½’æ¡£\n\n## é—®é¢˜\n${record.question}\n\n## å›ç­”\n${record.answer}${refsSection}\n`,
+      `# ÎÊ´ğ¹éµµ\n\n## ÎÊÌâ\n${record.question}\n\n## »Ø´ğ\n${record.answer}${refsSection}\n`,
       frontmatter,
     );
 
     try {
       await vault.writeFile(relPath, content);
-      // è¿½åŠ åˆ° index.md
+      // ×·¼Óµ½ index.md
       await vault.appendIndex(
         frontmatter.title,
-        `å½’æ¡£é—®ç­”ï¼š${record.question.slice(0, 40)}`,
+        `¹éµµÎÊ´ğ£º${record.question.slice(0, 40)}`,
       );
-      // è®°å½•æ“ä½œæ—¥å¿—
-      await vault.appendLog('query', [relPath], `å½’æ¡£é—®ç­”: ${record.question.slice(0, 40)}`);
+      // ¼ÇÂ¼²Ù×÷ÈÕÖ¾
+      await vault.appendLog('query', [relPath], `¹éµµÎÊ´ğ: ${record.question.slice(0, 40)}`);
       return reply.send({ ok: true, path: relPath });
     } catch (err: unknown) {
       return reply.code(500).send({

@@ -39,6 +39,46 @@ async function runCheck() {
   }
 }
 
+// 从 SSE 事件块解析 event/data 字段，返回 null 表示无效事件
+function parseSSEEvent(evt: string): { eventType: string; data: string } | null {
+  let eventType = '';
+  let data = '';
+  for (const line of evt.split('\n')) {
+    if (line.startsWith('event: ')) eventType = line.slice(7);
+    if (line.startsWith('data: ')) data = line.slice(6);
+  }
+  if (!eventType || !data) return null;
+  return { eventType, data };
+}
+
+// 处理修复进度事件，提取出来以降低 fixIssue 的认知复杂度
+async function handleFixEvent(eventType: string, data: string): Promise<void> {
+  let parsed: FixProgressEvent;
+  try {
+    parsed = JSON.parse(data) as FixProgressEvent;
+  } catch {
+    return;
+  }
+  if (eventType === 'progress' || eventType === 'fixed') {
+    fixLogs.value.push(parsed);
+    return;
+  }
+  if (eventType === 'done') {
+    fixLogs.value.push(parsed);
+    if (parsed.status === 'done') {
+      ElMessage.success('修复完成');
+      // 修复后重新体检刷新报告
+      await runCheck();
+    } else {
+      ElMessage.error(parsed.message || '修复失败');
+    }
+    return;
+  }
+  if (eventType === 'error') {
+    ElMessage.error(parsed.message || '修复出错');
+  }
+}
+
 // 一键修复单个问题。SSE 流式接收修复进度。
 // issueType 区分断链/孤立，target 为 {from,to} 或字符串路径。
 async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: string; to: string } | string, key: string) {
@@ -65,33 +105,9 @@ async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: str
       const events = buffer.split('\n\n');
       buffer = events.pop() || '';
       for (const evt of events) {
-        const lines = evt.split('\n');
-        let eventType = '';
-        let data = '';
-        for (const line of lines) {
-          if (line.startsWith('event: ')) eventType = line.slice(7);
-          if (line.startsWith('data: ')) data = line.slice(6);
-        }
-        if (!eventType || !data) continue;
-        try {
-          const parsed = JSON.parse(data) as FixProgressEvent;
-          if (eventType === 'progress' || eventType === 'fixed') {
-            fixLogs.value.push(parsed);
-          } else if (eventType === 'done') {
-            fixLogs.value.push(parsed);
-            if (parsed.status === 'done') {
-              ElMessage.success('修复完成');
-              // 修复后重新体检刷新报告
-              await runCheck();
-            } else {
-              ElMessage.error(parsed.message || '修复失败');
-            }
-          } else if (eventType === 'error') {
-            ElMessage.error(parsed.message || '修复出错');
-          }
-        } catch {
-          // 非 JSON 数据跳过
-        }
+        const parsed = parseSSEEvent(evt);
+        if (!parsed) continue;
+        await handleFixEvent(parsed.eventType, parsed.data);
       }
     }
   } catch (err) {
@@ -308,7 +324,7 @@ onMounted(() => {
 
 .neon-btn {
   background: var(--bg-glass) !important;
-  border: 1px solid rgba(176, 38, 255, 0.4) !important;
+  border: 1px solid var(--accent-purple-a40) !important;
   color: var(--text-bright) !important;
   font-family: var(--font-mono) !important;
   letter-spacing: 0.05em;
@@ -342,17 +358,17 @@ onMounted(() => {
 }
 
 .summary-item.healthy {
-  background: linear-gradient(135deg, rgba(0, 245, 255, 0.2), rgba(0, 245, 255, 0.05));
-  border-color: rgba(0, 245, 255, 0.5);
+  background: linear-gradient(135deg, var(--accent-cyan-a20), var(--accent-cyan-a05));
+  border-color: var(--accent-cyan-a50);
   color: var(--neon-cyan);
-  box-shadow: 0 0 20px rgba(0, 245, 255, 0.3);
+  box-shadow: 0 0 20px var(--accent-cyan-a30);
 }
 
 .summary-item.warning {
-  background: linear-gradient(135deg, rgba(255, 0, 110, 0.2), rgba(255, 0, 110, 0.05));
-  border-color: rgba(255, 0, 110, 0.5);
+  background: linear-gradient(135deg, var(--accent-pink-a20), var(--accent-pink-a05));
+  border-color: var(--accent-pink-a50);
   color: var(--neon-magenta);
-  box-shadow: 0 0 20px rgba(255, 0, 110, 0.3);
+  box-shadow: 0 0 20px var(--accent-pink-a30);
 }
 
 .health-loading {
@@ -384,8 +400,8 @@ onMounted(() => {
 
 .issue-section {
   padding: 18px 22px;
-  background: rgba(5, 0, 16, 0.5);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-card);
   transition: all 0.3s ease;
 }
@@ -424,16 +440,16 @@ onMounted(() => {
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 700;
-  background: rgba(0, 245, 255, 0.15);
-  border: 1px solid rgba(0, 245, 255, 0.4);
+  background: var(--accent-cyan-a15);
+  border: 1px solid var(--accent-cyan-a40);
   color: var(--neon-cyan);
 }
 
 .section-count.has-issue {
-  background: rgba(255, 0, 110, 0.15);
-  border-color: rgba(255, 0, 110, 0.5);
+  background: var(--accent-pink-a15);
+  border-color: var(--accent-pink-a50);
   color: var(--neon-magenta);
-  box-shadow: 0 0 12px rgba(255, 0, 110, 0.4);
+  box-shadow: 0 0 12px var(--accent-pink-a40);
 }
 
 .section-desc {
@@ -455,23 +471,23 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
-  background: rgba(176, 38, 255, 0.08);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--accent-purple-a08);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-input);
   font-size: 13px;
   transition: all 0.25s ease;
 }
 
 .issue-item:hover {
-  background: rgba(176, 38, 255, 0.15);
-  border-color: rgba(176, 38, 255, 0.4);
+  background: var(--accent-purple-a15);
+  border-color: var(--accent-purple-a40);
   transform: translateX(4px);
 }
 
 .issue-item code {
   padding: 3px 10px;
-  background: rgba(0, 245, 255, 0.1);
-  border: 1px solid rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a25);
   border-radius: 6px;
   font-size: 12px;
   font-family: var(--font-mono);
@@ -485,8 +501,8 @@ onMounted(() => {
 
 .broken-target {
   color: var(--neon-magenta) !important;
-  border-color: rgba(255, 0, 110, 0.4) !important;
-  background: rgba(255, 0, 110, 0.1) !important;
+  border-color: var(--accent-pink-a40) !important;
+  background: var(--accent-pink-a10) !important;
   font-weight: 600;
 }
 
@@ -500,7 +516,7 @@ onMounted(() => {
 
 .fix-log-section {
   padding: 18px 22px;
-  background: rgba(5, 0, 16, 0.6);
+  background: var(--bg-scene);
   border: 1px solid rgba(193, 255, 62, 0.25);
   border-radius: var(--radius-card);
 }
@@ -524,13 +540,13 @@ onMounted(() => {
 }
 
 .fix-log-item.error {
-  background: rgba(255, 0, 110, 0.12);
-  border-color: rgba(255, 0, 110, 0.35);
+  background: var(--accent-pink-a12);
+  border-color: var(--accent-pink-a35);
 }
 
 .fix-log-item.done {
-  background: rgba(0, 245, 255, 0.1);
-  border-color: rgba(0, 245, 255, 0.35);
+  background: var(--accent-cyan-a10);
+  border-color: var(--accent-cyan-a35);
 }
 
 .log-step {
@@ -550,8 +566,8 @@ onMounted(() => {
 
 .log-tool {
   padding: 2px 8px;
-  background: rgba(0, 245, 255, 0.1);
-  border: 1px solid rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a25);
   border-radius: 6px;
   color: var(--neon-cyan);
   font-size: 11px;

@@ -1,12 +1,12 @@
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { AppConfig } from './types.js';
 
-// é…ç½®æ–‡ä»¶é»˜è®¤æŸ¥æ‰¾è·¯å¾„ï¼šCWD/config.json æˆ– services/api/config.json
+// ÅäÖÃÎÄ¼şÄ¬ÈÏ²éÕÒÂ·¾¶£ºCWD/config.json »ò services/api/config.json
 const CONFIG_FILENAME = 'config.json';
 
-// é»˜è®¤é…ç½®ï¼ˆNPR-05-7 é»˜è®¤å€¼æ¸…å•ï¼‰ã€‚
-// vaultPath é»˜è®¤ './vault'ï¼Œhost 'localhost'ï¼Œport 3000ã€‚
+// Ä¬ÈÏÅäÖÃ£¨NPR-05-7 Ä¬ÈÏÖµÇåµ¥£©¡£
+// vaultPath Ä¬ÈÏ './vault'£¬host 'localhost'£¬port 3000¡£
 function defaultConfig(): AppConfig {
   return {
     vaultPath: './vault',
@@ -24,8 +24,8 @@ function defaultConfig(): AppConfig {
   };
 }
 
-// ä» config.json åŠ è½½é…ç½®ï¼Œåˆå¹¶é»˜è®¤å€¼ã€‚
-// apiKeyRef ä»…å­˜ç¯å¢ƒå˜é‡åï¼ŒAPI Key åœ¨ä½¿ç”¨æ–¹é€šè¿‡ process.env[apiKeyRef] è¯»å–ï¼ˆM-7ï¼‰ã€‚
+// ´Ó config.json ¼ÓÔØÅäÖÃ£¬ºÏ²¢Ä¬ÈÏÖµ¡£
+// apiKeyRef ½ö´æ»·¾³±äÁ¿Ãû£¬API Key ÔÚÊ¹ÓÃ·½Í¨¹ı process.env[apiKeyRef] ¶ÁÈ¡£¨M-7£©¡£
 export async function loadConfig(): Promise<AppConfig> {
   const defaults = defaultConfig();
   const candidates = [
@@ -39,7 +39,7 @@ export async function loadConfig(): Promise<AppConfig> {
       raw = await fs.readFile(p, 'utf8');
       break;
     } catch {
-      // ç»§ç»­å°è¯•ä¸‹ä¸€ä¸ªå€™é€‰è·¯å¾„
+      // ¼ÌĞø³¢ÊÔÏÂÒ»¸öºòÑ¡Â·¾¶
     }
   }
 
@@ -54,7 +54,7 @@ export async function loadConfig(): Promise<AppConfig> {
     return defaults;
   }
 
-  // æµ…åˆå¹¶åµŒå¥—å¯¹è±¡ï¼Œé¿å…ä¸‹å±‚æ•°æ®ä¸¢å¤±
+  // Ç³ºÏ²¢Ç¶Ì×¶ÔÏó£¬±ÜÃâÏÂ²ãÊı¾İ¶ªÊ§
   return {
     ...defaults,
     ...parsed,
@@ -65,10 +65,10 @@ export async function loadConfig(): Promise<AppConfig> {
   };
 }
 
-// Â§12.3-7 é…ç½®çƒ­åŠ è½½ï¼šé‡æ–°è¯»å– config.json å¹¶è¿”å›æ–°é…ç½®ã€‚
-// çƒ­åŠ è½½ä½œç”¨åŸŸï¼šllm.model/budget/healthCheck.staleDays å¯å³æ—¶ç”Ÿæ•ˆï¼ˆè¿è¡Œæ—¶å‚æ•°ï¼‰ã€‚
-// éœ€é‡å¯ç”Ÿæ•ˆé¡¹ï¼šadapter/vaultPath/serverï¼ˆæ¶‰åŠå®ä¾‹é‡å»ºæˆ–ç«¯å£ç»‘å®šï¼‰ã€‚
-// è°ƒç”¨æ–¹éœ€è‡ªè¡Œåˆ¤æ–­å“ªäº›å­—æ®µå¯çƒ­æ›´æ–°ã€‚
+// ¡ì12.3-7 ÅäÖÃÈÈ¼ÓÔØ£ºÖØĞÂ¶ÁÈ¡ config.json ²¢·µ»ØĞÂÅäÖÃ¡£
+// ÈÈ¼ÓÔØ×÷ÓÃÓò£ºllm.model/budget/healthCheck.staleDays ¿É¼´Ê±ÉúĞ§£¨ÔËĞĞÊ±²ÎÊı£©¡£
+// ĞèÖØÆôÉúĞ§Ïî£ºadapter/vaultPath/server£¨Éæ¼°ÊµÀıÖØ½¨»ò¶Ë¿Ú°ó¶¨£©¡£
+// µ÷ÓÃ·½Ğè×ÔĞĞÅĞ¶ÏÄÄĞ©×Ö¶Î¿ÉÈÈ¸üĞÂ¡£
 export async function reloadConfig(): Promise<AppConfig> {
   return loadConfig();
 }

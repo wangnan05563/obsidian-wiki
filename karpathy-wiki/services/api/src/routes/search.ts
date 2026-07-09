@@ -2,16 +2,16 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 import { searchPages } from '../search-util.js';
 
-// æ³¨å†Œå…¨æ–‡æ£€ç´¢è·¯ç”±ã€‚
-//   GET /api/search?q=å…³é”®è¯&type=&tag=  å…¨æ–‡æ£€ç´¢
+// ×¢²áÈ«ÎÄ¼ìË÷Â·ÓÉ¡£
+//   GET /api/search?q=¹Ø¼ü´Ê&type=&tag=  È«ÎÄ¼ìË÷
 //
-// å½“å‰å®ç°ï¼šæœ´ç´  includes åŒ¹é…ï¼ˆå‚ç›´åˆ‡ç‰‡æœ€ç®€å®ç°ï¼‰ã€‚
-// type/tag è¿‡æ»¤å‚æ•°é¢„ç•™ï¼Œå½“å‰ä»…æŒ‰ q åŒ¹é…ï¼ˆåç»­å¯æ‰©å±• frontmatter è¿‡æ»¤ï¼‰ã€‚
+// µ±Ç°ÊµÏÖ£ºÆÓËØ includes Æ¥Åä£¨´¹Ö±ÇĞÆ¬×î¼òÊµÏÖ£©¡£
+// type/tag ¹ıÂË²ÎÊıÔ¤Áô£¬µ±Ç°½ö°´ q Æ¥Åä£¨ºóĞø¿ÉÀ©Õ¹ frontmatter ¹ıÂË£©¡£
 export function registerSearchRoute(app: FastifyInstance, vault: VaultService) {
   app.get('/api/search', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { q?: string; type?: string; tag?: string };
-    if (!query.q || !query.q.trim()) {
-      return reply.code(400).send({ error: 'ç¼ºå°‘ q å‚æ•°' });
+    if (!query.q?.trim()) {
+      return reply.code(400).send({ error: 'È±ÉÙ q ²ÎÊı' });
     }
 
     try {

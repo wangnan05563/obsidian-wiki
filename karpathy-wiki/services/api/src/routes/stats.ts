@@ -1,18 +1,18 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { VaultService } from '../vault/vault-service.js';
 
-// æ³¨å†Œç»Ÿè®¡è·¯ç”±ã€‚
-//   GET /api/stats   è¿”å›ä»ªè¡¨ç›˜æ±‡æ€»æ•°æ®ï¼ˆé¡µé¢æ•°ã€ç›®å½•åˆ†å¸ƒã€æœ€è¿‘ç¼–è¯‘è®°å½•ï¼‰
-// çº¯ç¡®å®šæ€§èšåˆï¼Œä¸è°ƒ LLMã€‚
+// ×¢²áÍ³¼ÆÂ·ÓÉ¡£
+//   GET /api/stats   ·µ»ØÒÇ±íÅÌ»ã×ÜÊı¾İ£¨Ò³ÃæÊı¡¢Ä¿Â¼·Ö²¼¡¢×î½ü±àÒë¼ÇÂ¼£©
+// ´¿È·¶¨ĞÔ¾ÛºÏ£¬²»µ÷ LLM¡£
 export function registerStatsRoute(app: FastifyInstance, vault: VaultService) {
   app.get('/api/stats', async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const graph = await vault.buildLinkGraph();
       const vaultPath = vault.getVaultPath();
 
-      // æŒ‰ç›®å½•ç»Ÿè®¡é¡µé¢æ•°
+      // °´Ä¿Â¼Í³¼ÆÒ³ÃæÊı
       const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
       const dirCounts: Record<string, number> = {};
       for (const d of pageDirs) {
@@ -25,14 +25,14 @@ export function registerStatsRoute(app: FastifyInstance, vault: VaultService) {
         }
       }
 
-      // è¯»å– log.md æœ«å°¾è‹¥å¹²è¡Œä½œä¸ºæœ€è¿‘ç¼–è¯‘è®°å½•ï¼ˆç®€å•å®ç°ï¼Œä¸è§£æå®Œæ•´ç»“æ„ï¼‰
+      // ¶ÁÈ¡ log.md Ä©Î²Èô¸ÉĞĞ×÷Îª×î½ü±àÒë¼ÇÂ¼£¨¼òµ¥ÊµÏÖ£¬²»½âÎöÍêÕû½á¹¹£©
       let recentLog = '';
       try {
         const logContent = await vault.readFile('log.md');
-        // å–æœ€å 500 å­—ç¬¦ä½œä¸ºæœ€è¿‘è®°å½•æ‘˜è¦
+        // È¡×îºó 500 ×Ö·û×÷Îª×î½ü¼ÇÂ¼ÕªÒª
         recentLog = logContent.slice(-500);
       } catch {
-        // log.md å¯èƒ½è¿˜æœªåˆ›å»º
+        // log.md ¿ÉÄÜ»¹Î´´´½¨
       }
 
       return reply.send({

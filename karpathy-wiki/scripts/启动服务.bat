@@ -52,8 +52,8 @@ if not exist "node_modules" (
 REM [3/4] 启动后端 API + 前端 Web
 echo [3/4] 启动服务（使用 %PKG_CMD%）...
 
-REM 启动后端 API（新窗口）
-start "KarpathyWiki-API" cmd /c "%PKG_CMD% dev:api 2>&1 & pause"
+REM 启动后端 API（chcp 65001 匹配 Node.js UTF-8 stdout，避免子窗口 GBK 乱码）
+start "KarpathyWiki-API" cmd /c "chcp 65001 >nul & %PKG_CMD% dev:api 2>&1 & pause"
 
 REM 等待后端端口就绪（最多 30 秒）
 echo 等待后端 API 就绪...
@@ -71,8 +71,8 @@ if errorlevel 1 (
 )
 echo   后端 API 已启动：http://localhost:3000
 
-REM 启动前端 Web（新窗口）
-start "KarpathyWiki-Web" cmd /c "%PKG_CMD% dev:web 2>&1 & pause"
+REM 启动前端 Web（chcp 65001 同上）
+start "KarpathyWiki-Web" cmd /c "chcp 65001 >nul & %PKG_CMD% dev:web 2>&1 & pause"
 
 REM 等待前端端口就绪（最多 15 秒）
 set /a tries=0

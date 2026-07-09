@@ -1,0 +1,37 @@
+# ---------- 环境与依赖 ----------
+.env
+node_modules/
+
+# ---------- 构建产物 ----------
+dist/
+build/
+services/api/dist/
+services/api/public/assets/
+
+# ---------- 缓存目录（可重建） ----------
+.cache/
+.scannerwork/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+
+# ---------- TypeScript / vue-tsc 编译产物 ----------
+# vue-tsc 生成的虚拟代码文件，不应提交或扫描
+*.vue.js
+# TypeScript 编译产物（vue-tsc/tsc 输出），源码目录下不应存在 .js
+packages/web/src/**/*.js
+
+# ---------- 一次性调试脚本（根目录） ----------
+add-scene-vars.js
+cleanup-scene-vars.js
+replace-rgba.js
+
+# ---------- 开发调试截图（根目录） ----------
+macaron_*.png
+enterprise_config.png
+product_config.png
+theme_switcher_open.png
+
+# ---------- 运行时数据 ----------
+vault/raw/

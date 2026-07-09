@@ -108,6 +108,13 @@ function cancelEdit() {
   editingSchema.value = false;
 }
 
+// 提取为函数以避免模板中出现嵌套三元（S3358）
+function diffLinePrefix(type: string): string {
+  if (type === 'add') return '+';
+  if (type === 'del') return '-';
+  return ' ';
+}
+
 // 加载配置
 async function loadConfig() {
   loadingConfig.value = true;
@@ -257,7 +264,7 @@ onMounted(() => {
                       :class="line.type"
                     >
                       <span class="line-prefix">
-                        {{ line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ' }}
+                        {{ diffLinePrefix(line.type) }}
                       </span>
                       <span class="line-content">{{ line.content }}</span>
                     </div>
@@ -458,7 +465,7 @@ onMounted(() => {
 
 .config-tabs :deep(.el-tabs__item.is-active) {
   color: var(--neon-cyan) !important;
-  text-shadow: 0 0 8px rgba(0, 245, 255, 0.5);
+  text-shadow: 0 0 8px var(--accent-cyan-a50);
 }
 
 .config-tabs :deep(.el-tabs__active-bar) {
@@ -467,7 +474,7 @@ onMounted(() => {
 }
 
 .config-tabs :deep(.el-tabs__nav-wrap::after) {
-  background-color: rgba(176, 38, 255, 0.15);
+  background-color: var(--accent-purple-a15);
 }
 
 .schema-section,
@@ -497,7 +504,7 @@ onMounted(() => {
 /* 霓虹按钮：透明底 */
 .neon-btn {
   background: var(--bg-glass) !important;
-  border: 1px solid rgba(176, 38, 255, 0.4) !important;
+  border: 1px solid var(--accent-purple-a40) !important;
   color: var(--text-bright) !important;
   font-family: var(--font-mono) !important;
   letter-spacing: 0.05em;
@@ -514,7 +521,7 @@ onMounted(() => {
 .neon-btn-primary {
   background: var(--grad-fire) !important;
   border: none !important;
-  color: #fff !important;
+  color: var(--text-bright) !important;
   font-family: var(--font-mono) !important;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -539,22 +546,22 @@ onMounted(() => {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.8;
-  background: rgba(5, 0, 16, 0.6) !important;
+  background: var(--bg-scene) !important;
   color: var(--text-bright) !important;
-  border: 1px solid rgba(0, 245, 255, 0.25) !important;
+  border: 1px solid var(--accent-cyan-a25) !important;
   border-radius: var(--radius-input) !important;
 }
 
 .schema-editor :deep(.el-textarea__inner):focus {
   border-color: var(--neon-cyan) !important;
-  box-shadow: 0 0 16px rgba(0, 245, 255, 0.3) !important;
+  box-shadow: 0 0 16px var(--accent-cyan-a30) !important;
 }
 
 .schema-view {
   margin: 0;
   padding: 18px 24px;
-  background: rgba(5, 0, 16, 0.6);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-card);
   font-size: 13px;
   line-height: 1.8;
@@ -574,8 +581,8 @@ onMounted(() => {
 
 .config-block {
   padding: 18px 22px;
-  background: rgba(5, 0, 16, 0.5);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-card);
   transition: all 0.3s ease;
 }
@@ -588,12 +595,12 @@ onMounted(() => {
   color: var(--text-bright);
   letter-spacing: 0.05em;
   padding-bottom: 10px;
-  border-bottom: 1px solid rgba(0, 245, 255, 0.2);
+  border-bottom: 1px solid var(--accent-cyan-a20);
 }
 
 .block-bracket {
   color: var(--neon-cyan);
-  text-shadow: 0 0 8px rgba(0, 245, 255, 0.5);
+  text-shadow: 0 0 8px var(--accent-cyan-a50);
 }
 
 .config-row {
@@ -630,22 +637,22 @@ onMounted(() => {
 }
 
 .key-status.set {
-  background: rgba(0, 245, 255, 0.15);
-  border-color: rgba(0, 245, 255, 0.5);
+  background: var(--accent-cyan-a15);
+  border-color: var(--accent-cyan-a50);
   color: var(--neon-cyan);
 }
 
 .key-status.unset {
-  background: rgba(255, 0, 110, 0.15);
-  border-color: rgba(255, 0, 110, 0.5);
+  background: var(--accent-pink-a15);
+  border-color: var(--accent-pink-a50);
   color: var(--neon-magenta);
-  box-shadow: 0 0 10px rgba(255, 0, 110, 0.3);
+  box-shadow: 0 0 10px var(--accent-pink-a30);
 }
 
 .env-name {
   padding: 2px 10px;
-  background: rgba(176, 38, 255, 0.12);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  background: var(--accent-purple-a12);
+  border: 1px solid var(--accent-purple-a30);
   border-radius: 6px;
   font-size: 11px;
   font-family: var(--font-mono);
@@ -656,10 +663,10 @@ onMounted(() => {
   display: flex;
   gap: 14px;
   padding: 16px 20px;
-  background: linear-gradient(135deg, rgba(255, 0, 110, 0.18), rgba(255, 0, 110, 0.05));
-  border: 1px solid rgba(255, 0, 110, 0.4);
+  background: linear-gradient(135deg, var(--accent-pink-a18), var(--accent-pink-a05));
+  border: 1px solid var(--accent-pink-a40);
   border-radius: var(--radius-card);
-  box-shadow: 0 0 24px rgba(255, 0, 110, 0.15);
+  box-shadow: 0 0 24px var(--accent-pink-a15);
 }
 
 .warning-icon {
@@ -685,8 +692,8 @@ onMounted(() => {
 
 .warning-text code {
   padding: 2px 8px;
-  background: rgba(0, 245, 255, 0.12);
-  border: 1px solid rgba(0, 245, 255, 0.3);
+  background: var(--accent-cyan-a12);
+  border: 1px solid var(--accent-cyan-a30);
   border-radius: 6px;
   font-size: 11px;
   font-family: var(--font-mono);
@@ -699,16 +706,16 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 16px;
   padding: 12px 18px;
-  background: rgba(5, 0, 16, 0.5);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-card);
 }
 
 .reload-result {
   margin-bottom: 16px;
   padding: 14px 18px;
-  background: linear-gradient(135deg, rgba(0, 245, 255, 0.12), rgba(0, 245, 255, 0.03));
-  border: 1px solid rgba(0, 245, 255, 0.35);
+  background: linear-gradient(135deg, var(--accent-cyan-a12), var(--accent-cyan-a03));
+  border: 1px solid var(--accent-cyan-a35);
   border-radius: var(--radius-card);
 }
 
@@ -728,8 +735,8 @@ onMounted(() => {
 
 .applied-tag {
   padding: 2px 12px;
-  background: rgba(0, 245, 255, 0.1);
-  border: 1px solid rgba(0, 245, 255, 0.3);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a30);
   border-radius: var(--radius-pill);
   font-size: 11px;
   font-family: var(--font-mono);
@@ -747,8 +754,8 @@ onMounted(() => {
 .history-section {
   margin-top: 20px;
   padding: 16px 20px;
-  background: rgba(5, 0, 16, 0.5);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-card);
 }
 
@@ -769,8 +776,8 @@ onMounted(() => {
 
 .history-disabled code {
   padding: 2px 8px;
-  background: rgba(176, 38, 255, 0.12);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  background: var(--accent-purple-a12);
+  border: 1px solid var(--accent-purple-a30);
   border-radius: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -796,31 +803,31 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   padding: 9px 12px;
-  background: rgba(176, 38, 255, 0.06);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--accent-purple-a06);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.25s ease;
 }
 
 .commit-item:hover {
-  background: rgba(0, 245, 255, 0.1);
-  border-color: rgba(0, 245, 255, 0.35);
+  background: var(--accent-cyan-a10);
+  border-color: var(--accent-cyan-a35);
   transform: translateX(4px);
 }
 
 .commit-item.selected {
-  background: rgba(255, 0, 110, 0.12);
-  border-color: rgba(255, 0, 110, 0.5);
-  box-shadow: 0 0 12px rgba(255, 0, 110, 0.25);
+  background: var(--accent-pink-a12);
+  border-color: var(--accent-pink-a50);
+  box-shadow: 0 0 12px var(--accent-pink-a25);
 }
 
 .commit-hash {
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--neon-cyan);
-  background: rgba(0, 245, 255, 0.1);
-  border: 1px solid rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a25);
   padding: 2px 8px;
   border-radius: 6px;
   flex-shrink: 0;
@@ -857,8 +864,8 @@ onMounted(() => {
 
 .diff-result {
   padding: 12px 16px;
-  background: rgba(5, 0, 16, 0.7);
-  border: 1px solid rgba(176, 38, 255, 0.2);
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
   border-radius: 10px;
   max-height: 300px;
   overflow-y: auto;
@@ -886,11 +893,11 @@ onMounted(() => {
 }
 
 .diff-line.add {
-  background: rgba(0, 245, 255, 0.12);
+  background: var(--accent-cyan-a12);
 }
 
 .diff-line.del {
-  background: rgba(255, 0, 110, 0.12);
+  background: var(--accent-pink-a12);
 }
 
 .line-prefix {

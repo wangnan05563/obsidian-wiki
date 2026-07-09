@@ -1,45 +1,45 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import fs from 'fs/promises';
-import os from 'os';
-import path from 'path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { EngineAdapter, CompileInput } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 
-// æ³¨å†Œ POST /api/compile è·¯ç”±ã€‚
-// æ¥å—ä¸¤ç§ Content-Typeï¼š
-//   - multipart/form-dataï¼šfile å­—æ®µä¸Šä¼ æ–‡ä»¶
-//   - application/jsonï¼š{ type: 'url'|'text', content: string }
-// å“åº”ä¸º SSE æµï¼Œäº‹ä»¶æ ¼å¼ï¼ševent: <type>\ndata: <json>\n\n
+// ×¢²á POST /api/compile Â·ÓÉ¡£
+// ½ÓÊÜÁ½ÖÖ Content-Type£º
+//   - multipart/form-data£ºfile ×Ö¶ÎÉÏ´«ÎÄ¼ş
+//   - application/json£º{ type: 'url'|'text', content: string }
+// ÏìÓ¦Îª SSE Á÷£¬ÊÂ¼ş¸ñÊ½£ºevent: <type>\ndata: <json>\n\n
 export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapter) {
   app.post('/api/compile', async (request: FastifyRequest, reply: FastifyReply) => {
     let input: CompileInput;
 
     const contentType = request.headers['content-type'] ?? '';
     if (contentType.startsWith('multipart/form-data')) {
-      // multipart æ–‡ä»¶ä¸Šä¼ 
+      // multipart ÎÄ¼şÉÏ´«
       const file = await request.file();
       if (!file) {
-        return reply.code(400).send({ error: 'ç¼ºå°‘ file å­—æ®µ' });
+        return reply.code(400).send({ error: 'È±ÉÙ file ×Ö¶Î' });
       }
       const buffer = await file.toBuffer();
-      // è½ç›˜åˆ°ä¸´æ—¶ç›®å½•ï¼Œcompile-workflow ä¼šè¯»å–åå­˜æ¡£åˆ° raw/
+      // ÂäÅÌµ½ÁÙÊ±Ä¿Â¼£¬compile-workflow »á¶ÁÈ¡ºó´æµµµ½ raw/
       const tmp = path.join(os.tmpdir(), `wiki-compile-${Date.now()}-${file.filename}`);
       await fs.writeFile(tmp, buffer);
       input = { type: 'file', content: tmp };
     } else {
-      // JSONï¼šurl æˆ– text
+      // JSON£ºurl »ò text
       const body = request.body as { type?: string; content?: string; rawPath?: string };
       if (!body || (body.type !== 'url' && body.type !== 'text') || !body.content) {
-        return reply.code(400).send({ error: 'è¯·æ±‚ä½“é¡»å« type(url|text) ä¸ content' });
+        return reply.code(400).send({ error: 'ÇëÇóÌåĞëº¬ type(url|text) Óë content' });
       }
       input = {
-        type: body.type as 'url' | 'text',
+        type: body.type,
         content: body.content,
         rawPath: body.rawPath,
       };
     }
 
-    // SSE headersã€‚Connection: keep-alive é˜²ä»£ç†æ–­å¼€ï¼ŒX-Accel-Buffering: no é˜² Nginx ç¼“å†²ã€‚
+    // SSE headers¡£Connection: keep-alive ·À´úÀí¶Ï¿ª£¬X-Accel-Buffering: no ·À Nginx »º³å¡£
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -53,11 +53,11 @@ export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapte
     };
 
     try {
-      // Â§12.3-5ï¼šä¸²è¡Œé˜Ÿåˆ—åŒ…è£…ï¼Œä¿è¯å¹¶å‘ compile è¯·æ±‚ä¸äº§ç”Ÿ index.md/log.md è¿½åŠ ç«æ€ã€‚
-      // withCompileLock ç­‰å¾…å‰ä¸€ä¸ª compile å®Œæˆåæ‰å¼€å§‹æ¶ˆè´¹æœ¬æ¬¡è¿­ä»£ã€‚
+      // ¡ì12.3-5£º´®ĞĞ¶ÓÁĞ°ü×°£¬±£Ö¤²¢·¢ compile ÇëÇó²»²úÉú index.md/log.md ×·¼Ó¾ºÌ¬¡£
+      // withCompileLock µÈ´ıÇ°Ò»¸ö compile Íê³Éºó²Å¿ªÊ¼Ïû·Ñ±¾´Îµü´ú¡£
       await withCompileLock(async () => {
         for await (const ev of adapter.compile(input)) {
-          // åŒºåˆ†è¿›åº¦äº‹ä»¶ä¸é¡µé¢ç”Ÿæˆäº‹ä»¶ï¼šdata å« path/title è§†ä¸º page äº‹ä»¶
+          // Çø·Ö½ø¶ÈÊÂ¼şÓëÒ³ÃæÉú³ÉÊÂ¼ş£ºdata º¬ path/title ÊÓÎª page ÊÂ¼ş
           if (ev.step === 'done') {
             send('done', ev);
           } else if (ev.data?.path && ev.data?.title) {
@@ -78,15 +78,15 @@ export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapte
     }
   });
 
-  // Â§11.2 æ–­ç‚¹ç»­ä¼ ï¼šPOST /api/compile/resume/:runId
-  // ä»ä¸­æ–­ç‚¹æ¢å¤ç¼–è¯‘ï¼ŒSSE æµå¼è¿”å›è¿›åº¦äº‹ä»¶ï¼ˆåŒ /api/compile æ ¼å¼ï¼‰
+  // ¡ì11.2 ¶ÏµãĞø´«£ºPOST /api/compile/resume/:runId
+  // ´ÓÖĞ¶Ïµã»Ö¸´±àÒë£¬SSE Á÷Ê½·µ»Ø½ø¶ÈÊÂ¼ş£¨Í¬ /api/compile ¸ñÊ½£©
   app.post<{ Params: { runId: string } }>(
     '/api/compile/resume/:runId',
     async (request, reply) => {
       const { runId } = request.params;
-      // é˜²è·¯å¾„ç©¿è¶Šï¼šåªå…è®¸ UUID æ ¼å¼çš„ runId
+      // ·ÀÂ·¾¶´©Ô½£ºÖ»ÔÊĞí UUID ¸ñÊ½µÄ runId
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
-        return reply.code(400).send({ error: 'æ— æ•ˆçš„ runId' });
+        return reply.code(400).send({ error: 'ÎŞĞ§µÄ runId' });
       }
 
       reply.raw.writeHead(200, {

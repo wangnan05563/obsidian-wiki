@@ -1,0 +1,25 @@
+/* ============================================================
+ * 主题系统入口 · Themes Index
+ * 统一导入所有主题样式
+ *
+ * 主题切换原理：
+ * - 默认 :root 为霓虹赛博风（creative 主题），无需额外样式
+ * - 其他主题通过 [data-theme="xxx"] 选择器覆盖 CSS 变量
+ * - 在 <html> 元素上设置 data-theme 属性即可切换
+ * - 用户选择持久化到 localStorage
+ *
+ * 主题清单：
+ * 1. macaron    - 马卡龙（浅色，柔和粉嫩）
+ * 2. enterprise - 现代企业（科技蓝灰，毛玻璃）
+ * 3. creative   - 创意品牌（霓虹赛博，默认 :root）
+ * 4. product    - 产品展示（暗黑霓虹绿粉）
+ * 5. ecommerce  - 电商零售（明亮扁平橙蓝）
+ * 6. portfolio  - 艺术作品集（米色金黑，优雅）
+ * ============================================================ */
+
+@import './macaron.css';
+@import './enterprise.css';
+/* creative 主题使用 :root 默认值，无需单独文件 */
+@import './product.css';
+@import './ecommerce.css';
+@import './portfolio.css';

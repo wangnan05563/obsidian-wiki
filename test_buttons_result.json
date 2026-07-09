@@ -1,0 +1,162 @@
+[
+  {
+    "test": "Dashboard-Shortcuts-Count",
+    "status": "PASS",
+    "details": "Found 4 (expected 4)"
+  },
+  {
+    "test": "Dashboard-Shortcut-1",
+    "status": "PASS",
+    "details": "Clicked and returned"
+  },
+  {
+    "test": "Dashboard-Shortcut-2",
+    "status": "PASS",
+    "details": "Clicked and returned"
+  },
+  {
+    "test": "Dashboard-Shortcut-3",
+    "status": "PASS",
+    "details": "Clicked and returned"
+  },
+  {
+    "test": "Dashboard-Shortcut-4",
+    "status": "PASS",
+    "details": "Clicked and returned"
+  },
+  {
+    "test": "Dashboard-InitVault",
+    "status": "PASS",
+    "details": "Not visible (knowledge base has content)"
+  },
+  {
+    "test": "Ingest-Tab-文件上传",
+    "status": "PASS",
+    "details": "Tab switched"
+  },
+  {
+    "test": "Ingest-Tab-URL 粘贴",
+    "status": "PASS",
+    "details": "Tab switched"
+  },
+  {
+    "test": "Ingest-Tab-文本粘贴",
+    "status": "PASS",
+    "details": "Tab switched"
+  },
+  {
+    "test": "Ingest-URL-Fill",
+    "status": "PASS",
+    "details": "URL filled"
+  },
+  {
+    "test": "Ingest-ClearBtn",
+    "status": "PASS",
+    "details": "Clear clicked"
+  },
+  {
+    "test": "Browse-RefreshTree",
+    "status": "PASS",
+    "details": "Tree refreshed"
+  },
+  {
+    "test": "Browse-Search",
+    "status": "PASS",
+    "details": "Search executed"
+  },
+  {
+    "test": "Browse-BackToTree",
+    "status": "PASS",
+    "details": "Returned to tree"
+  },
+  {
+    "test": "Browse-FileNodeClick",
+    "status": "PASS",
+    "details": "File loaded (3 files)"
+  },
+  {
+    "test": "Browse-EditBtn",
+    "status": "PASS",
+    "details": "Edit mode entered"
+  },
+  {
+    "test": "Browse-CancelEdit",
+    "status": "PASS",
+    "details": "Edit cancelled"
+  },
+  {
+    "test": "Query-SuggestionChips",
+    "status": "PASS",
+    "details": "Found 2 chips"
+  },
+  {
+    "test": "Query-ChipFill",
+    "status": "PASS",
+    "details": "Input: 什么是 LLM Wiki？"
+  },
+  {
+    "test": "Query-SendBtn",
+    "status": "PASS",
+    "details": "Send clicked, waiting for response"
+  },
+  {
+    "test": "Query-NewSession",
+    "status": "PASS",
+    "details": "New session started"
+  },
+  {
+    "test": "Graph-ToggleView",
+    "status": "PASS",
+    "details": "View toggled"
+  },
+  {
+    "test": "Graph-ToggleBack",
+    "status": "PASS",
+    "details": "View toggled back"
+  },
+  {
+    "test": "Graph-Refresh",
+    "status": "PASS",
+    "details": "Graph refreshed"
+  },
+  {
+    "test": "Health-Recheck",
+    "status": "PASS",
+    "details": "Re-check triggered"
+  },
+  {
+    "test": "Health-FixButtons",
+    "status": "PASS",
+    "details": "Found 34 fix buttons (not clicking - destructive)"
+  },
+  {
+    "test": "Config-Tab-SystemConfig",
+    "status": "PASS",
+    "details": "System config tab opened"
+  },
+  {
+    "test": "Config-ReloadConfig",
+    "status": "PASS",
+    "details": "Config reloaded"
+  },
+  {
+    "test": "Config-EditSchema",
+    "status": "PASS",
+    "details": "Edit mode entered"
+  },
+  {
+    "test": "Config-SaveSchema",
+    "status": "PASS",
+    "details": "Schema saved"
+  },
+  {
+    "test": "Config-RefreshHistory",
+    "status": "PASS",
+    "details": "History refreshed"
+  },
+  {
+    "test": "Console-Errors-Supplement",
+    "status": "PASS",
+    "details": "No console errors"
+  }
+]

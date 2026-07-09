@@ -1,0 +1,347 @@
+/* ============================================================
+ * 艺术/作品集主题 · Portfolio Theme
+ * 米色背景 + 黑色 + 金色点缀，极简导航，优雅页面过渡
+ * 突出作品本身，精致高雅
+ * ============================================================ */
+
+[data-theme="portfolio"] {
+  /* 作品集主色：典雅黑 + 金 */
+  --neon-purple: #1a1a1a;
+  --neon-magenta: #c9a961;
+  --neon-cyan: #8b7355;
+  --neon-violet: #3d3d3d;
+  --neon-pink: #d4b572;
+  --neon-lime: #a08c5a;
+
+  /* 米色背景层次 */
+  --bg-void: #f5f2ed;
+  --bg-deep: #ede8e0;
+  --bg-mid: #e0d9cc;
+  --bg-card: rgba(255, 252, 247, 0.85);
+  --bg-card-solid: rgba(255, 252, 247, 0.98);
+  --bg-glass: rgba(255, 252, 247, 0.6);
+
+  /* 深色文字 */
+  --text-bright: #1a1a1a;
+  --text-base: #2d2d2d;
+  --text-soft: #5a5a5a;
+  --text-dim: #9a9a9a;
+
+  /* 优雅渐变（金+黑） */
+  --grad-neon: linear-gradient(135deg, #1a1a1a 0%, #c9a961 50%, #8b7355 100%);
+  --grad-fire: linear-gradient(135deg, #1a1a1a 0%, #c9a961 100%);
+  --grad-cool: linear-gradient(135deg, #c9a961 0%, #8b7355 100%);
+  --grad-aurora: linear-gradient(120deg, #c9a961 0%, #1a1a1a 40%, #8b7355 80%, #d4b572 100%);
+
+  /* 优雅阴影 */
+  --glow-purple: 0 8px 32px rgba(26, 26, 26, 0.12);
+  --glow-magenta: 0 8px 32px rgba(201, 169, 97, 0.2);
+  --glow-cyan: 0 8px 32px rgba(139, 115, 85, 0.15);
+  --glow-soft: 0 8px 40px rgba(26, 26, 26, 0.08);
+
+  /* 细线边框 */
+  --border-neon: 1px solid rgba(201, 169, 97, 0.4);
+  --border-glass: 1px solid rgba(26, 26, 26, 0.08);
+
+  /* 适中圆角 */
+  --radius-card: 12px;
+  --radius-btn: 8px;
+  --radius-input: 6px;
+  --radius-pill: 999px;
+
+  --blur: blur(10px);
+
+  /* 优雅字体 */
+  --font-display: 'Cormorant Garamond', 'PingFang SC', 'Microsoft YaHei', serif;
+  --font-body: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Robot IP & Graph colors: theme-aware */
+  --robot-head-1: #1a1a1a;
+  --robot-head-2: #2d2d2d;
+  --robot-head-3: #3d3d3d;
+  --robot-body-1: #c9a961;
+  --robot-body-2: #8b7355;
+  --robot-accent: #c9a961;
+  --robot-eye: #c9a961;
+  --robot-eye-deep: #a08c5a;
+  --robot-antenna: #d4b572;
+  --robot-glow: rgba(201, 169, 97, 0.3);
+  --graph-entities: #c9a961;
+  --graph-concepts: #8b7355;
+  --graph-comparisons: #1a1a1a;
+  --graph-queries: #d4b572;
+  --graph-entities-border: #d4b572;
+  --graph-concepts-border: #a08c5a;
+  --graph-comparisons-border: #3d3d3d;
+  --graph-queries-border: #e0c884;
+  --graph-edge: rgba(201, 169, 97, 0.35);
+  --graph-edge-highlight: #c9a961;
+  --graph-label: #1a1a1a;
+
+  /* Scene backgrounds: container depth area (code blocks, tree, stat card) */
+  --bg-scene: #ede8e0;
+  --border-accent: rgba(201, 169, 97, 0.4);
+
+  /* Accent semi-transparent colors (auto-derived from theme base) */
+  --accent-purple-base: #1a1a1a;
+  --accent-cyan-base: #c9a961;
+  --accent-pink-base: #8b7355;
+  --accent-magenta-base: #d4b572;
+  --accent-purple-a05: rgba(26, 26, 26, 0.05);
+  --accent-cyan-a05: rgba(201, 169, 97, 0.05);
+  --accent-pink-a05: rgba(139, 115, 85, 0.05);
+  --accent-magenta-a05: rgba(212, 181, 114, 0.05);
+  --accent-purple-a06: rgba(26, 26, 26, 0.06);
+  --accent-cyan-a06: rgba(201, 169, 97, 0.06);
+  --accent-pink-a06: rgba(139, 115, 85, 0.06);
+  --accent-magenta-a06: rgba(212, 181, 114, 0.06);
+  --accent-purple-a08: rgba(26, 26, 26, 0.08);
+  --accent-cyan-a08: rgba(201, 169, 97, 0.08);
+  --accent-pink-a08: rgba(139, 115, 85, 0.08);
+  --accent-magenta-a08: rgba(212, 181, 114, 0.08);
+  --accent-purple-a10: rgba(26, 26, 26, 0.1);
+  --accent-cyan-a10: rgba(201, 169, 97, 0.1);
+  --accent-pink-a10: rgba(139, 115, 85, 0.1);
+  --accent-magenta-a10: rgba(212, 181, 114, 0.1);
+  --accent-purple-a12: rgba(26, 26, 26, 0.12);
+  --accent-cyan-a12: rgba(201, 169, 97, 0.12);
+  --accent-pink-a12: rgba(139, 115, 85, 0.12);
+  --accent-magenta-a12: rgba(212, 181, 114, 0.12);
+  --accent-purple-a15: rgba(26, 26, 26, 0.15);
+  --accent-cyan-a15: rgba(201, 169, 97, 0.15);
+  --accent-pink-a15: rgba(139, 115, 85, 0.15);
+  --accent-magenta-a15: rgba(212, 181, 114, 0.15);
+  --accent-purple-a18: rgba(26, 26, 26, 0.18);
+  --accent-cyan-a18: rgba(201, 169, 97, 0.18);
+  --accent-pink-a18: rgba(139, 115, 85, 0.18);
+  --accent-magenta-a18: rgba(212, 181, 114, 0.18);
+  --accent-purple-a25: rgba(26, 26, 26, 0.25);
+  --accent-cyan-a25: rgba(201, 169, 97, 0.25);
+  --accent-pink-a25: rgba(139, 115, 85, 0.25);
+  --accent-magenta-a25: rgba(212, 181, 114, 0.25);
+  --accent-purple-a50: rgba(26, 26, 26, 0.5);
+  --accent-cyan-a50: rgba(201, 169, 97, 0.5);
+  --accent-pink-a50: rgba(139, 115, 85, 0.5);
+  --accent-magenta-a50: rgba(212, 181, 114, 0.5);
+  --accent-purple-a60: rgba(26, 26, 26, 0.6);
+  --accent-cyan-a60: rgba(201, 169, 97, 0.6);
+  --accent-pink-a60: rgba(139, 115, 85, 0.6);
+  --accent-magenta-a60: rgba(212, 181, 114, 0.6);
+  --accent-purple-a70: rgba(26, 26, 26, 0.7);
+  --accent-cyan-a70: rgba(201, 169, 97, 0.7);
+  --accent-pink-a70: rgba(139, 115, 85, 0.7);
+  --accent-magenta-a70: rgba(212, 181, 114, 0.7);
+
+  /* Additional alpha variants for portfolio theme */
+  --accent-purple-a20: rgba(26, 26, 26, 0.2);
+  --accent-cyan-a20: rgba(201, 169, 97, 0.2);
+  --accent-pink-a20: rgba(139, 115, 85, 0.2);
+  --accent-magenta-a20: rgba(212, 181, 114, 0.2);
+  --accent-purple-a30: rgba(26, 26, 26, 0.3);
+  --accent-cyan-a30: rgba(201, 169, 97, 0.3);
+  --accent-pink-a30: rgba(139, 115, 85, 0.3);
+  --accent-magenta-a30: rgba(212, 181, 114, 0.3);
+  --accent-purple-a40: rgba(26, 26, 26, 0.4);
+  --accent-cyan-a40: rgba(201, 169, 97, 0.4);
+  --accent-pink-a40: rgba(139, 115, 85, 0.4);
+  --accent-magenta-a40: rgba(212, 181, 114, 0.4);
+
+  /* Additional alpha variants for portfolio theme */
+  --accent-purple-a04: rgba(26, 26, 26, 0.04);
+  --accent-cyan-a04: rgba(201, 169, 97, 0.04);
+  --accent-pink-a04: rgba(139, 115, 85, 0.04);
+  --accent-magenta-a04: rgba(212, 181, 114, 0.04);
+  --accent-purple-a45: rgba(26, 26, 26, 0.45);
+  --accent-cyan-a45: rgba(201, 169, 97, 0.45);
+  --accent-pink-a45: rgba(139, 115, 85, 0.45);
+  --accent-magenta-a45: rgba(212, 181, 114, 0.45);
+
+  /* Additional alpha variants for portfolio theme */
+  --accent-purple-a03: rgba(26, 26, 26, 0.03);
+  --accent-cyan-a03: rgba(201, 169, 97, 0.03);
+  --accent-pink-a03: rgba(139, 115, 85, 0.03);
+  --accent-magenta-a03: rgba(212, 181, 114, 0.03);
+  --accent-purple-a35: rgba(26, 26, 26, 0.35);
+  --accent-cyan-a35: rgba(201, 169, 97, 0.35);
+  --accent-pink-a35: rgba(139, 115, 85, 0.35);
+  --accent-magenta-a35: rgba(212, 181, 114, 0.35);
+}
+
+/* 作品集背景层：米色 + 金色光晕 */
+[data-theme="portfolio"] .bg-layer.base {
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%, rgba(201, 169, 97, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse 70% 50% at 85% 20%, rgba(139, 115, 85, 0.1) 0%, transparent 50%),
+    radial-gradient(ellipse 90% 70% at 50% 95%, rgba(26, 26, 26, 0.05) 0%, transparent 55%),
+    var(--bg-deep);
+}
+
+[data-theme="portfolio"] .bg-layer.grid {
+  background-image:
+    linear-gradient(rgba(26, 26, 26, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 169, 97, 0.04) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  animation: grid-drift 40s linear infinite;
+}
+
+[data-theme="portfolio"] .bg-layer.noise {
+  opacity: 0.12;
+  mix-blend-mode: multiply;
+}
+
+[data-theme="portfolio"] .bg-layer.orbs::before {
+  background: radial-gradient(circle, #c9a961, transparent 70%);
+  opacity: 0.25;
+}
+
+[data-theme="portfolio"] .bg-layer.orbs::after {
+  background: radial-gradient(circle, #8b7355, transparent 70%);
+  opacity: 0.25;
+}
+
+/* 卡片顶部金色高光线 */
+[data-theme="portfolio"] .glass-card::before {
+  background: linear-gradient(90deg, transparent, #c9a961, #8b7355, transparent);
+  opacity: 0.6;
+}
+
+/* 3D 悬停改为优雅微抬升 */
+[data-theme="portfolio"] .hover-3d:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(26, 26, 26, 0.12);
+}
+
+/* Element Plus 适配：作品集风格 */
+[data-theme="portfolio"] .el-button {
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+[data-theme="portfolio"] .el-button--primary {
+  background: linear-gradient(135deg, #1a1a1a 0%, #3d3d3d 100%) !important;
+  box-shadow: 0 4px 16px rgba(26, 26, 26, 0.2) !important;
+}
+
+[data-theme="portfolio"] .el-button--primary:hover {
+  box-shadow: 0 6px 24px rgba(201, 169, 97, 0.3) !important;
+}
+
+[data-theme="portfolio"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success) {
+  background: rgba(255, 252, 247, 0.9) !important;
+  border: 1px solid rgba(26, 26, 26, 0.15) !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="portfolio"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
+  background: rgba(201, 169, 97, 0.1) !important;
+  border-color: #c9a961 !important;
+  color: #8a6e1f !important;
+  box-shadow: 0 4px 16px rgba(201, 169, 97, 0.2) !important;
+}
+
+[data-theme="portfolio"] .el-input__wrapper,
+[data-theme="portfolio"] .el-textarea__inner {
+  background: rgba(255, 252, 247, 0.9) !important;
+  box-shadow: 0 0 0 1px rgba(26, 26, 26, 0.12) inset !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="portfolio"] .el-input__wrapper:hover,
+[data-theme="portfolio"] .el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px rgba(201, 169, 97, 0.5) inset !important;
+}
+
+[data-theme="portfolio"] .el-input__wrapper.is-focus,
+[data-theme="portfolio"] .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px #c9a961 inset, 0 0 0 3px rgba(201, 169, 97, 0.1) !important;
+}
+
+[data-theme="portfolio"] .el-input__inner {
+  color: var(--text-bright) !important;
+}
+
+[data-theme="portfolio"] .el-input__inner::placeholder {
+  color: var(--text-dim) !important;
+}
+
+[data-theme="portfolio"] .el-tabs__item {
+  color: var(--text-soft) !important;
+  letter-spacing: 1px;
+}
+
+[data-theme="portfolio"] .el-tabs__item:hover {
+  color: #c9a961 !important;
+}
+
+[data-theme="portfolio"] .el-tabs__item.is-active {
+  color: #1a1a1a !important;
+  text-shadow: none;
+  font-weight: 700;
+}
+
+[data-theme="portfolio"] .el-tabs__active-bar {
+  background: linear-gradient(90deg, #c9a961, #8b7355) !important;
+}
+
+[data-theme="portfolio"] .el-tabs__nav-wrap::after {
+  background-color: rgba(26, 26, 26, 0.08) !important;
+}
+
+[data-theme="portfolio"] .el-tree {
+  color: var(--text-base) !important;
+}
+
+[data-theme="portfolio"] .el-tree-node__content:hover {
+  background: rgba(201, 169, 97, 0.08) !important;
+}
+
+[data-theme="portfolio"] .el-tree-node.is-current > .el-tree-node__content {
+  background: rgba(201, 169, 97, 0.12) !important;
+}
+
+[data-theme="portfolio"] .el-dialog {
+  background: var(--bg-card-solid) !important;
+  box-shadow: 0 24px 64px rgba(26, 26, 26, 0.15) !important;
+}
+
+[data-theme="portfolio"] .el-dialog__title {
+  color: var(--text-bright) !important;
+  font-family: var(--font-display);
+}
+
+[data-theme="portfolio"] .el-dialog__body {
+  color: var(--text-base) !important;
+}
+
+[data-theme="portfolio"] .el-upload-dragger {
+  background: rgba(255, 252, 247, 0.8) !important;
+  border: 2px dashed rgba(26, 26, 26, 0.2) !important;
+}
+
+[data-theme="portfolio"] .el-upload-dragger:hover {
+  border-color: #c9a961 !important;
+  box-shadow: 0 4px 16px rgba(201, 169, 97, 0.2) !important;
+}
+
+[data-theme="portfolio"] .el-message {
+  background: var(--bg-card-solid) !important;
+  color: var(--text-bright) !important;
+  box-shadow: 0 8px 32px rgba(26, 26, 26, 0.12) !important;
+}
+
+[data-theme="portfolio"] ::-webkit-scrollbar-track {
+  background: rgba(237, 232, 224, 0.5);
+}
+
+[data-theme="portfolio"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #c9a961, #8b7355);
+  border: 2px solid rgba(237, 232, 224, 0.5);
+}
+
+[data-theme="portfolio"] ::selection {
+  background: rgba(201, 169, 97, 0.3);
+  color: var(--text-bright);
+}

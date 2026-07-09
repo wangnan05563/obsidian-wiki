@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import RobotAvatar from './components/RobotAvatar.vue';
+import ThemeSwitcher from './components/ThemeSwitcher.vue';
 import Dashboard from './views/Dashboard.vue';
 import Ingest from './views/Ingest.vue';
 import Progress from './views/Progress.vue';
@@ -101,6 +102,9 @@ onBeforeUnmount(() => {
       <span class="footer-line"></span>
     </footer>
   </div>
+
+  <!-- 主题切换器：浮动按钮，右下角 -->
+  <ThemeSwitcher />
 </template>
 
 <style scoped>

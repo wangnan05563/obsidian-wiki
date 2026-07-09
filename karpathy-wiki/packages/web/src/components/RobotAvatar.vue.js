@@ -2,7 +2,7 @@
 const __VLS_props = withDefaults(defineProps(), {
     size: 120,
     floating: false
-});
+}); // NOSONAR - Vue macro 调用，返回值在编译期被处理
 debugger; /* PartiallyEnd: #3632/scriptSetup.vue */
 const __VLS_withDefaultsArg = (function (t) { return t; })({
     size: 120,
@@ -33,15 +33,15 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.linearGradient, __VLS_intrinsi
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "0%",
-    'stop-color': "#1a0533",
+    'stop-color': "var(--robot-head-1)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "50%",
-    'stop-color': "#2d0a4a",
+    'stop-color': "var(--robot-head-2)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "100%",
-    'stop-color': "#0d1a3d",
+    'stop-color': "var(--robot-head-3)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.linearGradient, __VLS_intrinsicElements.linearGradient)({
     id: "cyberBody",
@@ -52,11 +52,11 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.linearGradient, __VLS_intrinsi
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "0%",
-    'stop-color': "#3d0a5c",
+    'stop-color': "var(--robot-body-1)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "100%",
-    'stop-color': "#0a1f4d",
+    'stop-color': "var(--robot-body-2)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.radialGradient, __VLS_intrinsicElements.radialGradient)({
     id: "eyeGlow",
@@ -67,11 +67,11 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "40%",
-    'stop-color': "#00f5ff",
+    'stop-color': "var(--robot-eye)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "100%",
-    'stop-color': "#0088aa",
+    'stop-color': "var(--robot-eye-deep)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.radialGradient, __VLS_intrinsicElements.radialGradient)({
     id: "antennaGlow",
@@ -82,11 +82,11 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "50%",
-    'stop-color': "#ff006e",
+    'stop-color': "var(--robot-antenna)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.stop)({
     offset: "100%",
-    'stop-color': "#b026ff",
+    'stop-color': "var(--robot-accent)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.filter, __VLS_intrinsicElements.filter)({
     id: "neonGlow",
@@ -111,7 +111,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.line)({
     y1: "8",
     x2: "60",
     y2: "22",
-    stroke: "#b026ff",
+    stroke: "var(--robot-accent)",
     'stroke-width': "2",
     'stroke-linecap': "round",
     filter: "url(#neonGlow)",
@@ -132,7 +132,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.rect)({
     rx: "18",
     ry: "18",
     fill: "url(#cyberHead)",
-    stroke: "#b026ff",
+    stroke: "var(--robot-accent)",
     'stroke-width': "1.5",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.rect)({
@@ -143,7 +143,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.rect)({
     rx: "18",
     ry: "18",
     fill: "none",
-    stroke: "#00f5ff",
+    stroke: "var(--robot-eye)",
     'stroke-width': "0.8",
     opacity: "0.6",
 });
@@ -152,7 +152,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.line)({
     y1: "30",
     x2: "26",
     y2: "72",
-    stroke: "#ff006e",
+    stroke: "var(--robot-antenna)",
     'stroke-width': "0.8",
     opacity: "0.5",
 });
@@ -161,7 +161,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.line)({
     y1: "30",
     x2: "94",
     y2: "72",
-    stroke: "#00f5ff",
+    stroke: "var(--robot-eye)",
     'stroke-width': "0.8",
     opacity: "0.5",
 });
@@ -170,7 +170,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.line)({
     y1: "0",
     x2: "96",
     y2: "0",
-    stroke: "#00f5ff",
+    stroke: "var(--robot-eye)",
     'stroke-width': "2",
     opacity: "0.8",
     ...{ class: "scan-line" },
@@ -210,7 +210,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.circle)({
 __VLS_asFunctionalElement(__VLS_intrinsicElements.polyline)({
     points: "50,66 56,70 60,68 64,70 70,66",
     fill: "none",
-    stroke: "#ff006e",
+    stroke: "var(--robot-antenna)",
     'stroke-width': "2",
     'stroke-linecap': "round",
     'stroke-linejoin': "round",
@@ -224,7 +224,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.rect)({
     rx: "12",
     ry: "12",
     fill: "url(#cyberBody)",
-    stroke: "#8338ec",
+    stroke: "var(--robot-accent)",
     'stroke-width': "1.5",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.rect)({
@@ -235,7 +235,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.rect)({
     rx: "12",
     ry: "12",
     fill: "none",
-    stroke: "#00f5ff",
+    stroke: "var(--robot-eye)",
     'stroke-width': "0.8",
     opacity: "0.5",
 });
@@ -243,7 +243,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.circle)({
     cx: "60",
     cy: "96",
     r: "3.5",
-    fill: "#ff006e",
+    fill: "var(--robot-antenna)",
     filter: "url(#neonGlow)",
     ...{ class: "core-pulse" },
 });
@@ -251,14 +251,14 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.circle)({
     cx: "46",
     cy: "96",
     r: "2",
-    fill: "#00f5ff",
+    fill: "var(--robot-eye)",
     filter: "url(#neonGlow)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.circle)({
     cx: "74",
     cy: "96",
     r: "2",
-    fill: "#b026ff",
+    fill: "var(--robot-accent)",
     filter: "url(#neonGlow)",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.line)({
@@ -266,7 +266,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.line)({
     y1: "88",
     x2: "44",
     y2: "88",
-    stroke: "#00f5ff",
+    stroke: "var(--robot-eye)",
     'stroke-width': "0.8",
     opacity: "0.6",
 });
@@ -275,7 +275,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.line)({
     y1: "88",
     x2: "84",
     y2: "88",
-    stroke: "#ff006e",
+    stroke: "var(--robot-antenna)",
     'stroke-width': "0.8",
     opacity: "0.6",
 });

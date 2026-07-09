@@ -1,0 +1,322 @@
+/* ============================================================
+ * Macaron Theme
+ * Soft pink + soft cyan + cream background, rounded & cute
+ * Fresh and healing atmosphere
+ * ============================================================ */
+
+[data-theme="macaron"] {
+  /* Macaron palette: soft pastel colors */
+  --neon-purple: #c8a2e8;
+  --neon-magenta: #ffb3d1;
+  --neon-cyan: #a8e0d8;
+  --neon-violet: #d4b5e8;
+  --neon-pink: #ffc4d6;
+  --neon-lime: #d4f0a8;
+
+  /* Light background layers */
+  --bg-void: #fff9f5;
+  --bg-deep: #fff5f0;
+  --bg-mid: #fdeef5;
+  --bg-card: rgba(255, 255, 255, 0.72);
+  --bg-card-solid: rgba(255, 255, 255, 0.95);
+  --bg-glass: rgba(255, 255, 255, 0.5);
+
+  /* Dark text on light background */
+  --text-bright: #4a3a52;
+  --text-base: #5c4a66;
+  --text-soft: #8a7a96;
+  --text-dim: #b5a8c0;
+
+  /* Soft gradients */
+  --grad-neon: linear-gradient(135deg, #ffb3d1 0%, #c8a2e8 50%, #a8e0d8 100%);
+  --grad-fire: linear-gradient(135deg, #ffb3d1 0%, #ffc4d6 100%);
+  --grad-cool: linear-gradient(135deg, #a8e0d8 0%, #c8a2e8 100%);
+  --grad-aurora: linear-gradient(120deg, #a8e0d8 0%, #c8a2e8 40%, #ffb3d1 80%, #ffc4d6 100%);
+
+  /* Soft shadows (no strong glow) */
+  --glow-purple: 0 8px 32px rgba(200, 162, 232, 0.35);
+  --glow-magenta: 0 8px 32px rgba(255, 179, 209, 0.35);
+  --glow-cyan: 0 8px 32px rgba(168, 224, 216, 0.35);
+  --glow-soft: 0 8px 40px rgba(200, 162, 232, 0.2);
+
+  /* Soft borders */
+  --border-neon: 1px solid rgba(200, 162, 232, 0.4);
+  --border-glass: 1px solid rgba(200, 162, 232, 0.25);
+
+  /* Larger rounded corners for cute look */
+  --radius-card: 28px;
+  --radius-btn: 16px;
+  --radius-input: 14px;
+  --radius-pill: 999px;
+
+  --blur: blur(20px);
+
+  /* Rounded fonts */
+  --font-display: 'PingFang SC', 'Microsoft YaHei', 'Nunito', sans-serif;
+  --font-body: 'PingFang SC', 'Microsoft YaHei', 'Nunito', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Robot IP & Graph colors: theme-aware */
+  --robot-head-1: #fff0f5;
+  --robot-head-2: #ffe0ec;
+  --robot-head-3: #e8f5f0;
+  --robot-body-1: #ffd6e8;
+  --robot-body-2: #d0f0e8;
+  --robot-accent: #c8a2e8;
+  --robot-eye: #a8e0d8;
+  --robot-eye-deep: #7ec0b8;
+  --robot-antenna: #ffb3d1;
+  --robot-glow: rgba(255, 179, 209, 0.4);
+  --graph-entities: #ffb3d1;
+  --graph-concepts: #a8e0d8;
+  --graph-comparisons: #c8a2e8;
+  --graph-queries: #ffc4d6;
+  --graph-entities-border: #ffc4d6;
+  --graph-concepts-border: #c8f0e8;
+  --graph-comparisons-border: #d4b5e8;
+  --graph-queries-border: #ffd4e0;
+  --graph-edge: rgba(200, 162, 232, 0.4);
+  --graph-edge-highlight: #a8e0d8;
+  --graph-label: #4a3a52;
+
+  /* Scene backgrounds: container depth area (code blocks, tree, stat card) */
+  --bg-scene: #fff5f0;
+  --border-accent: rgba(200, 162, 232, 0.4);
+
+  /* Accent semi-transparent colors (auto-derived from theme base) */
+  --accent-purple-base: #c8a2e8;
+  --accent-cyan-base: #a8e0d8;
+  --accent-pink-base: #ffb3d1;
+  --accent-magenta-base: #ffc4d6;
+  --accent-purple-a05: rgba(200, 162, 232, 0.05);
+  --accent-cyan-a05: rgba(168, 224, 216, 0.05);
+  --accent-pink-a05: rgba(255, 179, 209, 0.05);
+  --accent-magenta-a05: rgba(255, 196, 214, 0.05);
+  --accent-purple-a06: rgba(200, 162, 232, 0.06);
+  --accent-cyan-a06: rgba(168, 224, 216, 0.06);
+  --accent-pink-a06: rgba(255, 179, 209, 0.06);
+  --accent-magenta-a06: rgba(255, 196, 214, 0.06);
+  --accent-purple-a08: rgba(200, 162, 232, 0.08);
+  --accent-cyan-a08: rgba(168, 224, 216, 0.08);
+  --accent-pink-a08: rgba(255, 179, 209, 0.08);
+  --accent-magenta-a08: rgba(255, 196, 214, 0.08);
+  --accent-purple-a10: rgba(200, 162, 232, 0.1);
+  --accent-cyan-a10: rgba(168, 224, 216, 0.1);
+  --accent-pink-a10: rgba(255, 179, 209, 0.1);
+  --accent-magenta-a10: rgba(255, 196, 214, 0.1);
+  --accent-purple-a12: rgba(200, 162, 232, 0.12);
+  --accent-cyan-a12: rgba(168, 224, 216, 0.12);
+  --accent-pink-a12: rgba(255, 179, 209, 0.12);
+  --accent-magenta-a12: rgba(255, 196, 214, 0.12);
+  --accent-purple-a15: rgba(200, 162, 232, 0.15);
+  --accent-cyan-a15: rgba(168, 224, 216, 0.15);
+  --accent-pink-a15: rgba(255, 179, 209, 0.15);
+  --accent-magenta-a15: rgba(255, 196, 214, 0.15);
+  --accent-purple-a18: rgba(200, 162, 232, 0.18);
+  --accent-cyan-a18: rgba(168, 224, 216, 0.18);
+  --accent-pink-a18: rgba(255, 179, 209, 0.18);
+  --accent-magenta-a18: rgba(255, 196, 214, 0.18);
+  --accent-purple-a25: rgba(200, 162, 232, 0.25);
+  --accent-cyan-a25: rgba(168, 224, 216, 0.25);
+  --accent-pink-a25: rgba(255, 179, 209, 0.25);
+  --accent-magenta-a25: rgba(255, 196, 214, 0.25);
+  --accent-purple-a50: rgba(200, 162, 232, 0.5);
+  --accent-cyan-a50: rgba(168, 224, 216, 0.5);
+  --accent-pink-a50: rgba(255, 179, 209, 0.5);
+  --accent-magenta-a50: rgba(255, 196, 214, 0.5);
+  --accent-purple-a60: rgba(200, 162, 232, 0.6);
+  --accent-cyan-a60: rgba(168, 224, 216, 0.6);
+  --accent-pink-a60: rgba(255, 179, 209, 0.6);
+  --accent-magenta-a60: rgba(255, 196, 214, 0.6);
+  --accent-purple-a70: rgba(200, 162, 232, 0.7);
+  --accent-cyan-a70: rgba(168, 224, 216, 0.7);
+  --accent-pink-a70: rgba(255, 179, 209, 0.7);
+  --accent-magenta-a70: rgba(255, 196, 214, 0.7);
+
+  /* Additional alpha variants for macaron theme */
+  --accent-purple-a20: rgba(200, 162, 232, 0.2);
+  --accent-cyan-a20: rgba(168, 224, 216, 0.2);
+  --accent-pink-a20: rgba(255, 179, 209, 0.2);
+  --accent-magenta-a20: rgba(255, 196, 214, 0.2);
+  --accent-purple-a30: rgba(200, 162, 232, 0.3);
+  --accent-cyan-a30: rgba(168, 224, 216, 0.3);
+  --accent-pink-a30: rgba(255, 179, 209, 0.3);
+  --accent-magenta-a30: rgba(255, 196, 214, 0.3);
+  --accent-purple-a40: rgba(200, 162, 232, 0.4);
+  --accent-cyan-a40: rgba(168, 224, 216, 0.4);
+  --accent-pink-a40: rgba(255, 179, 209, 0.4);
+  --accent-magenta-a40: rgba(255, 196, 214, 0.4);
+
+  /* Additional alpha variants for macaron theme */
+  --accent-purple-a04: rgba(200, 162, 232, 0.04);
+  --accent-cyan-a04: rgba(168, 224, 216, 0.04);
+  --accent-pink-a04: rgba(255, 179, 209, 0.04);
+  --accent-magenta-a04: rgba(255, 196, 214, 0.04);
+  --accent-purple-a45: rgba(200, 162, 232, 0.45);
+  --accent-cyan-a45: rgba(168, 224, 216, 0.45);
+  --accent-pink-a45: rgba(255, 179, 209, 0.45);
+  --accent-magenta-a45: rgba(255, 196, 214, 0.45);
+
+  /* Additional alpha variants for macaron theme */
+  --accent-purple-a03: rgba(200, 162, 232, 0.03);
+  --accent-cyan-a03: rgba(168, 224, 216, 0.03);
+  --accent-pink-a03: rgba(255, 179, 209, 0.03);
+  --accent-magenta-a03: rgba(255, 196, 214, 0.03);
+  --accent-purple-a35: rgba(200, 162, 232, 0.35);
+  --accent-cyan-a35: rgba(168, 224, 216, 0.35);
+  --accent-pink-a35: rgba(255, 179, 209, 0.35);
+  --accent-magenta-a35: rgba(255, 196, 214, 0.35);
+}
+
+/* Macaron background: light soft halos */
+[data-theme="macaron"] .bg-layer.base {
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%, rgba(255, 179, 209, 0.4) 0%, transparent 50%),
+    radial-gradient(ellipse 70% 50% at 85% 20%, rgba(168, 224, 216, 0.35) 0%, transparent 50%),
+    radial-gradient(ellipse 90% 70% at 50% 95%, rgba(200, 162, 232, 0.3) 0%, transparent 55%),
+    var(--bg-deep);
+}
+
+[data-theme="macaron"] .bg-layer.grid {
+  background-image:
+    linear-gradient(rgba(200, 162, 232, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168, 224, 216, 0.08) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  animation: grid-drift 40s linear infinite;
+}
+
+[data-theme="macaron"] .bg-layer.noise {
+  opacity: 0.25;
+  mix-blend-mode: multiply;
+}
+
+[data-theme="macaron"] .bg-layer.orbs::before {
+  background: radial-gradient(circle, #ffb3d1, transparent 70%);
+}
+
+[data-theme="macaron"] .bg-layer.orbs::after {
+  background: radial-gradient(circle, #a8e0d8, transparent 70%);
+}
+
+/* Card top highlight line: soft pink */
+[data-theme="macaron"] .glass-card::before {
+  background: linear-gradient(90deg, transparent, #ffb3d1, #a8e0d8, transparent);
+}
+
+/* 3D hover: soft float */
+[data-theme="macaron"] .hover-3d:hover {
+  transform: translateY(-6px) rotateX(2deg) rotateY(-2deg);
+  box-shadow: var(--glow-purple);
+}
+
+/* Element Plus: light theme */
+[data-theme="macaron"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success) {
+  background: rgba(255, 255, 255, 0.7) !important;
+  border: 1px solid rgba(200, 162, 232, 0.4) !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="macaron"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
+  background: rgba(255, 179, 209, 0.2) !important;
+  border-color: #ffb3d1 !important;
+  color: #b3467d !important;
+  box-shadow: var(--glow-magenta) !important;
+}
+
+[data-theme="macaron"] .el-input__wrapper,
+[data-theme="macaron"] .el-textarea__inner {
+  background: rgba(255, 255, 255, 0.8) !important;
+  box-shadow: 0 0 0 1px rgba(200, 162, 232, 0.3) inset !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="macaron"] .el-input__wrapper:hover,
+[data-theme="macaron"] .el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px rgba(168, 224, 216, 0.6) inset !important;
+}
+
+[data-theme="macaron"] .el-input__wrapper.is-focus,
+[data-theme="macaron"] .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px #a8e0d8 inset, 0 0 16px rgba(168, 224, 216, 0.4) !important;
+}
+
+[data-theme="macaron"] .el-input__inner {
+  color: var(--text-bright) !important;
+}
+
+[data-theme="macaron"] .el-input__inner::placeholder {
+  color: var(--text-dim) !important;
+}
+
+[data-theme="macaron"] .el-tabs__item {
+  color: var(--text-soft) !important;
+}
+
+[data-theme="macaron"] .el-tabs__item:hover {
+  color: #a8e0d8 !important;
+}
+
+[data-theme="macaron"] .el-tabs__item.is-active {
+  color: #d4699b !important;
+  text-shadow: 0 0 12px rgba(255, 179, 209, 0.5);
+}
+
+[data-theme="macaron"] .el-tabs__nav-wrap::after {
+  background-color: rgba(200, 162, 232, 0.2) !important;
+}
+
+[data-theme="macaron"] .el-tree {
+  color: var(--text-base) !important;
+}
+
+[data-theme="macaron"] .el-tree-node__content:hover {
+  background: rgba(255, 179, 209, 0.15) !important;
+}
+
+[data-theme="macaron"] .el-tree-node.is-current > .el-tree-node__content {
+  background: rgba(168, 224, 216, 0.2) !important;
+}
+
+[data-theme="macaron"] .el-dialog {
+  background: var(--bg-card-solid) !important;
+  box-shadow: var(--glow-purple) !important;
+}
+
+[data-theme="macaron"] .el-dialog__title {
+  color: var(--text-bright) !important;
+}
+
+[data-theme="macaron"] .el-dialog__body {
+  color: var(--text-base) !important;
+}
+
+[data-theme="macaron"] .el-upload-dragger {
+  background: rgba(255, 255, 255, 0.7) !important;
+  border: 2px dashed rgba(200, 162, 232, 0.5) !important;
+}
+
+[data-theme="macaron"] .el-upload-dragger:hover {
+  border-color: #a8e0d8 !important;
+  box-shadow: var(--glow-cyan) !important;
+}
+
+[data-theme="macaron"] .el-message {
+  background: var(--bg-card-solid) !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="macaron"] ::-webkit-scrollbar-track {
+  background: rgba(255, 245, 240, 0.5);
+}
+
+[data-theme="macaron"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #ffb3d1, #a8e0d8);
+  border: 2px solid rgba(255, 245, 240, 0.5);
+}
+
+[data-theme="macaron"] ::selection {
+  background: rgba(255, 179, 209, 0.4);
+  color: var(--text-bright);
+}

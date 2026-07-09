@@ -58,6 +58,31 @@
   --font-display: 'Orbitron', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-body: 'Rajdhani', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* 机器人 IP 配色：机身渐变 + 发光点缀，随主题变化 */
+  --robot-head-1: #1a0533;
+  --robot-head-2: #2d0a4a;
+  --robot-head-3: #0d1a3d;
+  --robot-body-1: #3d0a5c;
+  --robot-body-2: #0a1f4d;
+  --robot-accent: #b026ff;
+  --robot-eye: #00f5ff;
+  --robot-eye-deep: #0088aa;
+  --robot-antenna: #ff006e;
+  --robot-glow: rgba(176, 38, 255, 0.4);
+
+  /* 图谱目录色：4 类节点的填充 + 描边，随主题变化 */
+  --graph-entities: #ff006e;
+  --graph-concepts: #00f5ff;
+  --graph-comparisons: #b026ff;
+  --graph-queries: #ff3ec9;
+  --graph-entities-border: #ff4d94;
+  --graph-concepts-border: #7afaff;
+  --graph-comparisons-border: #d366ff;
+  --graph-queries-border: #ff7ad9;
+  --graph-edge: rgba(176, 38, 255, 0.45);
+  --graph-edge-highlight: #00f5ff;
+  --graph-label: #f3e9ff;
 }
 
 * {
@@ -534,4 +559,92 @@ body {
 ::selection {
   background: rgba(255, 0, 110, 0.4);
   color: var(--text-bright);
+
+  /* Additional alpha variants for creative theme */
+  --accent-purple-a20: rgba(176, 38, 255, 0.2);
+  --accent-cyan-a20: rgba(0, 245, 255, 0.2);
+  --accent-pink-a20: rgba(255, 0, 110, 0.2);
+  --accent-magenta-a20: rgba(255, 62, 201, 0.2);
+  --accent-purple-a30: rgba(176, 38, 255, 0.3);
+  --accent-cyan-a30: rgba(0, 245, 255, 0.3);
+  --accent-pink-a30: rgba(255, 0, 110, 0.3);
+  --accent-magenta-a30: rgba(255, 62, 201, 0.3);
+  --accent-purple-a40: rgba(176, 38, 255, 0.4);
+  --accent-cyan-a40: rgba(0, 245, 255, 0.4);
+  --accent-pink-a40: rgba(255, 0, 110, 0.4);
+  --accent-magenta-a40: rgba(255, 62, 201, 0.4);
+
+  /* Additional alpha variants for creative theme */
+  --accent-purple-a04: rgba(176, 38, 255, 0.04);
+  --accent-cyan-a04: rgba(0, 245, 255, 0.04);
+  --accent-pink-a04: rgba(255, 0, 110, 0.04);
+  --accent-magenta-a04: rgba(255, 62, 201, 0.04);
+  --accent-purple-a45: rgba(176, 38, 255, 0.45);
+  --accent-cyan-a45: rgba(0, 245, 255, 0.45);
+  --accent-pink-a45: rgba(255, 0, 110, 0.45);
+  --accent-magenta-a45: rgba(255, 62, 201, 0.45);
+
+  /* Additional alpha variants for creative theme */
+  --accent-purple-a03: rgba(176, 38, 255, 0.03);
+  --accent-cyan-a03: rgba(0, 245, 255, 0.03);
+  --accent-pink-a03: rgba(255, 0, 110, 0.03);
+  --accent-magenta-a03: rgba(255, 62, 201, 0.03);
+  --accent-purple-a35: rgba(176, 38, 255, 0.35);
+  --accent-cyan-a35: rgba(0, 245, 255, 0.35);
+  --accent-pink-a35: rgba(255, 0, 110, 0.35);
+  --accent-magenta-a35: rgba(255, 62, 201, 0.35);
 }
+  /* Scene backgrounds: container depth area (code blocks, tree, stat card) */
+  --bg-scene: #050010;
+  --border-accent: rgba(176, 38, 255, 0.4);
+
+  /* Accent semi-transparent colors (auto-derived from theme base) */
+  --accent-purple-base: #b026ff;
+  --accent-cyan-base: #00f5ff;
+  --accent-pink-base: #ff006e;
+  --accent-magenta-base: #ff3ec9;
+  --accent-purple-a05: rgba(176, 38, 255, 0.05);
+  --accent-cyan-a05: rgba(0, 245, 255, 0.05);
+  --accent-pink-a05: rgba(255, 0, 110, 0.05);
+  --accent-magenta-a05: rgba(255, 62, 201, 0.05);
+  --accent-purple-a06: rgba(176, 38, 255, 0.06);
+  --accent-cyan-a06: rgba(0, 245, 255, 0.06);
+  --accent-pink-a06: rgba(255, 0, 110, 0.06);
+  --accent-magenta-a06: rgba(255, 62, 201, 0.06);
+  --accent-purple-a08: rgba(176, 38, 255, 0.08);
+  --accent-cyan-a08: rgba(0, 245, 255, 0.08);
+  --accent-pink-a08: rgba(255, 0, 110, 0.08);
+  --accent-magenta-a08: rgba(255, 62, 201, 0.08);
+  --accent-purple-a10: rgba(176, 38, 255, 0.1);
+  --accent-cyan-a10: rgba(0, 245, 255, 0.1);
+  --accent-pink-a10: rgba(255, 0, 110, 0.1);
+  --accent-magenta-a10: rgba(255, 62, 201, 0.1);
+  --accent-purple-a12: rgba(176, 38, 255, 0.12);
+  --accent-cyan-a12: rgba(0, 245, 255, 0.12);
+  --accent-pink-a12: rgba(255, 0, 110, 0.12);
+  --accent-magenta-a12: rgba(255, 62, 201, 0.12);
+  --accent-purple-a15: rgba(176, 38, 255, 0.15);
+  --accent-cyan-a15: rgba(0, 245, 255, 0.15);
+  --accent-pink-a15: rgba(255, 0, 110, 0.15);
+  --accent-magenta-a15: rgba(255, 62, 201, 0.15);
+  --accent-purple-a18: rgba(176, 38, 255, 0.18);
+  --accent-cyan-a18: rgba(0, 245, 255, 0.18);
+  --accent-pink-a18: rgba(255, 0, 110, 0.18);
+  --accent-magenta-a18: rgba(255, 62, 201, 0.18);
+  --accent-purple-a25: rgba(176, 38, 255, 0.25);
+  --accent-cyan-a25: rgba(0, 245, 255, 0.25);
+  --accent-pink-a25: rgba(255, 0, 110, 0.25);
+  --accent-magenta-a25: rgba(255, 62, 201, 0.25);
+  --accent-purple-a50: rgba(176, 38, 255, 0.5);
+  --accent-cyan-a50: rgba(0, 245, 255, 0.5);
+  --accent-pink-a50: rgba(255, 0, 110, 0.5);
+  --accent-magenta-a50: rgba(255, 62, 201, 0.5);
+  --accent-purple-a60: rgba(176, 38, 255, 0.6);
+  --accent-cyan-a60: rgba(0, 245, 255, 0.6);
+  --accent-pink-a60: rgba(255, 0, 110, 0.6);
+  --accent-magenta-a60: rgba(255, 62, 201, 0.6);
+  --accent-purple-a70: rgba(176, 38, 255, 0.7);
+  --accent-cyan-a70: rgba(0, 245, 255, 0.7);
+  --accent-pink-a70: rgba(255, 0, 110, 0.7);
+  --accent-magenta-a70: rgba(255, 62, 201, 0.7);
+

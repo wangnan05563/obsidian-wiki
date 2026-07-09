@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import fs from 'fs/promises';
-import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { VaultService } from '../vault/vault-service.js';
 
 const execFileAsync = promisify(execFile);
@@ -49,7 +49,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
   app.put('/api/schema', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { content?: string };
     if (!body || typeof body.content !== 'string') {
-      return reply.code(400).send({ error: 'ËØ∑Ê±Ç‰ΩìÈ°ªÂê´ content Â≠óÊÆµ' });
+      return reply.code(400).send({ error: '«Î«ÛÃÂ–Î∫¨ content ◊÷∂Œ' });
     }
     try {
       const full = path.resolve(vault.getVaultPath(), 'SCHEMA.md');
@@ -86,7 +86,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
   app.get('/api/schema/diff', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { from?: string; to?: string };
     if (!query.from) {
-      return reply.code(400).send({ error: 'Áº∫Â∞ë from ÂèÇÊï∞' });
+      return reply.code(400).send({ error: '»±…Ÿ from ≤Œ ˝' });
     }
 
     const vaultPath = vault.getVaultPath();
@@ -105,10 +105,10 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
 
     for (const line of diff.split('\n')) {
       if (line.startsWith('@@')) {
-        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/); // NOSONAR: µ•¥Œ∆•≈‰»° @@ ––∫≈£¨match ∑µªÿ ˝◊È∏¸  ∫œ¥À≥°æ∞
         if (match) {
-          oldLine = parseInt(match[1], 10);
-          newLine = parseInt(match[2], 10);
+          oldLine = Number.parseInt(match[1], 10);
+          newLine = Number.parseInt(match[2], 10);
         }
       } else if (line.startsWith('+') && !line.startsWith('+++')) {
         lines.push({ type: 'add', content: line.slice(1), newLine: newLine++ });

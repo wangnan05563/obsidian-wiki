@@ -1,32 +1,35 @@
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ToolDefinition, HarnessConfig, StepResult } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
 import type { FixInput, FixProgressEvent } from '../types.js';
 
-// åŠ è½½ fix prompt å•ç‚¹å­˜å‚¨ï¼ˆM-3 prompt ç­‰ä»·æ€§ï¼‰
+// ¼ÓÔØ fix prompt µ¥µã´æ´¢£¨M-3 prompt µÈ¼ÛĞÔ£©
+declare const __dirname: string;
 async function loadFixPrompt(): Promise<string> {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+  const here = typeof __dirname !== 'undefined' // NOSONAR: __dirname Îª declare const£¬ESM ÏÂ¿ÉÄÜÎ´ÉùÃ÷£¬Ğè typeof ÊØÎÀ
+    ? __dirname
+    : path.dirname(fileURLToPath(import.meta.url));
   const promptPath = path.resolve(here, '..', 'prompts', 'health-check-fix.md');
   return fs.readFile(promptPath, 'utf8');
 }
 
-// JSON Schema ç®€å†™
+// JSON Schema ¼òĞ´
 function objSchema(properties: Record<string, unknown>, required: string[]) {
   return { type: 'object', properties, required } as const;
 }
 
-// fix å·¥ä½œæµå·¥å…·é›†ã€‚å…è®¸ read_file/write_file/append_logï¼Œç¦æ­¢æ”¹ SCHEMA/indexï¼ˆ10.4 å†™å…¥çº¦æŸï¼‰ã€‚
-// VaultService.writeFile å·²å†…ç½®ç™½åå•æ ¡éªŒï¼Œå·¥å…·å±‚æ— éœ€é‡å¤æ ¡éªŒã€‚
+// fix ¹¤×÷Á÷¹¤¾ß¼¯¡£ÔÊĞí read_file/write_file/append_log£¬½ûÖ¹¸Ä SCHEMA/index£¨10.4 Ğ´ÈëÔ¼Êø£©¡£
+// VaultService.writeFile ÒÑÄÚÖÃ°×Ãûµ¥Ğ£Ñé£¬¹¤¾ß²ãÎŞĞèÖØ¸´Ğ£Ñé¡£
 export function createFixTools(vault: VaultService): ToolDefinition[] {
   return [
     {
       name: 'read_file',
-      description: 'è¯»å– Vault ä¸­çš„é¡µé¢å†…å®¹ï¼ˆç›¸å¯¹è·¯å¾„ï¼Œå¦‚ concepts/llm-wiki.mdï¼‰',
+      description: '¶ÁÈ¡ Vault ÖĞµÄÒ³ÃæÄÚÈİ£¨Ïà¶ÔÂ·¾¶£¬Èç concepts/llm-wiki.md£©',
       parameters: objSchema(
-        { path: { type: 'string', description: 'Vault å†…ç›¸å¯¹è·¯å¾„' } },
+        { path: { type: 'string', description: 'Vault ÄÚÏà¶ÔÂ·¾¶' } },
         ['path'],
       ),
       handler: async (args: unknown) => {
@@ -36,11 +39,11 @@ export function createFixTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'write_file',
-      description: 'å†™å…¥é¡µé¢ï¼ˆå« frontmatterï¼‰ã€‚ä»…å…è®¸ entities/concepts/comparisons/queries/ ç›®å½•ã€‚',
+      description: 'Ğ´ÈëÒ³Ãæ£¨º¬ frontmatter£©¡£½öÔÊĞí entities/concepts/comparisons/queries/ Ä¿Â¼¡£',
       parameters: objSchema(
         {
-          path: { type: 'string', description: 'é¡µé¢ç›¸å¯¹è·¯å¾„' },
-          content: { type: 'string', description: 'é¡µé¢å®Œæ•´å†…å®¹' },
+          path: { type: 'string', description: 'Ò³ÃæÏà¶ÔÂ·¾¶' },
+          content: { type: 'string', description: 'Ò³ÃæÍêÕûÄÚÈİ' },
         },
         ['path', 'content'],
       ),
@@ -52,7 +55,7 @@ export function createFixTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'append_log',
-      description: 'å‘ log.md è¿½åŠ ä¿®å¤æ“ä½œè®°å½•',
+      description: 'Ïò log.md ×·¼ÓĞŞ¸´²Ù×÷¼ÇÂ¼',
       parameters: objSchema(
         {
           files: { type: 'array', items: { type: 'string' } },
@@ -69,39 +72,39 @@ export function createFixTools(vault: VaultService): ToolDefinition[] {
   ];
 }
 
-// å·¥å…·è°ƒç”¨å â†’ å‰ç«¯å¯è¯»æ­¥éª¤åæ˜ å°„ï¼ˆä¸ compile å·¥ä½œæµä¸€è‡´çš„è®¾è®¡ï¼‰
+// ¹¤¾ßµ÷ÓÃÃû ¡ú Ç°¶Ë¿É¶Á²½ÖèÃûÓ³Éä£¨Óë compile ¹¤×÷Á÷Ò»ÖÂµÄÉè¼Æ£©
 const TOOL_STEP_MAP: Record<string, string> = {
   read_file: 'scan',
   write_file: 'fixing',
   append_log: 'update_log',
 };
 
-// æ‰§è¡Œä¿®å¤å·¥ä½œæµï¼Œè¿”å› AsyncIterable<FixProgressEvent>ã€‚
-// ä¸ compile-workflow ç›¸åŒçš„äº‹ä»¶æ¡¥æ¥æ¨¡å¼ï¼šafterStep hook æ¨é€è¿›åº¦ï¼ŒAsyncGenerator yieldã€‚
+// Ö´ĞĞĞŞ¸´¹¤×÷Á÷£¬·µ»Ø AsyncIterable<FixProgressEvent>¡£
+// Óë compile-workflow ÏàÍ¬µÄÊÂ¼şÇÅ½ÓÄ£Ê½£ºafterStep hook ÍÆËÍ½ø¶È£¬AsyncGenerator yield¡£
 export async function* healthCheckFixWorkflow(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   input: FixInput,
 ): AsyncIterable<FixProgressEvent> {
-  // 1. æ„é€  prompt
+  // 1. ¹¹Ôì prompt
   const promptTemplate = await loadFixPrompt();
-  // broken_link æ—¶ target æ˜¯å¯¹è±¡ï¼Œorphan æ—¶æ˜¯å­—ç¬¦ä¸²ã€‚TS æ— æ³•åœ¨ä¸‰å…ƒä¸­æ”¶çª„è”åˆç±»å‹ï¼Œæ•…æ˜¾å¼æ–­è¨€ã€‚
+  // broken_link Ê± target ÊÇ¶ÔÏó£¬orphan Ê±ÊÇ×Ö·û´®¡£TS ÎŞ·¨ÔÚÈıÔªÖĞÊÕÕ­ÁªºÏÀàĞÍ£¬¹ÊÏÔÊ½¶ÏÑÔ¡£
   const targetDesc = input.issueType === 'broken_link'
-    ? `æ¥æºé¡µé¢: ${(input.target as { from: string; to: string }).from}ï¼Œæ–­é“¾æŒ‡å‘: [[${(input.target as { from: string; to: string }).to}]]`
-    : `å­¤ç«‹é¡µé¢: ${input.target as string}`;
+    ? `À´Ô´Ò³Ãæ: ${(input.target as { from: string; to: string }).from}£¬¶ÏÁ´Ö¸Ïò: [[${(input.target as { from: string; to: string }).to}]]`
+    : `¹ÂÁ¢Ò³Ãæ: ${input.target as string}`;
 
   const task = `${promptTemplate}
 
-## é—®é¢˜ç±»å‹
-${input.issueType === 'broken_link' ? 'æ–­é“¾ä¿®å¤' : 'å­¤ç«‹é¡µé¢ä¿®å¤'}
+## ÎÊÌâÀàĞÍ
+${input.issueType === 'broken_link' ? '¶ÏÁ´ĞŞ¸´' : '¹ÂÁ¢Ò³ÃæĞŞ¸´'}
 
-## é—®é¢˜æè¿°
+## ÎÊÌâÃèÊö
 ${targetDesc}
 
-è¯·ä½¿ç”¨å·¥å…·ä¿®å¤æ­¤é—®é¢˜ã€‚
+ÇëÊ¹ÓÃ¹¤¾ßĞŞ¸´´ËÎÊÌâ¡£
 `;
 
-  // 2. äº‹ä»¶é˜Ÿåˆ—æ¡¥æ¥ï¼ˆä¸ compile-workflow ç›¸åŒæ¨¡å¼ï¼‰
+  // 2. ÊÂ¼ş¶ÓÁĞÇÅ½Ó£¨Óë compile-workflow ÏàÍ¬Ä£Ê½£©
   const queue: FixProgressEvent[] = [];
   let resolveWaiter: (() => void) | null = null;
   let finished = false;
@@ -115,7 +118,7 @@ ${targetDesc}
     }
   };
 
-  // 3. æ„é€  harnessï¼Œæ³¨å…¥ afterStep hook æ¨é€è¿›åº¦
+  // 3. ¹¹Ôì harness£¬×¢Èë afterStep hook ÍÆËÍ½ø¶È
   const harness = new Harness({
     ...harnessConfig,
     tools: createFixTools(vault),
@@ -128,12 +131,12 @@ ${targetDesc}
           try {
             parsedArgs = JSON.parse(call.function.arguments) as { path?: string };
           } catch {
-            // LLM å¶å‘é JSON å‚æ•°ï¼Œå¿½ç•¥
+            // LLM Å¼·¢·Ç JSON ²ÎÊı£¬ºöÂÔ
           }
           pushEvent({
             step: stepName,
             status: 'done',
-            message: `æ­¥éª¤ ${step}: ${toolName}`,
+            message: `²½Öè ${step}: ${toolName}`,
             tool: toolName,
             data: { path: parsedArgs.path },
           });
@@ -142,7 +145,7 @@ ${targetDesc}
     },
   });
 
-  // 4. å¯åŠ¨ harnessï¼Œå®Œæˆåæ¨é€ done/fixed äº‹ä»¶
+  // 4. Æô¶¯ harness£¬Íê³ÉºóÍÆËÍ done/fixed ÊÂ¼ş
   const runPromise = harness
     .run({ task, context: { issueType: input.issueType, target: input.target } })
     .then((result) => {
@@ -151,16 +154,16 @@ ${targetDesc}
         step: isError ? 'done' : 'fixed',
         status: isError ? 'error' : 'done',
         message: isError
-          ? `ä¿®å¤å¤±è´¥: ${result.finalContent || 'æœªçŸ¥é”™è¯¯'}`
-          : `ä¿®å¤å®Œæˆï¼Œå…± ${result.step} æ­¥`,
+          ? `ĞŞ¸´Ê§°Ü: ${result.finalContent || 'Î´Öª´íÎó'}`
+          : `ĞŞ¸´Íê³É£¬¹² ${result.step} ²½`,
       });
       if (!isError) {
-        pushEvent({ step: 'done', status: 'done', message: 'ä¿®å¤æµç¨‹ç»“æŸ' });
+        pushEvent({ step: 'done', status: 'done', message: 'ĞŞ¸´Á÷³Ì½áÊø' });
       }
     })
     .catch((err: unknown) => {
       const errMsg = err instanceof Error ? err.message : String(err);
-      pushEvent({ step: 'done', status: 'error', message: `ä¿®å¤å¼‚å¸¸: ${errMsg}` });
+      pushEvent({ step: 'done', status: 'error', message: `ĞŞ¸´Òì³£: ${errMsg}` });
     })
     .finally(() => {
       finished = true;
@@ -171,7 +174,7 @@ ${targetDesc}
       }
     });
 
-  // 5. yield é˜Ÿåˆ—äº‹ä»¶
+  // 5. yield ¶ÓÁĞÊÂ¼ş
   while (!finished || queue.length > 0) {
     if (queue.length === 0) {
       await new Promise<void>((resolve) => {

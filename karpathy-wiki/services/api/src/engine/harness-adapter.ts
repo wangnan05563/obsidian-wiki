@@ -1,18 +1,17 @@
 import type { HarnessConfig } from '@wiki/harness';
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
-import { compileWorkflow } from '../workflows/compile-workflow.js';
-import { resumeCompileWorkflow } from '../workflows/compile-workflow.js';
+import { compileWorkflow, resumeCompileWorkflow } from '../workflows/compile-workflow.js';
 import { queryWorkflow } from '../workflows/query-workflow.js';
 import { healthCheckFixWorkflow } from '../workflows/health-check-fix-workflow.js';
 
-// HarnessAdapterï¼šé˜¶æ®µ2 é»˜è®¤å®ç°ã€‚
-// healthCheck ç»•è¿‡ harness ç›´æ¥èµ°ç¡®å®šæ€§é€»è¾‘ï¼ˆM-2ï¼‰ï¼Œcompile/query é€šè¿‡å·¥ä½œæµè°ƒç”¨ harnessã€‚
+// HarnessAdapter£º½×¶Î2 Ä¬ÈÏÊµÏÖ¡£
+// healthCheck ÈÆ¹ı harness Ö±½Ó×ßÈ·¶¨ĞÔÂß¼­£¨M-2£©£¬compile/query Í¨¹ı¹¤×÷Á÷µ÷ÓÃ harness¡£
 export class HarnessAdapter implements EngineAdapter {
-  private harnessConfig: HarnessConfig;
-  private vault: VaultService;
+  private readonly harnessConfig: HarnessConfig;
+  private readonly vault: VaultService;
   private staleDays: number;
 
   constructor(config: HarnessConfig, vault: VaultService, staleDays = 30) {
@@ -21,14 +20,14 @@ export class HarnessAdapter implements EngineAdapter {
     this.staleDays = staleDays;
   }
 
-  // Â§12.3-7 é…ç½®çƒ­åŠ è½½ï¼šæ›´æ–°è¿è¡Œæ—¶å¯å˜å‚æ•°ã€‚
-  // model/budget/staleDays å³æ—¶ç”Ÿæ•ˆï¼›provider/baseUrl/apiKey å˜æ›´éœ€é‡å¯ï¼ˆæ¶‰åŠ LLM å®ä¾‹é‡å»ºï¼‰ã€‚
+  // ¡ì12.3-7 ÅäÖÃÈÈ¼ÓÔØ£º¸üĞÂÔËĞĞÊ±¿É±ä²ÎÊı¡£
+  // model/budget/staleDays ¼´Ê±ÉúĞ§£»provider/baseUrl/apiKey ±ä¸üĞèÖØÆô£¨Éæ¼° LLM ÊµÀıÖØ½¨£©¡£
   updateConfig(updates: { model?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number }): void {
     if (updates.model) {
       this.harnessConfig.llm.model = updates.model;
     }
     if (updates.maxSteps || updates.tokenBudget) {
-      // harnessConfig.budget åœ¨ç±»å‹ä¸Šæ˜¯å¯é€‰çš„ï¼Œçƒ­åŠ è½½å‰éœ€ä¿è¯å­—æ®µå­˜åœ¨
+      // harnessConfig.budget ÔÚÀàĞÍÉÏÊÇ¿ÉÑ¡µÄ£¬ÈÈ¼ÓÔØÇ°Ğè±£Ö¤×Ö¶Î´æÔÚ
       const prev = this.harnessConfig.budget ?? { maxSteps: 20, tokenBudget: 50000 };
       this.harnessConfig.budget = {
         maxSteps: updates.maxSteps ?? prev.maxSteps,
@@ -41,11 +40,11 @@ export class HarnessAdapter implements EngineAdapter {
   }
 
   async *compile(input: CompileInput): AsyncIterable<ProgressEvent> {
-    // å·¥å…·é›†ä¸ hooks ç”± compileWorkflow å†…éƒ¨æ³¨å…¥ï¼Œç¡®ä¿æ¯æ¬¡ç¼–è¯‘æŒæœ‰æœ€æ–° vault å¼•ç”¨
+    // ¹¤¾ß¼¯Óë hooks ÓÉ compileWorkflow ÄÚ²¿×¢Èë£¬È·±£Ã¿´Î±àÒë³ÖÓĞ×îĞÂ vault ÒıÓÃ
     yield* compileWorkflow(this.harnessConfig, this.vault, input);
   }
 
-  // Â§11.2 æ–­ç‚¹ç»­ä¼ ï¼šä»ä¸­æ–­ç‚¹æ¢å¤ç¼–è¯‘ï¼Œå¤ç”¨ç›¸åŒçš„ harness äº‹ä»¶æ¡¥æ¥é€»è¾‘
+  // ¡ì11.2 ¶ÏµãĞø´«£º´ÓÖĞ¶Ïµã»Ö¸´±àÒë£¬¸´ÓÃÏàÍ¬µÄ harness ÊÂ¼şÇÅ½ÓÂß¼­
   async *resumeCompile(runId: string): AsyncIterable<ProgressEvent> {
     yield* resumeCompileWorkflow(this.harnessConfig, this.vault, runId);
   }
@@ -54,22 +53,22 @@ export class HarnessAdapter implements EngineAdapter {
     yield* queryWorkflow(this.harnessConfig, this.vault, input);
   }
 
-  // Â§4.6 ä¸€é”®ä¿®å¤ï¼šé€šè¿‡ LLM ä¿®å¤æ–­é“¾/å­¤ç«‹é¡µé¢ï¼ŒSSE æµå¼è¿”å›ä¿®å¤è¿›åº¦
+  // ¡ì4.6 Ò»¼üĞŞ¸´£ºÍ¨¹ı LLM ĞŞ¸´¶ÏÁ´/¹ÂÁ¢Ò³Ãæ£¬SSE Á÷Ê½·µ»ØĞŞ¸´½ø¶È
   async *healthCheckFix(input: FixInput): AsyncIterable<FixProgressEvent> {
     yield* healthCheckFixWorkflow(this.harnessConfig, this.vault, input);
   }
 
-  // çº¯ç¡®å®šæ€§é€»è¾‘ï¼Œä¸è°ƒ LLMã€‚æ£€æµ‹å­¤ç«‹é¡µ/æ–­é“¾/è¿‡æœŸé¡µï¼ˆ4.6 health-check å·¥ä½œæµï¼‰ã€‚
-  // Â§11.2 å¹¶å‘ä½“æ£€ï¼šæ–­é“¾æ‰«æä¸è¿‡æœŸæ£€æµ‹å¹¶è¡ŒåŒ–ï¼Œæå‡å¤§è§„æ¨¡çŸ¥è¯†åº“ä½“æ£€é€Ÿåº¦ã€‚
+  // ´¿È·¶¨ĞÔÂß¼­£¬²»µ÷ LLM¡£¼ì²â¹ÂÁ¢Ò³/¶ÏÁ´/¹ıÆÚÒ³£¨4.6 health-check ¹¤×÷Á÷£©¡£
+  // ¡ì11.2 ²¢·¢Ìå¼ì£º¶ÏÁ´É¨ÃèÓë¹ıÆÚ¼ì²â²¢ĞĞ»¯£¬ÌáÉı´ó¹æÄ£ÖªÊ¶¿âÌå¼ìËÙ¶È¡£
   async healthCheck(): Promise<HealthReport> {
     const graph = await this.vault.buildLinkGraph();
 
-    // å…¥é“¾é›†åˆï¼šè¢«ä»»ä½•é¡µé¢ [[é¡µé¢å]] å¼•ç”¨è¿‡çš„é¡µé¢è·¯å¾„
+    // ÈëÁ´¼¯ºÏ£º±»ÈÎºÎÒ³Ãæ [[Ò³ÃæÃû]] ÒıÓÃ¹ıµÄÒ³ÃæÂ·¾¶
     const linked = new Set<string>(graph.edges.map((e) => e.to));
     const orphans = graph.nodes.filter((n) => !linked.has(n));
 
-    // æ–­é“¾æ£€æµ‹ï¼šæ‰«ææ¯ä¸ªé¡µé¢çš„ [[link]]ï¼Œå¯¹ç…§å·²å­˜åœ¨çš„é¡µé¢åé›†åˆã€‚
-    // buildLinkGraph åªè®°å½•"ç›®æ ‡å­˜åœ¨"çš„è¾¹ï¼Œè¿™é‡Œè¡¥å‡º"ç›®æ ‡ä¸å­˜åœ¨"çš„æ–­é“¾ã€‚
+    // ¶ÏÁ´¼ì²â£ºÉ¨ÃèÃ¿¸öÒ³ÃæµÄ [[link]]£¬¶ÔÕÕÒÑ´æÔÚµÄÒ³ÃæÃû¼¯ºÏ¡£
+    // buildLinkGraph Ö»¼ÇÂ¼"Ä¿±ê´æÔÚ"µÄ±ß£¬ÕâÀï²¹³ö"Ä¿±ê²»´æÔÚ"µÄ¶ÏÁ´¡£
     const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
     const nameToPath = new Map<string, string>();
     for (const rel of graph.nodes) {
@@ -77,7 +76,7 @@ export class HarnessAdapter implements EngineAdapter {
       nameToPath.set(base, rel);
     }
 
-    // Â§11.2ï¼š4 ä¸ªç›®å½•å¹¶è¡Œæ‰«ææ–­é“¾ï¼ŒPromise.all ç­‰å¾…å…¨éƒ¨å®Œæˆ
+    // ¡ì11.2£º4 ¸öÄ¿Â¼²¢ĞĞÉ¨Ãè¶ÏÁ´£¬Promise.all µÈ´ıÈ«²¿Íê³É
     const wikilinkRe = /\[\[([^\]]+)\]\]/g;
     const scanDir = async (d: string): Promise<Array<{ from: string; to: string }>> => {
       const results: Array<{ from: string; to: string }> = [];
@@ -98,7 +97,7 @@ export class HarnessAdapter implements EngineAdapter {
           continue;
         }
         let m: RegExpExecArray | null;
-        wikilinkRe.lastIndex = 0; // å¤ç”¨æ­£åˆ™éœ€é‡ç½® lastIndex
+        wikilinkRe.lastIndex = 0; // ¸´ÓÃÕıÔòĞèÖØÖÃ lastIndex
         while ((m = wikilinkRe.exec(content)) !== null) {
           const target = m[1].trim();
           if (!nameToPath.has(target)) {
@@ -109,7 +108,7 @@ export class HarnessAdapter implements EngineAdapter {
       return results;
     };
 
-    // è¿‡æœŸæ£€æµ‹ä¹Ÿå¹¶è¡Œï¼šæ¯ä¸ªèŠ‚ç‚¹ç‹¬ç«‹ getPageUpdated
+    // ¹ıÆÚ¼ì²âÒ²²¢ĞĞ£ºÃ¿¸ö½Úµã¶ÀÁ¢ getPageUpdated
     const now = Date.now();
     const thresholdMs = this.staleDays * 24 * 60 * 60 * 1000;
     const checkStale = async (node: string): Promise<string | null> => {
@@ -121,7 +120,7 @@ export class HarnessAdapter implements EngineAdapter {
       return null;
     };
 
-    // ä¸¤ç±»æ£€æµ‹å¹¶è¡Œæ‰§è¡Œ
+    // Á½Àà¼ì²â²¢ĞĞÖ´ĞĞ
     const [brokenByDir, staleResults] = await Promise.all([
       Promise.all(pageDirs.map(scanDir)),
       Promise.all(graph.nodes.map(checkStale)),

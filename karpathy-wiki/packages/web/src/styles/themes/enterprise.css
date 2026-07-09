@@ -1,0 +1,344 @@
+/* ============================================================
+ * 现代企业主题 · Enterprise Theme
+ * 科技蓝 + 高级灰，毛玻璃效果，精致微交互
+ * 专业、现代、可信赖
+ * ============================================================ */
+
+[data-theme="enterprise"] {
+  /* 企业主色：科技蓝 + 高级灰 */
+  --neon-purple: #2563eb;
+  --neon-magenta: #3b82f6;
+  --neon-cyan: #06b6d4;
+  --neon-violet: #6366f1;
+  --neon-pink: #60a5fa;
+  --neon-lime: #10b981;
+
+  /* 浅灰背景层次 */
+  --bg-void: #f8fafc;
+  --bg-deep: #f1f5f9;
+  --bg-mid: #e2e8f0;
+  --bg-card: rgba(255, 255, 255, 0.8);
+  --bg-card-solid: rgba(255, 255, 255, 0.98);
+  --bg-glass: rgba(255, 255, 255, 0.6);
+
+  /* 深色文字 */
+  --text-bright: #0f172a;
+  --text-base: #1e293b;
+  --text-soft: #475569;
+  --text-dim: #94a3b8;
+
+  /* 蓝灰渐变 */
+  --grad-neon: linear-gradient(135deg, #2563eb 0%, #3b82f6 50%, #06b6d4 100%);
+  --grad-fire: linear-gradient(135deg, #2563eb 0%, #6366f1 100%);
+  --grad-cool: linear-gradient(135deg, #06b6d4 0%, #2563eb 100%);
+  --grad-aurora: linear-gradient(120deg, #06b6d4 0%, #2563eb 40%, #3b82f6 80%, #6366f1 100%);
+
+  /* 精致阴影 */
+  --glow-purple: 0 8px 32px rgba(37, 99, 235, 0.18);
+  --glow-magenta: 0 8px 32px rgba(59, 130, 246, 0.18);
+  --glow-cyan: 0 8px 32px rgba(6, 182, 212, 0.18);
+  --glow-soft: 0 8px 40px rgba(15, 23, 42, 0.08);
+
+  /* 精致边框 */
+  --border-neon: 1px solid rgba(37, 99, 235, 0.3);
+  --border-glass: 1px solid rgba(15, 23, 42, 0.08);
+
+  /* 适中圆角 */
+  --radius-card: 16px;
+  --radius-btn: 10px;
+  --radius-input: 8px;
+  --radius-pill: 999px;
+
+  --blur: blur(12px);
+
+  /* 现代字体 */
+  --font-display: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-body: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Robot IP & Graph colors: theme-aware */
+  --robot-head-1: #1e3a5f;
+  --robot-head-2: #2d4a7a;
+  --robot-head-3: #1a2f4d;
+  --robot-body-1: #2563eb;
+  --robot-body-2: #1e3a5f;
+  --robot-accent: #2563eb;
+  --robot-eye: #06b6d4;
+  --robot-eye-deep: #0891b2;
+  --robot-antenna: #3b82f6;
+  --robot-glow: rgba(37, 99, 235, 0.3);
+  --graph-entities: #2563eb;
+  --graph-concepts: #06b6d4;
+  --graph-comparisons: #6366f1;
+  --graph-queries: #3b82f6;
+  --graph-entities-border: #3b82f6;
+  --graph-concepts-border: #22d3ee;
+  --graph-comparisons-border: #818cf8;
+  --graph-queries-border: #60a5fa;
+  --graph-edge: rgba(37, 99, 235, 0.35);
+  --graph-edge-highlight: #06b6d4;
+  --graph-label: #0f172a;
+
+  /* Scene backgrounds: container depth area (code blocks, tree, stat card) */
+  --bg-scene: #f1f5f9;
+  --border-accent: rgba(37, 99, 235, 0.3);
+
+  /* Accent semi-transparent colors (auto-derived from theme base) */
+  --accent-purple-base: #2563eb;
+  --accent-cyan-base: #06b6d4;
+  --accent-pink-base: #3b82f6;
+  --accent-magenta-base: #6366f1;
+  --accent-purple-a05: rgba(37, 99, 235, 0.05);
+  --accent-cyan-a05: rgba(6, 182, 212, 0.05);
+  --accent-pink-a05: rgba(59, 130, 246, 0.05);
+  --accent-magenta-a05: rgba(99, 102, 241, 0.05);
+  --accent-purple-a06: rgba(37, 99, 235, 0.06);
+  --accent-cyan-a06: rgba(6, 182, 212, 0.06);
+  --accent-pink-a06: rgba(59, 130, 246, 0.06);
+  --accent-magenta-a06: rgba(99, 102, 241, 0.06);
+  --accent-purple-a08: rgba(37, 99, 235, 0.08);
+  --accent-cyan-a08: rgba(6, 182, 212, 0.08);
+  --accent-pink-a08: rgba(59, 130, 246, 0.08);
+  --accent-magenta-a08: rgba(99, 102, 241, 0.08);
+  --accent-purple-a10: rgba(37, 99, 235, 0.1);
+  --accent-cyan-a10: rgba(6, 182, 212, 0.1);
+  --accent-pink-a10: rgba(59, 130, 246, 0.1);
+  --accent-magenta-a10: rgba(99, 102, 241, 0.1);
+  --accent-purple-a12: rgba(37, 99, 235, 0.12);
+  --accent-cyan-a12: rgba(6, 182, 212, 0.12);
+  --accent-pink-a12: rgba(59, 130, 246, 0.12);
+  --accent-magenta-a12: rgba(99, 102, 241, 0.12);
+  --accent-purple-a15: rgba(37, 99, 235, 0.15);
+  --accent-cyan-a15: rgba(6, 182, 212, 0.15);
+  --accent-pink-a15: rgba(59, 130, 246, 0.15);
+  --accent-magenta-a15: rgba(99, 102, 241, 0.15);
+  --accent-purple-a18: rgba(37, 99, 235, 0.18);
+  --accent-cyan-a18: rgba(6, 182, 212, 0.18);
+  --accent-pink-a18: rgba(59, 130, 246, 0.18);
+  --accent-magenta-a18: rgba(99, 102, 241, 0.18);
+  --accent-purple-a25: rgba(37, 99, 235, 0.25);
+  --accent-cyan-a25: rgba(6, 182, 212, 0.25);
+  --accent-pink-a25: rgba(59, 130, 246, 0.25);
+  --accent-magenta-a25: rgba(99, 102, 241, 0.25);
+  --accent-purple-a50: rgba(37, 99, 235, 0.5);
+  --accent-cyan-a50: rgba(6, 182, 212, 0.5);
+  --accent-pink-a50: rgba(59, 130, 246, 0.5);
+  --accent-magenta-a50: rgba(99, 102, 241, 0.5);
+  --accent-purple-a60: rgba(37, 99, 235, 0.6);
+  --accent-cyan-a60: rgba(6, 182, 212, 0.6);
+  --accent-pink-a60: rgba(59, 130, 246, 0.6);
+  --accent-magenta-a60: rgba(99, 102, 241, 0.6);
+  --accent-purple-a70: rgba(37, 99, 235, 0.7);
+  --accent-cyan-a70: rgba(6, 182, 212, 0.7);
+  --accent-pink-a70: rgba(59, 130, 246, 0.7);
+  --accent-magenta-a70: rgba(99, 102, 241, 0.7);
+
+  /* Additional alpha variants for enterprise theme */
+  --accent-purple-a20: rgba(37, 99, 235, 0.2);
+  --accent-cyan-a20: rgba(6, 182, 212, 0.2);
+  --accent-pink-a20: rgba(59, 130, 246, 0.2);
+  --accent-magenta-a20: rgba(99, 102, 241, 0.2);
+  --accent-purple-a30: rgba(37, 99, 235, 0.3);
+  --accent-cyan-a30: rgba(6, 182, 212, 0.3);
+  --accent-pink-a30: rgba(59, 130, 246, 0.3);
+  --accent-magenta-a30: rgba(99, 102, 241, 0.3);
+  --accent-purple-a40: rgba(37, 99, 235, 0.4);
+  --accent-cyan-a40: rgba(6, 182, 212, 0.4);
+  --accent-pink-a40: rgba(59, 130, 246, 0.4);
+  --accent-magenta-a40: rgba(99, 102, 241, 0.4);
+
+  /* Additional alpha variants for enterprise theme */
+  --accent-purple-a04: rgba(37, 99, 235, 0.04);
+  --accent-cyan-a04: rgba(6, 182, 212, 0.04);
+  --accent-pink-a04: rgba(59, 130, 246, 0.04);
+  --accent-magenta-a04: rgba(99, 102, 241, 0.04);
+  --accent-purple-a45: rgba(37, 99, 235, 0.45);
+  --accent-cyan-a45: rgba(6, 182, 212, 0.45);
+  --accent-pink-a45: rgba(59, 130, 246, 0.45);
+  --accent-magenta-a45: rgba(99, 102, 241, 0.45);
+
+  /* Additional alpha variants for enterprise theme */
+  --accent-purple-a03: rgba(37, 99, 235, 0.03);
+  --accent-cyan-a03: rgba(6, 182, 212, 0.03);
+  --accent-pink-a03: rgba(59, 130, 246, 0.03);
+  --accent-magenta-a03: rgba(99, 102, 241, 0.03);
+  --accent-purple-a35: rgba(37, 99, 235, 0.35);
+  --accent-cyan-a35: rgba(6, 182, 212, 0.35);
+  --accent-pink-a35: rgba(59, 130, 246, 0.35);
+  --accent-magenta-a35: rgba(99, 102, 241, 0.35);
+}
+
+/* 企业背景层：浅灰 + 蓝色光晕 */
+[data-theme="enterprise"] .bg-layer.base {
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%, rgba(37, 99, 235, 0.1) 0%, transparent 50%),
+    radial-gradient(ellipse 70% 50% at 85% 20%, rgba(6, 182, 212, 0.1) 0%, transparent 50%),
+    radial-gradient(ellipse 90% 70% at 50% 95%, rgba(99, 102, 241, 0.08) 0%, transparent 55%),
+    var(--bg-deep);
+}
+
+[data-theme="enterprise"] .bg-layer.grid {
+  background-image:
+    linear-gradient(rgba(37, 99, 235, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(6, 182, 212, 0.05) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  animation: grid-drift 40s linear infinite;
+}
+
+[data-theme="enterprise"] .bg-layer.noise {
+  opacity: 0.15;
+  mix-blend-mode: multiply;
+}
+
+[data-theme="enterprise"] .bg-layer.orbs::before {
+  background: radial-gradient(circle, #2563eb, transparent 70%);
+  opacity: 0.3;
+}
+
+[data-theme="enterprise"] .bg-layer.orbs::after {
+  background: radial-gradient(circle, #06b6d4, transparent 70%);
+  opacity: 0.3;
+}
+
+/* 卡片顶部蓝色高光线 */
+[data-theme="enterprise"] .glass-card::before {
+  background: linear-gradient(90deg, transparent, #2563eb, #06b6d4, transparent);
+  opacity: 0.5;
+}
+
+/* 3D 悬停改为精致微抬升 */
+[data-theme="enterprise"] .hover-3d:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(37, 99, 235, 0.15);
+}
+
+/* Element Plus 适配：企业风格 */
+[data-theme="enterprise"] .el-button {
+  letter-spacing: 0.3px;
+}
+
+[data-theme="enterprise"] .el-button--primary {
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%) !important;
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.25) !important;
+}
+
+[data-theme="enterprise"] .el-button--primary:hover {
+  box-shadow: 0 6px 24px rgba(37, 99, 235, 0.4) !important;
+}
+
+[data-theme="enterprise"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success) {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border: 1px solid rgba(37, 99, 235, 0.25) !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="enterprise"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
+  background: rgba(37, 99, 235, 0.08) !important;
+  border-color: #2563eb !important;
+  color: #1d4ed8 !important;
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.15) !important;
+}
+
+[data-theme="enterprise"] .el-input__wrapper,
+[data-theme="enterprise"] .el-textarea__inner {
+  background: rgba(255, 255, 255, 0.9) !important;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1) inset !important;
+  color: var(--text-bright) !important;
+}
+
+[data-theme="enterprise"] .el-input__wrapper:hover,
+[data-theme="enterprise"] .el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.4) inset !important;
+}
+
+[data-theme="enterprise"] .el-input__wrapper.is-focus,
+[data-theme="enterprise"] .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px #2563eb inset, 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
+}
+
+[data-theme="enterprise"] .el-input__inner {
+  color: var(--text-bright) !important;
+}
+
+[data-theme="enterprise"] .el-input__inner::placeholder {
+  color: var(--text-dim) !important;
+}
+
+[data-theme="enterprise"] .el-tabs__item {
+  color: var(--text-soft) !important;
+}
+
+[data-theme="enterprise"] .el-tabs__item:hover {
+  color: #2563eb !important;
+}
+
+[data-theme="enterprise"] .el-tabs__item.is-active {
+  color: #2563eb !important;
+  text-shadow: none;
+  font-weight: 700;
+}
+
+[data-theme="enterprise"] .el-tabs__active-bar {
+  background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
+}
+
+[data-theme="enterprise"] .el-tabs__nav-wrap::after {
+  background-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+[data-theme="enterprise"] .el-tree {
+  color: var(--text-base) !important;
+}
+
+[data-theme="enterprise"] .el-tree-node__content:hover {
+  background: rgba(37, 99, 235, 0.08) !important;
+}
+
+[data-theme="enterprise"] .el-tree-node.is-current > .el-tree-node__content {
+  background: rgba(37, 99, 235, 0.12) !important;
+}
+
+[data-theme="enterprise"] .el-dialog {
+  background: var(--bg-card-solid) !important;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.2) !important;
+}
+
+[data-theme="enterprise"] .el-dialog__title {
+  color: var(--text-bright) !important;
+}
+
+[data-theme="enterprise"] .el-dialog__body {
+  color: var(--text-base) !important;
+}
+
+[data-theme="enterprise"] .el-upload-dragger {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border: 2px dashed rgba(37, 99, 235, 0.3) !important;
+}
+
+[data-theme="enterprise"] .el-upload-dragger:hover {
+  border-color: #2563eb !important;
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.15) !important;
+}
+
+[data-theme="enterprise"] .el-message {
+  background: var(--bg-card-solid) !important;
+  color: var(--text-bright) !important;
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.15) !important;
+}
+
+[data-theme="enterprise"] ::-webkit-scrollbar-track {
+  background: rgba(241, 245, 249, 0.5);
+}
+
+[data-theme="enterprise"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #2563eb, #06b6d4);
+  border: 2px solid rgba(241, 245, 249, 0.5);
+}
+
+[data-theme="enterprise"] ::selection {
+  background: rgba(37, 99, 235, 0.25);
+  color: var(--text-bright);
+}

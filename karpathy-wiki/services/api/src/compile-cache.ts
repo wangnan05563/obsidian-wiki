@@ -1,21 +1,22 @@
-import fs from 'fs/promises';
-import path from 'path';
-import crypto from 'crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
 
-// Â§11.2 å¢é‡ç¼–è¯‘ï¼šåŸºäº raw/ æ–‡ä»¶å†…å®¹å“ˆå¸Œè·³è¿‡å·²ç¼–è¯‘èµ„æ–™ã€‚
-// ç¼“å­˜æ–‡ä»¶ .harness/compile-cache.json ç»´æŠ¤ { å†…å®¹å“ˆå¸Œ: rawPath } æ˜ å°„ã€‚
-// åŒä¸€å†…å®¹é‡å¤æŠ•é€’æ—¶è·³è¿‡ç¼–è¯‘ï¼Œé¿å…é‡å¤æ¶ˆè€— LLM tokenã€‚
+// ¡ì11.2 ÔöÁ¿±àÒë£º»ùÓÚ raw/ ÎÄ¼şÄÚÈİ¹şÏ£Ìø¹ıÒÑ±àÒë×ÊÁÏ¡£
+// »º´æÎÄ¼ş .harness/compile-cache.json Î¬»¤ { ÄÚÈİ¹şÏ£: rawPath } Ó³Éä¡£
+// Í¬Ò»ÄÚÈİÖØ¸´Í¶µİÊ±Ìø¹ı±àÒë£¬±ÜÃâÖØ¸´ÏûºÄ LLM token¡£
 
 export class CompileCache {
-  private cacheFile: string;
-  private cache: Map<string, string> = new Map();
-  private loaded = false;
+  private readonly cacheFile: string;
+  // cache ÔÚ lookup/record Ê±Ğ´Èë£¬loaded ÔÚ ensureLoaded Ê±·­×ª£¬¾ù²»¿É readonly£¨S2933£©
+  private cache: Map<string, string> = new Map(); // NOSONAR
+  private loaded = false; // NOSONAR
 
   constructor(cacheFile: string) {
     this.cacheFile = cacheFile;
   }
 
-  // æ‡’åŠ è½½ç¼“å­˜æ–‡ä»¶ï¼Œé¦–æ¬¡è°ƒç”¨æ—¶è¯»å–
+  // ÀÁ¼ÓÔØ»º´æÎÄ¼ş£¬Ê×´Îµ÷ÓÃÊ±¶ÁÈ¡
   private async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
     try {
@@ -25,24 +26,24 @@ export class CompileCache {
         this.cache.set(k, v);
       }
     } catch {
-      // æ–‡ä»¶ä¸å­˜åœ¨æˆ–è§£æå¤±è´¥ï¼Œç©ºç¼“å­˜å¼€å§‹
+      // ÎÄ¼ş²»´æÔÚ»ò½âÎöÊ§°Ü£¬¿Õ»º´æ¿ªÊ¼
     }
     this.loaded = true;
   }
 
-  // è®¡ç®—å†…å®¹ SHA-256 å“ˆå¸Œï¼ˆå‰ 16 å­—ç¬¦ï¼Œè¶³å¤ŸåŒºåˆ†ï¼Œé¿å…é•¿å­—ç¬¦ä¸²ï¼‰
+  // ¼ÆËãÄÚÈİ SHA-256 ¹şÏ££¨Ç° 16 ×Ö·û£¬×ã¹»Çø·Ö£¬±ÜÃâ³¤×Ö·û´®£©
   static hash(content: string): string {
     return crypto.createHash('sha256').update(content, 'utf8').digest('hex').slice(0, 16);
   }
 
-  // æ£€æŸ¥å†…å®¹å“ˆå¸Œæ˜¯å¦å·²ç¼–è¯‘è¿‡ã€‚å‘½ä¸­è¿”å› rawPathï¼Œæœªå‘½ä¸­è¿”å› nullã€‚
+  // ¼ì²éÄÚÈİ¹şÏ£ÊÇ·ñÒÑ±àÒë¹ı¡£ÃüÖĞ·µ»Ø rawPath£¬Î´ÃüÖĞ·µ»Ø null¡£
   async lookup(content: string): Promise<string | null> {
     await this.ensureLoaded();
     const hash = CompileCache.hash(content);
     return this.cache.get(hash) ?? null;
   }
 
-  // è®°å½•ä¸€æ¬¡æˆåŠŸç¼–è¯‘ã€‚hash â†’ rawPath æ˜ å°„æŒä¹…åŒ–ã€‚
+  // ¼ÇÂ¼Ò»´Î³É¹¦±àÒë¡£hash ¡ú rawPath Ó³Éä³Ö¾Ã»¯¡£
   async record(content: string, rawPath: string): Promise<void> {
     await this.ensureLoaded();
     const hash = CompileCache.hash(content);
@@ -50,7 +51,7 @@ export class CompileCache {
     await this.persist();
   }
 
-  // æŒä¹…åŒ–åˆ°æ–‡ä»¶ï¼Œå¹‚ç­‰ã€‚ç›®å½•ä¸å­˜åœ¨æ—¶è‡ªåŠ¨åˆ›å»ºã€‚
+  // ³Ö¾Ã»¯µ½ÎÄ¼ş£¬ÃİµÈ¡£Ä¿Â¼²»´æÔÚÊ±×Ô¶¯´´½¨¡£
   private async persist(): Promise<void> {
     const obj: Record<string, string> = {};
     for (const [k, v] of this.cache) {

@@ -1,22 +1,22 @@
-# scripts/build-exe.ps1
-# Karpathy-Wiki EXE ¹¹½¨½Å±¾
+ï»¿# scripts/build-exe.ps1
+# Karpathy-Wiki EXE æ„å»ºè„šæœ¬
 #
-# ÓÃ·¨£º
-#   powershell -File scripts/build-exe.ps1            # Ä¬ÈÏÍêÕû¹¹½¨
-#   powershell -File scripts/build-exe.ps1 -SkipSPA   # Ìø¹ı SPA ¹¹½¨£¨Ç°¶ËÎŞ±ä¸üÊ±ÓÃ£©
-#   powershell -File scripts/build-exe.ps1 -SkipDeps  # Ìø¹ıÒÀÀµ°²×°£¨ÒÀÀµÎŞ±ä¸üÊ±ÓÃ£©
-#   powershell -File scripts/build-exe.ps1 -Clean     # ÇåÀíËùÓĞ»º´æÖØĞÂ¹¹½¨
+# ç”¨æ³•ï¼š
+#   powershell -File scripts/build-exe.ps1            # é»˜è®¤å®Œæ•´æ„å»º
+#   powershell -File scripts/build-exe.ps1 -SkipSPA   # è·³è¿‡ SPA æ„å»ºï¼ˆå‰ç«¯æ— å˜æ›´æ—¶ç”¨ï¼‰
+#   powershell -File scripts/build-exe.ps1 -SkipDeps  # è·³è¿‡ä¾èµ–å®‰è£…ï¼ˆä¾èµ–æ— å˜æ›´æ—¶ç”¨ï¼‰
+#   powershell -File scripts/build-exe.ps1 -Clean     # æ¸…ç†æ‰€æœ‰ç¼“å­˜é‡æ–°æ„å»º
 #
-# ²úÎï£ºdist/karpathy-wiki/ Ä¿Â¼ + dist/KarpathyWiki-Setup-v*.exe
+# äº§ç‰©ï¼šdist/karpathy-wiki/ ç›®å½• + dist/KarpathyWiki-Setup-v*.exe
 #
-# ¹¹½¨²½Öè£º
-# 1. ¼ì²éÒÀÀµ£¨Node.js / pnpm / @yao-pkg/pkg / esbuild£©
-# 2. ¹¹½¨ @wiki/harness£¨Èç´æÔÚ±¾µØ°ü£©
-# 3. ¹¹½¨ SPA£¨vite build ¡ú services/api/public£©
-# 4. esbuild ´ò°üºó¶Ë TS ¡ú CJS µ¥ÎÄ¼ş bundle
-# 5. @yao-pkg/pkg ´ò°ü ¡ú exe
-# 6. ¸´ÖÆÍâÖÃ×ÊÔ´£¨SPA + config.json + vault Ä¬ÈÏ½á¹¹£©
-# 7. ÖÆ×÷°²×°°ü£¨Inno Setup£©
+# æ„å»ºæ­¥éª¤ï¼š
+# 1. æ£€æŸ¥ä¾èµ–ï¼ˆNode.js / pnpm / @yao-pkg/pkg / esbuildï¼‰
+# 2. æ„å»º @wiki/harnessï¼ˆå¦‚å­˜åœ¨æœ¬åœ°åŒ…ï¼‰
+# 3. æ„å»º SPAï¼ˆvite build â†’ services/api/publicï¼‰
+# 4. esbuild æ‰“åŒ…åç«¯ TS â†’ CJS å•æ–‡ä»¶ bundle
+# 5. @yao-pkg/pkg æ‰“åŒ… â†’ exe
+# 6. å¤åˆ¶å¤–ç½®èµ„æºï¼ˆSPA + config.json + vault é»˜è®¤ç»“æ„ï¼‰
+# 7. åˆ¶ä½œå®‰è£…åŒ…ï¼ˆInno Setupï¼‰
 
 param(
     [switch]$SkipSPA,
@@ -28,23 +28,50 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $repoRoot
 
-# »º´æÓë²úÎïÄ¿Â¼
+# ç¼“å­˜ä¸äº§ç‰©ç›®å½•ï¼ˆå¿…é¡»åœ¨å¼•ç”¨ $cacheDir å‰å®šä¹‰ï¼‰
 $cacheDir = "$repoRoot\.cache"
 $buildDir = "$repoRoot\.build"
 $distDir = "$repoRoot\dist"
 $buildReadyMarker = "$buildDir\.kw-build-ready"
+
+# è‡ªåŠ¨æ£€æµ‹ Git çš„ patch.exe å¹¶æ·»åŠ åˆ° PATHï¼ˆpkg-fetch ä»æºç æ„å»º Node äºŒè¿›åˆ¶æ—¶éœ€è¦ï¼‰
+$git = Get-Command git -ErrorAction SilentlyContinue
+if($git){
+    $gitDir = Split-Path $git.Source
+    $patchPath = Join-Path (Split-Path $gitDir) "usr\bin"
+    if(Test-Path (Join-Path $patchPath "patch.exe")){
+        $env:Path = "$patchPath;$env:Path"
+        Write-Host "[Build] [OK] Git patch æ·»åŠ åˆ° PATH: $patchPath" -ForegroundColor Green
+    }
+}
+
+# è‡ªåŠ¨æ£€æµ‹ NASM å¹¶æ·»åŠ åˆ° PATHï¼ˆpkg-fetch ä»æºç æ„å»º Node äºŒè¿›åˆ¶æ—¶éœ€è¦ï¼‰
+$nasm = Get-Command nasm -ErrorAction SilentlyContinue
+if(-not $nasm){
+    $nasmCacheDir = Join-Path $cacheDir "nasm-tmp"
+    $nasmExe = Get-ChildItem $nasmCacheDir -Filter "nasm.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if($nasmExe){
+        $nasmDir = Split-Path $nasmExe.FullName
+        $env:Path = "$nasmDir;$env:Path"
+        Write-Host "[Build] [OK] NASM ä»ç¼“å­˜æ·»åŠ åˆ° PATH: $nasmDir" -ForegroundColor Green
+    } else {
+        Write-Host "[Build] [WARN] NASM æœªæ‰¾åˆ°ï¼Œpkg-fetch ä»æºç æ„å»ºå¯èƒ½å¤±è´¥" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[Build] [OK] NASM å·²åœ¨ PATH ä¸­: $($nasm.Source)" -ForegroundColor Green
+}
 
 function Write-Step { param($msg) Write-Host "[Build] $msg" -ForegroundColor Cyan }
 function Write-Ok { param($msg) Write-Host "[Build]   [OK] $msg" -ForegroundColor Green }
 function Write-Warn { param($msg) Write-Host "[Build]   [WARN] $msg" -ForegroundColor Yellow }
 function Write-Err { param($msg) Write-Host "[Build]   [FAIL] $msg" -ForegroundColor Red }
 
-# -Clean£ºÇåÀíËùÓĞ»º´æ
+# -Cleanï¼šæ¸…ç†æ‰€æœ‰ç¼“å­˜
 if ($Clean) {
-    Write-Host "[Clean] ÇåÀíËùÓĞ»º´æ..." -ForegroundColor Yellow
+    Write-Host "[Clean] æ¸…ç†æ‰€æœ‰ç¼“å­˜..." -ForegroundColor Yellow
     foreach ($p in @(".build", $cacheDir, $distDir)) {
         if (Test-Path $p) {
-            Write-Host "  É¾³ı $p"
+            Write-Host "  åˆ é™¤ $p"
             Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue
         }
     }
@@ -59,52 +86,57 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Repo: $repoRoot"
 Write-Host "Build: $buildDir"
 Write-Host "Dist: $distDir"
-if ($SkipDeps) { Write-Host "Mode: SkipDeps£¨Ìø¹ıÒÀÀµ°²×°£©" }
-if ($SkipSPA)  { Write-Host "Mode: SkipSPA£¨Ìø¹ı SPA ¹¹½¨£©" }
+if ($SkipDeps) { Write-Host "Mode: SkipDepsï¼ˆè·³è¿‡ä¾èµ–å®‰è£…ï¼‰" }
+if ($SkipSPA)  { Write-Host "Mode: SkipSPAï¼ˆè·³è¿‡ SPA æ„å»ºï¼‰" }
 
-# ============== 1. ¼ì²éÒÀÀµ ==============
-Write-Host "`n[1/7] ¼ì²éÒÀÀµ..." -ForegroundColor Yellow
+# ============== 1. æ£€æŸ¥ä¾èµ– ==============
+Write-Host "`n[1/7] æ£€æŸ¥ä¾èµ–..." -ForegroundColor Yellow
 
-# Node.js °æ±¾¼ì²é
+# Node.js ç‰ˆæœ¬æ£€æŸ¥
 $nodeVersion = (node --version 2>$null) -replace '[v\n\r]', ''
 if ($nodeVersion) {
     $nodeMajor = [int]($nodeVersion.Split('.')[0])
     if ($nodeMajor -lt 18) {
-        Write-Err "Node $nodeVersion °æ±¾¹ıµÍ£¬ĞèÒª Node 18+"
-        throw "Node °æ±¾¹ıµÍ£¨$nodeVersion£©£¬ĞèÒª 18+"
+        Write-Err "Node $nodeVersion ç‰ˆæœ¬è¿‡ä½ï¼Œéœ€è¦ Node 18+"
+        throw "Node ç‰ˆæœ¬è¿‡ä½ï¼ˆ$nodeVersionï¼‰ï¼Œéœ€è¦ 18+"
     }
-    Write-Ok "Node °æ±¾£º$nodeVersion"
+    Write-Ok "Node ç‰ˆæœ¬ï¼š$nodeVersion"
 } else {
-    throw "Î´¼ì²âµ½ Node.js£¬Çë°²×° Node 18+ ºóÖØÊÔ"
+    throw "æœªæ£€æµ‹åˆ° Node.jsï¼Œè¯·å®‰è£… Node 18+ åé‡è¯•"
 }
 
-# ¼ì²â°ü¹ÜÀíÆ÷
+# æ£€æµ‹åŒ…ç®¡ç†å™¨
 $UsePnpm = $false
 try { $null = pnpm --version; $UsePnpm = $true } catch { }
 $pkgCmd = if ($UsePnpm) { 'pnpm' } else { 'npm' }
-Write-Ok "°ü¹ÜÀíÆ÷£º$pkgCmd"
+Write-Ok "åŒ…ç®¡ç†å™¨ï¼š$pkgCmd"
 
-# °²×°¸ùÄ¿Â¼ÒÀÀµ
+# å®‰è£…æ ¹ç›®å½•ä¾èµ–
 if (-not $SkipDeps) {
-    Write-Step "°²×°¸ùÄ¿Â¼ÒÀÀµ..."
+    Write-Step "å®‰è£…æ ¹ç›®å½•ä¾èµ–..."
     & $pkgCmd install
-    if ($LASTEXITCODE -ne 0) { throw "¸ùÄ¿Â¼ÒÀÀµ°²×°Ê§°Ü" }
+    if ($LASTEXITCODE -ne 0) { throw "æ ¹ç›®å½•ä¾èµ–å®‰è£…å¤±è´¥" }
 }
 
-# È·±£ @yao-pkg/pkg ºÍ esbuild ÒÑ°²×°£¨¹¹½¨¹¤¾ß£©
+# ç¡®ä¿ @yao-pkg/pkg å’Œ esbuild å·²å®‰è£…ï¼ˆæ„å»ºå·¥å…·ï¼‰
+# ä¸ºä»€ä¹ˆåŠ  -wï¼šé¡¹ç›®æ˜¯ pnpm workspaceï¼Œæ ¹ç›®å½• add éœ€æ˜¾å¼ --workspace-root æ ‡å¿—
 $buildTools = @("@yao-pkg/pkg", "esbuild")
 foreach ($tool in $buildTools) {
     $toolPath = "node_modules\.bin\$tool"
     if (-not (Test-Path $toolPath) -and -not (Test-Path "node_modules\$tool")) {
-        Write-Step "°²×°¹¹½¨¹¤¾ß $tool..."
-        & $pkgCmd add -D $tool
-        if ($LASTEXITCODE -ne 0) { throw "$tool °²×°Ê§°Ü" }
+        Write-Step "å®‰è£…æ„å»ºå·¥å…· $tool..."
+        if ($UsePnpm) {
+            & $pkgCmd add -Dw $tool
+        } else {
+            & $pkgCmd add -D $tool
+        }
+        if ($LASTEXITCODE -ne 0) { throw "$tool å®‰è£…å¤±è´¥" }
     }
 }
-Write-Ok "¹¹½¨¹¤¾ß¾ÍĞ÷£¨@yao-pkg/pkg + esbuild£©"
+Write-Ok "æ„å»ºå·¥å…·å°±ç»ªï¼ˆ@yao-pkg/pkg + esbuildï¼‰"
 
-# ============== 2. ¹¹½¨ @wiki/harness ==============
-Write-Host "`n[2/7] ¹¹½¨ @wiki/harness..." -ForegroundColor Yellow
+# ============== 2. æ„å»º @wiki/harness ==============
+Write-Host "`n[2/7] æ„å»º @wiki/harness..." -ForegroundColor Yellow
 
 $harnessPath = Join-Path $repoRoot "..\wiki-harness"
 if (Test-Path (Join-Path $harnessPath "package.json")) {
@@ -112,91 +144,100 @@ if (Test-Path (Join-Path $harnessPath "package.json")) {
     try {
         if (-not $SkipDeps) {
             & $pkgCmd install
-            if ($LASTEXITCODE -ne 0) { Pop-Location; throw "@wiki/harness ÒÀÀµ°²×°Ê§°Ü" }
+            if ($LASTEXITCODE -ne 0) { Pop-Location; throw "@wiki/harness ä¾èµ–å®‰è£…å¤±è´¥" }
         }
         & $pkgCmd run build
-        if ($LASTEXITCODE -ne 0) { Pop-Location; throw "@wiki/harness ¹¹½¨Ê§°Ü" }
+        if ($LASTEXITCODE -ne 0) { Pop-Location; throw "@wiki/harness æ„å»ºå¤±è´¥" }
     } finally {
         Pop-Location
     }
-    Write-Ok "@wiki/harness ¹¹½¨Íê³É"
+    Write-Ok "@wiki/harness æ„å»ºå®Œæˆ"
+    
+    # å®‰è£…æœ¬åœ° harness åˆ° karpathy-wiki çš„ node_modulesï¼ˆpkg æ‰“åŒ…æ—¶éœ€è¦ï¼‰
+    Write-Step "å®‰è£… @wiki/harness åˆ°æœ¬åœ°..."
+    & $pkgCmd add "file:$harnessPath" -w
+    if ($LASTEXITCODE -ne 0) { throw "@wiki/harness å®‰è£…å¤±è´¥" }
+    Write-Ok "@wiki/harness å®‰è£…å®Œæˆ"
 } else {
-    Write-Warn "Î´ÕÒµ½±¾µØ wiki-harness Ä¿Â¼£¬Ìø¹ı£¨ÈôÒÑ·¢²¼µ½ npm ¿ÉºöÂÔ£©"
+    Write-Warn "æœªæ‰¾åˆ°æœ¬åœ° wiki-harness ç›®å½•ï¼Œè·³è¿‡ï¼ˆè‹¥å·²å‘å¸ƒåˆ° npm å¯å¿½ç•¥ï¼‰"
 }
 
-# ============== 3. ¹¹½¨ SPA ==============
-Write-Host "`n[3/7] ¹¹½¨ SPA..." -ForegroundColor Yellow
+# ============== 3. æ„å»º SPA ==============
+Write-Host "`n[3/7] æ„å»º SPA..." -ForegroundColor Yellow
 
 $spaIndex = Join-Path $repoRoot "services\api\public\index.html"
 if ($SkipSPA -and (Test-Path $spaIndex)) {
-    Write-Ok "SPA ÒÑ´æÔÚÇÒ -SkipSPA ÒÑÖ¸¶¨£¬Ìø¹ı¹¹½¨"
+    Write-Ok "SPA å·²å­˜åœ¨ä¸” -SkipSPA å·²æŒ‡å®šï¼Œè·³è¿‡æ„å»º"
 } else {
-    # ¹¹½¨Ç°¶Ë£ºvite.config.ts ÖĞ outDir Ö¸Ïò services/api/public
+    # æ„å»ºå‰ç«¯ï¼švite.config.ts ä¸­ outDir æŒ‡å‘ services/api/public
     & $pkgCmd run build
-    if ($LASTEXITCODE -ne 0) { throw "SPA ¹¹½¨Ê§°Ü" }
+    if ($LASTEXITCODE -ne 0) { throw "SPA æ„å»ºå¤±è´¥" }
 
     if (-not (Test-Path $spaIndex)) {
-        throw "SPA ¹¹½¨Íê³Éµ«Î´ÕÒµ½ index.html£º$spaIndex"
+        throw "SPA æ„å»ºå®Œæˆä½†æœªæ‰¾åˆ° index.htmlï¼š$spaIndex"
     }
-    Write-Ok "SPA ¹¹½¨Íê³É£º$spaIndex"
+    Write-Ok "SPA æ„å»ºå®Œæˆï¼š$spaIndex"
 }
 
-# ============== 4. esbuild ´ò°üºó¶Ë TS ¡ú CJS µ¥ÎÄ¼ş ==============
-Write-Host "`n[4/7] esbuild ´ò°üºó¶Ë..." -ForegroundColor Yellow
+# ============== 4. esbuild æ‰“åŒ…åç«¯ TS â†’ CJS å•æ–‡ä»¶ ==============
+Write-Host "`n[4/7] esbuild æ‰“åŒ…åç«¯..." -ForegroundColor Yellow
 
-# ÎªÊ²Ã´ÓÃ esbuild£ºÏîÄ¿Ê¹ÓÃ ESM£¨"type": "module"£©£¬pkg ¶Ô ESM Ö§³ÖÓĞÏŞ
-# esbuild °ÑËùÓĞ TS ´ò°ü³Éµ¥¸ö CJS ÎÄ¼ş£¬pkg ÔÙ´ò°ü³É exe
+# ä¸ºä»€ä¹ˆç”¨ esbuildï¼šé¡¹ç›®ä½¿ç”¨ ESMï¼ˆ"type": "module"ï¼‰ï¼Œpkg å¯¹ ESM æ”¯æŒæœ‰é™
+# esbuild æŠŠæ‰€æœ‰ TS æ‰“åŒ…æˆå•ä¸ª CJS æ–‡ä»¶ï¼Œpkg å†æ‰“åŒ…æˆ exe
 $entryFile = Join-Path $repoRoot "services\api\src\index.ts"
 $bundleFile = Join-Path $buildDir "bundle.cjs"
 
 $esbuildArgs = @(
-    "node_modules\.bin\esbuild",
+    # ä¸ºä»€ä¹ˆç”¨ node_modules/esbuild/bin/esbuild è€Œé .bin/esbuildï¼š
+    # .bin/esbuildï¼ˆæ— æ‰©å±•åï¼‰æ˜¯ bash shimï¼ŒWindows ä¸‹ç”¨ node æ‰§è¡Œä¼šæŠ¥ SyntaxError
+    # ç›´æ¥è°ƒç”¨ esbuild åŒ…çš„ JS å…¥å£ï¼Œè·¨å¹³å°ä¸”ä¸ä¾èµ– .cmd/.ps1 shim
+    "node_modules\esbuild\bin\esbuild",
     $entryFile,
     "--bundle",
     "--platform=node",
     "--format=cjs",
     "--target=node18",
     "--outfile=$bundleFile",
-    "--external:@wiki/harness",  # ±¾µØ file: ÒıÓÃ£¬pkg Ğèµ¥¶À´¦Àí
-    "--external:gray-matter",    # Ô­ÉúÄ£¿é£¬±£³ÖÍâ²¿ÒıÓÃ
-    "--loader:.node=copy",       # Ô­Éú .node Ä£¿éÖ±½Ó¸´ÖÆ
+    "--external:@wiki/harness",  # æœ¬åœ° file: å¼•ç”¨ï¼Œpkg éœ€å•ç‹¬å¤„ç†
+    "--external:gray-matter",    # åŸç”Ÿæ¨¡å—ï¼Œä¿æŒå¤–éƒ¨å¼•ç”¨
+    "--loader:.node=copy",       # åŸç”Ÿ .node æ¨¡å—ç›´æ¥å¤åˆ¶
     "--log-level=info"
 )
 
 & node @esbuildArgs
-if ($LASTEXITCODE -ne 0) { throw "esbuild ´ò°üÊ§°Ü" }
+if ($LASTEXITCODE -ne 0) { throw "esbuild æ‰“åŒ…å¤±è´¥" }
 
 if (-not (Test-Path $bundleFile)) {
-    throw "esbuild ´ò°üÍê³Éµ«Î´ÕÒµ½ bundle.cjs£º$bundleFile"
+    throw "esbuild æ‰“åŒ…å®Œæˆä½†æœªæ‰¾åˆ° bundle.cjsï¼š$bundleFile"
 }
 
-# @wiki/harness ĞèÒª×÷ÎªÍâ²¿ÒÀÀµ´ò°ü
-# ÎªÊ²Ã´£ºharness ÊÇ±¾µØ file: ÒıÓÃ£¬esbuild ÎŞ·¨Ö±½Ó½âÎö£¬Ğè pkg ´Ó node_modules ÊÕ¼¯
+# @wiki/harness éœ€è¦ä½œä¸ºå¤–éƒ¨ä¾èµ–æ‰“åŒ…
+# ä¸ºä»€ä¹ˆï¼šharness æ˜¯æœ¬åœ° file: å¼•ç”¨ï¼Œesbuild æ— æ³•ç›´æ¥è§£æï¼Œéœ€ pkg ä» node_modules æ”¶é›†
 $harnessNodeModules = Join-Path $repoRoot "node_modules\@wiki\harness"
 if (Test-Path $harnessNodeModules) {
-    Write-Ok "@wiki/harness ÒÑÔÚ node_modules ÖĞ"
+    Write-Ok "@wiki/harness å·²åœ¨ node_modules ä¸­"
 } else {
-    Write-Warn "@wiki/harness ²»ÔÚ node_modules ÖĞ£¬¹¹½¨¿ÉÄÜÊ§°Ü"
+    Write-Warn "@wiki/harness ä¸åœ¨ node_modules ä¸­ï¼Œæ„å»ºå¯èƒ½å¤±è´¥"
 }
 
-Write-Ok "esbuild ´ò°üÍê³É£º$bundleFile"
+Write-Ok "esbuild æ‰“åŒ…å®Œæˆï¼š$bundleFile"
 
-# ============== 5. @yao-pkg/pkg ´ò°ü ¡ú exe ==============
-Write-Host "`n[5/7] pkg ´ò°ü exe..." -ForegroundColor Yellow
-Write-Host "  Ô¤¼ÆºÄÊ±£ºÔ¼ 1-3 ·ÖÖÓ£¨Ê×´ÎĞèÏÂÔØ Node.js ¶ş½øÖÆ£©" -ForegroundColor DarkGray
+# ============== 5. @yao-pkg/pkg æ‰“åŒ… â†’ exe ==============
+Write-Host "`n[5/7] pkg æ‰“åŒ… exe..." -ForegroundColor Yellow
+Write-Host "  é¢„è®¡è€—æ—¶ï¼šçº¦ 1-3 åˆ†é’Ÿï¼ˆé¦–æ¬¡éœ€ä¸‹è½½ Node.js äºŒè¿›åˆ¶ï¼‰" -ForegroundColor DarkGray
 
 $pkgOutputDir = Join-Path $distDir "karpathy-wiki"
-# ÇåÀí¾É²úÎï
+# æ¸…ç†æ—§äº§ç‰©
 if (Test-Path $pkgOutputDir) {
     Remove-Item -Recurse -Force $pkgOutputDir
 }
 
-# pkg ÅäÖÃÎÄ¼ş
+# pkg é…ç½®æ–‡ä»¶
 $pkgConfig = @{
     name = "karpathy-wiki"
     bin = $bundleFile
     pkg = @{
-        targets = @("node18-win-x64")
+        targets = @("node24-win-x64")
         output = $pkgOutputDir
         assets = @(
             "services\api\prompts\**\*",
@@ -208,50 +249,53 @@ $pkgConfig = @{
 $pkgConfigPath = Join-Path $buildDir "pkg-config.json"
 $pkgConfig | ConvertTo-Json -Depth 5 | Set-Content $pkgConfigPath -Encoding UTF8
 
-# ÉèÖÃ pkg »º´æÄ¿Â¼£¨±ÜÃâÖØ¸´ÏÂÔØ Node ¶ş½øÖÆ£©
+# è®¾ç½® pkg ç¼“å­˜ç›®å½•ï¼ˆé¿å…é‡å¤ä¸‹è½½ Node äºŒè¿›åˆ¶ï¼‰
 $env:PKG_CACHE_PATH = $cacheDir
 
-# ÎªÊ²Ã´ÓÃ --options expose-gc£ºFastify ¿ÉÄÜĞèÒª GC ¿ØÖÆ
+# ============== 5. pkg --sea æ‰“åŒ… exeï¼ˆä½¿ç”¨ Node.js å®˜æ–¹ SEA åŠŸèƒ½ï¼Œæ— éœ€é¢„ä¸‹è½½ç‰¹æ®ŠäºŒè¿›åˆ¶ï¼‰==============
+Write-Host "`n[5/7] pkg --sea æ‰“åŒ… exe..." -ForegroundColor Yellow
+Write-Host "  é¢„è®¡è€—æ—¶ï¼šçº¦ 1-2 åˆ†é’Ÿï¼ˆéœ€ä¸‹è½½ Node.js å®˜æ–¹äºŒè¿›åˆ¶ï¼‰" -ForegroundColor DarkGray
+
+$exePath = Join-Path $pkgOutputDir "karpathy-wiki.exe"
 $pkgArgs = @(
-    "node_modules\.bin\pkg",
-    $pkgConfigPath,
-    "--targets", "node18-win-x64",
-    "--output", (Join-Path $pkgOutputDir "karpathy-wiki.exe"),
+    "node_modules\@yao-pkg\pkg\lib-es5\bin.js",
+    $bundleFile,
+    "--sea",
+    "--output", $exePath,
     "--options", "max-old-space-size=512"
 )
 
 & node @pkgArgs
-if ($LASTEXITCODE -ne 0) { throw "pkg ´ò°üÊ§°Ü" }
+if ($LASTEXITCODE -ne 0) { throw "pkg æ‰“åŒ…å¤±è´¥" }
 
-$exePath = Join-Path $pkgOutputDir "karpathy-wiki.exe"
 if (-not (Test-Path $exePath)) {
-    throw "pkg ´ò°üÍê³Éµ«Î´ÕÒµ½ exe£º$exePath"
+    throw "pkg æ‰“åŒ…å®Œæˆä½†æœªæ‰¾åˆ° exeï¼š$exePath"
 }
-Write-Ok "exe Éú³ÉÍê³É£º$exePath"
+Write-Ok "exe ç”Ÿæˆå®Œæˆï¼š$exePath"
 
-# ============== 6. ¸´ÖÆÍâÖÃ×ÊÔ´ ==============
-Write-Host "`n[6/7] ¸´ÖÆÍâÖÃ×ÊÔ´..." -ForegroundColor Yellow
+# ============== 6. å¤åˆ¶å¤–ç½®èµ„æº ==============
+Write-Host "`n[6/7] å¤åˆ¶å¤–ç½®èµ„æº..." -ForegroundColor Yellow
 
-# 6.1 SPA ¾²Ì¬×ÊÔ´£¨Ç°¶Ë¹¹½¨²úÎï£©
-Write-Host "  [6.1] ¸´ÖÆ SPA ¾²Ì¬×ÊÔ´..."
+# 6.1 SPA é™æ€èµ„æºï¼ˆå‰ç«¯æ„å»ºäº§ç‰©ï¼‰
+Write-Host "  [6.1] å¤åˆ¶ SPA é™æ€èµ„æº..."
 $spaSource = Join-Path $repoRoot "services\api\public"
 $spaTarget = Join-Path $pkgOutputDir "public"
 if (Test-Path $spaSource) {
     Copy-Item -Recurse -Force $spaSource $spaTarget
-    Write-Ok "SPA ÒÑ¸´ÖÆµ½ $spaTarget"
+    Write-Ok "SPA å·²å¤åˆ¶åˆ° $spaTarget"
 } else {
-    Write-Warn "SPA Ô´Ä¿Â¼²»´æÔÚ£º$spaSource"
+    Write-Warn "SPA æºç›®å½•ä¸å­˜åœ¨ï¼š$spaSource"
 }
 
-# 6.2 ÅäÖÃÎÄ¼ş£¨config.json£©
-Write-Host "  [6.2] ¸´ÖÆÅäÖÃÎÄ¼ş..."
+# 6.2 é…ç½®æ–‡ä»¶ï¼ˆconfig.jsonï¼‰
+Write-Host "  [6.2] å¤åˆ¶é…ç½®æ–‡ä»¶..."
 $configSource = Join-Path $repoRoot "services\api\config.json"
 $configTarget = Join-Path $pkgOutputDir "config.json"
 if (Test-Path $configSource) {
     Copy-Item -Force $configSource $configTarget
-    Write-Ok "config.json ÒÑ¸´ÖÆ"
+    Write-Ok "config.json å·²å¤åˆ¶"
 } else {
-    # Éú³ÉÄ¬ÈÏÅäÖÃ
+    # ç”Ÿæˆé»˜è®¤é…ç½®
     $defaultConfig = @{
         vaultPath = "./vault"
         adapter = "harness"
@@ -267,55 +311,55 @@ if (Test-Path $configSource) {
         healthCheck = @{ staleDays = 30 }
     }
     $defaultConfig | ConvertTo-Json -Depth 5 | Set-Content $configTarget -Encoding UTF8
-    Write-Ok "ÒÑÉú³ÉÄ¬ÈÏ config.json"
+    Write-Ok "å·²ç”Ÿæˆé»˜è®¤ config.json"
 }
 
-# 6.3 .env Ä£°å£¨²»º¬Êµ¼Ê Key£¬½öÕ¼Î»ÌáÊ¾£©
-Write-Host "  [6.3] Éú³É .env Ä£°å..."
+# 6.3 .env æ¨¡æ¿ï¼ˆä¸å«å®é™… Keyï¼Œä»…å ä½æç¤ºï¼‰
+Write-Host "  [6.3] ç”Ÿæˆ .env æ¨¡æ¿..."
 $envTemplate = Join-Path $pkgOutputDir ".env.example"
 $envContent = @"
-# Karpathy-Wiki »·¾³±äÁ¿ÅäÖÃ
-# ¸´ÖÆ´ËÎÄ¼şÎª .env ²¢ÌîÈëÊµ¼Ê API Key
-# Ö§³Ö£ºGLM_KEY / QWEN_KEY / DEEPSEEK_KEY£¨Óë config.json ÖĞ apiKeyRef ¶ÔÓ¦£©
+# Karpathy-Wiki ç¯å¢ƒå˜é‡é…ç½®
+# å¤åˆ¶æ­¤æ–‡ä»¶ä¸º .env å¹¶å¡«å…¥å®é™… API Key
+# æ”¯æŒï¼šGLM_KEY / QWEN_KEY / DEEPSEEK_KEYï¼ˆä¸ config.json ä¸­ apiKeyRef å¯¹åº”ï¼‰
 
-# ÖÇÆ× GLM
+# æ™ºè°± GLM
 GLM_KEY=
 
-# Í¨ÒåÇ§ÎÊ Qwen
+# é€šä¹‰åƒé—® Qwen
 # QWEN_KEY=
 
 # DeepSeek
 # DEEPSEEK_KEY=
 "@
 Set-Content -Path $envTemplate -Value $envContent -Encoding UTF8
-Write-Ok ".env.example ÒÑÉú³É"
+Write-Ok ".env.example å·²ç”Ÿæˆ"
 
-# 6.4 Ä¬ÈÏ Vault Ä¿Â¼½á¹¹
-Write-Host "  [6.4] ´´½¨Ä¬ÈÏ Vault Ä¿Â¼..."
+# 6.4 é»˜è®¤ Vault ç›®å½•ç»“æ„
+Write-Host "  [6.4] åˆ›å»ºé»˜è®¤ Vault ç›®å½•..."
 $vaultTarget = Join-Path $pkgOutputDir "vault"
 $PageDirs = @('raw', 'entities', 'concepts', 'comparisons', 'queries')
 foreach ($d in $PageDirs) {
     $dirPath = Join-Path $vaultTarget $d
     New-Item -ItemType Directory -Force $dirPath | Out-Null
 }
-Write-Ok "Ä¬ÈÏ Vault Ä¿Â¼ÒÑ´´½¨"
+Write-Ok "é»˜è®¤ Vault ç›®å½•å·²åˆ›å»º"
 
-# 6.5 prompts Ä¿Â¼£¨±àÒë/ÎÊ´ğ/Ìå¼ìµÄ prompt Ä£°å£©
-Write-Host "  [6.5] ¸´ÖÆ prompts Ä¿Â¼..."
+# 6.5 prompts ç›®å½•ï¼ˆç¼–è¯‘/é—®ç­”/ä½“æ£€çš„ prompt æ¨¡æ¿ï¼‰
+Write-Host "  [6.5] å¤åˆ¶ prompts ç›®å½•..."
 $promptsSource = Join-Path $repoRoot "services\api\src\prompts"
 $promptsTarget = Join-Path $pkgOutputDir "prompts"
 if (Test-Path $promptsSource) {
     Copy-Item -Recurse -Force $promptsSource $promptsTarget
-    Write-Ok "prompts ÒÑ¸´ÖÆ"
+    Write-Ok "prompts å·²å¤åˆ¶"
 } else {
-    Write-Warn "prompts Ô´Ä¿Â¼²»´æÔÚ£º$promptsSource"
+    Write-Warn "prompts æºç›®å½•ä¸å­˜åœ¨ï¼š$promptsSource"
 }
 
-# Ğ´Èë¹¹½¨¾ÍĞ÷±ê¼Ç
+# å†™å…¥æ„å»ºå°±ç»ªæ ‡è®°
 Set-Content -Path $buildReadyMarker -Value (Get-Date -Format o) -Encoding UTF8
 
-# ============== 7. ÖÆ×÷°²×°°ü£¨Inno Setup£© ==============
-Write-Host "`n[7/7] ÖÆ×÷°²×°°ü£¨Inno Setup£©..." -ForegroundColor Yellow
+# ============== 7. åˆ¶ä½œå®‰è£…åŒ…ï¼ˆInno Setupï¼‰ ==============
+Write-Host "`n[7/7] åˆ¶ä½œå®‰è£…åŒ…ï¼ˆInno Setupï¼‰..." -ForegroundColor Yellow
 
 function Find-ISCC {
     $cmd = Get-Command iscc -ErrorAction SilentlyContinue
@@ -336,19 +380,19 @@ function Refresh-Path {
 
 $iscc = Find-ISCC
 
-# ×Ô¶¯°²×° Inno Setup£¨ÈçÎ´°²×°£©
+# è‡ªåŠ¨å®‰è£… Inno Setupï¼ˆå¦‚æœªå®‰è£…ï¼‰
 if (-not $iscc) {
-    Write-Host "  Inno Setup Î´°²×°£¬³¢ÊÔ×Ô¶¯°²×°..." -ForegroundColor Cyan
+    Write-Host "  Inno Setup æœªå®‰è£…ï¼Œå°è¯•è‡ªåŠ¨å®‰è£…..." -ForegroundColor Cyan
 
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Host "  Ê¹ÓÃ winget °²×°..." -ForegroundColor DarkGray
+        Write-Host "  ä½¿ç”¨ winget å®‰è£…..." -ForegroundColor DarkGray
         winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements --accept-source-agreements
         Refresh-Path
         $iscc = Find-ISCC
     }
 
     if (-not $iscc) {
-        Write-Host "  Ö±½ÓÏÂÔØ Inno Setup °²×°°ü..." -ForegroundColor DarkGray
+        Write-Host "  ç›´æ¥ä¸‹è½½ Inno Setup å®‰è£…åŒ…..." -ForegroundColor DarkGray
         $installerUrl = "https://jrsoftware.org/download.php/is.exe"
         $installerFile = "$env:TEMP\innosetup-install.exe"
         try {
@@ -357,20 +401,20 @@ if (-not $iscc) {
             Refresh-Path
             $iscc = Find-ISCC
         } catch {
-            Write-Host "  [WARN] ÏÂÔØ°²×°Ê§°Ü£º$_" -ForegroundColor Red
+            Write-Host "  [WARN] ä¸‹è½½å®‰è£…å¤±è´¥ï¼š$_" -ForegroundColor Red
         } finally {
             if (Test-Path $installerFile) { Remove-Item $installerFile -Force -ErrorAction SilentlyContinue }
         }
     }
 }
 
-# ×Ô¶¯´´½¨ installer.iss£¨Èç²»´æÔÚ£©
+# è‡ªåŠ¨åˆ›å»º installer.issï¼ˆå¦‚ä¸å­˜åœ¨ï¼‰
 $issFile = Join-Path $repoRoot "installer.iss"
 if ($iscc -and -not (Test-Path $issFile)) {
-    Write-Host "  installer.iss ²»´æÔÚ£¬×Ô¶¯´´½¨..." -ForegroundColor Cyan
+    Write-Host "  installer.iss ä¸å­˜åœ¨ï¼Œè‡ªåŠ¨åˆ›å»º..." -ForegroundColor Cyan
     $issTemplate = @"
 ; Auto-generated by build-exe.ps1
-; Karpathy-Wiki Inno Setup ÅäÖÃ
+; Karpathy-Wiki Inno Setup é…ç½®
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
 #endif
@@ -393,43 +437,43 @@ DisableProgramGroupPage=yes
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
-Name: "desktopicon"; Description: "´´½¨×ÀÃæ¿ì½İ·½Ê½"; GroupDescription: "¸½¼ÓÑ¡Ïî:"
+Name: "desktopicon"; Description: "åˆ›å»ºæ¡Œé¢å¿«æ·æ–¹å¼"; GroupDescription: "é™„åŠ é€‰é¡¹:"
 [Files]
 Source: "dist\karpathy-wiki\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{group}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"
 Name: "{commondesktop}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"; Tasks: desktopicon
 [Run]
-Filename: "{app}\karpathy-wiki.exe"; Description: "Æô¶¯ Karpathy-Wiki"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\karpathy-wiki.exe"; Description: "å¯åŠ¨ Karpathy-Wiki"; Flags: nowait postinstall skipifsilent
 "@
-    # Inno Setup ±àÒëÆ÷£¨ISCC£©ĞèÒª UTF-8 BOM ²ÅÄÜÕıÈ·½âÎöÖĞÎÄ
+    # Inno Setup ç¼–è¯‘å™¨ï¼ˆISCCï¼‰éœ€è¦ UTF-8 BOM æ‰èƒ½æ­£ç¡®è§£æä¸­æ–‡
     [System.IO.File]::WriteAllText($issFile, $issTemplate, (New-Object System.Text.UTF8Encoding($true)))
 }
 
-# ±àÒë°²×°°ü
+# ç¼–è¯‘å®‰è£…åŒ…
 if (-not $iscc) {
-    Write-Warn "Inno Setup ²»¿ÉÓÃ£¬Ìø¹ı°²×°°üÖÆ×÷"
-    Write-Host "  ÊÖ¶¯°²×°£ºhttps://jrsoftware.org/isdl.php" -ForegroundColor DarkGray
+    Write-Warn "Inno Setup ä¸å¯ç”¨ï¼Œè·³è¿‡å®‰è£…åŒ…åˆ¶ä½œ"
+    Write-Host "  æ‰‹åŠ¨å®‰è£…ï¼šhttps://jrsoftware.org/isdl.php" -ForegroundColor DarkGray
 } else {
-    # ¶ÁÈ¡°æ±¾ºÅ
+    # è¯»å–ç‰ˆæœ¬å·
     $version = "0.1.0"
     $rootPkg = Join-Path $repoRoot "package.json"
     if (Test-Path $rootPkg) {
         $pkgContent = Get-Content $rootPkg -Raw | ConvertFrom-Json
         if ($pkgContent.version) { $version = $pkgContent.version }
     }
-    Write-Host "  °æ±¾ºÅ: $version"
-    Write-Host "  ±àÒë°²×°°ü..."
+    Write-Host "  ç‰ˆæœ¬å·: $version"
+    Write-Host "  ç¼–è¯‘å®‰è£…åŒ…..."
     & $iscc /DMyAppVersion=$version $issFile
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn "°²×°°ü±àÒëÊ§°Ü"
+        Write-Warn "å®‰è£…åŒ…ç¼–è¯‘å¤±è´¥"
     } else {
         $setupExe = "dist\KarpathyWiki-Setup-v$version.exe"
-        Write-Ok "°²×°°üÒÑÉú³É£º$setupExe"
+        Write-Ok "å®‰è£…åŒ…å·²ç”Ÿæˆï¼š$setupExe"
     }
 }
 
-# ============== Íê³É ==============
+# ============== å®Œæˆ ==============
 $size = (Get-ChildItem -Recurse $pkgOutputDir | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host "`n========================================" -ForegroundColor Green
 Write-Host "  Build Complete!" -ForegroundColor Green
@@ -439,11 +483,11 @@ Write-Host ("  Size: {0:N1} MB" -f $size)
 Write-Host "  EXE:   $pkgOutputDir\karpathy-wiki.exe"
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Ê¹ÓÃ·½Ê½£º"
-Write-Host "  - Ö±½ÓÔËĞĞ£ºdist\karpathy-wiki\karpathy-wiki.exe"
-Write-Host "  - °²×°°ü£ºdist\KarpathyWiki-Setup-v*.exe£¨Èç Inno Setup ¿ÉÓÃ£©"
+Write-Host "  ä½¿ç”¨æ–¹å¼ï¼š"
+Write-Host "  - ç›´æ¥è¿è¡Œï¼šdist\karpathy-wiki\karpathy-wiki.exe"
+Write-Host "  - å®‰è£…åŒ…ï¼šdist\KarpathyWiki-Setup-v*.exeï¼ˆå¦‚ Inno Setup å¯ç”¨ï¼‰"
 Write-Host ""
-Write-Host "  Ê×´ÎÔËĞĞÇ°£º"
-Write-Host "  1. ±à¼­ config.json È·ÈÏÄ£ĞÍÅäÖÃ"
-Write-Host "  2. ¸´ÖÆ .env.example Îª .env£¬ÌîÈë API Key"
+Write-Host "  é¦–æ¬¡è¿è¡Œå‰ï¼š"
+Write-Host "  1. ç¼–è¾‘ config.json ç¡®è®¤æ¨¡å‹é…ç½®"
+Write-Host "  2. å¤åˆ¶ .env.example ä¸º .envï¼Œå¡«å…¥ API Key"
 Write-Host "========================================" -ForegroundColor Green

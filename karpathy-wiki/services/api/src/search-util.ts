@@ -1,19 +1,19 @@
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { VaultService } from './vault/vault-service.js';
 
-// å…¨æ–‡æ£€ç´¢å‘½ä¸­ç»“æžœ
+// È«ÎÄ¼ìË÷ÃüÖÐ½á¹û
 export interface SearchHit {
   path: string;
   title: string;
   snippet: string;
-  // å‘½ä¸­å…³é”®è¯æ•°ï¼ˆç›¸å…³æ€§æŽ’åºç”¨ï¼‰
+  // ÃüÖÐ¹Ø¼ü´ÊÊý£¨Ïà¹ØÐÔÅÅÐòÓÃ£©
   hits: number;
 }
 
-// ç®€å•å…¨æ–‡æœç´¢ï¼šæ‰«ææ‰€æœ‰é¡µé¢ç›®å½•ï¼ŒæŒ‰å…³é”®è¯åŒ¹é…æ ‡é¢˜ä¸Žæ­£æ–‡ã€‚
-// åž‚ç›´åˆ‡ç‰‡é˜¶æ®µç”¨æœ€æœ´ç´ çš„ includes åŒ¹é…ï¼ŒåŽç»­å¯æ›¿æ¢ä¸ºå€’æŽ’ç´¢å¼•æˆ–å‘é‡åŒ–æ£€ç´¢ã€‚
-// query-workflow.ts çš„ searchPages å·¥å…·ä¸Ž /api/search è·¯ç”±å…±ç”¨æ­¤å®žçŽ°ï¼ˆDRYï¼‰ã€‚
+// ¼òµ¥È«ÎÄËÑË÷£ºÉ¨ÃèËùÓÐÒ³ÃæÄ¿Â¼£¬°´¹Ø¼ü´ÊÆ¥Åä±êÌâÓëÕýÎÄ¡£
+// ´¹Ö±ÇÐÆ¬½×¶ÎÓÃ×îÆÓËØµÄ includes Æ¥Åä£¬ºóÐø¿ÉÌæ»»Îªµ¹ÅÅË÷Òý»òÏòÁ¿»¯¼ìË÷¡£
+// query-workflow.ts µÄ searchPages ¹¤¾ßÓë /api/search Â·ÓÉ¹²ÓÃ´ËÊµÏÖ£¨DRY£©¡£
 export async function searchPages(
   vault: VaultService,
   keywords: string,
@@ -43,21 +43,22 @@ export async function searchPages(
         continue;
       }
       const lower = content.toLowerCase();
-      // ä»»ä¸€å…³é”®è¯å‘½ä¸­å³æ”¶å½•ï¼Œå‘½ä¸­æ•°è¶Šå¤šæŽ’åºè¶Šé å‰
+      // ÈÎÒ»¹Ø¼ü´ÊÃüÖÐ¼´ÊÕÂ¼£¬ÃüÖÐÊýÔ½¶àÅÅÐòÔ½¿¿Ç°
       const hitCount = terms.filter((t) => lower.includes(t)).length;
       if (hitCount === 0) continue;
 
       const title = f.slice(0, -3);
-      // æ‘˜è¦å–é¦–ä¸ªå…³é”®è¯å‡ºçŽ°ä½ç½®å‰åŽ 60 å­—ç¬¦
+      // ÕªÒªÈ¡Ê×¸ö¹Ø¼ü´Ê³öÏÖÎ»ÖÃÇ°ºó 60 ×Ö·û
       const firstIdx = lower.indexOf(terms[0]);
       const start = Math.max(0, firstIdx - 30);
-      const snippet = content.slice(start, start + 120).replace(/\n/g, ' ');
+      // ÓÃ replaceAll Ìæ´ú replace+È«¾ÖÕýÔò£¨S7781£©
+      const snippet = content.slice(start, start + 120).replaceAll('\n', ' ');
 
       results.push({ path: rel, title, snippet, hits: hitCount });
     }
   }
 
-  // å‘½ä¸­æ•°å¤šçš„ä¼˜å…ˆï¼ŒåŒå‘½ä¸­æ•°æŒ‰æ ‡é¢˜å­—å…¸åº
+  // ÃüÖÐÊý¶àµÄÓÅÏÈ£¬Í¬ÃüÖÐÊý°´±êÌâ×ÖµäÐò
   results.sort((a, b) => {
     if (b.hits !== a.hits) return b.hits - a.hits;
     return a.title.localeCompare(b.title);

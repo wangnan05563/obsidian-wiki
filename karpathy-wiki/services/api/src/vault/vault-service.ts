@@ -1,5 +1,5 @@
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import matter from 'gray-matter';
 
 export interface TreeNode {
@@ -9,55 +9,55 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
-// å†™å…¥è·¯å¾„ç™½åå•ï¼šAI ä»…å¯å†™è¿™äº›ç›®å½•/æ–‡ä»¶ï¼Œç¦æ­¢æ”¹ SCHEMA.mdï¼ˆ10.4 å†™å…¥çº¦æŸï¼‰
-const WRITE_ALLOWED_DIRS = ['raw', 'entities', 'concepts', 'comparisons', 'queries'];
-const WRITE_ALLOWED_FILES = ['index.md', 'log.md'];
+// Ğ´ÈëÂ·¾¶°×Ãûµ¥£ºAI ½ö¿ÉĞ´ÕâĞ©Ä¿Â¼/ÎÄ¼ş£¬½ûÖ¹¸Ä SCHEMA.md£¨10.4 Ğ´ÈëÔ¼Êø£©
+const WRITE_ALLOWED_DIRS = new Set(['raw', 'entities', 'concepts', 'comparisons', 'queries']);
+const WRITE_ALLOWED_FILES = new Set(['index.md', 'log.md']);
 
-// é»˜è®¤ SCHEMA å†…å®¹ã€‚init æ—¶è‹¥ SCHEMA.md ä¸å­˜åœ¨åˆ™å†™å…¥æ­¤å†…å®¹ï¼Œä¿è¯é¦–æ¬¡å¯åŠ¨å³å¯ç”¨ã€‚
-const DEFAULT_SCHEMA = `# çŸ¥è¯†åº“é¡µé¢è§„èŒƒ SCHEMA
+// Ä¬ÈÏ SCHEMA ÄÚÈİ¡£init Ê±Èô SCHEMA.md ²»´æÔÚÔòĞ´Èë´ËÄÚÈİ£¬±£Ö¤Ê×´ÎÆô¶¯¼´¿ÉÓÃ¡£
+const DEFAULT_SCHEMA = `# ÖªÊ¶¿âÒ³Ãæ¹æ·¶ SCHEMA
 
-## é¡µé¢ç±»å‹
-- entity: å®ä½“é¡µï¼ˆäºº/ç‰©/é¡¹ç›®ï¼‰
-- concept: æ¦‚å¿µé¡µï¼ˆæ–¹æ³•/ç†è®º/æŠ€æœ¯ï¼‰
-- comparison: å¯¹æ¯”é¡µï¼ˆå¤šå®ä½“/å¤šæ¦‚å¿µå¯¹ç…§ï¼‰
-- query: å½’æ¡£çš„é«˜ä»·å€¼é—®ç­”
+## Ò³ÃæÀàĞÍ
+- entity: ÊµÌåÒ³£¨ÈË/Îï/ÏîÄ¿£©
+- concept: ¸ÅÄîÒ³£¨·½·¨/ÀíÂÛ/¼¼Êõ£©
+- comparison: ¶Ô±ÈÒ³£¨¶àÊµÌå/¶à¸ÅÄî¶ÔÕÕ£©
+- query: ¹éµµµÄ¸ß¼ÛÖµÎÊ´ğ
 
-## frontmatter å¿…å¡«å­—æ®µ
+## frontmatter ±ØÌî×Ö¶Î
 \`\`\`yaml
 ---
-title: é¡µé¢æ ‡é¢˜
+title: Ò³Ãæ±êÌâ
 type: entity|concept|comparison|query
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-source: åŸå§‹èµ„æ–™æ¥æºï¼ˆURL æˆ–æ–‡ä»¶åï¼‰
+source: Ô­Ê¼×ÊÁÏÀ´Ô´£¨URL »òÎÄ¼şÃû£©
 tags: [tag1, tag2]
 ---
 \`\`\`
 
-## åŒå‘é“¾æ¥
-- ä½¿ç”¨ [[é¡µé¢å]] é“¾æ¥åˆ°å…¶ä»–é¡µé¢
-- æ–‡ä»¶åä¸é¡µé¢åä¸€è‡´ï¼ˆä¾‹å¦‚ [[llm-wiki]] å¯¹åº” concepts/llm-wiki.mdï¼‰
+## Ë«ÏòÁ´½Ó
+- Ê¹ÓÃ [[Ò³ÃæÃû]] Á´½Óµ½ÆäËûÒ³Ãæ
+- ÎÄ¼şÃûÓëÒ³ÃæÃûÒ»ÖÂ£¨ÀıÈç [[llm-wiki]] ¶ÔÓ¦ concepts/llm-wiki.md£©
 
-## ç›®å½•çº¦å®š
-- entities/ å®ä½“
-- concepts/ æ¦‚å¿µ
-- comparisons/ å¯¹æ¯”
-- queries/ å½’æ¡£é—®ç­”
-- raw/ åŸå§‹èµ„æ–™å­˜æ¡£
+## Ä¿Â¼Ô¼¶¨
+- entities/ ÊµÌå
+- concepts/ ¸ÅÄî
+- comparisons/ ¶Ô±È
+- queries/ ¹éµµÎÊ´ğ
+- raw/ Ô­Ê¼×ÊÁÏ´æµµ
 `;
 
-const DEFAULT_INDEX = `# çŸ¥è¯†åº“ç›®å½•\n\n`;
-const DEFAULT_LOG = `# æ“ä½œæ—¥å¿—\n\n`;
+const DEFAULT_INDEX = `# ÖªÊ¶¿âÄ¿Â¼\n\n`;
+const DEFAULT_LOG = `# ²Ù×÷ÈÕÖ¾\n\n`;
 
 export class VaultService {
-  constructor(private vaultPath: string) {}
+  constructor(private readonly vaultPath: string) {}
 
-  // å…¬å¼€ vaultPath ä¾› adapter ç­‰å¤–éƒ¨æ¨¡å—æ‹¼æ¥è·¯å¾„ç”¨ï¼ˆå¦‚ healthCheck æ‰«æç›®å½•ï¼‰
+  // ¹«¿ª vaultPath ¹© adapter µÈÍâ²¿Ä£¿éÆ´½ÓÂ·¾¶ÓÃ£¨Èç healthCheck É¨ÃèÄ¿Â¼£©
   getVaultPath(): string {
     return this.vaultPath;
   }
 
-  // åˆå§‹åŒ– Vault ç›®å½•ç»“æ„ã€‚å·²å­˜åœ¨çš„æ–‡ä»¶ä¸è¦†ç›–ï¼Œé¿å…ç ´åç”¨æˆ·å†…å®¹ã€‚
+  // ³õÊ¼»¯ Vault Ä¿Â¼½á¹¹¡£ÒÑ´æÔÚµÄÎÄ¼ş²»¸²¸Ç£¬±ÜÃâÆÆ»µÓÃ»§ÄÚÈİ¡£
   async init(): Promise<void> {
     await fs.mkdir(this.vaultPath, { recursive: true });
     const dirs = ['raw', 'entities', 'concepts', 'comparisons', 'queries'];
@@ -78,12 +78,12 @@ export class VaultService {
     }
   }
 
-  // è§£æå¹¶æ ¡éªŒç›¸å¯¹è·¯å¾„ï¼Œé˜²æ­¢è·¯å¾„éå†æ”»å‡»ï¼ˆå¦‚ ../../etc/passwdï¼‰
+  // ½âÎö²¢Ğ£ÑéÏà¶ÔÂ·¾¶£¬·ÀÖ¹Â·¾¶±éÀú¹¥»÷£¨Èç ../../etc/passwd£©
   private resolve(rel: string): string {
     const full = path.resolve(this.vaultPath, rel);
     const relFromVault = path.relative(this.vaultPath, full);
     if (relFromVault.startsWith('..') || path.isAbsolute(relFromVault)) {
-      throw new Error(`è·¯å¾„è¶Šç•Œ: ${rel}`);
+      throw new Error(`Â·¾¶Ô½½ç: ${rel}`);
     }
     return full;
   }
@@ -93,20 +93,20 @@ export class VaultService {
     return fs.readFile(full, 'utf8');
   }
 
-  // å†™å…¥æ–‡ä»¶ï¼Œå«è·¯å¾„ç™½åå•æ ¡éªŒã€‚SCHEMA.md ä¸å…è®¸ AI å†™ï¼ˆ10.4 å†™å…¥çº¦æŸï¼‰ã€‚
+  // Ğ´ÈëÎÄ¼ş£¬º¬Â·¾¶°×Ãûµ¥Ğ£Ñé¡£SCHEMA.md ²»ÔÊĞí AI Ğ´£¨10.4 Ğ´ÈëÔ¼Êø£©¡£
   async writeFile(relativePath: string, content: string): Promise<void> {
     const full = this.resolve(relativePath);
     const top = relativePath.split(/[\\/]/)[0];
-    const allowed = WRITE_ALLOWED_DIRS.includes(top) || WRITE_ALLOWED_FILES.includes(relativePath.replace(/\\/g, '/'));
+    const allowed = WRITE_ALLOWED_DIRS.has(top) || WRITE_ALLOWED_FILES.has(relativePath.replaceAll('\\', '/'));
     if (!allowed) {
-      throw new Error(`å†™å…¥è¢«æ‹’ç»ï¼Œè·¯å¾„ä¸åœ¨ç™½åå•: ${relativePath}`);
+      throw new Error(`Ğ´Èë±»¾Ü¾ø£¬Â·¾¶²»ÔÚ°×Ãûµ¥: ${relativePath}`);
     }
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, content, 'utf8');
   }
 
   async appendIndex(pageName: string, summary: string): Promise<void> {
-    const line = `- [[${pageName}]] â€” ${summary}\n`;
+    const line = `- [[${pageName}]] ¡ª ${summary}\n`;
     const full = this.resolve('index.md');
     await fs.appendFile(full, line, 'utf8');
   }
@@ -119,17 +119,17 @@ export class VaultService {
     const ts = new Date().toISOString().replace('T', ' ').slice(0, 16);
     const lines = [
       `\n## ${ts}\n`,
-      `- æ“ä½œç±»å‹ï¼š${operation}\n`,
-      `- å½±å“æ–‡ä»¶ï¼š${affectedFiles.join(', ') || '(æ— )'}\n`,
+      `- ²Ù×÷ÀàĞÍ£º${operation}\n`,
+      `- Ó°ÏìÎÄ¼ş£º${affectedFiles.join(', ') || '(ÎŞ)'}\n`,
     ];
-    if (note) lines.push(`- å¤‡æ³¨ï¼š${note}\n`);
+    if (note) lines.push(`- ±¸×¢£º${note}\n`);
     const full = this.resolve('log.md');
     await fs.appendFile(full, lines.join(''), 'utf8');
   }
 
-  // å­˜æ¡£åŸå§‹èµ„æ–™åˆ° raw/ï¼Œè¿”å›ç›¸å¯¹è·¯å¾„ã€‚filename ä»…å– basename é˜²æ³¨å…¥ã€‚
+  // ´æµµÔ­Ê¼×ÊÁÏµ½ raw/£¬·µ»ØÏà¶ÔÂ·¾¶¡£filename ½öÈ¡ basename ·À×¢Èë¡£
   async archiveRaw(filename: string, content: string): Promise<string> {
-    const safeName = path.basename(filename).replace(/[^\w.\-]/g, '_');
+    const safeName = path.basename(filename).replace(/[^\w.-]/g, '_'); // NOSONAR: ÓÃÕıÔò×Ö·ûÀà×ö°×Ãûµ¥¹ıÂË£¬replaceAll ²»ÊÊÓÃ
     const rel = `raw/${safeName}`;
     const full = this.resolve(rel);
     await fs.mkdir(path.dirname(full), { recursive: true });
@@ -142,7 +142,7 @@ export class VaultService {
     const entries = await fs.readdir(root, { withFileTypes: true });
     const nodes: TreeNode[] = [];
     for (const e of entries) {
-      const childPath = path.relative(this.vaultPath, path.join(root, e.name)).replace(/\\/g, '/');
+      const childPath = path.relative(this.vaultPath, path.join(root, e.name)).replaceAll('\\', '/');
       if (e.isDirectory()) {
         nodes.push({
           name: e.name,
@@ -157,55 +157,76 @@ export class VaultService {
     return nodes;
   }
 
-  // æ„å»ºåŒå‘é“¾æ¥å›¾ã€‚çº¯ç¡®å®šæ€§é€»è¾‘ï¼Œä¸è°ƒ LLMï¼ˆM-2 healthCheck ä¸ harness å…³ç³»ï¼‰ã€‚
-  // èŠ‚ç‚¹ = é¡µé¢æ–‡ä»¶ï¼ˆå» .md åç¼€ä½œé¡µé¢åï¼‰ï¼Œè¾¹ = [[é¡µé¢å]] å¼•ç”¨ã€‚
+  // ¹¹½¨Ë«ÏòÁ´½ÓÍ¼¡£´¿È·¶¨ĞÔÂß¼­£¬²»µ÷ LLM£¨M-2 healthCheck Óë harness ¹ØÏµ£©¡£
+  // ½Úµã = Ò³ÃæÎÄ¼ş£¨È¥ .md ºó×º×÷Ò³ÃæÃû£©£¬±ß = [[Ò³ÃæÃû]] ÒıÓÃ¡£
+  // Ò³ÃæÊÕ¼¯Óë±ß³éÈ¡²ğ·ÖÎª¸¨Öú·½·¨£¬½µµÍÖ÷º¯ÊıÈÏÖª¸´ÔÓ¶È£¨S3776£©
   async buildLinkGraph(): Promise<{ nodes: string[]; edges: Array<{ from: string; to: string }> }> {
-    const nodes: string[] = [];
-    const edges: Array<{ from: string; to: string }> = [];
     const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
-
-    // æ”¶é›†æ‰€æœ‰é¡µé¢ï¼Œå»ºç«‹ é¡µé¢å â†’ ç›¸å¯¹è·¯å¾„ æ˜ å°„
     const nameToPath = new Map<string, string>();
+    const nodes: string[] = [];
+
+    // ÊÕ¼¯ËùÓĞÒ³Ãæ£¬½¨Á¢ Ò³ÃæÃû ¡ú Ïà¶ÔÂ·¾¶ Ó³Éä
     for (const d of pageDirs) {
-      const dirFull = path.join(this.vaultPath, d);
-      let entries: string[] = [];
-      try {
-        entries = await fs.readdir(dirFull);
-      } catch {
-        continue;
-      }
-      for (const f of entries) {
-        if (!f.endsWith('.md')) continue;
-        const pageName = f.slice(0, -3);
-        const rel = `${d}/${f}`;
-        nodes.push(rel);
-        nameToPath.set(pageName, rel);
-      }
+      await this.collectPagesFromDir(d, nodes, nameToPath);
     }
 
-    // è§£ææ¯ä¸ªé¡µé¢çš„ [[link]]ï¼Œå»ºç«‹è¾¹
-    const wikilinkRe = /\[\[([^\]]+)\]\]/g;
+    // ½âÎöÃ¿¸öÒ³ÃæµÄ [[link]]£¬½¨Á¢±ß
+    const edges: Array<{ from: string; to: string }> = [];
     for (const [, fromPath] of nameToPath) {
-      let content = '';
-      try {
-        content = await this.readFile(fromPath);
-      } catch {
-        continue;
-      }
-      let m: RegExpExecArray | null;
-      while ((m = wikilinkRe.exec(content)) !== null) {
-        const target = m[1].trim();
-        const toPath = nameToPath.get(target);
-        if (toPath) {
-          edges.push({ from: fromPath, to: toPath });
-        }
-      }
+      const pageEdges = await this.extractEdgesFromPage(fromPath, nameToPath);
+      edges.push(...pageEdges);
     }
 
     return { nodes, edges };
   }
 
-  // æå–é¡µé¢ frontmatter çš„ updated å­—æ®µã€‚ä¾› healthCheck åˆ¤å®šè¿‡æœŸç”¨ã€‚
+  // ÊÕ¼¯µ¥¸öÄ¿Â¼ÏÂµÄ .md Ò³Ãæ£¬Ìî³ä nodes Óë nameToPath Ó³Éä
+  private async collectPagesFromDir(
+    dir: string,
+    nodes: string[],
+    nameToPath: Map<string, string>,
+  ): Promise<void> {
+    const dirFull = path.join(this.vaultPath, dir);
+    let entries: string[] = [];
+    try {
+      entries = await fs.readdir(dirFull);
+    } catch {
+      return;
+    }
+    for (const f of entries) {
+      if (!f.endsWith('.md')) continue;
+      const pageName = f.slice(0, -3);
+      const rel = `${dir}/${f}`;
+      nodes.push(rel);
+      nameToPath.set(pageName, rel);
+    }
+  }
+
+  // ¶ÁÈ¡µ¥¸öÒ³ÃæÄÚÈİ£¬½âÎö [[link]] ²¢·µ»ØÖ¸ÏòÒÑ´æÔÚÒ³ÃæµÄ±ß
+  private async extractEdgesFromPage(
+    fromPath: string,
+    nameToPath: Map<string, string>,
+  ): Promise<Array<{ from: string; to: string }>> {
+    let content = '';
+    try {
+      content = await this.readFile(fromPath);
+    } catch {
+      return [];
+    }
+    const edges: Array<{ from: string; to: string }> = [];
+    const wikilinkRe = /\[\[([^\]]+)\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = wikilinkRe.exec(content)) !== null) {
+      const target = m[1].trim();
+      const toPath = nameToPath.get(target);
+      if (toPath) {
+        edges.push({ from: fromPath, to: toPath });
+      }
+    }
+    return edges;
+  }
+
+  // ÌáÈ¡Ò³Ãæ frontmatter µÄ updated ×Ö¶Î¡£¹© healthCheck ÅĞ¶¨¹ıÆÚÓÃ¡£
   async getPageUpdated(rel: string): Promise<string | null> {
     try {
       const content = await this.readFile(rel);

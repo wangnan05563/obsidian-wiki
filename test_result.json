@@ -1,0 +1,157 @@
+[
+  {
+    "test": "Homepage Load",
+    "status": "PASS",
+    "details": "Title: Karpathy AI 知识库"
+  },
+  {
+    "test": "API Health",
+    "status": "PASS",
+    "details": "Status: 200"
+  },
+  {
+    "test": "Nav-dashboard",
+    "status": "PASS",
+    "details": "Page switched"
+  },
+  {
+    "test": "Nav-ingest",
+    "status": "PASS",
+    "details": "Page switched"
+  },
+  {
+    "test": "Nav-browse",
+    "status": "PASS",
+    "details": "Page switched"
+  },
+  {
+    "test": "Nav-query",
+    "status": "PASS",
+    "details": "Page switched"
+  },
+  {
+    "test": "Nav-graph",
+    "status": "PASS",
+    "details": "Page switched"
+  },
+  {
+    "test": "Nav-health",
+    "status": "PASS",
+    "details": "Page switched"
+  },
+  {
+    "test": "Nav-config",
+    "status": "PASS",
+    "details": "Page switched"
+  },
+  {
+    "test": "Element-dashboard-机器人头像",
+    "status": "PASS",
+    "details": "Count: 2"
+  },
+  {
+    "test": "Element-dashboard-导航标题",
+    "status": "PASS",
+    "details": "Count: 6"
+  },
+  {
+    "test": "Element-dashboard-信息卡片",
+    "status": "PASS",
+    "details": "Count: 9"
+  },
+  {
+    "test": "Element-ingest-Element Plus 标签页",
+    "status": "PASS",
+    "details": "Count: 3"
+  },
+  {
+    "test": "Element-browse-浏览树",
+    "status": "PASS",
+    "details": "Count: 39"
+  },
+  {
+    "test": "Element-query-问答输入框",
+    "status": "PASS",
+    "details": "Count: 1"
+  },
+  {
+    "test": "Element-graph-图谱画布",
+    "status": "PASS",
+    "details": "Count: 10"
+  },
+  {
+    "test": "Element-health-体检状态",
+    "status": "PASS",
+    "details": "Count: 4"
+  },
+  {
+    "test": "Element-config-配置标签页",
+    "status": "PASS",
+    "details": "Count: 2"
+  },
+  {
+    "test": "Theme Switch",
+    "status": "PASS",
+    "details": "creative -> enterprise, --bg-scene: #f1f5f9"
+  },
+  {
+    "test": "Query Input",
+    "status": "PASS",
+    "details": "Text entered"
+  },
+  {
+    "test": "Query Submit",
+    "status": "PASS",
+    "details": "Enter pressed"
+  },
+  {
+    "test": "Ingest Tabs",
+    "status": "PASS",
+    "details": "Found 3 tabs"
+  },
+  {
+    "test": "Ingest Text Fill",
+    "status": "PASS",
+    "details": "Text filled"
+  },
+  {
+    "test": "Ingest Submit Btn",
+    "status": "PASS",
+    "details": "Found 1 buttons"
+  },
+  {
+    "test": "Responsive-mobile",
+    "status": "PASS",
+    "details": "375x812"
+  },
+  {
+    "test": "API-/health",
+    "status": "PASS",
+    "details": "Status: 200 (expected 200)"
+  },
+  {
+    "test": "API-/api/stats",
+    "status": "PASS",
+    "details": "Status: 200 (expected 200)"
+  },
+  {
+    "test": "API-/api/config",
+    "status": "PASS",
+    "details": "Status: 200 (expected 200)"
+  },
+  {
+    "test": "API-/api/files/tree",
+    "status": "PASS",
+    "details": "Status: 200 (expected 200)"
+  },
+  {
+    "test": "API-/api/graph",
+    "status": "PASS",
+    "details": "Status: 200 (expected 200)"
+  },
+  {
+    "test": "Console Errors",
+    "status": "PASS",
+    "details": "No console errors"
+  }
+]
