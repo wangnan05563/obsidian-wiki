@@ -1,0 +1,21 @@
+# EditorConfig is awesome: https://EditorConfig.org
+# 顶层强制：所有文本文件必须 UTF-8，避免 Vite 加载时按 UTF-8 解析 GBK 内容导致浏览器乱码
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = false
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.bat]
+end_of_line = crlf
+
+[*.ps1]
+end_of_line = crlf

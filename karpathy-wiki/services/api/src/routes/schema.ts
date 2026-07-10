@@ -49,7 +49,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
   app.put('/api/schema', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { content?: string };
     if (!body || typeof body.content !== 'string') {
-      return reply.code(400).send({ error: 'ÇëÇóÌåĞëº¬ content ×Ö¶Î' });
+      return reply.code(400).send({ error: 'è¯·æ±‚ä½“é¡»å« content å­—æ®µ' });
     }
     try {
       const full = path.resolve(vault.getVaultPath(), 'SCHEMA.md');
@@ -86,7 +86,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
   app.get('/api/schema/diff', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { from?: string; to?: string };
     if (!query.from) {
-      return reply.code(400).send({ error: 'È±ÉÙ from ²ÎÊı' });
+      return reply.code(400).send({ error: 'ç¼ºå°‘ from å‚æ•°' });
     }
 
     const vaultPath = vault.getVaultPath();
@@ -105,7 +105,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
 
     for (const line of diff.split('\n')) {
       if (line.startsWith('@@')) {
-        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/); // NOSONAR: µ¥´ÎÆ¥ÅäÈ¡ @@ ĞĞºÅ£¬match ·µ»ØÊı×é¸üÊÊºÏ´Ë³¡¾°
+        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/); // NOSONAR: å•æ¬¡åŒ¹é…å– @@ è¡Œå·ï¼Œmatch è¿”å›æ•°ç»„æ›´é€‚åˆæ­¤åœºæ™¯
         if (match) {
           oldLine = Number.parseInt(match[1], 10);
           newLine = Number.parseInt(match[2], 10);

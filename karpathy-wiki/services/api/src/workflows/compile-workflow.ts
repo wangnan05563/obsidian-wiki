@@ -9,36 +9,36 @@ import type { CompileInput, ProgressEvent } from '../types.js';
 import { RunLogger } from '../run-logger.js';
 import { CompileCache } from '../compile-cache.js';
 
-// ¡ì12.3-6£ºcompile ÖĞÍ¾Ê§°ÜÊ±£¬¸øÒÑÉú³ÉµÄÒ³Ãæ±ê¼Ç status: draft¡£
-// ¾ö²ß²»»Ø¹ö¡ª¡ªLLM ±àÒë³É±¾¸ß£¨token ÒÑÏûºÄ£©£¬°ë³ÉÆ·±£Áô¹©ÓÃ»§¾ö²ß¡£
+// Â§12.3-6ï¼šcompile ä¸­é€”å¤±è´¥æ—¶ï¼Œç»™å·²ç”Ÿæˆçš„é¡µé¢æ ‡è®° status: draftã€‚
+// å†³ç­–ä¸å›æ»šâ€”â€”LLM ç¼–è¯‘æˆæœ¬é«˜ï¼ˆtoken å·²æ¶ˆè€—ï¼‰ï¼ŒåŠæˆå“ä¿ç•™ä¾›ç”¨æˆ·å†³ç­–ã€‚
 async function markPagesAsDraft(vault: VaultService, pagePaths: string[]): Promise<void> {
   for (const rel of pagePaths) {
     try {
       const raw = await vault.readFile(rel);
       const parsed = matter(raw);
-      // ÒÑÓĞ status ×Ö¶ÎÔò²»¸²¸Ç£¬½ö²¹³äÈ±Ê§µÄ
+      // å·²æœ‰ status å­—æ®µåˆ™ä¸è¦†ç›–ï¼Œä»…è¡¥å……ç¼ºå¤±çš„
       if (!parsed.data.status) {
         parsed.data.status = 'draft';
         const updated = matter.stringify(parsed.content, parsed.data);
         await vault.writeFile(rel, updated);
       }
     } catch {
-      // Ò³Ãæ¿ÉÄÜĞ´ÈëÊ§°Ü¾Í²»´æÔÚ£¬Ìø¹ı
+      // é¡µé¢å¯èƒ½å†™å…¥å¤±è´¥å°±ä¸å­˜åœ¨ï¼Œè·³è¿‡
     }
   }
 }
 
-// ¼ÓÔØ compile prompt µ¥µã´æ´¢¡£Skill Óë harness ¹²ÒıÓÃ£¬±£Ö¤Á½½×¶ÎµÈ¼Û£¨M-3£©¡£
+// åŠ è½½ compile prompt å•ç‚¹å­˜å‚¨ã€‚Skill ä¸ harness å…±å¼•ç”¨ï¼Œä¿è¯ä¸¤é˜¶æ®µç­‰ä»·ï¼ˆM-3ï¼‰ã€‚
 declare const __dirname: string;
 async function loadCompilePrompt(): Promise<string> {
-  const here = typeof __dirname !== 'undefined' // NOSONAR: __dirname Îª declare const£¬ESM ÏÂ¿ÉÄÜÎ´ÉùÃ÷£¬Ğè typeof ÊØÎÀ
+  const here = typeof __dirname !== 'undefined' // NOSONAR: __dirname ä¸º declare constï¼ŒESM ä¸‹å¯èƒ½æœªå£°æ˜ï¼Œéœ€ typeof å®ˆå«
     ? __dirname
     : path.dirname(fileURLToPath(import.meta.url));
   const promptPath = path.resolve(here, '..', 'prompts', 'compile.md');
   return fs.readFile(promptPath, 'utf8');
 }
 
-// JSON Schema ¼òĞ´£ºËùÓĞ¹¤¾ß²ÎÊı¾ùÎª¶ÔÏó£¬±ÜÃâÖØ¸´Ñù°å¡£
+// JSON Schema ç®€å†™ï¼šæ‰€æœ‰å·¥å…·å‚æ•°å‡ä¸ºå¯¹è±¡ï¼Œé¿å…é‡å¤æ ·æ¿ã€‚
 function objSchema(properties: Record<string, unknown>, required: string[]) {
   return {
     type: 'object',
@@ -47,15 +47,15 @@ function objSchema(properties: Record<string, unknown>, required: string[]) {
   } as const;
 }
 
-// compile ¹¤×÷Á÷µÄ¹¤¾ß¼¯¡£ÕâĞ©¹¤¾ßÊÇ LLM Î¨Ò»¿ÉÓÃµÄ¶ÁĞ´³ö¿Ú£¬
-// Í¨¹ı°×Ãûµ¥Ğ£ÑéÔÚ VaultService ÄÚ²¿±£Ö¤ AI Ğ´Èë±ß½ç£¨10.4 Ğ´ÈëÔ¼Êø£©¡£
+// compile å·¥ä½œæµçš„å·¥å…·é›†ã€‚è¿™äº›å·¥å…·æ˜¯ LLM å”¯ä¸€å¯ç”¨çš„è¯»å†™å‡ºå£ï¼Œ
+// é€šè¿‡ç™½åå•æ ¡éªŒåœ¨ VaultService å†…éƒ¨ä¿è¯ AI å†™å…¥è¾¹ç•Œï¼ˆ10.4 å†™å…¥çº¦æŸï¼‰ã€‚
 export function createCompileTools(vault: VaultService): ToolDefinition[] {
   return [
     {
       name: 'read_file',
-      description: '¶ÁÈ¡ Vault ÖĞµÄÎÄ¼ş£¨Ïà¶ÔÂ·¾¶£¬Èç SCHEMA.md¡¢raw/xxx.md£©',
+      description: 'è¯»å– Vault ä¸­çš„æ–‡ä»¶ï¼ˆç›¸å¯¹è·¯å¾„ï¼Œå¦‚ SCHEMA.mdã€raw/xxx.mdï¼‰',
       parameters: objSchema(
-        { path: { type: 'string', description: 'Vault ÄÚÏà¶ÔÂ·¾¶' } },
+        { path: { type: 'string', description: 'Vault å†…ç›¸å¯¹è·¯å¾„' } },
         ['path'],
       ),
       handler: async (args: unknown) => {
@@ -65,11 +65,11 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'write_file',
-      description: 'Ğ´Èë Wiki Ò³Ãæ£¨º¬ frontmatter£©¡£½öÔÊĞí entities/concepts/comparisons/queries/ Ä¿Â¼¡£',
+      description: 'å†™å…¥ Wiki é¡µé¢ï¼ˆå« frontmatterï¼‰ã€‚ä»…å…è®¸ entities/concepts/comparisons/queries/ ç›®å½•ã€‚',
       parameters: objSchema(
         {
-          path: { type: 'string', description: 'Ò³ÃæÏà¶ÔÂ·¾¶£¬Èç concepts/llm-wiki.md' },
-          content: { type: 'string', description: 'Ò³ÃæÍêÕûÄÚÈİ£¨º¬ frontmatter£©' },
+          path: { type: 'string', description: 'é¡µé¢ç›¸å¯¹è·¯å¾„ï¼Œå¦‚ concepts/llm-wiki.md' },
+          content: { type: 'string', description: 'é¡µé¢å®Œæ•´å†…å®¹ï¼ˆå« frontmatterï¼‰' },
         },
         ['path', 'content'],
       ),
@@ -81,7 +81,7 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'append_index',
-      description: 'Ïò index.md ×·¼ÓÒ»ĞĞÕªÒª£º- [[Ò³ÃæÃû]] ¡ª ÕªÒª',
+      description: 'å‘ index.md è¿½åŠ ä¸€è¡Œæ‘˜è¦ï¼š- [[é¡µé¢å]] â€” æ‘˜è¦',
       parameters: objSchema(
         {
           pageName: { type: 'string' },
@@ -97,7 +97,7 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'append_log',
-      description: 'Ïò log.md ×·¼Ó±àÒë²Ù×÷¼ÇÂ¼',
+      description: 'å‘ log.md è¿½åŠ ç¼–è¯‘æ“ä½œè®°å½•',
       parameters: objSchema(
         {
           files: { type: 'array', items: { type: 'string' } },
@@ -114,8 +114,8 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
   ];
 }
 
-// ¹¤¾ßµ÷ÓÃÃû ¡ú Ç°¶Ë¿É¶Á²½ÖèÃûÓ³Éä¡£
-// ÕâÊÇ½×¶Î2¿ØÖÆÈ¨ÊÕ»ØµÄÌåÏÖ¡ª¡ª½ø¶ÈÓïÒåÓÉÒµÎñ²ã¶¨Òå£¬²»ÒÀÀµ LLM Êä³ö£¨A-5£©¡£
+// å·¥å…·è°ƒç”¨å â†’ å‰ç«¯å¯è¯»æ­¥éª¤åæ˜ å°„ã€‚
+// è¿™æ˜¯é˜¶æ®µ2æ§åˆ¶æƒæ”¶å›çš„ä½“ç°â€”â€”è¿›åº¦è¯­ä¹‰ç”±ä¸šåŠ¡å±‚å®šä¹‰ï¼Œä¸ä¾èµ– LLM è¾“å‡ºï¼ˆA-5ï¼‰ã€‚
 const TOOL_STEP_MAP: Record<string, string> = {
   read_file: 'extract',
   write_file: 'generate_page',
@@ -123,18 +123,18 @@ const TOOL_STEP_MAP: Record<string, string> = {
   append_log: 'update_log',
 };
 
-// Ö´ĞĞ compile£¬·µ»Ø AsyncIterable<ProgressEvent>¡£
-// harness.run ÊÇ·ÇÁ÷Ê½ Promise<RunResult>£¬ÓÃ afterStep Hook °ÑÃ¿²½ÊÂ¼şÍÆÈë¶ÓÁĞ£¬
-// AsyncGenerator ´Ó¶ÓÁĞ yield ³öÈ¥£¬ÊµÏÖ"·ÇÁ÷Ê½ÒıÇæ ¡ú Á÷Ê½½Ó¿Ú"µÄÇÅ½Ó£¨M-1£©¡£
+// æ‰§è¡Œ compileï¼Œè¿”å› AsyncIterable<ProgressEvent>ã€‚
+// harness.run æ˜¯éæµå¼ Promise<RunResult>ï¼Œç”¨ afterStep Hook æŠŠæ¯æ­¥äº‹ä»¶æ¨å…¥é˜Ÿåˆ—ï¼Œ
+// AsyncGenerator ä»é˜Ÿåˆ— yield å‡ºå»ï¼Œå®ç°"éæµå¼å¼•æ“ â†’ æµå¼æ¥å£"çš„æ¡¥æ¥ï¼ˆM-1ï¼‰ã€‚
 //
-// ÕâÀï½ÓÊÜ harnessConfig ¶ø·ÇÒÑ¹¹ÔìµÄ harness ÊµÀı£¬ÊÇÒòÎª hooks ÔÚ harness ¹¹ÔìÊ±°ó¶¨£¬
-// ±ØĞëÔÚ±¾¹¤×÷Á÷ÄÚ²¿¹¹Ôì harness ²ÅÄÜ×¢Èë afterStep hook ÍÆËÍ½ø¶ÈÊÂ¼ş¡£
+// è¿™é‡Œæ¥å— harnessConfig è€Œéå·²æ„é€ çš„ harness å®ä¾‹ï¼Œæ˜¯å› ä¸º hooks åœ¨ harness æ„é€ æ—¶ç»‘å®šï¼Œ
+// å¿…é¡»åœ¨æœ¬å·¥ä½œæµå†…éƒ¨æ„é€  harness æ‰èƒ½æ³¨å…¥ afterStep hook æ¨é€è¿›åº¦äº‹ä»¶ã€‚
 export async function* compileWorkflow(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   input: CompileInput,
 ): AsyncIterable<ProgressEvent> {
-  // 1. ´æµµÔ­Ê¼×ÊÁÏµ½ raw/¡£file ÀàĞÍ¶ÁÈ¡±¾µØÎÄ¼ş£¬url/text Ö±½Ó´æµµ×Ö·û´®¡£
+  // 1. å­˜æ¡£åŸå§‹èµ„æ–™åˆ° raw/ã€‚file ç±»å‹è¯»å–æœ¬åœ°æ–‡ä»¶ï¼Œurl/text ç›´æ¥å­˜æ¡£å­—ç¬¦ä¸²ã€‚
   let rawContent: string;
   let rawFilename: string;
   if (input.type === 'file') {
@@ -145,9 +145,9 @@ export async function* compileWorkflow(
     rawFilename = input.rawPath ? path.basename(input.rawPath) : `input-${Date.now()}.md`;
   }
   const rawPath = await vault.archiveRaw(rawFilename, rawContent);
-  yield { step: 'archive', status: 'done', message: `Ô­Ê¼×ÊÁÏÒÑ´æµµ: ${rawPath}`, data: { path: rawPath } };
+  yield { step: 'archive', status: 'done', message: `åŸå§‹èµ„æ–™å·²å­˜æ¡£: ${rawPath}`, data: { path: rawPath } };
 
-  // ¡ì11.2 ÔöÁ¿±àÒë£ºÄÚÈİ¹şÏ£ÃüÖĞ»º´æÊ±Ìø¹ı±àÒë£¬±ÜÃâÖØ¸´ÏûºÄ token¡£
+  // Â§11.2 å¢é‡ç¼–è¯‘ï¼šå†…å®¹å“ˆå¸Œå‘½ä¸­ç¼“å­˜æ—¶è·³è¿‡ç¼–è¯‘ï¼Œé¿å…é‡å¤æ¶ˆè€— tokenã€‚
   const cacheFile = path.join(vault.getVaultPath(), '..', '.harness', 'compile-cache.json');
   const cache = new CompileCache(cacheFile);
   const cached = await cache.lookup(rawContent);
@@ -155,29 +155,29 @@ export async function* compileWorkflow(
     yield {
       step: 'done',
       status: 'done',
-      message: `ÄÚÈİÒÑ±àÒë¹ı£¨»º´æÃüÖĞ£©£¬Ìø¹ı¡£¶ÔÓ¦Ô­Ê¼×ÊÁÏ: ${cached}`,
+      message: `å†…å®¹å·²ç¼–è¯‘è¿‡ï¼ˆç¼“å­˜å‘½ä¸­ï¼‰ï¼Œè·³è¿‡ã€‚å¯¹åº”åŸå§‹èµ„æ–™: ${cached}`,
       data: { path: rawPath, cached: true },
     };
     return;
   }
 
-  // 2. ¶ÁÈ¡ SCHEMA.md£¨Ç¿ÖÆ£¬²»½» LLM ¾ö²ß£¬×÷Îª beforeLoop µÈ¼Û¶µµ×£©
+  // 2. è¯»å– SCHEMA.mdï¼ˆå¼ºåˆ¶ï¼Œä¸äº¤ LLM å†³ç­–ï¼Œä½œä¸º beforeLoop ç­‰ä»·å…œåº•ï¼‰
   const schema = await vault.readFile('SCHEMA.md');
-  yield { step: 'read_schema', status: 'done', message: 'ÒÑ¶ÁÈ¡ SCHEMA.md' };
+  yield { step: 'read_schema', status: 'done', message: 'å·²è¯»å– SCHEMA.md' };
 
-  // 3. ¹¹Ôì prompt£º±àÒëÖ¸Áî + SCHEMA + Ô­Ê¼×ÊÁÏÎ»ÖÃ
+  // 3. æ„é€  promptï¼šç¼–è¯‘æŒ‡ä»¤ + SCHEMA + åŸå§‹èµ„æ–™ä½ç½®
   const promptTemplate = await loadCompilePrompt();
   const task = `${promptTemplate}
 
-## SCHEMA.md ÄÚÈİ
+## SCHEMA.md å†…å®¹
 ${schema}
 
-## Ô­Ê¼×ÊÁÏ
-×ÊÁÏÒÑ´æµµÓÚ Vault ÄÚ ${rawPath}£¬ÇëÊ¹ÓÃ read_file ¹¤¾ß¶ÁÈ¡ÆäÄÚÈİºó±àÒë¡£
-Ô­Ê¼×ÊÁÏÀàĞÍ: ${input.type}
+## åŸå§‹èµ„æ–™
+èµ„æ–™å·²å­˜æ¡£äº Vault å†… ${rawPath}ï¼Œè¯·ä½¿ç”¨ read_file å·¥å…·è¯»å–å…¶å†…å®¹åç¼–è¯‘ã€‚
+åŸå§‹èµ„æ–™ç±»å‹: ${input.type}
 `;
 
-  // 5. ÇÅ½Ó harness µ½ÊÂ¼şÁ÷£ºcompile ºÍ resume ¹²ÓÃ´ËÂß¼­£¨¡ì11.2£©
+  // 5. æ¡¥æ¥ harness åˆ°äº‹ä»¶æµï¼šcompile å’Œ resume å…±ç”¨æ­¤é€»è¾‘ï¼ˆÂ§11.2ï¼‰
   yield* bridgeHarnessToEvents(
     harnessConfig,
     vault,
@@ -188,9 +188,9 @@ ${schema}
   );
 }
 
-// Í¨ÓÃ harness ÊÂ¼şÇÅ½Ó£º¹¹Ôì afterStep hook ¡ú ÊÂ¼ş¶ÓÁĞ ¡ú AsyncGenerator yield¡£
-// compileWorkflow ´«Èë harness.run£¬resumeCompileWorkflow ´«Èë harness.resume£¬
-// Á½Õß¹²ÏíÏàÍ¬µÄÊÂ¼şÍÆËÍ¡¢draft ±ê¼Ç¡¢ÈÕÖ¾Ë«Ğ´Âß¼­£¬±ÜÃâ±Õ°üÖØ½¨´úÂëÖØ¸´¡£
+// é€šç”¨ harness äº‹ä»¶æ¡¥æ¥ï¼šæ„é€  afterStep hook â†’ äº‹ä»¶é˜Ÿåˆ— â†’ AsyncGenerator yieldã€‚
+// compileWorkflow ä¼ å…¥ harness.runï¼ŒresumeCompileWorkflow ä¼ å…¥ harness.resumeï¼Œ
+// ä¸¤è€…å…±äº«ç›¸åŒçš„äº‹ä»¶æ¨é€ã€draft æ ‡è®°ã€æ—¥å¿—åŒå†™é€»è¾‘ï¼Œé¿å…é—­åŒ…é‡å»ºä»£ç é‡å¤ã€‚
 async function* bridgeHarnessToEvents(
   harnessConfig: HarnessConfig,
   vault: VaultService,
@@ -199,15 +199,15 @@ async function* bridgeHarnessToEvents(
   cache: CompileCache | null,
   rawContent: string | null,
 ): AsyncIterable<ProgressEvent> {
-  // ÊÂ¼ş¶ÓÁĞ£ºafterStep hook ÍÆÈë£¬AsyncGenerator yield ³öÈ¥¡£
-  // finished ±êÖ¾±ÜÃâ generator ÌáÇ°ÍË³öÊ± harness ÈÔÔÚĞ´¶ÓÁĞµ¼ÖÂÊÂ¼ş¶ªÊ§¡£
+  // äº‹ä»¶é˜Ÿåˆ—ï¼šafterStep hook æ¨å…¥ï¼ŒAsyncGenerator yield å‡ºå»ã€‚
+  // finished æ ‡å¿—é¿å… generator æå‰é€€å‡ºæ—¶ harness ä»åœ¨å†™é˜Ÿåˆ—å¯¼è‡´äº‹ä»¶ä¸¢å¤±ã€‚
   const queue: ProgressEvent[] = [];
   let resolveWaiter: (() => void) | null = null;
   let finished = false;
-  // ¡ì12.3-8£ºharness ÔËĞĞÈÕÖ¾Ë«Ğ´¡£logger ÊµÀıËæÃ¿´Î±àÒë´´½¨£¬ÈÕÖ¾Ä¿Â¼Óë vault Í¬¼¶¡£
+  // Â§12.3-8ï¼šharness è¿è¡Œæ—¥å¿—åŒå†™ã€‚logger å®ä¾‹éšæ¯æ¬¡ç¼–è¯‘åˆ›å»ºï¼Œæ—¥å¿—ç›®å½•ä¸ vault åŒçº§ã€‚
   const logger = new RunLogger(path.join(vault.getVaultPath(), '..', '.harness', 'logs'));
   let currentRunId = '';
-  // ¡ì12.3-6£º¸ú×Ù±¾´ÎÉú³ÉµÄÒ³ÃæÂ·¾¶£¬Ê§°ÜÊ±±ê¼Ç draft
+  // Â§12.3-6ï¼šè·Ÿè¸ªæœ¬æ¬¡ç”Ÿæˆçš„é¡µé¢è·¯å¾„ï¼Œå¤±è´¥æ—¶æ ‡è®° draft
   const generatedPages: string[] = [];
 
   const pushEvent = (ev: ProgressEvent) => {
@@ -219,15 +219,15 @@ async function* bridgeHarnessToEvents(
     }
   };
 
-  // ¹¹Ôì harness£¬×¢Èë afterStep hook¡£
-  // hook ¸ù¾İ¹¤¾ßµ÷ÓÃÃûÓ³ÉäÎªÇ°¶Ë¿É¶Á²½Öè£¬ÍÆÈëÊÂ¼ş¶ÓÁĞ£¬Í¬Ê±Ğ´ÈëÔËĞĞÈÕÖ¾¡£
+  // æ„é€  harnessï¼Œæ³¨å…¥ afterStep hookã€‚
+  // hook æ ¹æ®å·¥å…·è°ƒç”¨åæ˜ å°„ä¸ºå‰ç«¯å¯è¯»æ­¥éª¤ï¼Œæ¨å…¥äº‹ä»¶é˜Ÿåˆ—ï¼ŒåŒæ—¶å†™å…¥è¿è¡Œæ—¥å¿—ã€‚
   const harness = new Harness({
     ...harnessConfig,
     tools: createCompileTools(vault),
     hooks: {
       afterStep: async (ctx, step, result: StepResult) => {
         currentRunId = ctx.runId;
-        // result.toolCalls ÊÇ LLM ÔÚ±¾²½ÇëÇóµÄ¹¤¾ßµ÷ÓÃÁĞ±í
+        // result.toolCalls æ˜¯ LLM åœ¨æœ¬æ­¥è¯·æ±‚çš„å·¥å…·è°ƒç”¨åˆ—è¡¨
         for (const call of result.toolCalls) {
           const toolName = call.function.name;
           const stepName = TOOL_STEP_MAP[toolName] ?? toolName;
@@ -235,22 +235,22 @@ async function* bridgeHarnessToEvents(
           try {
             parsedArgs = JSON.parse(call.function.arguments) as { path?: string; pageName?: string };
           } catch {
-            // LLM Å¼·¢·µ»Ø·ÇºÏ·¨ JSON£¬ºöÂÔ½âÎö´íÎóÈÔÍÆËÍÊÂ¼ş
+            // LLM å¶å‘è¿”å›éåˆæ³• JSONï¼Œå¿½ç•¥è§£æé”™è¯¯ä»æ¨é€äº‹ä»¶
           }
           pushEvent({
             step: stepName,
             status: 'done',
-            message: `²½Öè ${step}: ${toolName}`,
+            message: `æ­¥éª¤ ${step}: ${toolName}`,
             data: {
               path: parsedArgs.path,
               title: parsedArgs.pageName,
             },
           });
-          // ¡ì12.3-6£ºÊÕ¼¯ write_file Éú³ÉµÄÒ³ÃæÂ·¾¶£¬ÓÃÓÚÊ§°ÜÊ±±ê¼Ç draft
+          // Â§12.3-6ï¼šæ”¶é›† write_file ç”Ÿæˆçš„é¡µé¢è·¯å¾„ï¼Œç”¨äºå¤±è´¥æ—¶æ ‡è®° draft
           if (toolName === 'write_file' && parsedArgs.path) {
             generatedPages.push(parsedArgs.path);
           }
-          // ¡ì12.3-8£º¼ÇÂ¼¼¼ÊõÈÕÖ¾£¨º¬ token ÏûºÄ£¬¹©ÊÂºóĞÔÄÜ·ÖÎö£©
+          // Â§12.3-8ï¼šè®°å½•æŠ€æœ¯æ—¥å¿—ï¼ˆå« token æ¶ˆè€—ï¼Œä¾›äº‹åæ€§èƒ½åˆ†æï¼‰
           await logger.log({
             ts: new Date().toISOString(),
             runId: ctx.runId,
@@ -265,7 +265,7 @@ async function* bridgeHarnessToEvents(
     },
   });
 
-  // Æô¶¯ harness£¨run »ò resume£©£¬Íê³Éºó push done ÊÂ¼ş + ¼ÇÂ¼ÖÕÌ¬ÈÕÖ¾
+  // å¯åŠ¨ harnessï¼ˆrun æˆ– resumeï¼‰ï¼Œå®Œæˆå push done äº‹ä»¶ + è®°å½•ç»ˆæ€æ—¥å¿—
   const runPromise = runFn(harness)
     .then(async (result) => {
       const isError = result.status === 'failed';
@@ -273,15 +273,15 @@ async function* bridgeHarnessToEvents(
         step: 'done',
         status: isError ? 'error' : 'done',
         message: isError
-          ? `±àÒëÊ§°Ü: ${result.finalContent || 'Î´Öª´íÎó'}`
-          : `±àÒëÍê³É£¬¹² ${result.step} ²½`,
+          ? `ç¼–è¯‘å¤±è´¥: ${result.finalContent || 'æœªçŸ¥é”™è¯¯'}`
+          : `ç¼–è¯‘å®Œæˆï¼Œå…± ${result.step} æ­¥`,
         data: { path: rawPath || undefined },
       });
-      // ¡ì12.3-6£ºÊ§°ÜÊ±¸øÒÑÉú³ÉÒ³Ãæ±ê¼Ç draft£¬±£Áô°ë³ÉÆ·¹©ÓÃ»§¾ö²ß
+      // Â§12.3-6ï¼šå¤±è´¥æ—¶ç»™å·²ç”Ÿæˆé¡µé¢æ ‡è®° draftï¼Œä¿ç•™åŠæˆå“ä¾›ç”¨æˆ·å†³ç­–
       if (isError && generatedPages.length > 0) {
         await markPagesAsDraft(vault, generatedPages);
       }
-      // ¡ì11.2£º±àÒë³É¹¦ºó¼ÇÂ¼»º´æ£¬ÏÂ´ÎÏàÍ¬ÄÚÈİÌø¹ı£¨resume Ê±²»¼ÇÂ¼£¬±ÜÃâ¸²¸Ç£©
+      // Â§11.2ï¼šç¼–è¯‘æˆåŠŸåè®°å½•ç¼“å­˜ï¼Œä¸‹æ¬¡ç›¸åŒå†…å®¹è·³è¿‡ï¼ˆresume æ—¶ä¸è®°å½•ï¼Œé¿å…è¦†ç›–ï¼‰
       if (!isError && cache && rawContent) {
         await cache.record(rawContent, rawPath);
       }
@@ -291,7 +291,7 @@ async function* bridgeHarnessToEvents(
         step: result.step,
         event: isError ? 'error' : 'done',
         tokenUsed: result.tokenUsed,
-        message: isError ? `±àÒëÊ§°Ü: ${result.finalContent || 'Î´Öª´íÎó'}` : `±àÒëÍê³É£¬¹² ${result.step} ²½`,
+        message: isError ? `ç¼–è¯‘å¤±è´¥: ${result.finalContent || 'æœªçŸ¥é”™è¯¯'}` : `ç¼–è¯‘å®Œæˆï¼Œå…± ${result.step} æ­¥`,
         error: isError ? result.finalContent : undefined,
       });
     })
@@ -300,20 +300,20 @@ async function* bridgeHarnessToEvents(
       pushEvent({
         step: 'done',
         status: 'error',
-        message: `±àÒëÊ§°Ü: ${errMsg}`,
+        message: `ç¼–è¯‘å¤±è´¥: ${errMsg}`,
       });
-      // ¡ì12.3-6£ºÒì³£·ÖÖ§Í¬Ñù±ê¼Ç draft
+      // Â§12.3-6ï¼šå¼‚å¸¸åˆ†æ”¯åŒæ ·æ ‡è®° draft
       if (generatedPages.length > 0) {
         await markPagesAsDraft(vault, generatedPages);
       }
-      // catch ·ÖÖ§ÎŞ result.runId£¬ÓÃ currentRunId ¶µµ×£¨afterStep ¿ÉÄÜÒÑÉèÖÃ£©
+      // catch åˆ†æ”¯æ—  result.runIdï¼Œç”¨ currentRunId å…œåº•ï¼ˆafterStep å¯èƒ½å·²è®¾ç½®ï¼‰
       if (currentRunId) {
         await logger.log({
           ts: new Date().toISOString(),
           runId: currentRunId,
           step: -1,
           event: 'error',
-          message: `±àÒëÒì³£: ${errMsg}`,
+          message: `ç¼–è¯‘å¼‚å¸¸: ${errMsg}`,
           error: errMsg,
         });
       }
@@ -327,7 +327,7 @@ async function* bridgeHarnessToEvents(
       }
     });
 
-  // yield ¶ÓÁĞÖĞµÄÊÂ¼ş£¬Ö±µ½ finished ÇÒ¶ÓÁĞ¿Õ
+  // yield é˜Ÿåˆ—ä¸­çš„äº‹ä»¶ï¼Œç›´åˆ° finished ä¸”é˜Ÿåˆ—ç©º
   while (!finished || queue.length > 0) {
     if (queue.length === 0) {
       await new Promise<void>((resolve) => {
@@ -343,17 +343,17 @@ async function* bridgeHarnessToEvents(
   await runPromise;
 }
 
-// ¡ì11.2 ¶ÏµãĞø´«£º´ÓÖĞ¶Ïµã»Ö¸´±àÒë¡£
-// harness.resume ´Ó FileStateStore ¼ÓÔØ messages/step/tokenUsed£¬¼ÌĞøÎ´Íê³ÉµÄÑ­»·¡£
-// afterStep hook ÖØĞÂ°ó¶¨¡ª¡ªgeneratedPages ´Ó¿Õ¿ªÊ¼£¨Ö®Ç°µÄÒ³ÃæÒÑÔÚ vault ÖĞ£©£¬
-// ÊÂ¼ş¶ÓÁĞÖØĞÂ´´½¨£¬logger ÒÔ append Ä£Ê½¼ÌĞøĞ´ÈëÍ¬Ò»¸ö {runId}.log ÎÄ¼ş¡£
-// ²»¼ÇÂ¼»º´æ£¨rawContent ÎŞ·¨´Ó state »Ö¸´£©£¬²»ÖØĞÂ´æµµÔ­Ê¼×ÊÁÏ¡£
+// Â§11.2 æ–­ç‚¹ç»­ä¼ ï¼šä»ä¸­æ–­ç‚¹æ¢å¤ç¼–è¯‘ã€‚
+// harness.resume ä» FileStateStore åŠ è½½ messages/step/tokenUsedï¼Œç»§ç»­æœªå®Œæˆçš„å¾ªç¯ã€‚
+// afterStep hook é‡æ–°ç»‘å®šâ€”â€”generatedPages ä»ç©ºå¼€å§‹ï¼ˆä¹‹å‰çš„é¡µé¢å·²åœ¨ vault ä¸­ï¼‰ï¼Œ
+// äº‹ä»¶é˜Ÿåˆ—é‡æ–°åˆ›å»ºï¼Œlogger ä»¥ append æ¨¡å¼ç»§ç»­å†™å…¥åŒä¸€ä¸ª {runId}.log æ–‡ä»¶ã€‚
+// ä¸è®°å½•ç¼“å­˜ï¼ˆrawContent æ— æ³•ä» state æ¢å¤ï¼‰ï¼Œä¸é‡æ–°å­˜æ¡£åŸå§‹èµ„æ–™ã€‚
 export async function* resumeCompileWorkflow(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   runId: string,
 ): AsyncIterable<ProgressEvent> {
-  yield { step: 'archive', status: 'done', message: `ÕıÔÚ»Ö¸´±àÒëÈÎÎñ: ${runId.slice(0, 8)}` };
+  yield { step: 'archive', status: 'done', message: `æ­£åœ¨æ¢å¤ç¼–è¯‘ä»»åŠ¡: ${runId.slice(0, 8)}` };
 
   yield* bridgeHarnessToEvents(
     harnessConfig,

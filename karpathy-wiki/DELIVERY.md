@@ -1,7 +1,7 @@
 # 交付文档 — Karpathy AI + Obsidian 知识库
 
-> 版本：阶段1 + 阶段2 + 阶段3 完整交付  
-> 日期：2026-07-08  
+> 版本：阶段1 + 阶段2 + 阶段3 + 内网穿透模块 完整交付  
+> 日期：2026-07-10  
 > 设计基线：《Karpathy-AI+Obsidian知识库概要设计说明书》V1.3
 
 ---
@@ -20,7 +20,7 @@
 ┌─────────────────────────────────────────────┐
 │                  前端 (Vue 3)                │
 │   仪表盘 / 投递 / 进度 / 浏览 / 问答 /        │
-│   图谱 / 体检 / 配置                         │
+│   图谱 / 体检 / 配置 / 内网穿透              │
 └──────────────────┬──────────────────────────┘
                    │ HTTP + SSE
 ┌──────────────────┴──────────────────────────┐
@@ -273,15 +273,15 @@ API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落
 
 | 字段 | 热加载 | 需重启 |
 |------|--------|--------|
-| `llm.model` | ✅ | |
-| `budget.maxSteps` | ✅ | |
-| `budget.tokenBudget` | ✅ | |
-| `healthCheck.staleDays` | ✅ | |
-| `adapter` | | ✅ |
-| `vaultPath` | | ✅ |
-| `server` | | ✅ |
-| `llm.provider` | | ✅ |
-| `llm.baseUrl` | | ✅ |
+| `llm.model` | ? | |
+| `budget.maxSteps` | ? | |
+| `budget.tokenBudget` | ? | |
+| `healthCheck.staleDays` | ? | |
+| `adapter` | | ? |
+| `vaultPath` | | ? |
+| `server` | | ? |
+| `llm.provider` | | ? |
+| `llm.baseUrl` | | ? |
 
 ### 8.4 运行时数据
 
@@ -297,35 +297,35 @@ API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落
 
 ### 阶段1 验证
 
-- ✅ tsc + vue-tsc 类型检查 exit 0
-- ✅ 8 个前端模块渲染正常，8 tab 路由切换正常
-- ✅ 7 个 API 返回 200（仅 favicon 404）
-- ✅ DeepSeek compile：28s，5 步，生成 4 个结构化页面（含 frontmatter + 双向链接）
-- ✅ DeepSeek query：SSE 流式，5 个 answer chunk + refs + done
+- ? tsc + vue-tsc 类型检查 exit 0
+- ? 8 个前端模块渲染正常，8 tab 路由切换正常
+- ? 7 个 API 返回 200（仅 favicon 404）
+- ? DeepSeek compile：28s，5 步，生成 4 个结构化页面（含 frontmatter + 双向链接）
+- ? DeepSeek query：SSE 流式，5 个 answer chunk + refs + done
 
 ### 阶段2 验证
 
-- ✅ tsc + vue-tsc 类型检查 exit 0
-- ✅ `POST /api/config/reload`：返回 applied + requireRestart
-- ✅ `POST /api/health-check`：并行扫描返回 1 孤立页 + 7 断链
-- ✅ `GET /api/compile/runs`：返回 3 个历史 run，按时间倒序
-- ✅ `GET /api/compile/runs/:runId/log`：返回 12 条 JSONL 日志
-- ✅ 增量编译缓存：同内容第二次 compile 28s → 1.4s（缓存命中）
-- ✅ `POST /api/compile/resume/:runId`：SSE 流式恢复编译
+- ? tsc + vue-tsc 类型检查 exit 0
+- ? `POST /api/config/reload`：返回 applied + requireRestart
+- ? `POST /api/health-check`：并行扫描返回 1 孤立页 + 7 断链
+- ? `GET /api/compile/runs`：返回 3 个历史 run，按时间倒序
+- ? `GET /api/compile/runs/:runId/log`：返回 12 条 JSONL 日志
+- ? 增量编译缓存：同内容第二次 compile 28s → 1.4s（缓存命中）
+- ? `POST /api/compile/resume/:runId`：SSE 流式恢复编译
 
 ### 阶段3 验证
 
-- ✅ tsc + vue-tsc 类型检查 exit 0（后端 + 前端均无错误）
-- ✅ `GET /api/search?q=moe`：返回 2 条搜索结果（dense-model.md + mixture-of-experts.md）
-- ✅ `GET /api/schema/history`：返回 1 条 Git 提交记录，gitEnabled: true
-- ✅ `POST /api/vault/init`：Vault 目录初始化正常
-- ✅ Health.vue 修复按钮 + SSE 进度日志面板
-- ✅ Browse.vue 搜索框 + 搜索结果列表
-- ✅ Query.vue 归档按钮（done 事件携带 sessionId + messageIndex）
-- ✅ Config.vue 版本历史列表 + diff 对比渲染
-- ✅ Dashboard.vue 空状态引导 + Vault 初始化按钮
-- ✅ Graph.vue §12.3-2 三级阈值降级 + §12.3-3 响应式列表视图（vue-tsc exit 0）
-- ✅ §12.3-4 MCP Server 接口详细协议落地（设计文档 §12.4，V1.3 跳过阶段1故暂不实施，保留扩展点）
+- ? tsc + vue-tsc 类型检查 exit 0（后端 + 前端均无错误）
+- ? `GET /api/search?q=moe`：返回 2 条搜索结果（dense-model.md + mixture-of-experts.md）
+- ? `GET /api/schema/history`：返回 1 条 Git 提交记录，gitEnabled: true
+- ? `POST /api/vault/init`：Vault 目录初始化正常
+- ? Health.vue 修复按钮 + SSE 进度日志面板
+- ? Browse.vue 搜索框 + 搜索结果列表
+- ? Query.vue 归档按钮（done 事件携带 sessionId + messageIndex）
+- ? Config.vue 版本历史列表 + diff 对比渲染
+- ? Dashboard.vue 空状态引导 + Vault 初始化按钮
+- ? Graph.vue §12.3-2 三级阈值降级 + §12.3-3 响应式列表视图（vue-tsc exit 0）
+- ? §12.3-4 MCP Server 接口详细协议落地（设计文档 §12.4，V1.3 跳过阶段1故暂不实施，保留扩展点）
 
 ---
 
@@ -347,3 +347,187 @@ API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落
 | §5.1 搜索工具复用 | search-util.ts 共享 | /api/search 路由与 query 工具共用搜索逻辑 |
 | §6.X Git 版本控制 | execFile + 优雅降级 | vault 非 git 仓库时返回 gitEnabled:false，不报错 |
 | §6.9 演示模式 | POST /api/vault/init | 初始化标准目录结构，无需预置 demo 数据 |
+
+---
+
+## 11. 内网穿透模块交付清单
+
+> 参考：`D:\code\otherProjects\17_xianyu` 项目内网穿透实现  
+> 日期：2026-07-10
+
+### 11.1 模块概述
+
+新增内网穿透（Tunnel）模块，允许用户将本地知识库服务通过公网隧道暴露给外部访问。支持两种 Provider：
+- **Cloudflare Quick Tunnel**：免注册，下载 cloudflared 二进制即可使用
+- **cpolar**：国内推荐，需配置 authtoken，下载 zip 自动解压
+
+### 11.2 后端新增文件
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 隧道服务核心 | `services/api/src/tunnel/tunnel-service.ts` | Provider 抽象基类 + Cloudflare/Cpolar 实现 + 二进制下载 + 子进程管理 |
+| 隧道路由 | `services/api/src/routes/tunnel.ts` | 5 个端点：status/start/stop/config(GET)/config(POST) |
+
+### 11.3 后端修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `services/api/src/types.ts` | 新增 `TunnelConfig` 接口 + `AppConfig.tunnel` 字段 |
+| `services/api/src/config.ts` | 新增 `getConfigPath()` + `defaultConfig().tunnel` + `loadConfig()` 合并 tunnel 段 |
+| `services/api/src/index.ts` | 注册 tunnel 路由 + autoStart 钩子 + SIGINT/SIGTERM 优雅停止 |
+
+### 11.4 新增 API 端点（5 个）
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/tunnel/status` | GET | 查询隧道运行状态（status/publicUrl/provider） |
+| `/api/tunnel/start` | POST | 启动隧道（自动下载二进制，失败返回下载链接） |
+| `/api/tunnel/stop` | POST | 停止隧道 |
+| `/api/tunnel/config` | GET | 读取配置（authtoken 脱敏：末 4 位 + padStart） |
+| `/api/tunnel/config` | POST | 保存配置（落盘 config.json，保留其他段不动） |
+
+### 11.5 前端新增文件
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 内网穿透视图 | `packages/web/src/views/Tunnel.vue` | 状态卡片 + 下载失败指引 + 配置表单 + 使用说明 |
+
+### 11.6 前端修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `packages/web/src/types.ts` | 新增 TunnelStatus / TunnelConfigData / TunnelConfigBody / TunnelDownloadError 类型 |
+| `packages/web/src/App.vue` | 导入 Tunnel.vue + ViewName 添加 'tunnel' + 导航 tab 添加"内网穿透" + 视图切换 |
+
+### 11.7 配置结构
+
+```json
+{
+  "tunnel": {
+    "provider": "cloudflare",
+    "localPort": 3000,
+    "cpolarAuthtoken": "",
+    "binaryPath": "./bin",
+    "autoStart": false
+  }
+}
+```
+
+### 11.8 设计决策
+
+| 决策点 | 选择 | 理由 |
+|--------|------|------|
+| Provider 选型 | Cloudflare + cpolar 双支持 | Cloudflare 免注册国际通用，cpolar 国内速度快 |
+| 二进制下载 | 多镜像源 fallback | 单一源不可用时不阻断，提供手动下载链接 |
+| cpolar 解压 | Windows 内置 tar 命令 | 避免 PowerShell 中文路径编码问题，Win10+ 自带 |
+| 子进程管理 | spawn + windowsHide:true | 等价 Python CREATE_NO_WINDOW，隐藏控制台窗口 |
+| 状态轮询 | 前端 setInterval 3s | 非 SSE 场景，简单可靠 |
+| authtoken 脱敏 | 末 4 位 + padStart | GET 返回脱敏串，POST 空串=不修改，避免明文回显覆盖 |
+| 配置落盘 | 仅覆盖 tunnel 段 | 保留 config.json 其他段不动，避免误覆盖 |
+| 优雅停止 | SIGINT/SIGTERM 钩子 | 优先停止隧道，避免转发流量到已关闭的服务 |
+| autoStart | 非阻塞异步启动 | 失败仅记日志，不阻断主服务启动 |
+
+### 11.9 前端验证记录
+
+- ? 导航测试：8/8（全部 tab 切换正常，含内网穿透 tab）
+- ? Tunnel 元素验证：7/7（glass-card × 4 / el-tag / el-button × 3 / el-select / el-input-number / el-switch / input × 2）
+- ? 破坏性按钮存在性：3/3（启动隧道 / 停止隧道 / 保存配置，仅验证存在不点击）
+- ? API 端点：7/7（/health + /api/stats + /api/config + /api/files/tree + /api/graph + /api/tunnel/status + /api/tunnel/config 全部 200）
+- ? /api/tunnel/status 返回结构正确（status + publicUrl + provider）
+- ? /api/tunnel/config 返回结构正确（provider + localPort + cpolarAuthtokenMasked + cpolarAuthtokenConfigured + binaryPath + autoStart）
+- ? 控制台错误数：0
+- ? 总体通过：True
+
+### 11.10 修复记录
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| App.vue 中文标签乱码 | 前端编辑过程中编码损坏，tab 标签变为 Unicode 替换字符（U+FFFD） | 恢复全部 9 个 tab 中文标签 + 标题"AI 知识库" + 页脚文本 + 10 处 CSS/HTML 注释 |
+| 后端 tsc 类型错误 | `tunnel-service.ts` 中 `this.provider` 可能为 null | 在 `start()` 方法添加空值守卫并重建 provider |
+
+---
+
+## 12. 系统清理模块交付清单
+
+> 参考：`D:\code\otherProjects\17_xianyu` 项目系统清理模块实现
+> 日期：2026-07-10
+
+### 12.1 模块概述
+
+新增系统清理（Cleanup）模块，参考闲鱼项目系统清理需求规格与详细设计，适配 wiki 项目实际资源（无 Python __pycache__ / WebView2 / SQLite 数据库）。支持 4 类清理对象的预览（dry_run）与实际清理，清理前二次确认，清理后审计日志记录。
+
+4 类清理对象：
+- **编译缓存**：`.harness/compile-cache.json`（SHA-256 内容哈希缓存，清理后下次全量重编译）
+- **运行状态**：`.harness/state/*.json`（断点续传状态文件，清理后无法 resume 历史任务）
+- **运行日志**：`.harness/logs/*.log`（harness 运行 JSONL 日志，按 days 过期清理）
+- **原始资料**：`vault/raw/input-*.md`（投递资料原始存档，按 days 过期清理）
+
+### 12.2 后端新增文件
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 清理路由 | `services/api/src/routes/cleanup.ts` | 2 个端点：status(GET) + cleanup(POST)，target 分发 + dry_run 预览 + days 下限保护 + JSONL 审计 |
+
+### 12.3 后端修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `services/api/src/types.ts` | 新增 `CleanupRequest` / `CleanupResult` / `CleanupStorageStatus` 类型定义 |
+| `services/api/src/index.ts` | 注册 cleanup 路由（`registerCleanupRoute(app, vault)`） |
+
+### 12.4 新增 API 端点（2 个）
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/cleanup/status` | GET | 统计 4 类对象存储状态（大小/文件数/最早时间/缓存条目数） |
+| `/api/cleanup` | POST | 执行清理，body: `{target, days?, dry_run}`，支持 all/compile_cache/run_state/run_logs/raw_archive |
+
+### 12.5 前端新增文件
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 系统清理视图 | `packages/web/src/views/Cleanup.vue` | 4 列状态卡片 + 4 个独立清理表单 + dry_run 开关 + ElMessageBox 二次确认 + 结果展示 |
+
+### 12.6 前端修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `packages/web/src/types.ts` | 新增 `CleanupTarget` / `CleanupBody` / `CleanupResult` / `CleanupStorageStatus` 类型（与后端对齐） |
+| `packages/web/src/App.vue` | 导入 Cleanup.vue + ViewName 添加 'cleanup' + 导航 tab 添加"系统清理" + 视图切换 |
+
+### 12.7 设计决策
+
+| 决策点 | 选择 | 理由 |
+|--------|------|------|
+| 清理对象映射 | 4 类（compile_cache/run_state/run_logs/raw_archive） | wiki 无 Python/SQLite/WebView2，按实际 .harness + vault 资源映射闲鱼清理范围 |
+| 审计方案 | JSONL 文件追加（`.harness/cleanup-audit.log`） | wiki 无数据库，与闲鱼 events 表写入语义一致，追加不阻塞主流程 |
+| 二次确认 | ElMessageBox.confirm | Vue 项目优于闲鱼 globalThis.confirm，统一 Element Plus 交互风格 |
+| 路由结构 | 单端点 POST /api/cleanup + target 分发 | 简化前端调用，4 类对象共用 dry_run/days 参数契约 |
+| days 下限 | `Math.max(1, days)` | 防止前端传 0 或负数导致全量清理，运行日志/原始资料按 days 过滤 mtime |
+| dry_run 默认 | true（预览模式） | 安全优先，关闭时按钮变红 + danger-tag 警示 + 二次确认 |
+| days 适用范围 | 仅 run_logs/raw_archive | 编译缓存/运行状态为全量对象（单文件或全目录），无时间维度 |
+| 单子项失败 | 独立 try/catch，errors 收集 | 单个文件删除失败不中断整体清理，结果区分类 cleaned/errors |
+
+### 12.8 前端验证记录
+
+Playwright 自动化测试（webapp-testing Skill），26/26 通过：
+
+- ? TC1 页面加载正常（title=Karpathy AI 知识库）
+- ? TC2 系统清理 tab 存在 + 切换到清理视图（.cleanup-page 渲染）
+- ? TC3 4 个状态块渲染 + 状态值显示（/api/cleanup/status 自动加载）
+- ? TC4 4 个清理块渲染
+- ? TC5 编译缓存 dry_run 预览（默认 dry_run=true，按钮非 danger，结果区显示"预览 1 项"）
+- ? TC6 days 输入框分布正确（运行日志/原始资料有，编译缓存/运行状态无）
+- ? TC7 dry_run 开关切换（关闭后按钮添加 .danger 类，红色警示）
+- ? TC8 ElMessageBox 二次确认弹窗（含"危险操作确认"提示）
+- ? TC9 取消按钮关闭弹窗 + 不发起请求（结果区不变）
+- ? TC10 确认清理实际执行（结果区显示"无操作"，days=7 过滤无匹配文件）
+- ? TC11 截图保存
+- ? TC12 无页面 JS 错误
+
+### 12.9 修复记录
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| App.vue / Cleanup.vue 中文乱码 | 编辑过程中文件被转为 GB2312 编码，Vite 按 UTF-8 读取产生 U+FFFD 替换字符 | 用 PowerShell 严格 UTF-8 解码检测，将 5 个 GB2312 文件（App.vue / Cleanup.vue / 前后端 types.ts）转回 UTF-8，重新构建生产包 |
+| vue-tsc 类型错误 | `form.showDays` 属性不存在于表单类型 | `showDays` 为卡片元数据，改用 `cards.find(c => c.key === key).showDays` 获取 |

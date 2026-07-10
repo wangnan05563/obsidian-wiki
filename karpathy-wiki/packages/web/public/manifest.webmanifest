@@ -1,0 +1,19 @@
+{
+  "name": "Karpathy AI 知识库",
+  "short_name": "Karpathy Wiki",
+  "description": "Karpathy AI + Obsidian 知识库系统",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d1a3d",
+  "theme_color": "#1a0533",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

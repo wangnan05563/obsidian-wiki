@@ -1,0 +1,55 @@
+{
+  "project": {
+    "name": "Karpathy-Wiki",
+    "root": ".."
+  },
+  "ports": {
+    "api": 3000,
+    "web": 5173
+  },
+  "commands": {
+    "pkg_manager": "auto",
+    "api_cmd": "dev:api",
+    "web_cmd": "dev:web",
+    "health_check_path": "/health"
+  },
+  "process": {
+    "api_window_title": "KarpathyWiki-API",
+    "web_window_title": "KarpathyWiki-Web",
+    "pid_dir": "logs"
+  },
+  "log": {
+    "session_id_prefix": "sess",
+    "session_id_format": "yyyyMMddHHmmss",
+    "random_hex_length": 4,
+    "seq_padding": 3,
+    "timestamp_format": "yyyy-MM-dd HH:mm:ss.fff"
+  },
+  "log_colors": {
+    "timestamp": "DarkGray",
+    "separator": "DarkGray",
+    "session_id": "Cyan",
+    "step_tag": "Magenta",
+    "message": "White",
+    "levels": {
+      "INFO": "Green",
+      "WARN": "Yellow",
+      "ERROR": "Red",
+      "STEP": "Cyan",
+      "OK": "Green",
+      "FAIL": "Red",
+      "SKIP": "DarkYellow"
+    }
+  },
+  "startup": {
+    "api_wait_max_tries": 15,
+    "web_wait_max_tries": 10,
+    "ping_interval_seconds": 2,
+    "open_browser": true,
+    "browser_url": "http://localhost:5173"
+  },
+  "shutdown": {
+    "verify_wait_seconds": 1,
+    "exit_delay_seconds": 2
+  }
+}

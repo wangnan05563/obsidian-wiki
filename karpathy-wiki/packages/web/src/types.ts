@@ -243,3 +243,125 @@ export interface ArchiveResult {
   ok: boolean;
   path: string;
 }
+
+// ===== 内网穿透相关类型 =====
+
+// 隧道运行状态（GET /api/tunnel/status）
+export interface TunnelStatus {
+  status: 'running' | 'stopped';
+  publicUrl: string | null;
+  provider: string;
+}
+
+// 隧道配置响应（GET /api/tunnel/config，authtoken 脱敏）
+export interface TunnelConfigData {
+  provider: 'cloudflare' | 'cpolar';
+  localPort: number;
+  cpolarAuthtokenMasked: string;
+  cpolarAuthtokenConfigured: boolean;
+  binaryPath: string;
+  autoStart: boolean;
+}
+
+// 隧道配置保存请求体（POST /api/tunnel/config）
+// cpolarAuthtoken 空串表示"不修改已有 token"
+export interface TunnelConfigBody {
+  provider: 'cloudflare' | 'cpolar';
+  localPort: number;
+  cpolarAuthtoken: string;
+  binaryPath: string;
+  autoStart: boolean;
+}
+
+// 二进制下载失败错误（POST /api/tunnel/start 返回 500 时）
+export interface TunnelDownloadError {
+  detail: string;
+  errorType: 'binary_download_failed';
+  manualPath: string;
+  downloadUrls: string[];
+}
+
+// ===== AI 服务相关类型 =====
+
+// AI 配置响应（GET /api/ai/config，API Key 脱敏）
+export interface AiConfig {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeyRef: string;
+  apiKeyMasked: string;
+  apiKeySet: boolean;
+}
+
+// LLM 预设项（GET /api/ai/presets）
+export interface LlmPreset {
+  key: string;
+  label: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeyRef: string;
+  apiKeyUrl: string;
+}
+
+// 测试连接响应（POST /api/ai/test-connection）
+export interface AiTestResult {
+  ok: boolean;
+  model?: string;
+  detail: string;
+}
+
+// 保存配置响应（PUT /api/ai/config）
+export interface AiSaveResult {
+  ok: boolean;
+  config: AiConfig;
+}
+
+// ===== 系统清理相关类型 =====
+
+// 清理目标（4 类对象 + all）
+export type CleanupTarget = 'compile_cache' | 'run_state' | 'run_logs' | 'raw_archive' | 'all';
+
+// 清理请求体
+export interface CleanupBody {
+  target: CleanupTarget;
+  // 仅 run_logs/raw_archive 使用（按天数清理）
+  days?: number;
+  // 默认 true（预览模式），强制用户主动关闭
+  dry_run: boolean;
+}
+
+// 清理结果
+export interface CleanupResult {
+  target: string;
+  days: number;
+  dry_run: boolean;
+  cleaned: string[];
+  errors: string[];
+  count: number;
+  total_freed_mb?: number;
+}
+
+// 存储状态（GET /api/cleanup/status）
+export interface CleanupStorageStatus {
+  compileCache: {
+    exists: boolean;
+    sizeMb: number;
+    entryCount: number;
+  };
+  runState: {
+    fileCount: number;
+    sizeMb: number;
+    oldest: string | null;
+  };
+  runLogs: {
+    fileCount: number;
+    sizeMb: number;
+    oldest: string | null;
+  };
+  rawArchive: {
+    fileCount: number;
+    sizeMb: number;
+    oldest: string | null;
+  };
+}

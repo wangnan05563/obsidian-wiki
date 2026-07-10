@@ -10,5 +10,11 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["vite/client"]
   },
-  "include": ["src/**/*", "src/**/*.vue"]
+  "include": ["src/**/*", "src/**/*.vue"],
+  "exclude": [
+    "node_modules",
+    "src/**/*.js",
+    "src/**/*.vue.js",
+    "src/**/*.ts.js"
+  ]
 }

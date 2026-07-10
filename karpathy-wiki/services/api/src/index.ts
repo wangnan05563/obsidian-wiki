@@ -19,26 +19,28 @@ import { registerConfigRoute } from './routes/config.js';
 import { registerRunsRoute } from './routes/runs.js';
 import { registerSearchRoute } from './routes/search.js';
 import { registerVaultRoute } from './routes/vault.js';
+import { registerAiRoute } from './routes/ai.js';
+import { registerCleanupRoute } from './routes/cleanup.js';
 
-// CJS Ä£Ê½ÏÂ __dirname ÓÉ Node.js Ô­ÉúÌá¹©£»ESM Ä£Ê½ÏÂĞèÒª´Ó import.meta.url ÅÉÉú
-// esbuild ´ò°üÊ±»á×Ô¶¯±£Áô __dirname ÒıÓÃ£¬TypeScript ±àÒëĞèÉùÃ÷´Ë±äÁ¿
+// CJS æ¨¡å¼ä¸‹ __dirname ç”± Node.js åŸç”Ÿæä¾›ï¼›ESM æ¨¡å¼ä¸‹éœ€è¦ä» import.meta.url æ´¾ç”Ÿ
+// esbuild æ‰“åŒ…æ—¶ä¼šè‡ªåŠ¨ä¿ç•™ __dirname å¼•ç”¨ï¼ŒTypeScript ç¼–è¯‘éœ€å£°æ˜æ­¤å˜é‡
 declare const __dirname: string;
-const dirname = typeof __dirname !== 'undefined' // NOSONAR: __dirname Îª declare const£¬ESM ÏÂ¿ÉÄÜÎ´ÉùÃ÷£¬Ğè typeof ÊØÎÀ
+const dirname = typeof __dirname !== 'undefined' // NOSONAR: __dirname ä¸º declare constï¼ŒESM ä¸‹å¯èƒ½æœªå£°æ˜ï¼Œéœ€ typeof å®ˆå«
   ? __dirname
   : path.dirname(fileURLToPath(import.meta.url));
 
-// pkg ´ò°üÄ£Ê½±êÖ¾£¨process.pkg ½öÔÚ pkg ´ò°üºó´æÔÚ£©
+// pkg æ‰“åŒ…æ¨¡å¼æ ‡å¿—ï¼ˆprocess.pkg ä»…åœ¨ pkg æ‰“åŒ…åå­˜åœ¨ï¼‰
 const IS_PACKAGED = !!(process as NodeJS.Process & { pkg?: unknown }).pkg;
 
 /**
- * ¼ÓÔØ .env ÎÄ¼ş»·¾³±äÁ¿£¨pkg ´ò°üÄ£Ê½ĞèÒªÊÖ¶¯¼ÓÔØ£©
- * ÎªÊ²Ã´ĞèÒª£º¿ª·¢Ä£Ê½ÓÉ start.ps1 ¼ÓÔØ£¬´ò°üºóĞè×ÔĞĞ¼ÓÔØ
- * ĞĞ½âÎö²ğ·ÖÎª¶ÀÁ¢º¯Êı£¬½µµÍ loadEnvFile ÈÏÖª¸´ÔÓ¶È£¨S3776£©
+ * åŠ è½½ .env æ–‡ä»¶ç¯å¢ƒå˜é‡ï¼ˆpkg æ‰“åŒ…æ¨¡å¼éœ€è¦æ‰‹åŠ¨åŠ è½½ï¼‰
+ * ä¸ºä»€ä¹ˆéœ€è¦ï¼šå¼€å‘æ¨¡å¼ç”± start.ps1 åŠ è½½ï¼Œæ‰“åŒ…åéœ€è‡ªè¡ŒåŠ è½½
+ * è¡Œè§£ææ‹†åˆ†ä¸ºç‹¬ç«‹å‡½æ•°ï¼Œé™ä½ loadEnvFile è®¤çŸ¥å¤æ‚åº¦ï¼ˆS3776ï¼‰
  */
 function applyEnvLine(line: string): void {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#')) return;
-  const m = trimmed.match(/^([^=]+)=(.*)$/); // NOSONAR: µ¥´ÎÆ¥ÅäÈ¡¼üÖµ£¬match ·µ»ØÊı×é¸üÊÊºÏ´Ë³¡¾°
+  const m = trimmed.match(/^([^=]+)=(.*)$/); // NOSONAR: å•æ¬¡åŒ¹é…å–é”®å€¼ï¼Œmatch è¿”å›æ•°ç»„æ›´é€‚åˆæ­¤åœºæ™¯
   if (m && !process.env[m[1].trim()]) {
     process.env[m[1].trim()] = m[2].trim();
   }
@@ -56,17 +58,17 @@ function loadEnvFile(): void {
       for (const line of content.split(/\r?\n/)) {
         applyEnvLine(line);
       }
-      console.log(`[Æô¶¯] .env ÒÑ¼ÓÔØ£º${p}`);
+      console.log(`[å¯åŠ¨] .env å·²åŠ è½½ï¼š${p}`);
       break;
     }
   }
 }
 
 /**
- * ¶Ë¿ÚÇåÀí£ºÉ±µôÕ¼ÓÃÄ¿±ê¶Ë¿ÚµÄ²ĞÁô½ø³Ì£¨pkg ´ò°üÄ£Ê½£©
- * ÎªÊ²Ã´ĞèÒª£ºÉÏ´ÎÒì³£ÍË³ö¿ÉÄÜ²ĞÁô½ø³ÌÕ¼ÓÃ¶Ë¿Ú
+ * ç«¯å£æ¸…ç†ï¼šæ€æ‰å ç”¨ç›®æ ‡ç«¯å£çš„æ®‹ç•™è¿›ç¨‹ï¼ˆpkg æ‰“åŒ…æ¨¡å¼ï¼‰
+ * ä¸ºä»€ä¹ˆéœ€è¦ï¼šä¸Šæ¬¡å¼‚å¸¸é€€å‡ºå¯èƒ½æ®‹ç•™è¿›ç¨‹å ç”¨ç«¯å£
  */
-// ÌáÈ¡ kill Âß¼­µ½¶ÀÁ¢º¯Êı£¬½µµÍ cleanupPort ÈÏÖª¸´ÔÓ¶È£¨S3776£©
+// æå– kill é€»è¾‘åˆ°ç‹¬ç«‹å‡½æ•°ï¼Œé™ä½ cleanupPort è®¤çŸ¥å¤æ‚åº¦ï¼ˆS3776ï¼‰
 function killPid(pid: string): boolean {
   try {
     execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
@@ -82,13 +84,13 @@ function cleanupPort(port: number): void {
   try {
     output = execSync('netstat -aon', { encoding: 'utf8', timeout: 5000 });
   } catch {
-    return; // netstat Ê§°Ü²»×è¶Ï
+    return; // netstat å¤±è´¥ä¸é˜»æ–­
   }
-  // ÓÃ String.raw ±ÜÃâÕıÔò×Ö·û´®Ë«ÖØ×ªÒå£¨S7780£©
+  // ç”¨ String.raw é¿å…æ­£åˆ™å­—ç¬¦ä¸²åŒé‡è½¬ä¹‰ï¼ˆS7780ï¼‰
   const pattern = new RegExp(String.raw`:${port}\s+\S+\s+\S+\s+LISTENING\s+(\d+)`);
   const killed = new Set<string>();
   for (const line of output.split(/\r?\n/)) {
-    const m = line.match(pattern); // NOSONAR: µ¥´ÎÆ¥ÅäÈ¡¼àÌı¶Ë¿Ú PID£¬match ·µ»ØÊı×é¸üÊÊºÏ´Ë³¡¾°
+    const m = line.match(pattern); // NOSONAR: å•æ¬¡åŒ¹é…å–ç›‘å¬ç«¯å£ PIDï¼Œmatch è¿”å›æ•°ç»„æ›´é€‚åˆæ­¤åœºæ™¯
     if (m && !killed.has(m[1]) && killPid(m[1])) {
       killed.add(m[1]);
     }
@@ -96,35 +98,35 @@ function cleanupPort(port: number): void {
 }
 
 /**
- * ×Ô¶¯´ò¿ªä¯ÀÀÆ÷£¨pkg ´ò°üÄ£Ê½£©
+ * è‡ªåŠ¨æ‰“å¼€æµè§ˆå™¨ï¼ˆpkg æ‰“åŒ…æ¨¡å¼ï¼‰
  */
 function openBrowser(url: string): void {
   if (!IS_PACKAGED) return;
   try {
     spawn('cmd', ['/c', 'start', '', url], { stdio: 'ignore', windowsHide: true });
-    console.log(`[Æô¶¯] ÒÑ´ò¿ªä¯ÀÀÆ÷£º${url}`);
+    console.log(`[å¯åŠ¨] å·²æ‰“å¼€æµè§ˆå™¨ï¼š${url}`);
   } catch {
-    console.log(`[ÌáÊ¾] ÇëÊÖ¶¯·ÃÎÊ£º${url}`);
+    console.log(`[æç¤º] è¯·æ‰‹åŠ¨è®¿é—®ï¼š${url}`);
   }
 }
 
 async function main(): Promise<void> {
-  // pkg ´ò°üÄ£Ê½£º¼ÓÔØ .env + ¶Ë¿ÚÇåÀí
+  // pkg æ‰“åŒ…æ¨¡å¼ï¼šåŠ è½½ .env + ç«¯å£æ¸…ç†
   loadEnvFile();
 
   const config = await loadConfig();
 
-  // pkg ´ò°üÄ£Ê½£ºÇåÀí²ĞÁô¶Ë¿Ú
+  // pkg æ‰“åŒ…æ¨¡å¼ï¼šæ¸…ç†æ®‹ç•™ç«¯å£
   if (IS_PACKAGED) {
-    console.log('[Æô¶¯] Karpathy-Wiki ´ò°üÄ£Ê½£¬ÇåÀí²ĞÁô¶Ë¿Ú...');
+    console.log('[å¯åŠ¨] Karpathy-Wiki æ‰“åŒ…æ¨¡å¼ï¼Œæ¸…ç†æ®‹ç•™ç«¯å£...');
     cleanupPort(config.server.port);
   }
 
-  // Vault ÊÇÖªÊ¶¿âÄÚÈİµÄÎ¨Ò»´æ´¢Î»ÖÃ£¬Æô¶¯Ê±È·±£Ä¿Â¼½á¹¹´æÔÚ£¨AC-01-5£©
+  // Vault æ˜¯çŸ¥è¯†åº“å†…å®¹çš„å”¯ä¸€å­˜å‚¨ä½ç½®ï¼Œå¯åŠ¨æ—¶ç¡®ä¿ç›®å½•ç»“æ„å­˜åœ¨ï¼ˆAC-01-5ï¼‰
   const vault = new VaultService(config.vaultPath);
   await vault.init();
 
-  // ¹¹Ôì HarnessAdapter¡£API Key Í¨¹ı»·¾³±äÁ¿¶ÁÈ¡£¬²»ÂäÅÌ£¨M-7£©
+  // æ„é€  HarnessAdapterã€‚API Key é€šè¿‡ç¯å¢ƒå˜é‡è¯»å–ï¼Œä¸è½ç›˜ï¼ˆM-7ï¼‰
   const apiKey = process.env[config.llm.apiKeyRef];
   const adapter = new HarnessAdapter(
     {
@@ -143,38 +145,41 @@ async function main(): Promise<void> {
 
   const app = Fastify({ logger: true });
 
-  // ×¢²á multipart ²å¼şÒÔÖ§³Ö compile Â·ÓÉµÄÎÄ¼şÉÏ´«
+  // æ³¨å†Œ multipart æ’ä»¶ä»¥æ”¯æŒ compile è·¯ç”±çš„æ–‡ä»¶ä¸Šä¼ 
   await app.register(multipart, {
-    limits: { fileSize: 1024 * 1024 * 10 }, // 10MB ÉÏÏŞ£¬·ÀÖ¹³¬´óÎÄ¼şºÄ¾¡ÄÚ´æ
+    limits: { fileSize: 1024 * 1024 * 10 }, // 10MB ä¸Šé™ï¼Œé˜²æ­¢è¶…å¤§æ–‡ä»¶è€—å°½å†…å­˜
   });
 
   registerCompileRoute(app, adapter);
   registerQueryRoute(app, adapter);
   registerQueryArchiveRoute(app, vault);
   registerHealthCheckRoute(app, adapter);
-  // files/graph/stats Â·ÓÉÖ±½Ó²Ù×÷ Vault£¬²»¾­¹ı adapter£¨´¿È·¶¨ĞÔ²Ù×÷£©
+  // files/graph/stats è·¯ç”±ç›´æ¥æ“ä½œ Vaultï¼Œä¸ç»è¿‡ adapterï¼ˆçº¯ç¡®å®šæ€§æ“ä½œï¼‰
   registerFilesRoutes(app, vault);
   registerGraphRoute(app, vault);
   registerStatsRoute(app, vault);
   registerSchemaRoutes(app, vault);
   registerConfigRoute(app, adapter);
-  // ¡ì11.2 ¶ÏµãĞø´«£º²éÑ¯ÖĞ¶ÏÈÎÎñÁĞ±í£¨ÍêÕû resume ´ıÏêÏ¸Éè¼Æ£©
+  // Â§11.2 æ–­ç‚¹ç»­ä¼ ï¼šæŸ¥è¯¢ä¸­æ–­ä»»åŠ¡åˆ—è¡¨ï¼ˆå®Œæ•´ resume å¾…è¯¦ç»†è®¾è®¡ï¼‰
   const stateDir = path.resolve(config.vaultPath, '..', '.harness', 'state');
   registerRunsRoute(app, stateDir);
-  // ¡ì5.1 È«ÎÄ¼ìË÷ + Vault ³õÊ¼»¯
+  // Â§5.1 å…¨æ–‡æ£€ç´¢ + Vault åˆå§‹åŒ–
   registerSearchRoute(app, vault);
   registerVaultRoute(app, vault);
+  // AI é…ç½®ç®¡ç† + ç³»ç»Ÿæ¸…ç†ï¼šå‚è€ƒ 17_xianyu é¡¹ç›®æ–°å¢æ¨¡å—
+  registerAiRoute(app);
+  registerCleanupRoute(app, vault);
 
-  // ½¡¿µ¼ì²é¶Ëµã£¨¹© docker-compose healthcheck ÓÃ£©
+  // å¥åº·æ£€æŸ¥ç«¯ç‚¹ï¼ˆä¾› docker-compose healthcheck ç”¨ï¼‰
   app.get('/health', async () => ({ ok: true }));
 
-  // SPA ¾²Ì¬×ÊÔ´ÍĞ¹Ü£¨Éú²úÄ£Ê½ / exe ´ò°üÄ£Ê½£©
-  // ÎªÊ²Ã´ĞèÒª£º¿ª·¢Ä£Ê½ÓÉ Vite 5173 Ìá¹©Ç°¶Ë£¬Éú²ú/exe Ä£Ê½Ğèºó¶Ëµ¥¶Ë¿ÚÍĞ¹Ü SPA
-  // Ì½²âË³Ğò£ºexe Í¬¼¶ public ¡ú services/api/public ¡ú services/api/static/spa
+  // SPA é™æ€èµ„æºæ‰˜ç®¡ï¼ˆç”Ÿäº§æ¨¡å¼ / exe æ‰“åŒ…æ¨¡å¼ï¼‰
+  // ä¸ºä»€ä¹ˆéœ€è¦ï¼šå¼€å‘æ¨¡å¼ç”± Vite 5173 æä¾›å‰ç«¯ï¼Œç”Ÿäº§/exe æ¨¡å¼éœ€åç«¯å•ç«¯å£æ‰˜ç®¡ SPA
+  // æ¢æµ‹é¡ºåºï¼šexe åŒçº§ public â†’ services/api/public â†’ services/api/static/spa
   const spaCandidates = [
-    path.resolve(process.cwd(), 'public'),                      // exe ÔËĞĞÄ£Ê½£ºCWD/public
-    path.resolve(dirname, '..', 'public'),                      // tsx ¿ª·¢Ä£Ê½£ºsrc/../public
-    path.resolve(dirname, '..', 'static', 'spa'),               // ¼æÈİ¾ÉÂ·¾¶
+    path.resolve(process.cwd(), 'public'),                      // exe è¿è¡Œæ¨¡å¼ï¼šCWD/public
+    path.resolve(dirname, '..', 'public'),                      // tsx å¼€å‘æ¨¡å¼ï¼šsrc/../public
+    path.resolve(dirname, '..', 'static', 'spa'),               // å…¼å®¹æ—§è·¯å¾„
   ];
   let spaRoot: string | null = null;
   for (const p of spaCandidates) {
@@ -187,25 +192,25 @@ async function main(): Promise<void> {
     await app.register(fastifyStatic, {
       root: spaRoot,
       prefix: '/',
-      wildcard: false,  // ¹Ø±ÕÍ¨Åä·û£¬ÊÖ¶¯´¦Àí SPA fallback
+      wildcard: false,  // å…³é—­é€šé…ç¬¦ï¼Œæ‰‹åŠ¨å¤„ç† SPA fallback
     });
-    // SPA fallback£ºËùÓĞÎ´Æ¥ÅäµÄ GET ÇëÇó·µ»Ø index.html£¨Vue Router history Ä£Ê½£©
+    // SPA fallbackï¼šæ‰€æœ‰æœªåŒ¹é…çš„ GET è¯·æ±‚è¿”å› index.htmlï¼ˆVue Router history æ¨¡å¼ï¼‰
     app.setNotFoundHandler((req, reply) => {
       if (req.method === 'GET' && !req.url.startsWith('/api')) {
         return reply.sendFile('index.html');
       }
       return reply.code(404).send({ error: 'Not Found' });
     });
-    console.log(`[SPA] ¾²Ì¬×ÊÔ´ÍĞ¹Ü£º${spaRoot}`);
+    console.log(`[SPA] é™æ€èµ„æºæ‰˜ç®¡ï¼š${spaRoot}`);
   } else {
-    console.log('[SPA] Î´ÕÒµ½ SPA ²úÎï£¬½ö API Ä£Ê½£¨¿ª·¢Ä£Ê½ÓÉ Vite Ìá¹©Ç°¶Ë£©');
+    console.log('[SPA] æœªæ‰¾åˆ° SPA äº§ç‰©ï¼Œä»… API æ¨¡å¼ï¼ˆå¼€å‘æ¨¡å¼ç”± Vite æä¾›å‰ç«¯ï¼‰');
   }
 
   try {
     await app.listen({ host: config.server.host, port: config.server.port });
     const url = `http://${config.server.host}:${config.server.port}`;
     console.log(`Wiki API running at ${url}`);
-    // pkg ´ò°üÄ£Ê½£º×Ô¶¯´ò¿ªä¯ÀÀÆ÷
+    // pkg æ‰“åŒ…æ¨¡å¼ï¼šè‡ªåŠ¨æ‰“å¼€æµè§ˆå™¨
     openBrowser(url);
   } catch (err) {
     app.log.error(err);
@@ -213,7 +218,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => { // NOSONAR: ESM Èë¿Ú±ê×¼Ä£Ê½£¬main() ÊÇÒì²½Èë¿Úº¯Êıµ÷ÓÃ·Ç top-level await
-  console.error('Æô¶¯Ê§°Ü:', err);
+main().catch((err) => { // NOSONAR: ESM å…¥å£æ ‡å‡†æ¨¡å¼ï¼Œmain() æ˜¯å¼‚æ­¥å…¥å£å‡½æ•°è°ƒç”¨é top-level await
+  console.error('å¯åŠ¨å¤±è´¥:', err);
   process.exit(1);
 });

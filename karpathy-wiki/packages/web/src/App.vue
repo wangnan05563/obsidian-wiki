@@ -10,17 +10,19 @@ import Query from './views/Query.vue';
 import Graph from './views/Graph.vue';
 import Health from './views/Health.vue';
 import Config from './views/Config.vue';
+import Tunnel from './views/Tunnel.vue';
+import Cleanup from './views/Cleanup.vue';
 import { useCompileStore } from './stores/compile';
 
-type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config';
+type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup';
 
 const store = useCompileStore();
 const currentView = ref<ViewName>('dashboard');
 
-// 滚动视差：监听滚动位置，通过 CSS 变量驱动背景层位移
+// 监听滚动事件，更新 scrollY 变量驱动 CSS 视差效果
 const scrollY = ref(0);
 function handleScroll() {
-  // 使用 rAF 节流，避免高频触发导致掉帧
+  // 直接读取 scrollY，passive 模式下性能足够
   scrollY.value = window.scrollY;
 }
 
@@ -42,14 +44,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 视差背景层：4 层叠加，通过 scrollY 驱动不同速率位移 -->
+  <!-- 背景视差层：4 层叠加，通过 scrollY 实现视差滚动 -->
   <div class="bg-layer base" :style="{ transform: `translateY(${scrollY * 0.15}px)` }"></div>
   <div class="bg-layer grid" :style="{ transform: `translateY(${scrollY * 0.08}px)` }"></div>
   <div class="bg-layer noise"></div>
   <div class="bg-layer orbs parallax" :style="{ transform: `translateY(${scrollY * 0.25}px)` }"></div>
 
   <div class="app-shell">
-    <!-- 不对称导航：左侧 Logo + 右侧标签，破格倾斜装饰 -->
+    <!-- 导航栏：左侧 Logo + 标题，右侧标签页切换 -->
     <header class="nav glass-card">
       <div class="nav-deco"></div>
       <div class="nav-left" @click="go('dashboard')">
@@ -70,6 +72,8 @@ onBeforeUnmount(() => {
             { key: 'graph', label: '图谱' },
             { key: 'health', label: '体检' },
             { key: 'config', label: '配置' },
+            { key: 'tunnel', label: '内网穿透' },
+            { key: 'cleanup', label: '系统清理' },
           ]"
           :key="tab.key"
           class="tab-btn hover-glow"
@@ -94,16 +98,18 @@ onBeforeUnmount(() => {
       <Graph v-else-if="currentView === 'graph'" />
       <Health v-else-if="currentView === 'health'" />
       <Config v-else-if="currentView === 'config'" />
+      <Tunnel v-else-if="currentView === 'tunnel'" />
+      <Cleanup v-else-if="currentView === 'cleanup'" />
     </main>
 
     <footer class="footer">
       <span class="footer-line"></span>
-      <span class="footer-text">POWERED BY KARPATHY AI · 知识库垂直切片</span>
+      <span class="footer-text">POWERED BY KARPATHY AI · 知识库引擎</span>
       <span class="footer-line"></span>
     </footer>
   </div>
 
-  <!-- 主题切换器：浮动按钮，右下角 -->
+  <!-- 主题切换器：浮动组件，独立于主内容区 -->
   <ThemeSwitcher />
 </template>
 
@@ -119,7 +125,7 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
-/* 导航：不对称布局，左侧 Logo 偏大，右侧标签紧凑 */
+/* 导航栏：水平布局，左侧 Logo 与右侧标签页 */
 .nav {
   display: flex;
   align-items: center;
@@ -129,7 +135,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-/* 破格装饰：右下角倾斜渐变块 */
+/* 导航栏右上角装饰块：增加视觉层次 */
 .nav-deco {
   position: absolute;
   top: -20px;
@@ -208,7 +214,7 @@ onBeforeUnmount(() => {
   text-shadow: 0 0 12px rgba(0, 245, 255, 0.6);
 }
 
-/* 激活态：渐变背景 + 发光 */
+/* 激活态标签：渐变背景 + 光晕 */
 .tab-btn.active {
   background: var(--grad-fire);
   color: #fff;
@@ -240,7 +246,7 @@ onBeforeUnmount(() => {
   z-index: 1;
 }
 
-/* 页脚：赛博风分割线 */
+/* 底部页脚样式 */
 .footer {
   display: flex;
   align-items: center;
@@ -262,7 +268,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* 响应式：窄屏导航堆叠 */
+/* 响应式：移动端导航栏垂直排列 */
 @media (max-width: 900px) {
   .nav {
     flex-direction: column;

@@ -10,13 +10,15 @@ import Query from './views/Query.vue';
 import Graph from './views/Graph.vue';
 import Health from './views/Health.vue';
 import Config from './views/Config.vue';
+import Tunnel from './views/Tunnel.vue';
+import Cleanup from './views/Cleanup.vue';
 import { useCompileStore } from './stores/compile';
 const store = useCompileStore();
 const currentView = ref('dashboard');
-// 滚动视差：监听滚动位置，通过 CSS 变量驱动背景层位移
+// 监听滚动事件，更新 scrollY 变量驱动 CSS 视差效果
 const scrollY = ref(0);
 function handleScroll() {
-    // 使用 rAF 节流，避免高频触发导致掉帧
+    // 直接读取 scrollY，passive 模式下性能足够
     scrollY.value = window.scrollY;
 }
 function go(view) {
@@ -105,6 +107,8 @@ for (const [tab] of __VLS_getVForSourceType(([
     { key: 'graph', label: '图谱' },
     { key: 'health', label: '体检' },
     { key: 'config', label: '配置' },
+    { key: 'tunnel', label: '内网穿透' },
+    { key: 'cleanup', label: '系统清理' },
 ]))) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
         ...{ onClick: (...[$event]) => {
@@ -221,6 +225,18 @@ else if (__VLS_ctx.currentView === 'config') {
     const __VLS_36 = __VLS_asFunctionalComponent(Config, new Config({}));
     const __VLS_37 = __VLS_36({}, ...__VLS_functionalComponentArgsRest(__VLS_36));
 }
+else if (__VLS_ctx.currentView === 'tunnel') {
+    /** @type {[typeof Tunnel, ]} */ ;
+    // @ts-ignore
+    const __VLS_39 = __VLS_asFunctionalComponent(Tunnel, new Tunnel({}));
+    const __VLS_40 = __VLS_39({}, ...__VLS_functionalComponentArgsRest(__VLS_39));
+}
+else if (__VLS_ctx.currentView === 'cleanup') {
+    /** @type {[typeof Cleanup, ]} */ ;
+    // @ts-ignore
+    const __VLS_42 = __VLS_asFunctionalComponent(Cleanup, new Cleanup({}));
+    const __VLS_43 = __VLS_42({}, ...__VLS_functionalComponentArgsRest(__VLS_42));
+}
 __VLS_asFunctionalElement(__VLS_intrinsicElements.footer, __VLS_intrinsicElements.footer)({
     ...{ class: "footer" },
 });
@@ -235,8 +251,8 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.
 });
 /** @type {[typeof ThemeSwitcher, ]} */ ;
 // @ts-ignore
-const __VLS_39 = __VLS_asFunctionalComponent(ThemeSwitcher, new ThemeSwitcher({}));
-const __VLS_40 = __VLS_39({}, ...__VLS_functionalComponentArgsRest(__VLS_39));
+const __VLS_45 = __VLS_asFunctionalComponent(ThemeSwitcher, new ThemeSwitcher({}));
+const __VLS_46 = __VLS_45({}, ...__VLS_functionalComponentArgsRest(__VLS_45));
 /** @type {__VLS_StyleScopedClasses['bg-layer']} */ ;
 /** @type {__VLS_StyleScopedClasses['base']} */ ;
 /** @type {__VLS_StyleScopedClasses['bg-layer']} */ ;
@@ -278,6 +294,8 @@ const __VLS_self = (await import('vue')).defineComponent({
             Graph: Graph,
             Health: Health,
             Config: Config,
+            Tunnel: Tunnel,
+            Cleanup: Cleanup,
             store: store,
             currentView: currentView,
             scrollY: scrollY,

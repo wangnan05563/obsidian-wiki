@@ -2,13 +2,13 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-// ¡ì11.2 ¶ÏµãĞø´«£º²éÑ¯ÖĞ¶ÏµÄ compile ÈÎÎñÁĞ±í¡£
-// ÍêÕû resume Éæ¼°¹¤×÷Á÷±Õ°üÖØ½¨£¨afterStep hook ÒÀÀµ queue/generatedPages µÈ£©£¬
-// ±ê¼ÇÎª´ıÏêÏ¸Éè¼Æ¡£µ±Ç°ÏÈÌá¹©²éÑ¯ API£¬ÈÃÓÃ»§¸ĞÖªÖĞ¶ÏÈÎÎñ¡£
+// Â§11.2 æ–­ç‚¹ç»­ä¼ ï¼šæŸ¥è¯¢ä¸­æ–­çš„ compile ä»»åŠ¡åˆ—è¡¨ã€‚
+// å®Œæ•´ resume æ¶‰åŠå·¥ä½œæµé—­åŒ…é‡å»ºï¼ˆafterStep hook ä¾èµ– queue/generatedPages ç­‰ï¼‰ï¼Œ
+// æ ‡è®°ä¸ºå¾…è¯¦ç»†è®¾è®¡ã€‚å½“å‰å…ˆæä¾›æŸ¥è¯¢ APIï¼Œè®©ç”¨æˆ·æ„ŸçŸ¥ä¸­æ–­ä»»åŠ¡ã€‚
 //
-// ¡ì12.3-8 ÈÕÖ¾²é¿´£ºGET /api/compile/runs/:runId/log ¶ÁÈ¡ .harness/logs/{runId}.log
+// Â§12.3-8 æ—¥å¿—æŸ¥çœ‹ï¼šGET /api/compile/runs/:runId/log è¯»å– .harness/logs/{runId}.log
 export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
-  // ÈÕÖ¾Ä¿Â¼Óë state Ä¿Â¼Í¬¼¶£º.harness/logs/
+  // æ—¥å¿—ç›®å½•ä¸ state ç›®å½•åŒçº§ï¼š.harness/logs/
   const logDir = path.resolve(stateDir, '..', 'logs');
 
   app.get('/api/compile/runs', async (_request, reply) => {
@@ -26,7 +26,7 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
             tokenUsed: number;
             startedAt: string;
           };
-          // ½ö·µ»ØÕªÒª£¬²»º¬ÍêÕû messages£¨±ÜÃâÏìÓ¦¹ı´ó£©
+          // ä»…è¿”å›æ‘˜è¦ï¼Œä¸å«å®Œæ•´ messagesï¼ˆé¿å…å“åº”è¿‡å¤§ï¼‰
           runs.push({
             runId: state.runId,
             status: state.status,
@@ -35,10 +35,10 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
             startedAt: state.startedAt,
           });
         } catch {
-          // µ¥¸öÎÄ¼ş½âÎöÊ§°ÜÌø¹ı
+          // å•ä¸ªæ–‡ä»¶è§£æå¤±è´¥è·³è¿‡
         }
       }
-      // °´¿ªÊ¼Ê±¼äµ¹Ğò£¬×îĞÂµÄÔÚÇ°
+      // æŒ‰å¼€å§‹æ—¶é—´å€’åºï¼Œæœ€æ–°çš„åœ¨å‰
       runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
       return reply.send({ runs });
     } catch (err: unknown) {
@@ -48,27 +48,27 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
     }
   });
 
-  // ¡ì12.3-8 ¶ÁÈ¡Ä³´Î±àÒëµÄ¼¼ÊõÈÕÖ¾£¨JSONL ¸ñÊ½£¬Ã¿ĞĞÒ»¸ö JSON ¶ÔÏó£©
+  // Â§12.3-8 è¯»å–æŸæ¬¡ç¼–è¯‘çš„æŠ€æœ¯æ—¥å¿—ï¼ˆJSONL æ ¼å¼ï¼Œæ¯è¡Œä¸€ä¸ª JSON å¯¹è±¡ï¼‰
   app.get<{ Params: { runId: string } }>(
     '/api/compile/runs/:runId/log',
     async (request, reply) => {
       const { runId } = request.params;
-      // ·ÀÂ·¾¶´©Ô½£ºÖ»ÔÊĞí UUID ¸ñÊ½µÄ runId
+      // é˜²è·¯å¾„ç©¿è¶Šï¼šåªå…è®¸ UUID æ ¼å¼çš„ runId
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
-        return reply.code(400).send({ error: 'ÎŞĞ§µÄ runId' });
+        return reply.code(400).send({ error: 'æ— æ•ˆçš„ runId' });
       }
       const logFile = path.join(logDir, `${runId}.log`);
       try {
         const raw = await fs.readFile(logFile, 'utf8');
-        // JSONL£ºÃ¿ĞĞÒ»¸ö JSON£¬¿ÕĞĞÌø¹ı
+        // JSONLï¼šæ¯è¡Œä¸€ä¸ª JSONï¼Œç©ºè¡Œè·³è¿‡
         const entries = raw
           .split('\n')
           .filter((line) => line.trim())
           .map((line) => JSON.parse(line));
         return reply.send({ entries });
       } catch {
-        // ÎÄ¼ş²»´æÔÚ»ò¶ÁÈ¡Ê§°Ü
-        return reply.code(404).send({ error: 'ÈÕÖ¾²»´æÔÚ', entries: [] });
+        // æ–‡ä»¶ä¸å­˜åœ¨æˆ–è¯»å–å¤±è´¥
+        return reply.code(404).send({ error: 'æ—¥å¿—ä¸å­˜åœ¨', entries: [] });
       }
     },
   );

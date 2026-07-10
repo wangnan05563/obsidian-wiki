@@ -7,17 +7,17 @@ import type { VaultService } from '../vault/vault-service.js';
 import type { QueryInput, AnswerChunk } from '../types.js';
 import { searchPages } from '../search-util.js';
 
-// ¼ÓÔØ query prompt µ¥µã´æ´¢¡£Óë compile ¹²ÓÃ prompts/ Ä¿Â¼£¬±£Ö¤Á½½×¶ÎµÈ¼Û£¨M-3£©¡£
+// åŠ è½½ query prompt å•ç‚¹å­˜å‚¨ã€‚ä¸ compile å…±ç”¨ prompts/ ç›®å½•ï¼Œä¿è¯ä¸¤é˜¶æ®µç­‰ä»·ï¼ˆM-3ï¼‰ã€‚
 declare const __dirname: string;
 async function loadQueryPrompt(): Promise<string> {
-  const here = typeof __dirname !== 'undefined' // NOSONAR: __dirname Îª declare const£¬ESM ÏÂ¿ÉÄÜÎ´ÉùÃ÷£¬Ğè typeof ÊØÎÀ
+  const here = typeof __dirname !== 'undefined' // NOSONAR: __dirname ä¸º declare constï¼ŒESM ä¸‹å¯èƒ½æœªå£°æ˜ï¼Œéœ€ typeof å®ˆå«
     ? __dirname
     : path.dirname(fileURLToPath(import.meta.url));
   const promptPath = path.resolve(here, '..', 'prompts', 'query.md');
   return fs.readFile(promptPath, 'utf8');
 }
 
-// JSON Schema ¼òĞ´£ºËùÓĞ¹¤¾ß²ÎÊı¾ùÎª¶ÔÏó£¬±ÜÃâÖØ¸´Ñù°å¡£
+// JSON Schema ç®€å†™ï¼šæ‰€æœ‰å·¥å…·å‚æ•°å‡ä¸ºå¯¹è±¡ï¼Œé¿å…é‡å¤æ ·æ¿ã€‚
 function objSchema(properties: Record<string, unknown>, required: string[]) {
   return {
     type: 'object',
@@ -26,14 +26,14 @@ function objSchema(properties: Record<string, unknown>, required: string[]) {
   } as const;
 }
 
-// query ¹¤×÷Á÷µÄ¹¤¾ß¼¯¡£½öÌá¹©Ö»¶Á¹¤¾ß£¬query ²»ÔÊĞíĞ´ Vault£¨AC-03-2£©¡£
+// query å·¥ä½œæµçš„å·¥å…·é›†ã€‚ä»…æä¾›åªè¯»å·¥å…·ï¼Œquery ä¸å…è®¸å†™ Vaultï¼ˆAC-03-2ï¼‰ã€‚
 export function createQueryTools(vault: VaultService): ToolDefinition[] {
   return [
     {
       name: 'search_pages',
-      description: '°´¹Ø¼ü´ÊËÑË÷ÖªÊ¶¿âÒ³Ãæ¡£·µ»ØÆ¥ÅäµÄÒ³ÃæÂ·¾¶ÓëÕªÒªÆ¬¶Î¡£',
+      description: 'æŒ‰å…³é”®è¯æœç´¢çŸ¥è¯†åº“é¡µé¢ã€‚è¿”å›åŒ¹é…çš„é¡µé¢è·¯å¾„ä¸æ‘˜è¦ç‰‡æ®µã€‚',
       parameters: objSchema(
-        { keywords: { type: 'string', description: 'ËÑË÷¹Ø¼ü´Ê£¬¶à¸ö´ÊÓÃ¿Õ¸ñ·Ö¸ô' } },
+        { keywords: { type: 'string', description: 'æœç´¢å…³é”®è¯ï¼Œå¤šä¸ªè¯ç”¨ç©ºæ ¼åˆ†éš”' } },
         ['keywords'],
       ),
       handler: async (args: unknown) => {
@@ -43,9 +43,9 @@ export function createQueryTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'read_page',
-      description: '¶ÁÈ¡ÖªÊ¶¿âÖĞÖ¸¶¨Ò³ÃæµÄÍêÕûÄÚÈİ¡£',
+      description: 'è¯»å–çŸ¥è¯†åº“ä¸­æŒ‡å®šé¡µé¢çš„å®Œæ•´å†…å®¹ã€‚',
       parameters: objSchema(
-        { path: { type: 'string', description: 'Ò³ÃæÏà¶ÔÂ·¾¶£¬Èç concepts/llm-wiki.md' } },
+        { path: { type: 'string', description: 'é¡µé¢ç›¸å¯¹è·¯å¾„ï¼Œå¦‚ concepts/llm-wiki.md' } },
         ['path'],
       ),
       handler: async (args: unknown) => {
@@ -56,7 +56,7 @@ export function createQueryTools(vault: VaultService): ToolDefinition[] {
   ];
 }
 
-// ´Ó×îÖÕ´ğ°¸ÎÄ±¾ÖĞÌáÈ¡ [[Ò³ÃæÃû]] ÒıÓÃ£¬È¥ÖØºó×÷Îª refs ·µ»Ø¡£
+// ä»æœ€ç»ˆç­”æ¡ˆæ–‡æœ¬ä¸­æå– [[é¡µé¢å]] å¼•ç”¨ï¼Œå»é‡åä½œä¸º refs è¿”å›ã€‚
 function extractRefs(text: string): string[] {
   const refs = new Set<string>();
   const re = /\[\[([^\]]+)\]\]/g;
@@ -67,63 +67,63 @@ function extractRefs(text: string): string[] {
   return Array.from(refs);
 }
 
-// Ö´ĞĞ query£¬·µ»Ø AsyncIterable<AnswerChunk>¡£
-// harness.run ÊÇ·ÇÁ÷Ê½ Promise<RunResult>£¬ÕâÀï°Ñ finalContent °´¾äÇĞ·ÖºóÖğ¿é yield£¬
-// Ä£ÄâÁ÷Ê½Êä³öÌåÑé¡£ÕæÕıµÄÁ÷Ê½Ğè LLM adapter µÄ chatStream£¬Áô´ıºóĞøÓÅ»¯¡£
+// æ‰§è¡Œ queryï¼Œè¿”å› AsyncIterable<AnswerChunk>ã€‚
+// harness.run æ˜¯éæµå¼ Promise<RunResult>ï¼Œè¿™é‡ŒæŠŠ finalContent æŒ‰å¥åˆ‡åˆ†åé€å— yieldï¼Œ
+// æ¨¡æ‹Ÿæµå¼è¾“å‡ºä½“éªŒã€‚çœŸæ­£çš„æµå¼éœ€ LLM adapter çš„ chatStreamï¼Œç•™å¾…åç»­ä¼˜åŒ–ã€‚
 export async function* queryWorkflow(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   input: QueryInput,
 ): AsyncIterable<AnswerChunk> {
-  // 1. ¹¹Ôì prompt£ºÎÊ´ğÖ¸Áî + ÓÃ»§ÎÊÌâ + ÀúÊ·£¨Èç¹ûÓĞ£©
+  // 1. æ„é€  promptï¼šé—®ç­”æŒ‡ä»¤ + ç”¨æˆ·é—®é¢˜ + å†å²ï¼ˆå¦‚æœæœ‰ï¼‰
   const promptTemplate = await loadQueryPrompt();
   const historyStr = input.history && input.history.length > 0
-    ? input.history.map((h) => `${h.role === 'user' ? 'ÓÃ»§' : 'ÖúÊÖ'}: ${h.content}`).join('\n')
+    ? input.history.map((h) => `${h.role === 'user' ? 'ç”¨æˆ·' : 'åŠ©æ‰‹'}: ${h.content}`).join('\n')
     : '';
-  // ÌáÈ¡Ç¶Ì×Ä£°åµ½±äÁ¿£¬½µµÍÄ£°å¸´ÔÓ¶È£¨S4624£©
-  const historySection = historyStr ? `## ÀúÊ·¶Ô»°\n${historyStr}` : '';
+  // æå–åµŒå¥—æ¨¡æ¿åˆ°å˜é‡ï¼Œé™ä½æ¨¡æ¿å¤æ‚åº¦ï¼ˆS4624ï¼‰
+  const historySection = historyStr ? `## å†å²å¯¹è¯\n${historyStr}` : '';
   const task = `${promptTemplate}
 
-## ÓÃ»§ÎÊÌâ
+## ç”¨æˆ·é—®é¢˜
 ${input.question}
 
 ${historySection}
 `;
 
-  // 2. ¹¹Ôì harness£¬query ²»ĞèÒª afterStep hook ÍÆËÍ½ø¶È£¨´ğ°¸±¾Éí¼´×îÖÕÊä³ö£©
+  // 2. æ„é€  harnessï¼Œquery ä¸éœ€è¦ afterStep hook æ¨é€è¿›åº¦ï¼ˆç­”æ¡ˆæœ¬èº«å³æœ€ç»ˆè¾“å‡ºï¼‰
   const harness = new Harness({
     ...harnessConfig,
     tools: createQueryTools(vault),
   });
 
-  // 3. Ö´ĞĞÎÊ´ğ
+  // 3. æ‰§è¡Œé—®ç­”
   let result;
   try {
     result = await harness.run({ task, context: { question: input.question } });
   } catch (err: unknown) {
-    yield { text: `ÎÊ´ğÊ§°Ü: ${err instanceof Error ? err.message : String(err)}` };
+    yield { text: `é—®ç­”å¤±è´¥: ${err instanceof Error ? err.message : String(err)}` };
     yield { refs: [], done: true };
     return;
   }
 
   if (result.status === 'failed') {
-    yield { text: `ÎÊ´ğÊ§°Ü: ${result.finalContent || 'Î´Öª´íÎó'}` };
+    yield { text: `é—®ç­”å¤±è´¥: ${result.finalContent || 'æœªçŸ¥é”™è¯¯'}` };
     yield { refs: [], done: true };
     return;
   }
 
-  // 4. ½« finalContent °´¾äÇĞ·Ö£¬Öğ¿é yield Ä£ÄâÁ÷Ê½Êä³ö
-  const answer = result.finalContent || 'ÖªÊ¶¿âÎ´¸²¸Ç´ËÎÊÌâ¡£';
-  // °´ÖĞÓ¢ÎÄ¾äºÅ/ÎÊºÅ/¸ĞÌ¾ºÅÇĞ·Ö£¬±£Áô·Ö¸ô·û¡£
-  // È«½Ç/°ë½Ç±êµã¾­ NFKC ¹éÒ»»¯ºóµÈ¼Û£¬È¥ÖØ±£ÁôÈ«½Ç×÷Ö÷·Ö¸ô·û£¨S5869£©£»ÏÔÊ½·Ö×éÃ÷È· | ÓÅÏÈ¼¶£¨S5850£©
-  const sentences = answer.match(/(?:[^¡££¡£¿.!]*[¡££¡£¿.!]+)|(?:[^¡££¡£¿.!]+$)/g) ?? [answer];
+  // 4. å°† finalContent æŒ‰å¥åˆ‡åˆ†ï¼Œé€å— yield æ¨¡æ‹Ÿæµå¼è¾“å‡º
+  const answer = result.finalContent || 'çŸ¥è¯†åº“æœªè¦†ç›–æ­¤é—®é¢˜ã€‚';
+  // æŒ‰ä¸­è‹±æ–‡å¥å·/é—®å·/æ„Ÿå¹å·åˆ‡åˆ†ï¼Œä¿ç•™åˆ†éš”ç¬¦ã€‚
+  // å…¨è§’/åŠè§’æ ‡ç‚¹ç» NFKC å½’ä¸€åŒ–åç­‰ä»·ï¼Œå»é‡ä¿ç•™å…¨è§’ä½œä¸»åˆ†éš”ç¬¦ï¼ˆS5869ï¼‰ï¼›æ˜¾å¼åˆ†ç»„æ˜ç¡® | ä¼˜å…ˆçº§ï¼ˆS5850ï¼‰
+  const sentences = answer.match(/(?:[^ã€‚ï¼ï¼Ÿ.!]*[ã€‚ï¼ï¼Ÿ.!]+)|(?:[^ã€‚ï¼ï¼Ÿ.!]+$)/g) ?? [answer];
   for (const s of sentences) {
     if (s.trim()) {
       yield { text: s };
     }
   }
 
-  // 5. ÌáÈ¡ÒıÓÃ²¢±ê¼ÇÍê³É
+  // 5. æå–å¼•ç”¨å¹¶æ ‡è®°å®Œæˆ
   const refs = extractRefs(answer);
   yield { refs, done: true };
 }

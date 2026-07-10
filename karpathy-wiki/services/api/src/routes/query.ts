@@ -4,9 +4,9 @@ import matter from 'gray-matter';
 import type { EngineAdapter, QueryInput } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 
-// ¡ì5.1 L-7 ·À´Û¸Ä¹éµµ£º»á»°´æ´¢¡£
-// ÄÚ´æ Map ´æ´¢ÎÊ´ğ¶Ô£¬archive Â·ÓÉ´Ó·şÎñ¶Ë´æ´¢È¡´ğ°¸£¬²»ĞÅÈÎ¿Í»§¶Ë´«ÄÚÈİ¡£
-// ½ø³ÌÖØÆô¶ªÊ§£¨´¹Ö±ÇĞÆ¬¿É½ÓÊÜ£»ºóĞø¿É»» SQLite ³Ö¾Ã»¯£©¡£
+// Â§5.1 L-7 é˜²ç¯¡æ”¹å½’æ¡£ï¼šä¼šè¯å­˜å‚¨ã€‚
+// å†…å­˜ Map å­˜å‚¨é—®ç­”å¯¹ï¼Œarchive è·¯ç”±ä»æœåŠ¡ç«¯å­˜å‚¨å–ç­”æ¡ˆï¼Œä¸ä¿¡ä»»å®¢æˆ·ç«¯ä¼ å†…å®¹ã€‚
+// è¿›ç¨‹é‡å¯ä¸¢å¤±ï¼ˆå‚ç›´åˆ‡ç‰‡å¯æ¥å—ï¼›åç»­å¯æ¢ SQLite æŒä¹…åŒ–ï¼‰ã€‚
 interface QaRecord {
   question: string;
   answer: string;
@@ -15,14 +15,14 @@ interface QaRecord {
 }
 const sessions = new Map<string, QaRecord[]>();
 
-// ×¢²á POST /api/query Â·ÓÉ¡£
-// ÇëÇóÌå£º{ question: string, history?: Array<{role, content}> }
-// ÏìÓ¦Îª SSE Á÷£¬done ÊÂ¼ş¸½´ø sessionId£¨¹©¹éµµÓÃ£©¡£
+// æ³¨å†Œ POST /api/query è·¯ç”±ã€‚
+// è¯·æ±‚ä½“ï¼š{ question: string, history?: Array<{role, content}> }
+// å“åº”ä¸º SSE æµï¼Œdone äº‹ä»¶é™„å¸¦ sessionIdï¼ˆä¾›å½’æ¡£ç”¨ï¼‰ã€‚
 export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter) {
   app.post('/api/query', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { question?: string; history?: QueryInput['history'] };
     if (!body || !body.question || typeof body.question !== 'string') {
-      return reply.code(400).send({ error: 'ÇëÇóÌåĞëº¬ question ×Ö¶Î' });
+      return reply.code(400).send({ error: 'è¯·æ±‚ä½“é¡»å« question å­—æ®µ' });
     }
 
     const input: QueryInput = {
@@ -30,7 +30,7 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
       history: body.history,
     };
 
-    // Îª±¾´ÎÎÊ´ğ·ÖÅä sessionId£¬´æÈë»á»°´æ´¢¹© archive ·À´Û¸ÄÈ¡ÓÃ
+    // ä¸ºæœ¬æ¬¡é—®ç­”åˆ†é… sessionIdï¼Œå­˜å…¥ä¼šè¯å­˜å‚¨ä¾› archive é˜²ç¯¡æ”¹å–ç”¨
     const sessionId = randomUUID();
     const answerBuffer: string[] = [];
     let refs: string[] = [];
@@ -54,7 +54,7 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
             refs = chunk.refs ?? [];
             send('refs', { refs });
           }
-          // ´æÈë»á»°´æ´¢£¬¹© archive ·À´Û¸ÄÈ¡ÓÃ
+          // å­˜å…¥ä¼šè¯å­˜å‚¨ï¼Œä¾› archive é˜²ç¯¡æ”¹å–ç”¨
           const records = sessions.get(sessionId) ?? [];
           const messageIndex = records.length;
           records.push({
@@ -64,7 +64,7 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
             ts: new Date().toISOString(),
           });
           sessions.set(sessionId, records);
-          // done ÊÂ¼ş¸½´ø sessionId + messageIndex£¬¿Í»§¶Ë±£´æ¹©¹éµµÓÃ
+          // done äº‹ä»¶é™„å¸¦ sessionId + messageIndexï¼Œå®¢æˆ·ç«¯ä¿å­˜ä¾›å½’æ¡£ç”¨
           send('done', { sessionId, messageIndex });
         } else if ((chunk.refs?.length ?? 0) > 0) {
           send('refs', { refs: chunk.refs });
@@ -83,56 +83,56 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
   });
 }
 
-// ¶ÀÁ¢µ¼³ö¹éµµÂ·ÓÉ×¢²áº¯Êı£¬ÔÚ index.ts ÖĞÓë query Â·ÓÉÒ»Æğ×¢²á¡£
-// ²ğ·ÖÊÇÒòÎª archive ĞèÒª vault ×¢Èë£¬¶ø query ĞèÒª adapter¡£
+// ç‹¬ç«‹å¯¼å‡ºå½’æ¡£è·¯ç”±æ³¨å†Œå‡½æ•°ï¼Œåœ¨ index.ts ä¸­ä¸ query è·¯ç”±ä¸€èµ·æ³¨å†Œã€‚
+// æ‹†åˆ†æ˜¯å› ä¸º archive éœ€è¦ vault æ³¨å…¥ï¼Œè€Œ query éœ€è¦ adapterã€‚
 export function registerQueryArchiveRoute(app: FastifyInstance, vault: VaultService) {
   app.post('/api/query/archive', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { sessionId?: string; messageIndex?: number };
     if (!body || !body.sessionId || typeof body.messageIndex !== 'number') {
-      return reply.code(400).send({ error: 'ÇëÇóÌåĞëº¬ sessionId Óë messageIndex' });
+      return reply.code(400).send({ error: 'è¯·æ±‚ä½“é¡»å« sessionId ä¸ messageIndex' });
     }
 
     const records = sessions.get(body.sessionId);
     if (!records || body.messageIndex < 0 || body.messageIndex >= records.length) {
-      return reply.code(404).send({ error: '»á»°»òÏûÏ¢²»´æÔÚ£¨¿ÉÄÜÒÑ¹ıÆÚ£©' });
+      return reply.code(404).send({ error: 'ä¼šè¯æˆ–æ¶ˆæ¯ä¸å­˜åœ¨ï¼ˆå¯èƒ½å·²è¿‡æœŸï¼‰' });
     }
 
     const record = records[body.messageIndex];
-    // Éú³É¹éµµÒ³ÃæÎÄ¼şÃû£ºqueries/qa-{timestamp}-{¶ÌËæ»ú}.md
+    // ç”Ÿæˆå½’æ¡£é¡µé¢æ–‡ä»¶åï¼šqueries/qa-{timestamp}-{çŸ­éšæœº}.md
     const shortId = body.sessionId.slice(0, 8);
     const dateStr = new Date(record.ts).toISOString().slice(0, 10);
     const relPath = `queries/qa-${dateStr}-${shortId}.md`;
 
-    // ¹¹Ôì frontmatter + ÕıÎÄ¡£type: query ·ûºÏ SCHEMA ¹æ·¶
+    // æ„é€  frontmatter + æ­£æ–‡ã€‚type: query ç¬¦åˆ SCHEMA è§„èŒƒ
     const frontmatter = {
-      title: `ÎÊ´ğ¹éµµ£º${record.question.slice(0, 30)}${record.question.length > 30 ? '¡­' : ''}`,
+      title: `é—®ç­”å½’æ¡£ï¼š${record.question.slice(0, 30)}${record.question.length > 30 ? 'â€¦' : ''}`,
       type: 'query',
       created: dateStr,
       updated: dateStr,
       source: 'qa-archive',
-      tags: ['ÎÊ´ğ¹éµµ', ...record.refs],
+      tags: ['é—®ç­”å½’æ¡£', ...record.refs],
     };
 
-    // ÌáÈ¡Ç¶Ì×Ä£°åµ½±äÁ¿£¬½µµÍÄ£°å¸´ÔÓ¶È£¨S4624£©
+    // æå–åµŒå¥—æ¨¡æ¿åˆ°å˜é‡ï¼Œé™ä½æ¨¡æ¿å¤æ‚åº¦ï¼ˆS4624ï¼‰
     const refLines = record.refs.map((r) => `- [[${r}]]`).join('\n');
     const refsSection = record.refs.length > 0
-      ? `\n\n## ÒıÓÃÒ³Ãæ\n${refLines}`
+      ? `\n\n## å¼•ç”¨é¡µé¢\n${refLines}`
       : '';
 
     const content = matter.stringify(
-      `# ÎÊ´ğ¹éµµ\n\n## ÎÊÌâ\n${record.question}\n\n## »Ø´ğ\n${record.answer}${refsSection}\n`,
+      `# é—®ç­”å½’æ¡£\n\n## é—®é¢˜\n${record.question}\n\n## å›ç­”\n${record.answer}${refsSection}\n`,
       frontmatter,
     );
 
     try {
       await vault.writeFile(relPath, content);
-      // ×·¼Óµ½ index.md
+      // è¿½åŠ åˆ° index.md
       await vault.appendIndex(
         frontmatter.title,
-        `¹éµµÎÊ´ğ£º${record.question.slice(0, 40)}`,
+        `å½’æ¡£é—®ç­”ï¼š${record.question.slice(0, 40)}`,
       );
-      // ¼ÇÂ¼²Ù×÷ÈÕÖ¾
-      await vault.appendLog('query', [relPath], `¹éµµÎÊ´ğ: ${record.question.slice(0, 40)}`);
+      // è®°å½•æ“ä½œæ—¥å¿—
+      await vault.appendLog('query', [relPath], `å½’æ¡£é—®ç­”: ${record.question.slice(0, 40)}`);
       return reply.send({ ok: true, path: relPath });
     } catch (err: unknown) {
       return reply.code(500).send({

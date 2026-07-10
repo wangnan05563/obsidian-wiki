@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import RobotAvatar from '../components/RobotAvatar.vue';
-import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine } from '../types';
+import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult } from '../types';
 
-const activeTab = ref<'schema' | 'config'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai'>('schema');
 const config = ref<ConfigData | null>(null);
 const schemaContent = ref<string>('');
 const schemaBuffer = ref<string>('');
@@ -158,10 +158,156 @@ async function reloadConfig() {
   }
 }
 
+// ===== AI 服务配置 =====
+
+// AI 配置状态
+const aiConfig = ref<AiConfig | null>(null);
+const aiPresets = ref<LlmPreset[]>([]);
+const loadingAi = ref(false);
+const savingAi = ref(false);
+const testingAi = ref(false);
+const aiTestResult = ref<AiTestResult | null>(null);
+
+// AI 表单（可编辑，与 aiConfig 分离，保存时才同步）
+const aiForm = ref({
+  provider: '',
+  baseUrl: '',
+  model: '',
+  apiKey: '', // 脱敏值或新输入值
+});
+
+// 加载 AI 配置
+async function loadAiConfig() {
+  loadingAi.value = true;
+  try {
+    const res = await fetch('/api/ai/config');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: AiConfig = await res.json();
+    aiConfig.value = data;
+    // 表单初始化为当前配置，apiKey 显示脱敏值
+    aiForm.value = {
+      provider: data.provider,
+      baseUrl: data.baseUrl,
+      model: data.model,
+      apiKey: data.apiKeyMasked || '',
+    };
+  } catch (err) {
+    ElMessage.error('加载 AI 配置失败：' + (err as Error).message);
+  } finally {
+    loadingAi.value = false;
+  }
+}
+
+// 加载 LLM 预设列表
+async function loadPresets() {
+  try {
+    const res = await fetch('/api/ai/presets');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    aiPresets.value = data.presets ?? [];
+  } catch {
+    // 预设加载失败不阻断，用户可手动输入
+  }
+}
+
+// 应用预设：一键填充 provider/baseUrl/model
+function applyPreset(preset: LlmPreset) {
+  aiForm.value.provider = preset.provider;
+  aiForm.value.baseUrl = preset.baseUrl;
+  aiForm.value.model = preset.model;
+  ElMessage.success(`已切换到 ${preset.label} 预设`);
+}
+
+// 保存 AI 配置
+async function saveAiConfig() {
+  if (!aiForm.value.baseUrl.trim()) {
+    ElMessage.warning('请填写 API Base URL');
+    return;
+  }
+  if (!aiForm.value.model.trim()) {
+    ElMessage.warning('请填写模型名称');
+    return;
+  }
+
+  savingAi.value = true;
+  try {
+    const res = await fetch('/api/ai/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: aiForm.value.provider,
+        baseUrl: aiForm.value.baseUrl,
+        model: aiForm.value.model,
+        apiKey: aiForm.value.apiKey,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      aiConfig.value = data.config;
+      // 保存后更新表单 apiKey 为脱敏值
+      aiForm.value.apiKey = data.config.apiKeyMasked || '';
+      ElMessage.success('AI 配置保存成功');
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    ElMessage.error('保存失败：' + (err as Error).message);
+  } finally {
+    savingAi.value = false;
+  }
+}
+
+// 测试 LLM 连接
+async function testConnection() {
+  testingAi.value = true;
+  aiTestResult.value = null;
+  try {
+    const res = await fetch('/api/ai/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: aiForm.value.baseUrl,
+        model: aiForm.value.model,
+        apiKey: aiForm.value.apiKey,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // 使用局部变量收窄类型，避免 ref 在 await 后被认为可能为 null
+    const result: AiTestResult = await res.json();
+    aiTestResult.value = result;
+    if (result.ok) {
+      ElMessage.success('连接测试成功');
+    } else {
+      ElMessage.warning('连接测试失败');
+    }
+  } catch (err) {
+    aiTestResult.value = { ok: false, detail: (err as Error).message };
+    ElMessage.error('测试失败：' + (err as Error).message);
+  } finally {
+    testingAi.value = false;
+  }
+}
+
+// 格式化测试结果文本（计算属性避免模板中类型收窄问题）
+const testResultText = computed(() => {
+  const r = aiTestResult.value;
+  if (!r) return '';
+  return r.ok ? `连接成功（模型: ${r.model || '未知'}）` : r.detail;
+});
+
+// 测试结果图标
+const testResultIcon = computed(() => {
+  const r = aiTestResult.value;
+  return r?.ok ? '?' : '?';
+});
+
 onMounted(() => {
   loadSchema();
   loadConfig();
   loadHistory();
+  loadAiConfig();
+  loadPresets();
 });
 </script>
 
@@ -221,7 +367,7 @@ onMounted(() => {
               <div v-if="!gitEnabled" class="history-disabled">
                 Vault 未启用 Git，无法查看版本历史。在 Vault 目录执行 <code>git init</code> 即可启用。
               </div>
-              <div v-else-if="commits.length === 0" class="history-empty">▸ 暂无提交记录</div>
+              <div v-else-if="commits.length === 0" class="history-empty">? 暂无提交记录</div>
               <div v-else class="commit-list">
                 <div
                   v-for="c in commits"
@@ -255,7 +401,7 @@ onMounted(() => {
                   </el-button>
                 </div>
                 <div v-if="showDiff && !loadingDiff" class="diff-result">
-                  <div v-if="diffLines.length === 0" class="diff-empty">▸ 无差异</div>
+                  <div v-if="diffLines.length === 0" class="diff-empty">? 无差异</div>
                   <div v-else class="diff-lines">
                     <div
                       v-for="(line, idx) in diffLines"
@@ -296,7 +442,7 @@ onMounted(() => {
                 <span class="applied-tag">staleDays: {{ reloadResult.applied.staleDays }}</span>
               </div>
               <div v-if="reloadResult.requireRestart.length > 0" class="reload-warn">
-                ⚠ 以下字段变更需重启服务才能生效：{{ reloadResult.requireRestart.join(', ') }}
+                ? 以下字段变更需重启服务才能生效：{{ reloadResult.requireRestart.join(', ') }}
               </div>
             </div>
 
@@ -372,10 +518,98 @@ onMounted(() => {
 
               <!-- API Key 提示 -->
               <div v-if="!config.llm.apiKeySet" class="key-warning">
-                <div class="warning-icon">⚠</div>
+                <div class="warning-icon">?</div>
                 <div class="warning-text">
                   <strong>API Key 未设置</strong>
                   <p>请设置环境变量 <code>{{ config.llm.apiKeyRef }}</code> 后重启服务，否则编译与问答将返回 401 错误。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- AI 服务配置 -->
+        <el-tab-pane label="AI 服务" name="ai">
+          <div class="ai-section">
+            <!-- 预设快捷选择 -->
+            <div class="preset-bar">
+              <span class="section-desc">// LLM 预设</span>
+              <div class="preset-tags">
+                <span
+                  v-for="preset in aiPresets"
+                  :key="preset.key"
+                  class="preset-tag"
+                  :class="{ active: aiForm.provider === preset.provider }"
+                  @click="applyPreset(preset)"
+                >
+                  {{ preset.label }}
+                </span>
+              </div>
+            </div>
+
+            <div v-if="loadingAi" class="section-loading">// 加载中…</div>
+            <div v-else class="ai-form">
+              <!-- 配置表单 -->
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 模型配置 <span class="block-bracket">]</span></h3>
+                <div class="form-row">
+                  <label class="form-label">API Base URL</label>
+                  <el-input
+                    v-model="aiForm.baseUrl"
+                    placeholder="https://api.openai.com/v1"
+                    class="form-input"
+                  />
+                </div>
+                <div class="form-row">
+                  <label class="form-label">API Key</label>
+                  <el-input
+                    v-model="aiForm.apiKey"
+                    type="password"
+                    show-password
+                    placeholder="输入 API Key（****表示已设置）"
+                    class="form-input"
+                  />
+                </div>
+                <div class="form-row">
+                  <label class="form-label">模型</label>
+                  <el-input
+                    v-model="aiForm.model"
+                    placeholder="gpt-4o-mini"
+                    class="form-input"
+                  />
+                </div>
+              </div>
+
+              <!-- 操作按钮 -->
+              <div class="ai-actions">
+                <el-button class="neon-btn" :loading="testingAi" @click="testConnection">
+                  测试连接
+                </el-button>
+                <el-button class="neon-btn-primary" :loading="savingAi" @click="saveAiConfig">
+                  保存配置
+                </el-button>
+              </div>
+
+              <!-- 测试结果 -->
+              <div v-if="aiTestResult" class="test-result" :class="{ ok: aiTestResult.ok, fail: !aiTestResult.ok }">
+                <span class="result-icon">{{ testResultIcon }}</span>
+                <span class="result-text">{{ testResultText }}</span>
+              </div>
+
+              <!-- 当前状态摘要 -->
+              <div v-if="aiConfig" class="ai-status">
+                <div class="status-row">
+                  <span class="status-label">当前状态</span>
+                  <span class="status-value">
+                    <span :class="['key-status', aiConfig.apiKeySet ? 'set' : 'unset']">
+                      {{ aiConfig.apiKeySet ? 'Key 已设置' : 'Key 未设置' }}
+                    </span>
+                    <span v-if="aiConfig.apiKeyMasked" class="masked-key">{{ aiConfig.apiKeyMasked }}</span>
+                  </span>
+                </div>
+                <div v-if="!aiConfig.apiKeySet" class="key-hint">
+                  <span class="hint-icon">?</span>
+                  <span>请配置 API Key 或设置环境变量 <code>{{ aiConfig.apiKeyRef }}</code></span>
                 </div>
               </div>
             </div>
@@ -920,5 +1154,198 @@ onMounted(() => {
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--text-base);
+}
+
+/* ===== AI 服务配置样式 ===== */
+.ai-section {
+  min-height: 400px;
+}
+
+.preset-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 14px 18px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-card);
+}
+
+.preset-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+
+.preset-tag {
+  padding: 4px 14px;
+  background: var(--accent-purple-a06);
+  border: 1px solid var(--accent-purple-a30);
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  letter-spacing: 0.03em;
+}
+
+.preset-tag:hover {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a10);
+  box-shadow: var(--glow-cyan);
+}
+
+.preset-tag.active {
+  background: var(--accent-cyan-a15);
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  box-shadow: 0 0 12px var(--accent-cyan-a30);
+}
+
+.ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 0;
+}
+
+.form-label {
+  width: 120px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.form-input {
+  flex: 1;
+}
+
+.form-input :deep(.el-input__wrapper) {
+  background: var(--bg-scene) !important;
+  border: 1px solid var(--accent-purple-a30) !important;
+  border-radius: var(--radius-input) !important;
+  box-shadow: none !important;
+  transition: all 0.3s ease !important;
+}
+
+.form-input :deep(.el-input__wrapper:hover) {
+  border-color: var(--neon-cyan) !important;
+}
+
+.form-input :deep(.el-input__wrapper.is-focus) {
+  border-color: var(--neon-cyan) !important;
+  box-shadow: 0 0 12px var(--accent-cyan-a30) !important;
+}
+
+.form-input :deep(.el-input__inner) {
+  color: var(--text-bright) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 13px !important;
+}
+
+.ai-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.test-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-radius: var(--radius-card);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.test-result.ok {
+  background: linear-gradient(135deg, var(--accent-cyan-a12), var(--accent-cyan-a03));
+  border: 1px solid var(--accent-cyan-a35);
+  color: var(--neon-cyan);
+}
+
+.test-result.fail {
+  background: linear-gradient(135deg, var(--accent-pink-a12), var(--accent-pink-a03));
+  border: 1px solid var(--accent-pink-a35);
+  color: var(--neon-magenta);
+}
+
+.result-icon {
+  font-size: 18px;
+  font-weight: 900;
+  text-shadow: 0 0 10px currentColor;
+}
+
+.ai-status {
+  padding: 14px 18px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-card);
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.status-label {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.status-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.masked-key {
+  padding: 2px 10px;
+  background: var(--accent-purple-a12);
+  border: 1px solid var(--accent-purple-a30);
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--neon-purple);
+}
+
+.key-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--neon-magenta);
+  font-family: var(--font-mono);
+}
+
+.hint-icon {
+  font-size: 16px;
+}
+
+.key-hint code {
+  padding: 2px 8px;
+  background: var(--accent-cyan-a12);
+  border: 1px solid var(--accent-cyan-a30);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--neon-cyan);
 }
 </style>
