@@ -81,11 +81,19 @@ Write-Log "node_modules 已就绪" -Level OK -Step "2/4"
 # 对标闲鱼启动脚本中的 PKG_CMD 检测逻辑
 $pkgManager = $Config.commands.pkg_manager
 if ($pkgManager -eq 'auto') {
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        $pkgManager = 'pnpm'
+    if (Get-Command pnpm.cmd -ErrorAction SilentlyContinue) {
+        $pkgManager = 'pnpm.cmd'
     } else {
-        $pkgManager = 'npm'
+        $pkgManager = 'npm.cmd'
     }
+} elseif ($pkgManager -eq 'pnpm') {
+    $pkgManager = 'pnpm.cmd'
+} elseif ($pkgManager -eq 'npm') {
+    $pkgManager = 'npm.cmd'
+}
+if (-not (Get-Command $pkgManager -ErrorAction SilentlyContinue)) {
+    Write-Log "包管理器不可用: $pkgManager" -Level ERROR -Step "2/4"
+    exit 1
 }
 Write-Log "包管理器: $pkgManager" -Level OK -Step "2/4"
 

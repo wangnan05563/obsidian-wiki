@@ -5,9 +5,8 @@ import type { UploadFile } from 'element-plus';
 import RobotAvatar from '../components/RobotAvatar.vue';
 import { useCompileStore } from '../stores/compile';
 
-const emit = defineEmits<{
-  (e: 'start'): void;
-}>();
+// 使用函数类型写法替代类型字面量（S6598）
+const emit = defineEmits<(e: 'start') => void>();
 
 const store = useCompileStore();
 

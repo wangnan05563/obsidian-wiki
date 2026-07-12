@@ -1,4 +1,4 @@
-/* ============================================================
+﻿/* ============================================================
  * 霓虹赛博设计系统 · Neon Cyber Design System
  * 电光紫 / 品红 / 青蓝撞色，深色背景 + 高饱和发光
  * 不对称布局 + 滚动视差 + 鼠标悬停动画
@@ -385,7 +385,7 @@ body {
 .el-input__wrapper,
 .el-textarea__inner {
   border-radius: var(--radius-input) !important;
-  background: rgba(10, 1, 24, 0.6) !important;
+  background: rgba(22, 10, 45, 0.3) !important;
   box-shadow: 0 0 0 1px rgba(176, 38, 255, 0.2) inset !important;
   color: var(--text-bright) !important;
   font-family: var(--font-body) !important;

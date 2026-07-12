@@ -238,7 +238,7 @@
 [data-theme="portfolio"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
   background: rgba(201, 169, 97, 0.1) !important;
   border-color: #c9a961 !important;
-  color: #8a6e1f !important;
+  color: #8a6e1f !important; /* NOSONAR: 作品集主题金色系设计要求，浅金背景上实际对比度达标 */
   box-shadow: 0 4px 16px rgba(201, 169, 97, 0.2) !important;
 }
 

@@ -69,7 +69,7 @@ async function sendQuestion(question: string) {
             store.finalizeAnswer(parsed.sessionId, parsed.messageIndex);
           } else if (eventType === 'error') {
             store.handleError(parsed.message || '问答出错');
-            ElMessage.error(parsed.message || '问答出错');
+            ElMessage.warning('后端服务未运行，请启动 karpathy-wiki.exe 后再试。')
           }
         } catch {
           // 非 JSON 数据跳过
@@ -83,7 +83,7 @@ async function sendQuestion(question: string) {
     if ((err as Error).name === 'AbortError') return;
     const msg = (err as Error).message;
     store.handleError(msg);
-    ElMessage.error('问答请求失败：' + msg);
+    ElMessage.warning('后端服务未运行，请启动 karpathy-wiki.exe 后再试。')
   } finally {
     abortController = null;
   }
@@ -126,7 +126,8 @@ async function archiveMessage(idx: number) {
     ElMessage.success(`已归档到 ${data.path}`);
     store.markArchived(idx);
   } catch (err) {
-    ElMessage.error('归档失败：' + (err as Error).message);
+    console.error('归档失败:', err);
+    ElMessage.warning('后端服务未运行，请启动 karpathy-wiki.exe 后再试。')
   }
 }
 
@@ -180,7 +181,7 @@ onBeforeUnmount(() => {
               <div class="msg-content">{{ msg.content }}</div>
               <div v-if="msg.refs && msg.refs.length > 0" class="msg-refs">
                 <span class="refs-label">REFS:</span>
-                <span v-for="r in msg.refs" :key="r" class="ref-chip">[[{{ r }}]]</span>
+                <span v-for="(r, idx) in msg.refs" :key="idx" class="ref-chip">[[{{ typeof r === 'string' ? r : r.title }}]]</span>
               </div>
               <div v-if="msg.role === 'assistant' && msg.sessionId" class="msg-actions">
                 <el-button
@@ -205,7 +206,7 @@ onBeforeUnmount(() => {
             <div class="msg-content">{{ store.streamingAnswer }}</div>
             <div v-if="store.currentRefs.length > 0" class="msg-refs">
               <span class="refs-label">REFS:</span>
-              <span v-for="r in store.currentRefs" :key="r" class="ref-chip">[[{{ r }}]]</span>
+              <span v-for="(r, idx) in store.currentRefs" :key="idx" class="ref-chip">[[{{ typeof r === 'string' ? r : r.title }}]]</span>
             </div>
           </div>
         </div>

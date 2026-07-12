@@ -75,6 +75,13 @@ export interface TunnelConfig {
   autoStart: boolean;
 }
 
+export interface WebSearchConfig {
+  provider: 'tavily' | 'bing';
+  apiKeyRef: string;
+  apiKey?: string;
+  maxResults?: number;
+}
+
 // 应用配置。
 // apiKeyRef 引用环境变量名（向后兼容）；apiKey 可选，前端配置时写入 config.json。
 // 读取优先级：config.json.llm.apiKey > process.env[apiKeyRef]（M-7 安全要求）。
@@ -88,6 +95,7 @@ export interface AppConfig {
   localOnly: boolean;
   healthCheck: { staleDays: number };
   tunnel: TunnelConfig;
+  webSearch?: WebSearchConfig;
 }
 
 // ===== 系统清理模块类型 =====

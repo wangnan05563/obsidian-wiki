@@ -273,9 +273,9 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="config-row">
-          <label class="row-label">开机自启</label>
+          <label class="row-label" for="tunnel-auto-start">开机自启</label>
           <div class="row-value">
-            <el-switch v-model="formAutoStart" />
+            <el-switch id="tunnel-auto-start" v-model="formAutoStart" />
             <span class="hint">服务启动时自动建立隧道</span>
           </div>
         </div>

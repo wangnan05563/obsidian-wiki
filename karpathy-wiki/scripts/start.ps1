@@ -34,13 +34,17 @@ if (Test-Path $EnvFile) {
     Write-Host "[警告] 未找到 .env 文件，API Key 可能缺失。若问答报错请先运行 .\scripts\install.ps1" -ForegroundColor Yellow
 }
 
-# 检测包管理器
-$UsePnpm = $false
-try { $null = pnpm --version; $UsePnpm = $true } catch { }
+# Windows PowerShell 可能禁止执行 pnpm.ps1/npm.ps1；显式使用 .cmd 入口。
+$PnpmCommand = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
+$NpmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+if (-not $PnpmCommand -and -not $NpmCommand) {
+    throw "未检测到 pnpm.cmd 或 npm.cmd，请先安装 Node.js 与包管理器"
+}
 
 function Get-DevCommand {
     param([string]$Target)  # 'api' 或 'web'
-    if ($UsePnpm) { return "pnpm dev:$Target" } else { return "npm run dev:$Target" }
+    if ($PnpmCommand) { return "pnpm.cmd dev:$Target" }
+    return "npm.cmd run dev:$Target"
 }
 
 # ============================================================

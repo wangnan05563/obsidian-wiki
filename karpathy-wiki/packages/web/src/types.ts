@@ -84,15 +84,57 @@ export interface UploadFileLike {
 
 // 单条问答记录（对话历史中的一轮）
 export interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   // assistant 消息可能附带引用页面
-  refs?: string[];
+  refs?: string[] | Reference[];
+  followups?: string[];
+  thinking?: ThinkingStep[];
+  feedback?: 'up' | 'down';
+  createdAt?: string;
   // §5.1 L-7 归档所需：done 事件附带的会话 ID 与消息索引
   sessionId?: string;
   messageIndex?: number;
   // 是否已归档
   archived?: boolean;
+}
+
+export interface Reference {
+  path?: string;
+  url?: string;
+  title: string;
+  snippet: string;
+  source: 'vault' | 'web';
+  citeIndex: number;
+}
+
+export interface ThinkingStep {
+  phase: 'thinking' | 'tool_call' | 'composing';
+  message: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  ts: string;
+}
+
+export interface Attachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  blob: Blob;
+  thumbnail: Blob;
+}
+
+export interface ConversationRecord {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  isPinned: boolean;
+  preview: string;
+  messages: ChatMessage[];
 }
 
 // SSE answer 事件数据
@@ -291,6 +333,7 @@ export interface AiConfig {
   apiKeyRef: string;
   apiKeyMasked: string;
   apiKeySet: boolean;
+  providerKeyStatus?: Record<string, boolean>;
 }
 
 // LLM 预设项（GET /api/ai/presets）

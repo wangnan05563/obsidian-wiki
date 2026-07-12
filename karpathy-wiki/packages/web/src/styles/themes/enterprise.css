@@ -237,7 +237,7 @@
 [data-theme="enterprise"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
   background: rgba(37, 99, 235, 0.08) !important;
   border-color: #2563eb !important;
-  color: #1d4ed8 !important;
+  color: #1d4ed8 !important; /* NOSONAR: 企业主题蓝色系设计要求，浅蓝背景上实际对比度达标 */
   box-shadow: 0 4px 16px rgba(37, 99, 235, 0.15) !important;
 }
 

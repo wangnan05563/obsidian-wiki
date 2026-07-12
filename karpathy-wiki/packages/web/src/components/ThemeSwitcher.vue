@@ -2,6 +2,10 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useTheme, type ThemeName } from '../composables/useTheme';
 
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), {
+  embedded: false,
+});
+
 const { currentTheme, themes, setTheme } = useTheme();
 const open = ref(false);
 const panelRef = ref<HTMLDivElement | null>(null);
@@ -54,9 +58,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="theme-switcher" ref="panelRef">
+  <div class="theme-switcher" :class="{ embedded: props.embedded }" ref="panelRef">
     <!-- Trigger button: shows current theme swatch -->
     <button
+      v-if="!props.embedded"
       class="trigger hover-glow"
       :class="{ active: open }"
       @click.stop="toggle"
@@ -71,7 +76,7 @@ onBeforeUnmount(() => {
 
     <!-- Theme selection panel -->
     <transition name="panel">
-      <div v-if="open" class="panel glass-card">
+      <div v-if="open || props.embedded" class="panel glass-card">
         <div class="panel-header">
           <span class="panel-title">{{ panelTitle }}</span>
           <span class="panel-sub">{{ themes.length }} styles</span>
@@ -109,6 +114,14 @@ onBeforeUnmount(() => {
   right: 24px;
   bottom: 24px;
   z-index: 1000;
+}
+
+.theme-switcher.embedded {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  z-index: 1;
+  width: 100%;
 }
 
 /* Trigger button */
@@ -182,6 +195,14 @@ onBeforeUnmount(() => {
   width: 280px;
   padding: 16px;
   background: var(--bg-card-solid);
+}
+
+.embedded .panel {
+  position: relative;
+  bottom: auto;
+  right: auto;
+  width: 100%;
+  background: var(--bg-card);
 }
 
 .panel-header {
@@ -308,6 +329,16 @@ onBeforeUnmount(() => {
 
   .panel {
     width: 260px;
+  }
+
+  .theme-switcher.embedded {
+    position: relative;
+    right: auto;
+    bottom: auto;
+  }
+
+  .embedded .panel {
+    width: 100%;
   }
 }
 </style>

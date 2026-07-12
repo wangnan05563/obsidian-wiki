@@ -116,11 +116,11 @@ function Invoke-EnvCheck {
 
     # 2. 包管理器（pnpm 优先，回退 npm）
     $pkgCmd = $null
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        $pkgCmd = "pnpm"
+    if (Get-Command pnpm.cmd -ErrorAction SilentlyContinue) {
+        $pkgCmd = "pnpm.cmd"
     }
-    elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-        $pkgCmd = "npm"
+    elseif (Get-Command npm.cmd -ErrorAction SilentlyContinue) {
+        $pkgCmd = "npm.cmd"
     }
     if (-not $pkgCmd) {
         Write-Host "  [FAIL] 未检测到 pnpm 或 npm" -ForegroundColor Red
@@ -433,11 +433,11 @@ function Action-Check {
     Write-Host ""
     Write-Host "[2/11] 包管理器..." -ForegroundColor Cyan
     $pkgCmd = $null
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        $pkgCmd = "pnpm"
+    if (Get-Command pnpm.cmd -ErrorAction SilentlyContinue) {
+        $pkgCmd = "pnpm.cmd"
     }
-    elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-        $pkgCmd = "npm"
+    elseif (Get-Command npm.cmd -ErrorAction SilentlyContinue) {
+        $pkgCmd = "npm.cmd"
     }
     if ($pkgCmd) {
         $pkgVer = & $pkgCmd --version 2>$null

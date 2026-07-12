@@ -51,7 +51,7 @@ REM [3/3] 执行前端构建
 echo.
 echo [3/3] 正在执行前端构建 SPA...
 
-%PKG_CMD% run build
+call %PKG_CMD% run build
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [ERROR] 构建失败，请查看上方错误信息

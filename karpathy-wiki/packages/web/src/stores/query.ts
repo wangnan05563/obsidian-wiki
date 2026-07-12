@@ -1,98 +1,147 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, Reference, ThinkingStep } from '../types';
 
-// query 问答 store。
-// 管理：对话历史、当前流式答案缓冲、loading 状态、错误信息。
 export const useQueryStore = defineStore('query', () => {
-  // 完整对话历史，每轮含 user 问题与 assistant 回答
   const messages = ref<ChatMessage[]>([]);
-  // 当前正在流式接收的 assistant 答案（实时拼接）
-  const streamingAnswer = ref<string>('');
-  // 当前轮引用的页面列表
-  const currentRefs = ref<string[]>([]);
+  const streamingAnswer = ref('');
+  const currentRefs = ref<Reference[]>([]);
+  const currentFollowups = ref<string[]>([]);
+  const currentThinking = ref<ThinkingStep[]>([]);
+  const searchProgress = ref<{ step: string; count?: number } | null>(null);
   const isLoading = ref(false);
-  const errorMessage = ref<string>('');
+  const errorMessage = ref('');
 
-  // 处理 SSE answer 事件：累加文本到流式缓冲
   function appendAnswer(text: string) {
     streamingAnswer.value += text;
   }
 
-  // 处理 SSE refs 事件：更新当前引用列表
-  function setRefs(refs: string[]) {
-    currentRefs.value = refs;
+  function setRefs(refs: string[] | Reference[]) {
+    currentRefs.value = refs.map((ref, index) => {
+      if (typeof ref !== 'string') return ref;
+      return {
+        path: ref,
+        title: ref.split('/').pop() || ref,
+        snippet: '',
+        source: 'vault' as const,
+        citeIndex: index + 1,
+      };
+    });
   }
 
-  // 处理 SSE done 事件：把流式缓冲落为一条 assistant 消息
-  // sessionId/messageIndex 由后端 done 事件附带，供归档使用
-  function finalizeAnswer(sessionId?: string, messageIndex?: number) {
+  function setFollowups(followups: string[]) {
+    currentFollowups.value = followups;
+  }
+
+  function appendThinking(step: ThinkingStep) {
+    currentThinking.value.push(step);
+  }
+
+  function setProgress(step: string, count?: number) {
+    searchProgress.value = { step, count };
+  }
+
+  function clearCurrentRound() {
+    streamingAnswer.value = '';
+    currentRefs.value = [];
+    currentFollowups.value = [];
+    currentThinking.value = [];
+    searchProgress.value = null;
+  }
+
+  function finalizeAnswer(sessionId?: string, messageIndex?: number, followups?: string[]) {
     if (streamingAnswer.value) {
+      const finalFollowups = followups?.length ? followups : currentFollowups.value;
       messages.value.push({
+        id: crypto.randomUUID(),
         role: 'assistant',
         content: streamingAnswer.value,
-        refs: currentRefs.value.length > 0 ? [...currentRefs.value] : undefined,
+        refs: currentRefs.value.length ? [...currentRefs.value] : undefined,
+        followups: finalFollowups.length ? [...finalFollowups] : undefined,
+        thinking: currentThinking.value.length ? [...currentThinking.value] : undefined,
+        createdAt: new Date().toISOString(),
         sessionId,
         messageIndex,
       });
     }
-    streamingAnswer.value = '';
-    currentRefs.value = [];
+    clearCurrentRound();
     isLoading.value = false;
   }
 
-  // 提交问题前：先把 user 消息入历史，清空缓冲进入 loading
   function submitQuestion(question: string) {
-    messages.value.push({ role: 'user', content: question });
-    streamingAnswer.value = '';
-    currentRefs.value = [];
+    messages.value.push({
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: question,
+      createdAt: new Date().toISOString(),
+    });
+    clearCurrentRound();
     errorMessage.value = '';
     isLoading.value = true;
   }
 
-  // 处理错误：保留已收到的部分答案，标记 loading 结束
   function handleError(message: string) {
     errorMessage.value = message;
     if (streamingAnswer.value) {
       messages.value.push({
+        id: crypto.randomUUID(),
         role: 'assistant',
-        content: streamingAnswer.value + `\n\n[出错: ${message}]`,
-        refs: currentRefs.value.length > 0 ? [...currentRefs.value] : undefined,
+        content: `${streamingAnswer.value}\n\n[出错: ${message}]`,
+        refs: currentRefs.value.length ? [...currentRefs.value] : undefined,
+        createdAt: new Date().toISOString(),
       });
-      streamingAnswer.value = '';
     }
-    currentRefs.value = [];
+    clearCurrentRound();
     isLoading.value = false;
   }
 
-  // 清空对话历史，开始新会话
   function reset() {
     messages.value = [];
-    streamingAnswer.value = '';
-    currentRefs.value = [];
+    clearCurrentRound();
     errorMessage.value = '';
     isLoading.value = false;
   }
 
-  // 标记某条消息已归档
   function markArchived(index: number) {
-    if (messages.value[index]) {
-      messages.value[index].archived = true;
-    }
+    if (messages.value[index]) messages.value[index].archived = true;
+  }
+
+  function loadMessages(loadedMessages: ChatMessage[]) {
+    messages.value = loadedMessages;
+    clearCurrentRound();
+    errorMessage.value = '';
+    isLoading.value = false;
+  }
+
+  function removeMessagesFrom(index: number) {
+    messages.value = messages.value.slice(0, index);
+  }
+
+  function setFeedback(index: number, feedback: 'up' | 'down') {
+    if (messages.value[index]) messages.value[index].feedback = feedback;
   }
 
   return {
     messages,
     streamingAnswer,
     currentRefs,
+    currentFollowups,
+    currentThinking,
+    searchProgress,
     isLoading,
     errorMessage,
     appendAnswer,
     setRefs,
+    setFollowups,
+    appendThinking,
+    setProgress,
     finalizeAnswer,
     submitQuestion,
     handleError,
     reset,
     markArchived,
+    loadMessages,
+    removeMessagesFrom,
+    setFeedback,
   };
 });

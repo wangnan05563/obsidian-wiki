@@ -1,4 +1,4 @@
-﻿# fix-encoding-all.ps1
+﻿﻿# fix-encoding-all.ps1
 #
 # 扫描以下范围内的文本文件，将 GBK 编码文件转为 UTF-8 无 BOM。
 #   1) packages/web/src 与 services/api/src 下所有 .vue / .ts

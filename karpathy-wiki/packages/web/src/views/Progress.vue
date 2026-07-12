@@ -6,9 +6,8 @@ import RobotAvatar from '../components/RobotAvatar.vue';
 import { useCompileStore } from '../stores/compile';
 import type { IngestPayload, TimelineItem, RunSummary } from '../types';
 
-const emit = defineEmits<{
-  (e: 'restart'): void;
-}>();
+// 使用函数类型写法替代类型字面量（S6598）
+const emit = defineEmits<(e: 'restart') => void>();
 
 const store = useCompileStore();
 let abortController: AbortController | null = null;
@@ -116,9 +115,9 @@ async function consumeSSE(response: Response) {
 
 onMounted(() => {
   if (store.pendingPayload && !store.isDone) {
-    void startCompile(store.pendingPayload);
+    startCompile(store.pendingPayload);
   } else {
-    void store.loadRuns();
+    store.loadRuns();
   }
 });
 

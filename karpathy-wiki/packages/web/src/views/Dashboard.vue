@@ -4,9 +4,8 @@ import { ElMessage } from 'element-plus';
 import RobotAvatar from '../components/RobotAvatar.vue';
 import type { StatsData } from '../types';
 
-const emit = defineEmits<{
-  (e: 'navigate', view: 'ingest' | 'browse' | 'query' | 'health'): void;
-}>();
+// 使用函数类型写法替代类型字面量（S6598）
+const emit = defineEmits<(e: 'navigate', view: 'ingest' | 'browse' | 'query' | 'health') => void>();
 
 const stats = ref<StatsData | null>(null);
 const loading = ref(false);

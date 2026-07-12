@@ -1,7 +1,6 @@
 /// <reference types="../node_modules/.vue-global-types/vue_3.5_0_0_0.d.ts" />
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import RobotAvatar from './components/RobotAvatar.vue';
-import ThemeSwitcher from './components/ThemeSwitcher.vue';
 import Dashboard from './views/Dashboard.vue';
 import Ingest from './views/Ingest.vue';
 import Progress from './views/Progress.vue';
@@ -249,10 +248,6 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.
 __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
     ...{ class: "footer-line" },
 });
-/** @type {[typeof ThemeSwitcher, ]} */ ;
-// @ts-ignore
-const __VLS_45 = __VLS_asFunctionalComponent(ThemeSwitcher, new ThemeSwitcher({}));
-const __VLS_46 = __VLS_45({}, ...__VLS_functionalComponentArgsRest(__VLS_45));
 /** @type {__VLS_StyleScopedClasses['bg-layer']} */ ;
 /** @type {__VLS_StyleScopedClasses['base']} */ ;
 /** @type {__VLS_StyleScopedClasses['bg-layer']} */ ;
@@ -285,7 +280,6 @@ const __VLS_self = (await import('vue')).defineComponent({
     setup() {
         return {
             RobotAvatar: RobotAvatar,
-            ThemeSwitcher: ThemeSwitcher,
             Dashboard: Dashboard,
             Ingest: Ingest,
             Progress: Progress,

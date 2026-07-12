@@ -198,8 +198,6 @@ $esbuildArgs = @(
     "--format=cjs",
     "--target=node18",
     "--outfile=$bundleFile",
-    "--external:@wiki/harness",  # 本地 file: 引用，pkg 需单独处理
-    "--external:gray-matter",    # 原生模块，保持外部引用
     "--loader:.node=copy",       # 原生 .node 模块直接复制
     "--log-level=info"
 )
@@ -211,8 +209,7 @@ if (-not (Test-Path $bundleFile)) {
     throw "esbuild 打包完成但未找到 bundle.cjs：$bundleFile"
 }
 
-# @wiki/harness 需要作为外部依赖打包
-# 为什么：harness 是本地 file: 引用，esbuild 无法直接解析，需 pkg 从 node_modules 收集
+# @wiki/harness 与 gray-matter 必须进入 bundle；SEA 运行时无法从 exe 外部解析普通 npm 包。
 $harnessNodeModules = Join-Path $repoRoot "node_modules\@wiki\harness"
 if (Test-Path $harnessNodeModules) {
     Write-Ok "@wiki/harness 已在 node_modules 中"

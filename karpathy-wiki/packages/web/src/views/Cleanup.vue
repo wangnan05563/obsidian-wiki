@@ -3,6 +3,7 @@ import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import RobotAvatar from '../components/RobotAvatar.vue';
 import type { CleanupBody, CleanupResult, CleanupStorageStatus, CleanupTarget } from '../types';
+import { apiErrorMessage } from '../utils/apiError';
 
 // 存储状态
 const status = ref<CleanupStorageStatus | null>(null);
@@ -80,7 +81,7 @@ async function loadStatus() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     status.value = await res.json();
   } catch (err) {
-    ElMessage.error('加载存储状态失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('加载存储状态失败', err));
   } finally {
     loadingStatus.value = false;
   }
@@ -90,7 +91,7 @@ async function handleCleanup(key: keyof typeof forms) {
   const form = forms[key];
   const card = cards.find((c) => c.key === key)!;
   // 非预览模式必须二次确认，避免误删（与闲鱼 globalThis.confirm 等价）
-  if (!form.dry_run) {
+  if (!form.dry_run) { // NOSONAR — guard clause，无 else 分支，S7735 不适用
     try {
       await ElMessageBox.confirm(confirmText(card.title), '危险操作确认', {
         confirmButtonText: '确认清理',
@@ -131,8 +132,9 @@ async function handleCleanup(key: keyof typeof forms) {
       ElMessage.success(`清理完成：处理 ${data.count} 项${freed}`);
     }
   } catch (err) {
-    results.value[key] = { errors: ['清理失败：' + (err as Error).message] } as CleanupResult;
-    ElMessage.error('清理失败');
+    const message = apiErrorMessage('清理失败', err);
+    results.value[key] = { errors: [message] } as CleanupResult;
+    ElMessage.error(message);
   } finally {
     loadings[key] = false;
   }
@@ -204,8 +206,9 @@ onMounted(() => {
 
           <!-- 保留天数（仅 run_logs/raw_archive 显示） -->
           <div v-if="card.showDays" class="form-row">
-            <label class="form-label">保留天数</label>
+            <label class="form-label" :for="'cleanup-days-' + card.key">保留天数</label>
             <el-input-number
+              :id="'cleanup-days-' + card.key"
               v-model="forms[card.key].days"
               :min="1"
               :max="365"

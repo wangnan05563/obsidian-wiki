@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { Warning, CircleCheck, Tools } from '@element-plus/icons-vue';
 import RobotAvatar from '../components/RobotAvatar.vue';
 import type { HealthReport, FixRequest, FixProgressEvent } from '../types';
+import { apiErrorMessage } from '../utils/apiError';
 
 const report = ref<HealthReport | null>(null);
 const loading = ref(false);
@@ -33,7 +34,7 @@ async function runCheck() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     report.value = await res.json();
   } catch (err) {
-    ElMessage.error('体检失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('体检失败', err));
   } finally {
     loading.value = false;
   }
@@ -111,7 +112,7 @@ async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: str
       }
     }
   } catch (err) {
-    ElMessage.error('修复请求失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('修复请求失败', err));
   } finally {
     fixingKey.value = '';
   }

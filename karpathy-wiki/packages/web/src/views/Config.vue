@@ -2,9 +2,11 @@
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import RobotAvatar from '../components/RobotAvatar.vue';
+import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult } from '../types';
+import { apiErrorMessage } from '../utils/apiError';
 
-const activeTab = ref<'schema' | 'config' | 'ai'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai' | 'theme'>('schema');
 const config = ref<ConfigData | null>(null);
 const schemaContent = ref<string>('');
 const schemaBuffer = ref<string>('');
@@ -37,7 +39,7 @@ async function loadSchema() {
     schemaContent.value = data.content;
     schemaBuffer.value = data.content;
   } catch (err) {
-    ElMessage.error('加载 SCHEMA 失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('加载 SCHEMA 失败', err));
   } finally {
     loadingSchema.value = false;
   }
@@ -53,7 +55,7 @@ async function loadHistory() {
     commits.value = data.commits ?? [];
     gitEnabled.value = data.gitEnabled ?? false;
   } catch (err) {
-    ElMessage.error('加载版本历史失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('加载版本历史失败', err));
   } finally {
     loadingHistory.value = false;
   }
@@ -70,7 +72,7 @@ async function loadDiff() {
     const data = await res.json();
     diffLines.value = data.lines ?? [];
   } catch (err) {
-    ElMessage.error('加载版本对比失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('加载版本对比失败', err));
     diffLines.value = [];
   } finally {
     loadingDiff.value = false;
@@ -96,7 +98,7 @@ async function saveSchema() {
     // 保存后刷新版本历史
     await loadHistory();
   } catch (err) {
-    ElMessage.error('保存失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
     savingSchema.value = false;
   }
@@ -123,7 +125,7 @@ async function loadConfig() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     config.value = await res.json();
   } catch (err) {
-    ElMessage.error('加载配置失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('加载配置失败', err));
   } finally {
     loadingConfig.value = false;
   }
@@ -152,7 +154,7 @@ async function reloadConfig() {
     // 刷新展示，让用户看到应用后的值
     await loadConfig();
   } catch (err) {
-    ElMessage.error('热加载失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('热加载失败', err));
   } finally {
     reloading.value = false;
   }
@@ -192,7 +194,7 @@ async function loadAiConfig() {
       apiKey: data.apiKeyMasked || '',
     };
   } catch (err) {
-    ElMessage.error('加载 AI 配置失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('加载 AI 配置失败', err));
   } finally {
     loadingAi.value = false;
   }
@@ -252,7 +254,7 @@ async function saveAiConfig() {
       throw new Error(data.error || '保存失败');
     }
   } catch (err) {
-    ElMessage.error('保存失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
     savingAi.value = false;
   }
@@ -283,7 +285,7 @@ async function testConnection() {
     }
   } catch (err) {
     aiTestResult.value = { ok: false, detail: (err as Error).message };
-    ElMessage.error('测试失败：' + (err as Error).message);
+    ElMessage.error(apiErrorMessage('测试失败', err));
   } finally {
     testingAi.value = false;
   }
@@ -571,8 +573,9 @@ onMounted(() => {
                   />
                 </div>
                 <div class="form-row">
-                  <label class="form-label">模型</label>
+                  <label class="form-label" for="ai-model">模型</label>
                   <el-input
+                    id="ai-model"
                     v-model="aiForm.model"
                     placeholder="gpt-4o-mini"
                     class="form-input"
@@ -614,6 +617,17 @@ onMounted(() => {
               </div>
             </div>
           </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="界面主题" name="theme">
+          <section class="theme-section">
+            <div class="theme-copy">
+              <span class="section-tag">// APPEARANCE</span>
+              <h3>选择界面主题</h3>
+              <p>主题会立即应用并自动保存，下次打开仍保持当前选择。</p>
+            </div>
+            <ThemeSwitcher embedded />
+          </section>
         </el-tab-pane>
       </el-tabs>
     </div>
@@ -709,6 +723,41 @@ onMounted(() => {
 
 .config-tabs :deep(.el-tabs__nav-wrap::after) {
   background-color: var(--accent-purple-a15);
+}
+
+.theme-section {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(320px, 1.3fr);
+  gap: 24px;
+  align-items: start;
+  padding: 22px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-card);
+}
+
+.theme-copy h3 {
+  margin: 8px 0;
+  color: var(--text-bright);
+}
+
+.theme-copy p {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+
+.section-tag {
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+@media (max-width: 760px) {
+  .theme-section {
+    grid-template-columns: 1fr;
+  }
 }
 
 .schema-section,
