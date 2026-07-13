@@ -1,9 +1,17 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { TunnelStatus, TunnelConfigData, TunnelConfigBody, TunnelDownloadError } from '../types';
+import type {
+  TunnelStatus,
+  TunnelConfigData,
+  TunnelConfigBody,
+  TunnelDownloadError,
+  TunnelAuthError,
+  CloudflareLoginStartResult,
+  CloudflareLoginStatusResult,
+} from '../types';
 
-// 隧道运行状态与配置（从后端加载）
+// ===== 运行状态与配置 =====
 const status = ref<TunnelStatus | null>(null);
 const config = ref<TunnelConfigData | null>(null);
 const loading = ref(true);
@@ -11,27 +19,47 @@ const starting = ref(false);
 const stopping = ref(false);
 const saving = ref(false);
 
-// 表单状态：独立于 config，保存后才同步
-const formProvider = ref<'cloudflare' | 'cpolar'>('cloudflare');
+// ===== 表单状态（独立于 config，保存后才同步）=====
+const formProvider = ref<'cloudflare' | 'cpolar' | 'tailscale'>('cloudflare');
 const formAuthtoken = ref('');
 const formPort = ref(0);
 const formBinaryPath = ref('');
 const formAutoStart = ref(false);
+const formTunnelMode = ref<'quick' | 'named'>('quick');
 
+// ===== 错误状态 =====
 // 二进制下载失败时展示手动放置指引
 const downloadError = ref<TunnelDownloadError | null>(null);
+// Tailscale Funnel 首次授权时展示授权向导
+const authError = ref<TunnelAuthError | null>(null);
 
-// 轮询定时器：运行中时每 3 秒查询状态（检测子进程崩溃）
+// ===== Named Tunnel 向导状态 =====
+const wizardVisible = ref(false);
+// el-steps 的 active 属性：0=login, 1=create, 2=route-dns
+const wizardStep = ref(0);
+const loginResult = ref<CloudflareLoginStartResult | null>(null);
+const loginStatus = ref<CloudflareLoginStatusResult | null>(null);
+const loginPolling = ref(false);
+const wizardTunnelName = ref('');
+const wizardHostname = ref('');
+const creatingTunnel = ref(false);
+const routingDns = ref(false);
+let loginPollTimer: ReturnType<typeof setInterval> | null = null;
+
+// ===== 运行状态轮询定时器 =====
+// 运行中时每 3 秒查询状态（检测子进程崩溃）
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const PROVIDER_LABELS: Record<string, string> = {
   cloudflare: 'Cloudflare Tunnel',
   cpolar: 'cpolar（国内推荐）',
+  tailscale: 'Tailscale Funnel（免费固定地址）',
 };
 
 const PROVIDER_DESC: Record<string, string> = {
-  cloudflare: '免注册，自动分配 trycloudflare 域名。大陆访问可能不稳定。',
+  cloudflare: '免注册，自动分配 trycloudflare 域名。大陆访问可能不稳定。支持 Named Tunnel 固定域名。',
   cpolar: '国内服务器稳定，需注册账号获取 authtoken。',
+  tailscale: '免费固定 ts.net 地址，需预装 Tailscale 并登录。首次启用需浏览器授权。',
 };
 
 async function loadStatus() {
@@ -55,6 +83,7 @@ async function loadConfig() {
     formPort.value = data.localPort;
     formBinaryPath.value = data.binaryPath;
     formAutoStart.value = data.autoStart;
+    formTunnelMode.value = data.tunnelMode;
     // authtoken 不回显明文，表单留空（空串=不修改）
     formAuthtoken.value = '';
   } catch (err) {
@@ -67,6 +96,7 @@ async function loadConfig() {
 async function startTunnel() {
   starting.value = true;
   downloadError.value = null;
+  authError.value = null;
   try {
     const res = await fetch('/api/tunnel/start', { method: 'POST' });
     const data = await res.json();
@@ -75,12 +105,19 @@ async function startTunnel() {
       if (data.errorType === 'binary_download_failed') {
         downloadError.value = data as TunnelDownloadError;
       }
+      // Tailscale 首次授权：渲染授权向导
+      if (data.errorType === 'tailscale_funnel_auth') {
+        authError.value = data as TunnelAuthError;
+      }
       throw new Error(data.detail || `HTTP ${res.status}`);
     }
     status.value = data as TunnelStatus;
     ElMessage.success('隧道已启动');
   } catch (err) {
-    ElMessage.error('启动失败：' + (err as Error).message);
+    // 下载失败和授权错误已通过 UI 渲染，这里仅在非这两种情况时弹错误
+    if (!downloadError.value && !authError.value) {
+      ElMessage.error('启动失败：' + (err as Error).message);
+    }
   } finally {
     starting.value = false;
   }
@@ -109,6 +146,7 @@ async function saveConfig() {
       cpolarAuthtoken: formAuthtoken.value,
       binaryPath: formBinaryPath.value,
       autoStart: formAutoStart.value,
+      tunnelMode: formTunnelMode.value,
     };
     const res = await fetch('/api/tunnel/config', {
       method: 'POST',
@@ -143,6 +181,134 @@ async function copyUrl() {
   }
 }
 
+// ===== Named Tunnel 向导方法 =====
+
+function openWizard() {
+  wizardVisible.value = true;
+  wizardStep.value = 0;
+  loginResult.value = null;
+  loginStatus.value = null;
+  wizardTunnelName.value = config.value?.tunnelName || '';
+  wizardHostname.value = config.value?.hostname || '';
+}
+
+function closeWizard() {
+  wizardVisible.value = false;
+  stopLoginPolling();
+}
+
+function stopLoginPolling() {
+  if (loginPollTimer) {
+    clearInterval(loginPollTimer);
+    loginPollTimer = null;
+  }
+  loginPolling.value = false;
+}
+
+async function startLogin() {
+  loginPolling.value = true;
+  loginResult.value = null;
+  loginStatus.value = null;
+  try {
+    const res = await fetch('/api/tunnel/cloudflare/login', { method: 'POST' });
+    const data: CloudflareLoginStartResult = await res.json();
+    loginResult.value = data;
+    if (data.status === 'failed') {
+      loginPolling.value = false;
+      ElMessage.error(data.message);
+      return;
+    }
+    // waiting 状态：启动轮询
+    startLoginPolling();
+  } catch (err) {
+    loginPolling.value = false;
+    ElMessage.error('启动授权失败：' + (err as Error).message);
+  }
+}
+
+function startLoginPolling() {
+  stopLoginPolling();
+  loginPolling.value = true;
+  // 每 2.5s 轮询 login 状态，直到 success 或 failed
+  loginPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/tunnel/cloudflare/login/status');
+      const data: CloudflareLoginStatusResult = await res.json();
+      loginStatus.value = data;
+      if (data.status === 'success') {
+        stopLoginPolling();
+        ElMessage.success('授权成功，cert.pem 已生成');
+        wizardStep.value = 1;
+      } else if (data.status === 'failed') {
+        stopLoginPolling();
+        ElMessage.error(data.message);
+      }
+    } catch (err) {
+      console.error('轮询 login 状态失败:', err);
+    }
+  }, 2500);
+}
+
+async function createTunnel() {
+  if (!wizardTunnelName.value.trim()) {
+    ElMessage.warning('请输入隧道名称');
+    return;
+  }
+  creatingTunnel.value = true;
+  try {
+    const res = await fetch('/api/tunnel/cloudflare/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tunnelName: wizardTunnelName.value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    ElMessage.success(data.message || '隧道创建成功');
+    wizardStep.value = 2;
+  } catch (err) {
+    ElMessage.error('创建隧道失败：' + (err as Error).message);
+  } finally {
+    creatingTunnel.value = false;
+  }
+}
+
+async function routeDns() {
+  if (!wizardHostname.value.trim()) {
+    ElMessage.warning('请输入固定域名');
+    return;
+  }
+  routingDns.value = true;
+  try {
+    const res = await fetch('/api/tunnel/cloudflare/route-dns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hostname: wizardHostname.value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    ElMessage.success(data.message || 'DNS 路由配置成功');
+    wizardVisible.value = false;
+    // 刷新配置：后端已自动切换到 named 模式并持久化 hostname
+    await loadConfig();
+  } catch (err) {
+    ElMessage.error('DNS 路由配置失败：' + (err as Error).message);
+  } finally {
+    routingDns.value = false;
+  }
+}
+
+// ===== Tailscale 授权处理 =====
+
+function openAuthUrl() {
+  if (authError.value?.authUrl) {
+    window.open(authError.value.authUrl, '_blank');
+  }
+}
+
+function dismissAuthError() {
+  authError.value = null;
+}
+
 // 运行中时轮询状态，停止时清除（避免无意义请求）
 watch(() => status.value?.status, (newStatus) => {
   if (newStatus === 'running') {
@@ -164,6 +330,7 @@ onBeforeUnmount(() => {
   if (pollTimer) {
     clearInterval(pollTimer);
   }
+  stopLoginPolling();
 });
 </script>
 
@@ -230,21 +397,76 @@ onBeforeUnmount(() => {
       </el-alert>
     </div>
 
+    <!-- Tailscale 授权向导 -->
+    <div class="glass-card" v-if="authError">
+      <el-alert type="warning" :closable="false" show-icon>
+        <template #title>Tailscale Funnel 需要授权</template>
+        <div class="auth-detail">{{ authError.detail }}</div>
+        <div class="auth-actions">
+          <el-button type="primary" size="small" @click="openAuthUrl">打开授权链接</el-button>
+          <el-button size="small" @click="startTunnel">我已授权，重新启动</el-button>
+          <el-button size="small" @click="dismissAuthError">取消</el-button>
+        </div>
+      </el-alert>
+    </div>
+
     <!-- 配置卡片 -->
     <div class="glass-card">
       <h2 class="card-title">穿透配置</h2>
       <div class="config-block">
+        <!-- Provider 选择 -->
         <div class="config-row">
           <label class="row-label">Provider</label>
           <div class="row-value">
             <el-select v-model="formProvider" placeholder="选择穿透服务">
               <el-option label="Cloudflare Tunnel（免注册）" value="cloudflare" />
               <el-option label="cpolar（国内推荐）" value="cpolar" />
+              <el-option label="Tailscale Funnel（免费固定地址）" value="tailscale" />
             </el-select>
             <div class="hint">{{ PROVIDER_DESC[formProvider] }}</div>
           </div>
         </div>
 
+        <!-- Cloudflare 模式切换 -->
+        <div class="config-row" v-if="formProvider === 'cloudflare'">
+          <label class="row-label">隧道模式</label>
+          <div class="row-value">
+            <el-radio-group v-model="formTunnelMode">
+              <el-radio value="quick">Quick（临时域名，免注册）</el-radio>
+              <el-radio value="named">Named（固定域名，需配置）</el-radio>
+            </el-radio-group>
+            <div class="hint" v-if="formTunnelMode === 'quick'">
+              每次启动分配不同的 trycloudflare 域名，开箱即用
+            </div>
+            <div class="hint" v-else>
+              使用固定域名，需通过向导配置 Cloudflare 账号 + 隧道 + DNS
+            </div>
+          </div>
+        </div>
+
+        <!-- Named Tunnel 配置状态 -->
+        <div class="config-row" v-if="formProvider === 'cloudflare' && formTunnelMode === 'named'">
+          <label class="row-label">固定域名</label>
+          <div class="row-value">
+            <div v-if="config?.tunnelId" class="named-config-info">
+              <div class="info-line">
+                <span class="info-label">隧道 ID：</span>
+                <code>{{ config.tunnelId }}</code>
+              </div>
+              <div class="info-line" v-if="config?.hostname">
+                <span class="info-label">固定域名：</span>
+                <code>{{ config.hostname }}</code>
+              </div>
+              <el-button size="small" type="primary" @click="openWizard">重新配置</el-button>
+            </div>
+            <div v-else class="named-config-empty">
+              <el-button size="small" type="primary" @click="openWizard">开始配置向导</el-button>
+              <span class="hint">三步配置：授权登录 → 创建隧道 → 绑定域名</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- cpolar Authtoken -->
         <div class="config-row" v-if="formProvider === 'cpolar'">
           <label class="row-label">Authtoken</label>
           <div class="row-value">
@@ -257,6 +479,20 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- Tailscale 前置条件 -->
+        <div class="config-row" v-if="formProvider === 'tailscale'">
+          <label class="row-label">前置条件</label>
+          <div class="row-value">
+            <div class="hint">
+              1. 需预装 Tailscale：<a href="https://tailscale.com/download/windows" target="_blank">下载地址</a><br>
+              2. 打开 Tailscale 并登录账号<br>
+              3. 启用 MagicDNS（管理后台默认启用）<br>
+              4. 首次启动隧道时需在浏览器完成 Funnel 授权
+            </div>
+          </div>
+        </div>
+
+        <!-- 本地端口 -->
         <div class="config-row">
           <label class="row-label">本地端口</label>
           <div class="row-value">
@@ -265,13 +501,15 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="config-row">
+        <!-- 二进制路径（Tailscale 不需要，检测系统安装）-->
+        <div class="config-row" v-if="formProvider !== 'tailscale'">
           <label class="row-label">二进制路径</label>
           <div class="row-value">
             <el-input v-model="formBinaryPath" placeholder="留空则自动下载到 data/ 目录" />
           </div>
         </div>
 
+        <!-- 开机自启 -->
         <div class="config-row">
           <label class="row-label" for="tunnel-auto-start">开机自启</label>
           <div class="row-value">
@@ -285,12 +523,98 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- Named Tunnel 配置向导 -->
+    <el-dialog
+      v-model="wizardVisible"
+      title="Cloudflare Named Tunnel 配置向导"
+      width="600px"
+      :close-on-click-modal="false"
+      @close="closeWizard"
+    >
+      <el-steps :active="wizardStep" finish-status="success" align-center>
+        <el-step title="授权登录" />
+        <el-step title="创建隧道" />
+        <el-step title="配置 DNS" />
+      </el-steps>
+
+      <!-- Step 0: 授权登录 -->
+      <div class="wizard-step-content" v-if="wizardStep === 0">
+        <div class="wizard-desc">
+          点击"开始授权"后，cloudflared 会启动 OAuth 流程。在浏览器中完成 Cloudflare 账号授权后，系统会自动检测 cert.pem 生成并进入下一步。
+        </div>
+        <div class="wizard-actions">
+          <el-button type="primary" :loading="loginPolling" @click="startLogin">
+            {{ loginResult ? '重新授权' : '开始授权' }}
+          </el-button>
+        </div>
+        <div class="wizard-login-status" v-if="loginResult">
+          <el-alert
+            :type="loginResult.status === 'failed' ? 'error' : 'info'"
+            :closable="false"
+            show-icon
+          >
+            <template #title>{{ loginResult.message }}</template>
+            <div v-if="loginResult.authUrl" class="auth-url-box">
+              <a :href="loginResult.authUrl" target="_blank" class="auth-url-link">{{ loginResult.authUrl }}</a>
+            </div>
+            <div v-if="loginResult.output" class="login-output">
+              <pre>{{ loginResult.output }}</pre>
+            </div>
+          </el-alert>
+        </div>
+        <div class="wizard-login-status" v-if="loginStatus && loginPolling">
+          <el-alert type="info" :closable="false" show-icon>
+            <template #title>{{ loginStatus.message }}</template>
+            <div class="polling-hint">正在等待授权完成...</div>
+          </el-alert>
+        </div>
+      </div>
+
+      <!-- Step 1: 创建隧道 -->
+      <div class="wizard-step-content" v-if="wizardStep === 1">
+        <div class="wizard-desc">
+          输入一个隧道名称（如 my-wiki-tunnel），系统会创建命名隧道并生成 credentials 文件。
+        </div>
+        <el-input
+          v-model="wizardTunnelName"
+          placeholder="隧道名称（字母、数字、连字符）"
+          :disabled="creatingTunnel"
+        />
+        <div class="wizard-actions">
+          <el-button type="primary" :loading="creatingTunnel" @click="createTunnel">创建隧道</el-button>
+        </div>
+      </div>
+
+      <!-- Step 2: 配置 DNS -->
+      <div class="wizard-step-content" v-if="wizardStep === 2">
+        <div class="wizard-desc">
+          输入你要绑定的固定域名（如 wiki.example.com）。该域名的 DNS 必须由 Cloudflare 管理。配置成功后会自动切换到 Named 模式。
+        </div>
+        <el-input
+          v-model="wizardHostname"
+          placeholder="固定域名（如 wiki.example.com）"
+          :disabled="routingDns"
+        />
+        <div class="wizard-actions">
+          <el-button type="primary" :loading="routingDns" @click="routeDns">配置 DNS</el-button>
+        </div>
+      </div>
+    </el-dialog>
+
     <!-- 使用说明 -->
     <div class="glass-card">
       <h2 class="card-title">使用说明</h2>
       <ol class="usage-list">
-        <li>选择 Provider（推荐 Cloudflare，免注册即用）</li>
+        <li>选择 Provider：
+          <ul>
+            <li><b>Cloudflare</b>：免注册即用，Quick 模式开箱即用，Named 模式支持固定域名</li>
+            <li><b>cpolar</b>：国内推荐，需注册获取 authtoken</li>
+            <li><b>Tailscale</b>：免费固定 ts.net 地址，需预装 Tailscale</li>
+          </ul>
+        </li>
         <li>如选 cpolar，需到官网注册获取 authtoken 并填入</li>
+        <li>如选 Cloudflare Named 模式，点击"开始配置向导"完成三步配置</li>
+        <li>如选 Tailscale，确保已安装登录，首次启动需浏览器授权</li>
         <li>本地端口留 0 自动继承服务端口，或指定其他端口</li>
         <li>点击"保存配置"持久化到 config.json</li>
         <li>点击"启动隧道"建立穿透，获得公网 URL</li>
@@ -415,6 +739,11 @@ onBeforeUnmount(() => {
   line-height: 2;
 }
 
+.usage-list ul {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
 .download-error-detail {
   margin: 8px 0;
 }
@@ -449,6 +778,95 @@ onBeforeUnmount(() => {
 
 .download-link:hover {
   text-decoration: underline;
+}
+
+/* Tailscale 授权向导 */
+.auth-detail {
+  margin: 8px 0;
+}
+
+.auth-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* Named Tunnel 配置信息 */
+.named-config-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-line {
+  font-size: 13px;
+  color: var(--text-soft, #ccc);
+}
+
+.info-line code {
+  font-family: var(--font-mono, monospace);
+  background: rgba(0, 245, 255, 0.08);
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--neon-cyan, #00f5ff);
+  word-break: break-all;
+}
+
+.named-config-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 向导对话框内容 */
+.wizard-step-content {
+  padding: 20px 0;
+}
+
+.wizard-desc {
+  font-size: 13px;
+  color: var(--text-soft, #ccc);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.wizard-login-status {
+  margin-top: 16px;
+}
+
+.auth-url-box {
+  margin-top: 8px;
+}
+
+.auth-url-link {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--neon-cyan, #00f5ff);
+  word-break: break-all;
+}
+
+.login-output pre {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim, #888);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.polling-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim, #888);
 }
 
 /* 响应式：窄屏配置行堆叠 */

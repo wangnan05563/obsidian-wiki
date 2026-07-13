@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import RobotAvatar from '../components/RobotAvatar.vue';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult } from '../types';
@@ -178,6 +178,59 @@ const aiForm = ref({
   apiKey: '', // 脱敏值或新输入值
 });
 
+// 当前选中的预设 key（用于按预设持久化配置）
+const selectedPresetKey = ref('');
+
+// 按预设持久化完整配置到 localStorage。
+// 为什么需要：切换预设标签时应返显该预设上次保存的 baseUrl/model/apiKey，
+// 仅靠后端全局配置无法区分不同预设的历史值。
+// 与 stores/model.ts 的 apiKey:${key} 保持兼容：保存时同步写入 apiKey 字段。
+function presetStorageKey(presetKey: string): string {
+  return `llmPresetConfig:${presetKey}`;
+}
+
+interface PresetConfigCache {
+  baseUrl: string;
+  model: string;
+  apiKey: string; // 明文，与 model.ts 的 apiKey:${key} 一致
+}
+
+function loadPresetCache(presetKey: string): PresetConfigCache | null {
+  const raw = localStorage.getItem(presetStorageKey(presetKey));
+  if (raw) {
+    try {
+      return JSON.parse(raw) as PresetConfigCache;
+    } catch {
+      // 损坏数据忽略
+    }
+  }
+  // 兼容 model.ts 旧存储：仅存了 apiKey:${key}
+  const legacyApiKey = localStorage.getItem(`apiKey:${presetKey}`);
+  return legacyApiKey ? { baseUrl: '', model: '', apiKey: legacyApiKey } : null;
+}
+
+function savePresetCache(presetKey: string, cache: PresetConfigCache): void {
+  localStorage.setItem(presetStorageKey(presetKey), JSON.stringify(cache));
+  // 同步写入 model.ts 读取的 key，保持两套机制一致
+  if (cache.apiKey) {
+    localStorage.setItem(`apiKey:${presetKey}`, cache.apiKey);
+  } else {
+    localStorage.removeItem(`apiKey:${presetKey}`);
+  }
+}
+
+function clearAllPresetCache(): void {
+  // 清除所有 llmPresetConfig:* 和 apiKey:* 条目
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && (k.startsWith('llmPresetConfig:') || k.startsWith('apiKey:'))) {
+      keysToRemove.push(k);
+    }
+  }
+  keysToRemove.forEach(k => localStorage.removeItem(k));
+}
+
 // 加载 AI 配置
 async function loadAiConfig() {
   loadingAi.value = true;
@@ -193,6 +246,9 @@ async function loadAiConfig() {
       model: data.model,
       apiKey: data.apiKeyMasked || '',
     };
+    // 根据当前 provider 匹配预设 key，用于后续按预设持久化
+    const matched = aiPresets.value.find(p => p.provider === data.provider);
+    selectedPresetKey.value = matched?.key ?? '';
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载 AI 配置失败', err));
   } finally {
@@ -212,11 +268,46 @@ async function loadPresets() {
   }
 }
 
-// 应用预设：一键填充 provider/baseUrl/model
-function applyPreset(preset: LlmPreset) {
+// 应用预设：切换标签时返显该预设上次保存的 baseUrl/model/apiKey。
+// 优先级：localStorage 按预设缓存 > 预设默认值（baseUrl/model）。
+// 为什么切换时同步后端：后端 config.json 只有一份全局配置，
+//   切换预设后需同步到后端，确保 Query 页面等使用当前预设的配置。
+//   仅当该预设有缓存的 apiKey 时才同步，避免新预设空 apiKey 覆盖旧配置。
+async function applyPreset(preset: LlmPreset) {
+  selectedPresetKey.value = preset.key;
+  const cache = loadPresetCache(preset.key);
   aiForm.value.provider = preset.provider;
-  aiForm.value.baseUrl = preset.baseUrl;
-  aiForm.value.model = preset.model;
+  // 有缓存则用缓存的 baseUrl/model（用户可能修改过），否则用预设默认值
+  aiForm.value.baseUrl = cache?.baseUrl || preset.baseUrl;
+  aiForm.value.model = cache?.model || preset.model;
+  // apiKey 优先用缓存明文；无缓存则留空让用户重新输入
+  aiForm.value.apiKey = cache?.apiKey || '';
+
+  // 后台同步到后端 config.json（不阻塞表单返显）
+  // 为什么用明文 apiKey 判断：有缓存 key 说明该预设已配置过，应同步到后端
+  if (cache?.apiKey) {
+    try {
+      const res = await fetch('/api/ai/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: preset.provider,
+          baseUrl: aiForm.value.baseUrl,
+          model: aiForm.value.model,
+          // 发送明文 apiKey 让后端更新 config.json，确保后端配置与当前预设一致
+          apiKey: cache.apiKey,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok) aiConfig.value = data.config;
+      }
+    } catch {
+      // 同步失败不阻断切换，用户可手动点"保存配置"
+    }
+    // 同步后端后，表单 apiKey 保持明文不变（方便用户查看和测试连接）
+  }
+
   ElMessage.success(`已切换到 ${preset.label} 预设`);
 }
 
@@ -247,6 +338,25 @@ async function saveAiConfig() {
     const data = await res.json();
     if (data.ok) {
       aiConfig.value = data.config;
+      // 保存成功后按预设持久化当前配置到 localStorage。
+      // 为什么在保存时持久化：此时配置已验证生效，下次切换该预设可直接返显。
+      // apiKey 存储逻辑：
+      //   - **** 开头是脱敏回传值（用户未修改），从 localStorage 取旧 key 保持不变
+      //   - 非脱敏值（明文或空串）是用户主动输入，直接持久化
+      //     其中空串表示用户清除 key，也需存空串而非取旧值
+      let apiKeyToStore: string;
+      if (aiForm.value.apiKey.startsWith('****')) {
+        apiKeyToStore = loadPresetCache(selectedPresetKey.value)?.apiKey ?? '';
+      } else {
+        apiKeyToStore = aiForm.value.apiKey;
+      }
+      if (selectedPresetKey.value) {
+        savePresetCache(selectedPresetKey.value, {
+          baseUrl: aiForm.value.baseUrl,
+          model: aiForm.value.model,
+          apiKey: apiKeyToStore,
+        });
+      }
       // 保存后更新表单 apiKey 为脱敏值
       aiForm.value.apiKey = data.config.apiKeyMasked || '';
       ElMessage.success('AI 配置保存成功');
@@ -257,6 +367,52 @@ async function saveAiConfig() {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
     savingAi.value = false;
+  }
+}
+
+// 恢复初始配置：调用后端重置接口，恢复出厂默认 LLM 配置。
+// 为什么需要：用户误改配置后可一键恢复，避免手动编辑 config.json。
+// 同时清除 localStorage 中的预设缓存，确保前端状态与后端一致。
+const resettingAi = ref(false);
+async function resetAiConfig() {
+  try {
+    await ElMessageBox.confirm(
+      '确定恢复 LLM 配置到出厂默认值吗？此操作将重置 provider/baseUrl/model/apiKey，且不可撤销。',
+      '恢复初始配置',
+      { confirmButtonText: '确定恢复', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    // 用户取消
+    return;
+  }
+
+  resettingAi.value = true;
+  try {
+    const res = await fetch('/api/ai/reset-config', { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      aiConfig.value = data.config;
+      aiForm.value = {
+        provider: data.config.provider,
+        baseUrl: data.config.baseUrl,
+        model: data.config.model,
+        apiKey: data.config.apiKeyMasked || '',
+      };
+      // 重置当前选中预设 key
+      const matched = aiPresets.value.find(p => p.provider === data.config.provider);
+      selectedPresetKey.value = matched?.key ?? '';
+      // 清除 localStorage 中所有预设缓存，避免恢复后又被旧缓存覆盖
+      clearAllPresetCache();
+      aiTestResult.value = null;
+      ElMessage.success('已恢复到出厂默认配置');
+    } else {
+      throw new Error(data.error || '恢复失败');
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('恢复初始配置失败', err));
+  } finally {
+    resettingAi.value = false;
   }
 }
 
@@ -304,12 +460,99 @@ const testResultIcon = computed(() => {
   return r?.ok ? '?' : '?';
 });
 
-onMounted(() => {
+// ===== 联网搜索配置 =====
+// §5.2 webSearch 配置状态：与 LLM 配置独立，用户可单独启用/禁用联网搜索
+const webSearchForm = ref({
+  provider: 'tavily' as 'tavily' | 'bing',
+  apiKey: '',
+  maxResults: 5,
+});
+const webSearchStatus = ref<{
+  enabled: boolean;
+  apiKeySet: boolean;
+  apiKeyMasked: string;
+  apiKeyRef: string;
+} | null>(null);
+const loadingWebSearch = ref(false);
+const savingWebSearch = ref(false);
+
+// 联网搜索 provider 中文标签
+const WEB_SEARCH_PROVIDERS: Array<{ value: 'tavily' | 'bing'; label: string; apiKeyUrl: string }> = [
+  { value: 'tavily', label: 'Tavily', apiKeyUrl: 'https://tavily.com' },
+  { value: 'bing', label: 'Bing', apiKeyUrl: 'https://www.microsoft.com/bing/apis' },
+];
+
+async function loadWebSearchConfig() {
+  loadingWebSearch.value = true;
+  try {
+    const res = await fetch('/api/ai/web-search');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.enabled) {
+      webSearchForm.value.provider = data.provider;
+      webSearchForm.value.apiKey = data.apiKeyMasked || '';
+      webSearchForm.value.maxResults = data.maxResults ?? 5;
+      webSearchStatus.value = {
+        enabled: true,
+        apiKeySet: data.apiKeySet,
+        apiKeyMasked: data.apiKeyMasked || '',
+        apiKeyRef: data.apiKeyRef,
+      };
+    } else {
+      webSearchStatus.value = { enabled: false, apiKeySet: false, apiKeyMasked: '', apiKeyRef: 'TAVILY_API_KEY' };
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('加载联网搜索配置失败', err));
+  } finally {
+    loadingWebSearch.value = false;
+  }
+}
+
+async function saveWebSearchConfig() {
+  savingWebSearch.value = true;
+  try {
+    const res = await fetch('/api/ai/web-search', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: webSearchForm.value.provider,
+        apiKey: webSearchForm.value.apiKey,
+        maxResults: webSearchForm.value.maxResults,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      const cfg = data.config;
+      webSearchStatus.value = {
+        enabled: true,
+        apiKeySet: cfg.apiKeySet,
+        apiKeyMasked: cfg.apiKeyMasked || '',
+        apiKeyRef: cfg.apiKeyRef,
+      };
+      // 保存后表单 apiKey 显示脱敏值
+      webSearchForm.value.apiKey = cfg.apiKeyMasked || '';
+      webSearchForm.value.provider = cfg.provider;
+      webSearchForm.value.maxResults = cfg.maxResults ?? 5;
+      ElMessage.success('联网搜索配置保存成功');
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存失败', err));
+  } finally {
+    savingWebSearch.value = false;
+  }
+}
+
+onMounted(async () => {
   loadSchema();
   loadConfig();
   loadHistory();
+  // 先加载预设列表，loadAiConfig 依赖 aiPresets 匹配当前 provider
+  await loadPresets();
   loadAiConfig();
-  loadPresets();
+  loadWebSearchConfig();
 });
 </script>
 
@@ -591,6 +834,14 @@ onMounted(() => {
                 <el-button class="neon-btn-primary" :loading="savingAi" @click="saveAiConfig">
                   保存配置
                 </el-button>
+                <el-button
+                  class="neon-btn"
+                  :loading="resettingAi"
+                  @click="resetAiConfig"
+                  style="margin-left: auto;"
+                >
+                  恢复初始配置
+                </el-button>
               </div>
 
               <!-- 测试结果 -->
@@ -613,6 +864,66 @@ onMounted(() => {
                 <div v-if="!aiConfig.apiKeySet" class="key-hint">
                   <span class="hint-icon">?</span>
                   <span>请配置 API Key 或设置环境变量 <code>{{ aiConfig.apiKeyRef }}</code></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- §5.2 联网搜索配置：与 LLM 配置独立，支持 tavily/bing 两个 provider -->
+            <div class="web-search-section">
+              <div class="section-header">
+                <span class="section-desc">// 联网搜索</span>
+                <span v-if="webSearchStatus" :class="['key-status', webSearchStatus.apiKeySet ? 'set' : 'unset']">
+                  {{ webSearchStatus.apiKeySet ? '已启用' : '未配置 Key' }}
+                </span>
+              </div>
+
+              <div v-if="loadingWebSearch" class="section-loading">// 加载中…</div>
+              <div v-else class="ai-form">
+                <div class="config-block hover-glow">
+                  <h3 class="block-title"><span class="block-bracket">[</span> 搜索引擎 <span class="block-bracket">]</span></h3>
+                  <div class="form-row">
+                    <label class="form-label">Provider</label>
+                    <div class="preset-tags">
+                      <span
+                        v-for="p in WEB_SEARCH_PROVIDERS"
+                        :key="p.value"
+                        class="preset-tag"
+                        :class="{ active: webSearchForm.provider === p.value }"
+                        @click="webSearchForm.provider = p.value"
+                      >{{ p.label }}</span>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <label class="form-label">API Key</label>
+                    <el-input
+                      v-model="webSearchForm.apiKey"
+                      type="password"
+                      show-password
+                      placeholder="输入联网搜索 API Key"
+                      class="form-input"
+                    />
+                  </div>
+                  <div class="form-row">
+                    <label class="form-label">最大结果数</label>
+                    <el-input
+                      v-model.number="webSearchForm.maxResults"
+                      type="number"
+                      :min="1"
+                      :max="20"
+                      class="form-input"
+                    />
+                  </div>
+                </div>
+
+                <div class="ai-actions">
+                  <el-button class="neon-btn-primary" :loading="savingWebSearch" @click="saveWebSearchConfig">
+                    保存配置
+                  </el-button>
+                </div>
+
+                <div v-if="webSearchStatus && !webSearchStatus.apiKeySet" class="key-hint">
+                  <span class="hint-icon">?</span>
+                  <span>未配置 API Key 时，知识库问答点击"联网搜索"将仅使用本地知识库。请配置 <code>{{ webSearchStatus.apiKeyRef }}</code></span>
                 </div>
               </div>
             </div>
@@ -1396,5 +1707,20 @@ onMounted(() => {
   border-radius: 6px;
   font-size: 11px;
   color: var(--neon-cyan);
+}
+
+/* §5.2 联网搜索配置区块 */
+.web-search-section {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
 }
 </style>

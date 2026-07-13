@@ -35,7 +35,7 @@ param(
     [switch]$SkipSystem,
     [switch]$SkipWizard,
     [switch]$StartService,
-    [string]$VaultPath = "./vault"
+    [string]$VaultPath = "../../data/vault"
 )
 
 # 强制遇错即停
@@ -355,7 +355,7 @@ if (-not $SkipWizard) {
 
 Write-Step "[6/7] 检查 .gitignore..."
 $Gitignore = Join-Path $ProjectRoot ".gitignore"
-$ignoreRules = @('.env', 'node_modules/', 'dist/', 'vault/raw/', 'services/api/public/')
+$ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/', 'services/api/public/')
 $existing = if (Test-Path $Gitignore) { Get-Content $Gitignore } else { @() }
 $updated = $existing
 foreach ($rule in $ignoreRules) {
@@ -410,10 +410,10 @@ if ($allPass) {
 
 Write-Host ""
 Write-Host "下一步操作：" -ForegroundColor Cyan
-Write-Host "  1. 启动服务：双击 scripts\启动服务.bat"
+Write-Host "  1. 启动服务：双击 scripts\start-service.bat"
 Write-Host "  2. 访问：http://localhost:5173"
-Write-Host "  3. 构建前端：双击 scripts\前端构建.bat"
-Write-Host "  4. 打包 EXE：双击 scripts\构建打包.bat"
+Write-Host "  3. 构建前端：双击 scripts\build-web.bat"
+Write-Host "  4. 打包 EXE：双击 scripts\build-exe.bat"
 Write-Host ""
 
 if (-not $ApiKey) {

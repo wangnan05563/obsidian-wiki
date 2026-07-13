@@ -61,31 +61,36 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   // 持久化当前对话到 IndexedDB
   // 为什么需要：每轮问答完成后需落盘，支持侧栏历史列表与会话恢复
+  // 为什么用 JSON 深拷贝：store.messages 是 Vue reactive proxy，
+  // IndexedDB structured clone 无法克隆 Proxy 对象，会报 "could not be cloned" 错误
   async function persistConversation(messages: ChatMessage[]) {
     if (messages.length === 0) return;
 
     const id = currentConversationId.value || crypto.randomUUID();
     const existing = conversations.value.find((conversation) => conversation.id === id);
 
+    // 深拷贝：剥离 Vue reactive proxy，转为纯对象供 IndexedDB structured clone
+    const plainMessages: ChatMessage[] = JSON.parse(JSON.stringify(messages));
+
     const record: ConversationRecord = {
       id,
-      title: existing?.title || messages[0].content.slice(0, 30),
+      title: existing?.title || plainMessages[0].content.slice(0, 30),
       createdAt: existing?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      messageCount: messages.length,
+      messageCount: plainMessages.length,
       isPinned: existing?.isPinned || false,
-      preview: messages.at(-1)!.content.slice(0, 60),
-      messages,
+      preview: plainMessages.at(-1)!.content.slice(0, 60),
+      messages: plainMessages,
     };
 
     await dbPut(STORE_CONVERSATIONS, record);
 
-    // 同步更新内存列表
+    // 同步更新内存列表（深拷贝避免 reactive proxy 污染）
     const idx = conversations.value.findIndex((conversation) => conversation.id === id);
     if (idx >= 0) {
-      conversations.value[idx] = record;
+      conversations.value[idx] = JSON.parse(JSON.stringify(record));
     } else {
-      conversations.value.push(record);
+      conversations.value.push(JSON.parse(JSON.stringify(record)));
     }
     currentConversationId.value = id;
   }

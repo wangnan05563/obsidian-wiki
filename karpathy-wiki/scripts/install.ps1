@@ -4,7 +4,7 @@
 # V1.3 变更：移除 TRAE CLI 检查，默认 HarnessAdapter
 
 param(
-    [string]$VaultPath = "./vault",
+    [string]$VaultPath = "../../data/vault",
     [switch]$SkipWizard
 )
 
@@ -204,7 +204,7 @@ if (-not $SkipWizard) {
 # 步骤 6：确保 .gitignore 排除敏感文件（M-7）
 # ============================================================
 $Gitignore = Join-Path $Root ".gitignore"
-$ignoreRules = @('.env', 'node_modules/', 'dist/', 'vault/raw/')
+$ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/')
 $existing = if (Test-Path $Gitignore) { Get-Content $Gitignore } else { @() }
 $updated = $existing
 foreach ($rule in $ignoreRules) {

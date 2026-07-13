@@ -2,7 +2,7 @@
 .SYNOPSIS
     Karpathy-Wiki 项目服务生命周期自动化执行器
 .DESCRIPTION
-    整合 scripts\启动服务.bat、scripts\停止服务.bat、scripts\前端构建.bat 三个脚本，
+    整合 scripts\start-service.bat、scripts\stop-service.bat、scripts\build-web.bat 三个脚本，
     提供 start/stop/rebuild/check/status 五个动作的统一入口。
     参考 .trae\skills\wiki-automation-startserver\SKILL.md 使用。
 .PARAMETER Action
@@ -107,7 +107,7 @@ function Invoke-EnvCheck {
     $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
     if (-not $nodeCmd) {
         Write-Host "  [FAIL] 未检测到 Node.js" -ForegroundColor Red
-        Write-Host "         请运行 scripts\环境配置.bat 一键安装环境" -ForegroundColor Yellow
+        Write-Host "         请运行 scripts\setup-env.bat 一键安装环境" -ForegroundColor Yellow
         Write-Log -LogAction $Action -Step "env-check" -Result "fail" -Msg "node not found"
         return $false
     }
@@ -183,7 +183,7 @@ function Invoke-Bat {
     Write-Host "  调用 $BatName ..." -ForegroundColor Cyan
     # cmd /c 包裹 .bat，避免 PowerShell 解析 .bat 中的 & 等特殊字符
     # -NoNewWindow：在当前控制台输出，便于实时观察
-    # 启动服务.bat 内部会 start 新窗口跑后端/前端，主进程会等待验证完成
+    # start-service.bat 内部会 start 新窗口跑后端/前端，主进程会等待验证完成
     $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$batPath`"" -NoNewWindow -Wait -PassThru
     if ($process.ExitCode -ne 0) {
         Write-Host "  [FAIL] $BatName 退出码 $($process.ExitCode)" -ForegroundColor Red
@@ -231,10 +231,10 @@ function Action-Start {
         return 1
     }
 
-    # 2. 调用启动服务.bat
+    # 2. 调用start-service.bat
     Write-Host ""
     Write-Host "[2/3] 启动服务..." -ForegroundColor Cyan
-    if (-not (Invoke-Bat -BatName "启动服务.bat" -Action "start")) {
+    if (-not (Invoke-Bat -BatName "start-service.bat" -Action "start")) {
         Write-Host ""
         Write-Host "[ERROR] 启动脚本执行失败" -ForegroundColor Red
         return 1
@@ -294,9 +294,9 @@ function Action-Stop {
     Write-Host "  停止 Karpathy-Wiki 服务..." -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
 
-    # 调用停止服务.bat
-    Write-Host "[1/2] 调用停止服务.bat..." -ForegroundColor Cyan
-    if (-not (Invoke-Bat -BatName "停止服务.bat" -Action "stop")) {
+    # 调用stop-service.bat
+    Write-Host "[1/2] 调用stop-service.bat..." -ForegroundColor Cyan
+    if (-not (Invoke-Bat -BatName "stop-service.bat" -Action "stop")) {
         Write-Host ""
         Write-Host "[ERROR] 停止脚本执行失败" -ForegroundColor Red
         return 1
@@ -365,11 +365,11 @@ function Action-Rebuild {
     # Step 2/3：前端构建
     Write-Host ""
     Write-Host "[2/3] 构建前端 SPA..." -ForegroundColor Cyan
-    if (-not (Invoke-Bat -BatName "前端构建.bat" -Action "rebuild")) {
+    if (-not (Invoke-Bat -BatName "build-web.bat" -Action "rebuild")) {
         Write-Host ""
         Write-Host "[ERROR] 前端构建失败，未启动服务" -ForegroundColor Red
         Write-Host "        旧构建产物（如有）已保留，请检查 vite 错误输出" -ForegroundColor Yellow
-        Write-Host "        可手动运行：scripts\前端构建.bat 查看详细错误" -ForegroundColor Yellow
+        Write-Host "        可手动运行：scripts\build-web.bat 查看详细错误" -ForegroundColor Yellow
         Write-Log -LogAction "rebuild" -Step "build" -Result "fail" -Msg "build failed"
         return 1
     }
@@ -510,7 +510,7 @@ function Action-Check {
         Write-Host "  [OK] 存在（生产模式可启动）" -ForegroundColor Green
     }
     else {
-        Write-Host "  [SKIP] 不存在（开发模式可选，生产模式需先运行 scripts\前端构建.bat）" -ForegroundColor Yellow
+        Write-Host "  [SKIP] 不存在（开发模式可选，生产模式需先运行 scripts\build-web.bat）" -ForegroundColor Yellow
     }
 
     # 9. 日志目录

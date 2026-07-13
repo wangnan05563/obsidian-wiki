@@ -1,7 +1,7 @@
 import type { HarnessConfig } from '@wiki/harness';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent } from '../types.js';
+import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent, WebSearchConfig } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { compileWorkflow, resumeCompileWorkflow } from '../workflows/compile-workflow.js';
 import { queryWorkflow } from '../workflows/query-workflow.js';
@@ -13,18 +13,33 @@ export class HarnessAdapter implements EngineAdapter {
   private readonly harnessConfig: HarnessConfig;
   private readonly vault: VaultService;
   private staleDays: number;
+  // §5.2 联网搜索配置：query workflow 注入 web_search 工具时需要
+  private webSearchConfig?: WebSearchConfig;
 
-  constructor(config: HarnessConfig, vault: VaultService, staleDays = 30) {
+  constructor(config: HarnessConfig, vault: VaultService, staleDays = 30, webSearchConfig?: WebSearchConfig) {
     this.harnessConfig = config;
     this.vault = vault;
     this.staleDays = staleDays;
+    this.webSearchConfig = webSearchConfig;
   }
 
   // §12.3-7 配置热加载：更新运行时可变参数。
-  // model/budget/staleDays 即时生效；provider/baseUrl/apiKey 变更需重启（涉及 LLM 实例重建）。
-  updateConfig(updates: { model?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number }): void {
+  // model/budget/staleDays 即时生效；provider/baseUrl/apiKey 变更同步到 harnessConfig.llm，
+  // 下次 harness.run 时 OpenAICompatibleAdapter 会读取新值构造请求。
+  // 为什么不需要重建 LLM 实例：OpenAICompatibleAdapter 持有 config 引用，构造请求时即时读取。
+  // §5.2 webSearchConfig 变更同步内存实例，支持 Config 页面保存后即时生效
+  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig }): void {
+    if (updates.provider) {
+      this.harnessConfig.llm.provider = updates.provider;
+    }
+    if (updates.baseUrl) {
+      this.harnessConfig.llm.baseUrl = updates.baseUrl;
+    }
     if (updates.model) {
       this.harnessConfig.llm.model = updates.model;
+    }
+    if (updates.apiKey !== undefined) {
+      this.harnessConfig.llm.apiKey = updates.apiKey;
     }
     if (updates.maxSteps || updates.tokenBudget) {
       // harnessConfig.budget 在类型上是可选的，热加载前需保证字段存在
@@ -36,6 +51,9 @@ export class HarnessAdapter implements EngineAdapter {
     }
     if (updates.staleDays) {
       this.staleDays = updates.staleDays;
+    }
+    if (updates.webSearchConfig) {
+      this.webSearchConfig = updates.webSearchConfig;
     }
   }
 
@@ -49,8 +67,11 @@ export class HarnessAdapter implements EngineAdapter {
     yield* resumeCompileWorkflow(this.harnessConfig, this.vault, runId);
   }
 
+  // §5.2 query 改造：传递 webSearchConfig 给 workflow，支持联网搜索工具注入
   async *query(input: QueryInput): AsyncIterable<AnswerChunk> {
-    yield* queryWorkflow(this.harnessConfig, this.vault, input);
+    yield* queryWorkflow(this.harnessConfig, this.vault, input, {
+      webSearchConfig: this.webSearchConfig,
+    });
   }
 
   // §4.6 一键修复：通过 LLM 修复断链/孤立页面，SSE 流式返回修复进度

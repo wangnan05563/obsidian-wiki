@@ -1,13 +1,17 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { loadConfig, saveAiConfig, getEffectiveApiKey, maskApiKey } from '../config.js';
+import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey } from '../config.js';
+import type { EngineAdapter } from '../types.js';
 
 // AI 服务路由：提供 LLM 配置的读取、保存与连接测试。
 // 参考 17_xianyu 项目 AI 服务模块设计，适配本项目的 Fastify + config.json 架构。
 //   GET  /api/ai/config           读取 AI 配置（API Key 脱敏）
-//   PUT  /api/ai/config           保存 AI 配置到 config.json
+//   PUT  /api/ai/config           保存 AI 配置到 config.json + 同步 adapter 运行时
+//   POST /api/ai/reset-config     恢复 LLM 配置到出厂默认值 + 同步 adapter 运行时
 //   GET  /api/ai/presets          返回 LLM 预设列表
 //   POST /api/ai/test-connection  测试 LLM 连接（OpenAI 兼容协议）
-export function registerAiRoute(app: FastifyInstance) {
+//   GET  /api/ai/web-search       读取联网搜索配置
+//   PUT  /api/ai/web-search       保存联网搜索配置 + 同步 adapter 运行时
+export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   // LLM 预设列表：统一 OpenAI 兼容协议，前端可一键切换。
   // 为什么需要：降低用户配置成本，常见厂商预填 baseUrl/model/apiKeyRef。
   const LLM_PRESETS = [
@@ -74,6 +78,17 @@ export function registerAiRoute(app: FastifyInstance) {
       apiKeyRef: 'OLLAMA_API_KEY',
       apiKeyUrl: '',
     },
+    {
+      // Agnes AI：全模态免费 API，OpenAI 兼容协议
+      // 官方文档：https://agnes-ai.com/zh-Hans/docs/overview
+      key: 'agnes',
+      label: 'Agnes AI',
+      provider: 'agnes',
+      baseUrl: 'https://apihub.agnes-ai.com/v1',
+      model: 'agnes-2.0-flash',
+      apiKeyRef: 'AGNES_API_KEY',
+      apiKeyUrl: 'https://agnes-ai.com',
+    },
   ];
 
   // GET /api/ai/config：返回当前 AI 配置，API Key 脱敏。
@@ -139,6 +154,49 @@ export function registerAiRoute(app: FastifyInstance) {
     try {
       const merged = await saveAiConfig(updates);
       const effectiveKey = getEffectiveApiKey(merged);
+      // 落盘后同步 adapter 运行时实例，避免切换预设后 baseUrl/model 不匹配导致 400
+      // 为什么需要：adapter 在启动时创建，不重新读取 config.json，需手动同步
+      if (adapter && typeof adapter.updateConfig === 'function') {
+        adapter.updateConfig({
+          provider: merged.llm.provider,
+          baseUrl: merged.llm.baseUrl,
+          model: merged.llm.model,
+          apiKey: effectiveKey,
+        });
+      }
+      return reply.send({
+        ok: true,
+        config: {
+          provider: merged.llm.provider,
+          baseUrl: merged.llm.baseUrl,
+          model: merged.llm.model,
+          apiKeyRef: merged.llm.apiKeyRef,
+          apiKeyMasked: maskApiKey(effectiveKey),
+          apiKeySet: Boolean(effectiveKey),
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ error: msg });
+    }
+  });
+
+  // POST /api/ai/reset-config：恢复 LLM 配置到出厂默认值。
+  // 为什么需要：用户误改配置后可一键恢复，避免手动编辑 config.json。
+  // 仅重置 llm 字段，其他配置保持不变；同步 adapter 运行时实例。
+  app.post('/api/ai/reset-config', async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const merged = await resetAiConfig();
+      const effectiveKey = getEffectiveApiKey(merged);
+      // 落盘后同步 adapter 运行时实例，确保下次请求使用恢复后的配置
+      if (adapter && typeof adapter.updateConfig === 'function') {
+        adapter.updateConfig({
+          provider: merged.llm.provider,
+          baseUrl: merged.llm.baseUrl,
+          model: merged.llm.model,
+          apiKey: effectiveKey,
+        });
+      }
       return reply.send({
         ok: true,
         config: {
@@ -236,6 +294,68 @@ export function registerAiRoute(app: FastifyInstance) {
       return reply.send({ ok: false, detail });
     } finally {
       clearTimeout(timeout);
+    }
+  });
+
+  // §5.2 GET /api/ai/web-search：读取联网搜索配置，API Key 脱敏。
+  // 为什么需要：前端 Config 页面需要展示当前配置状态，决定是否启用 web_search 工具。
+  app.get('/api/ai/web-search', async (_request, reply) => {
+    const config = await loadConfig();
+    const ws = config.webSearch;
+    if (!ws) {
+      return reply.send({ enabled: false });
+    }
+    // 实际生效的 apiKey 优先级：config.json.webSearch.apiKey > process.env[apiKeyRef]
+    const effectiveKey = ws.apiKey || process.env[ws.apiKeyRef] || '';
+    return reply.send({
+      enabled: true,
+      provider: ws.provider,
+      apiKeyRef: ws.apiKeyRef,
+      apiKeyMasked: maskApiKey(effectiveKey),
+      apiKeySet: Boolean(effectiveKey),
+      maxResults: ws.maxResults ?? 5,
+    });
+  });
+
+  // §5.2 PUT /api/ai/web-search：保存联网搜索配置并同步 adapter 运行时。
+  // 为什么需要同步 adapter：query workflow 通过 adapter.webSearchConfig 读取配置，
+  // 落盘后必须同步内存实例，否则需重启服务才生效。
+  app.put('/api/ai/web-search', async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as {
+      provider?: 'tavily' | 'bing';
+      apiKey?: string;
+      maxResults?: number;
+    };
+
+    if (!body) {
+      return reply.code(400).send({ error: '请求体为空' });
+    }
+
+    try {
+      const merged = await saveWebSearchConfig({
+        provider: body.provider,
+        apiKey: body.apiKey,
+        maxResults: body.maxResults,
+      });
+      const ws = merged.webSearch!;
+      const effectiveKey = ws.apiKey || process.env[ws.apiKeyRef] || '';
+      // 同步 adapter 运行时实例，避免落盘后内存配置陈旧
+      if (adapter && typeof adapter.updateConfig === 'function') {
+        adapter.updateConfig({ webSearchConfig: ws } as { webSearchConfig: typeof ws });
+      }
+      return reply.send({
+        ok: true,
+        config: {
+          provider: ws.provider,
+          apiKeyRef: ws.apiKeyRef,
+          apiKeyMasked: maskApiKey(effectiveKey),
+          apiKeySet: Boolean(effectiveKey),
+          maxResults: ws.maxResults ?? 5,
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ error: msg });
     }
   });
 }

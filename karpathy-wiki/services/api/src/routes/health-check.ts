@@ -47,6 +47,11 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
         }
       });
     } catch (err: unknown) {
+      // 为什么同时调用 request.log.error：SSE 错误只推前端，后端日志流需独立记录以便排障
+      request.log.error(
+        { err, issueType: body.issueType },
+        'health-check fix SSE stream error',
+      );
       send('error', {
         step: 'done',
         status: 'error',

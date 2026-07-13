@@ -7,10 +7,11 @@ import type { AppConfig } from './types.js';
 const CONFIG_FILENAME = 'config.json';
 
 // 默认配置（NPR-05-7 默认值清单）。
-// vaultPath 默认 './vault'，host 'localhost'，port 3000。
+// vaultPath 默认 '../../data/vault'（相对 services/api，指向 karpathy-wiki/data/vault），
+// 将运行时数据与源码分离；host 'localhost'，port 3000。
 function defaultConfig(): AppConfig {
   return {
-    vaultPath: './vault',
+    vaultPath: '../../data/vault',
     adapter: 'harness',
     llm: {
       provider: 'glm',
@@ -28,6 +29,26 @@ function defaultConfig(): AppConfig {
       cpolarAuthtoken: '',
       binaryPath: '',
       autoStart: false,
+      // Named Tunnel 默认 quick 模式（开箱即用），named 需三步向导配置后自动切换
+      tunnelMode: 'quick',
+      tunnelName: '',
+      tunnelId: '',
+      credentialsFile: '',
+      hostname: '',
+      certFile: '',
+    },
+    // 默认启用 info 级日志 + 请求级日志钩子
+    logging: {
+      level: 'info',
+      enableRequestLog: true,
+    },
+    // §5.2 联网搜索默认配置：tavily 作为默认 provider，apiKey 留空待用户填写
+    // 为什么需要默认值：避免 config.json 缺失 webSearch 字段时 query workflow 走"未配置"分支
+    webSearch: {
+      provider: 'tavily',
+      apiKeyRef: 'TAVILY_API_KEY',
+      apiKey: '',
+      maxResults: 5,
     },
   };
 }
@@ -83,6 +104,14 @@ export async function loadConfig(): Promise<AppConfig> {
     server: { ...defaults.server, ...parsed.server },
     healthCheck: { ...defaults.healthCheck, ...parsed.healthCheck },
     tunnel: { ...defaults.tunnel, ...parsed.tunnel },
+    // 为什么用条件合并而非展开：parsed.logging 是可选的，展开后 level 会变成 string | undefined
+    logging: parsed.logging
+      ? { ...defaults.logging, ...parsed.logging }
+      : defaults.logging,
+    // §5.2 webSearch 合并：parsed.webSearch 可选，未配置时用默认值（含空 apiKey）
+    webSearch: parsed.webSearch
+      ? { ...defaults.webSearch!, ...parsed.webSearch }
+      : defaults.webSearch,
   };
 }
 
@@ -141,4 +170,62 @@ export function maskApiKey(key: string): string {
     return key ? '****' : '';
   }
   return '****' + key.slice(-4);
+}
+
+// 恢复 LLM 配置到出厂默认值（defaultConfig 中的 llm 字段）。
+// 为什么需要：用户误改配置后可一键恢复，避免手动编辑 config.json。
+// 仅重置 llm 字段，其他配置（vaultPath/budget/tunnel/webSearch/logging）保持不变。
+export async function resetAiConfig(): Promise<AppConfig> {
+  const current = await loadConfig();
+  const defaults = defaultConfig();
+  const merged: AppConfig = {
+    ...current,
+    llm: { ...defaults.llm },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    const json = JSON.stringify(merged, null, 2);
+    await fs.writeFile(configPath, json, 'utf8');
+  }
+
+  return merged;
+}
+
+// §5.2 保存联网搜索配置到 config.json（部分更新）。
+// 为什么独立函数：webSearch 与 LLM 配置生命周期不同，用户可能单独启用/禁用联网搜索。
+// apiKey 处理与 saveAiConfig 一致：**** 开头视为未修改，空串表示清除。
+export async function saveWebSearchConfig(updates: {
+  provider?: 'tavily' | 'bing';
+  apiKey?: string;
+  maxResults?: number;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const baseWebSearch = current.webSearch ?? {
+    provider: 'tavily' as const,
+    apiKeyRef: 'TAVILY_API_KEY',
+    apiKey: '',
+    maxResults: 5,
+  };
+
+  const merged: AppConfig = {
+    ...current,
+    webSearch: {
+      ...baseWebSearch,
+      ...updates.provider ? { provider: updates.provider } : {},
+      ...updates.maxResults ? { maxResults: updates.maxResults } : {},
+      // apiKey 以 **** 开头视为脱敏回传，不修改
+      ...(updates.apiKey !== undefined && !updates.apiKey.startsWith('****'))
+        ? { apiKey: updates.apiKey }
+        : {},
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    const json = JSON.stringify(merged, null, 2);
+    await fs.writeFile(configPath, json, 'utf8');
+  }
+
+  return merged;
 }

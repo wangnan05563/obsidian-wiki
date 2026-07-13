@@ -68,6 +68,11 @@ export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapte
         }
       });
     } catch (err: unknown) {
+      // 为什么同时调用 request.log.error：SSE 错误只推前端，后端日志流需独立记录以便排障
+      request.log.error(
+        { err, inputType: input.type },
+        'compile SSE stream error',
+      );
       send('error', {
         step: 'done',
         status: 'error',
@@ -114,6 +119,11 @@ export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapte
           }
         });
       } catch (err: unknown) {
+        // 为什么同时调用 request.log.error：SSE 错误只推前端，后端日志流需独立记录以便排障
+        request.log.error(
+          { err, runId },
+          'compile resume SSE stream error',
+        );
         send('error', {
           step: 'done',
           status: 'error',
