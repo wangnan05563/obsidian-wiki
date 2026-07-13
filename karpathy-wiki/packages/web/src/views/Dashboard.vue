@@ -416,12 +416,14 @@ onMounted(() => {
 .recent-log {
   margin: 0;
   padding: 16px 20px;
-  background: rgba(5, 0, 16, 0.6);
-  border: 1px solid rgba(0, 245, 255, 0.15);
+  /* 使用主题场景背景变量，确保深浅主题下都有合适对比度 */
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-cyan-a15);
   border-radius: 14px;
   font-size: 12px;
   line-height: 1.7;
-  color: var(--text-soft);
+  /* 使用 text-base 提升日志文字辨识度 */
+  color: var(--text-base);
   font-family: var(--font-mono);
   max-height: 220px;
   overflow-y: auto;

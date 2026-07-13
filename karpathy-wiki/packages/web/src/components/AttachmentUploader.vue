@@ -6,7 +6,7 @@ import { useAttachmentsStore } from '../stores/attachments';
 // §2.8 AttachmentUploader — 图片附件上传组件。
 // 职责：支持点击/拖拽/粘贴上传图片，压缩后存入 IndexedDB，展示缩略图列表。
 // 设计选择：三种输入方式统一走 handleFile；缩略图 URL 在本组件内加载并缓存。
-const props = defineProps<{ attachments: string[] }>();
+const props = defineProps<{ attachments: string[]; iconOnly?: boolean }>();
 const emit = defineEmits<{
   add: [id: string];
   remove: [id: string];
@@ -118,20 +118,22 @@ function handleRemove(id: string) {
 </script>
 
 <template>
-  <div class="attachment-uploader">
+  <div class="attachment-uploader" :class="{ 'icon-only': props.iconOnly }">
     <input ref="fileInputRef" type="file"
       accept="image/jpeg,image/png,image/webp,image/gif"
       multiple
       @change="onFileChange"
       style="display: none" />
     <!-- 附件上传按钮：自定义 SVG 回形针图标，符合霓虹科技风 -->
-    <button class="upload-btn" @click="triggerFileInput" title="上传图片">
+    <button class="upload-btn" :class="{ 'icon-only': props.iconOnly }"
+      :title="props.iconOnly ? '上传附件' : undefined"
+      @click="triggerFileInput">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
         <path d="M21 11.5l-8.5 8.5a5 5 0 01-7-7l8-8a3.5 3.5 0 015 5l-8 8a2 2 0 01-3-3l7-7"
           stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </button>
-    <div class="attachment-list"
+    <div v-if="props.attachments.length > 0" class="attachment-list"
       @dragover.prevent="dragOver = true"
       @dragleave="dragOver = false"
       @drop.prevent="handleDrop"
@@ -152,6 +154,23 @@ function handleRemove(id: string) {
   gap: 8px;
   padding: 4px 8px;
 }
+/* §5.2 iconOnly 模式：紧凑布局，无额外 padding */
+.attachment-uploader.icon-only {
+  padding: 0;
+  position: relative;
+}
+/* iconOnly 模式下缩略图列表浮在按钮行上方，避免破坏同一行按钮布局 */
+.attachment-uploader.icon-only .attachment-list {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 8px;
+  padding: 6px;
+  background: var(--bg-glass, rgba(255, 255, 255, 0.05));
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
 .upload-btn {
   display: flex;
   align-items: center;
@@ -163,6 +182,11 @@ function handleRemove(id: string) {
   cursor: pointer;
   color: var(--text-soft, #888);
   transition: all 0.25s;
+}
+/* §5.2 iconOnly 模式：方形按钮与其他工具按钮统一 */
+.upload-btn.icon-only {
+  padding: 8px;
+  border-radius: 10px;
 }
 .upload-btn:hover {
   background: rgba(0, 245, 255, 0.12);

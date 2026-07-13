@@ -16,18 +16,34 @@ interface QaRecord {
 const sessions = new Map<string, QaRecord[]>();
 
 // 注册 POST /api/query 路由。
-// 请求体：{ question: string, history?: Array<{role, content}> }
-// 响应为 SSE 流，done 事件附带 sessionId（供归档用）。
+// §5.2 改造：请求体扩展 mode/webSearch/attachments/model；SSE 事件扩展 thinking/progress/followups
 export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter) {
   app.post('/api/query', async (request: FastifyRequest, reply: FastifyReply) => {
-    const body = request.body as { question?: string; history?: QueryInput['history'] };
+    const body = request.body as {
+      question?: string;
+      history?: QueryInput['history'];
+      // §5.2 模式：'web' 联网搜索 / 'deep' 深度思考
+      mode?: string;
+      // 是否启用联网搜索工具
+      webSearch?: boolean;
+      // 附件 base64 列表
+      attachments?: Array<{ data: string; mimeType: string; filename: string }>;
+      // 当前请求使用的模型（即时切换）
+      model?: string;
+    };
     if (!body || !body.question || typeof body.question !== 'string') {
       return reply.code(400).send({ error: '请求体须含 question 字段' });
     }
 
+    // 模型切换由 PUT /api/ai/config 统一处理（switchModel 时同步 adapter）
+    // 不在每次问答时重复切换，避免只更新 model 不更新 baseUrl 导致不匹配
     const input: QueryInput = {
       question: body.question,
       history: body.history,
+      mode: body.mode,
+      webSearch: body.webSearch,
+      attachments: body.attachments,
+      model: body.model,
     };
 
     // 为本次问答分配 sessionId，存入会话存储供 archive 防篡改取用
@@ -49,6 +65,23 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
 
     try {
       for await (const chunk of adapter.query(input)) {
+        // §5.2 thinking 事件：前端 ThinkingBlock 渲染
+        if (chunk.thinking) {
+          send('thinking', chunk.thinking);
+        }
+        // §5.2 progress 事件：联网搜索进度
+        if (chunk.progress) {
+          send('progress', chunk.progress);
+        }
+        // §5.2 image 事件：多模态图片推送
+        if (chunk.image) {
+          send('image', chunk.image);
+        }
+        // §5.2 followups 事件：追问建议
+        if (chunk.followups) {
+          send('followups', { followups: chunk.followups });
+        }
+
         if (chunk.done) {
           if ((chunk.refs?.length ?? 0) > 0) {
             refs = chunk.refs ?? [];
@@ -74,6 +107,11 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
         }
       }
     } catch (err: unknown) {
+      // 为什么同时调用 request.log.error：SSE 错误只推前端，后端日志流需独立记录以便排障
+      request.log.error(
+        { err, question: body.question, sessionId },
+        'query SSE stream error',
+      );
       send('error', {
         message: err instanceof Error ? err.message : String(err),
       });

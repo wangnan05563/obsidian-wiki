@@ -6,7 +6,8 @@ node_modules/
 dist/
 build/
 services/api/dist/
-services/api/public/assets/
+# vite 构建产物（build-web.bat 输出），完整忽略 public/ 目录
+services/api/public/
 
 # ---------- 缓存目录（可重建） ----------
 .cache/
@@ -15,6 +16,28 @@ services/api/public/assets/
 .ruff_cache/
 .mypy_cache/
 __pycache__/
+.harness/
+
+# ---------- Tauri / Cargo 构建缓存与日志 ----------
+.build/
+packages/desktop/src-tauri/target/
+# Tauri CLI 自动生成的 ACL 清单与 schema（tauri dev/build 时重新生成）
+packages/desktop/src-tauri/gen/
+cargo-check.log
+
+# ---------- 编译生成的二进制 wrapper ----------
+# windres.exe 由 windres-wrapper.c 编译生成，tauri-setup-env.ps1 自动编译
+# 保留 .c 源码入库，二进制产物忽略
+scripts/windres.exe
+
+# ---------- SonarQube 调试日志 ----------
+sonar-scan-*.log
+
+# ---------- 测试截图与一次性测试脚本 ----------
+scripts/test_screenshots/
+scripts/test_*.ps1
+scripts/test_*.py
+scripts/test_report.json
 
 # ---------- TypeScript / vue-tsc 编译产物 ----------
 # vue-tsc 生成的虚拟代码文件，不应提交或扫描
@@ -34,4 +57,17 @@ product_config.png
 theme_switcher_open.png
 
 # ---------- 运行时数据 ----------
-vault/raw/
+# vault 迁至 karpathy-wiki/data/vault/，仅保留 concepts/comparisons/SCHEMA.md 作为种子入库
+# raw/（原始输入）、entities/queries/（运行时生成）、log.md（操作日志）、index.md（运行时追加）均忽略
+data/vault/raw/
+data/vault/entities/
+data/vault/queries/
+data/vault/log.md
+data/vault/index.md
+data/vault/.harness/
+
+# ---------- 运行时日志与 PID 文件 ----------
+logs/*.pid
+logs/*.log
+logs/*.out
+logs/*.err

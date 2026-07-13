@@ -2,7 +2,7 @@
 # Karpathy-Wiki 服务停止主逻辑
 # 对标闲鱼 logger.py 日志风格：颜色分明 + 日期时间 + 全局流水号
 # 配置驱动：所有参数从 config.json 读取，无硬编码
-# 分层架构：本脚本由 停止服务.bat 调用，bat 仅作入口
+# 分层架构：本脚本由 stop-service.bat 调用，bat 仅作入口
 
 param(
     [string]$ConfigPath = "$PSScriptRoot\config.json"
@@ -28,7 +28,7 @@ $pidDir = Join-Path $Root $Config.process.pid_dir
 
 # ============================================================
 # [1/3] 停止后端 API
-# 对标闲鱼停止服务.bat [1/3] 逻辑
+# 对标闲鱼stop-service.bat [1/3] 逻辑
 # ============================================================
 Write-LogBanner -Title "$($Config.project.name) 停止流程 [会话: $($script:LogSessionId)]"
 Write-Log "开始停止流程" -Level STEP -Step "1/3"
@@ -68,7 +68,7 @@ if (-not $apiKilled) {
 
 # ============================================================
 # [2/3] 停止前端 Web
-# 对标闲鱼停止服务.bat [2/3] 逻辑
+# 对标闲鱼stop-service.bat [2/3] 逻辑
 # ============================================================
 Write-Log "正在停止前端 Web..." -Level INFO -Step "2/3"
 
@@ -112,7 +112,7 @@ Start-Sleep -Seconds $Config.shutdown.verify_wait_seconds
 
 # ============================================================
 # [3/3] 验证端口已释放
-# 对标闲鱼停止服务.bat [3/3] 逻辑
+# 对标闲鱼stop-service.bat [3/3] 逻辑
 # ============================================================
 Write-Log "正在验证停止结果..." -Level INFO -Step "3/3"
 

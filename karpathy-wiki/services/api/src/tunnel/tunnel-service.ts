@@ -3,8 +3,13 @@ import https from 'node:https';
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { exec as execCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { TunnelConfig } from '../types.js';
+
+const execAsync = promisify(execCb);
 
 // 二进制下载失败时抛出，附带手动放置指引供前端渲染下载链接。
 // 这样前端可以引导用户手动下载并放到指定路径，而不是只能报错。
@@ -19,13 +24,29 @@ export class BinaryDownloadError extends Error {
   }
 }
 
+// Tailscale Funnel 首次启用需用户在浏览器完成授权，携带授权链接供前端渲染向导。
+// auth_url 优先取命令输出的一次性链接（含 node 参数，直接授权当前节点），无链接时回退到管理后台。
+export class TailscaleFunnelAuthError extends Error {
+  readonly authUrl: string;
+  static readonly FALLBACK_AUTH_URL = 'https://login.tailscale.com/admin/dns/funnel';
+  constructor(message: string, authUrl?: string) {
+    super(message);
+    this.name = 'TailscaleFunnelAuthError';
+    this.authUrl = authUrl ?? TailscaleFunnelAuthError.FALLBACK_AUTH_URL;
+  }
+}
+
 // Provider 抽象基类：封装"二进制管理 + 子进程启动 + URL 解析 + 停止"通用流程。
-// 新增 provider 只需继承并实现 4 个抽象方法，无需改动 TunnelService。
+// 新增 provider 只需继承并实现抽象方法，无需改动 TunnelService。
 abstract class TunnelProvider {
   protected proc: ChildProcess | null = null;
   protected publicUrl: string | null = null;
   protected exited = false;
-  protected readonly binary: string;
+  // binary 非 readonly：ensureBinary 中 binaryPath 不存在时需重新指向默认下载路径
+  protected binary: string;
+  // 最近输出收集：超时诊断的关键信息，保留最近 20 行避免内存无限增长
+  protected recentLines: string[] = [];
+  private static readonly MAX_RECENT_LINES = 20;
 
   constructor(protected readonly localPort: number, protected readonly binaryPath: string) {
     // 优先用户手动放置路径（离线/下载失败场景），否则自动下载到 data/ 目录
@@ -34,19 +55,25 @@ abstract class TunnelProvider {
 
   abstract binaryName(): string;
   abstract downloadUrls(): string[];
-  abstract startCommand(): string[];
-  abstract urlPattern(): RegExp;
+  abstract successPattern(): RegExp;
   abstract providerName(): string;
+  // 启动超时（毫秒）：各 provider 覆写，cpolar 免费版首次连接需 ~22s
+  protected startTimeoutMs(): number {
+    return 15000;
+  }
+  // 启动成功后如何确定 publicUrl：默认从正则匹配结果取，named tunnel 覆写为固定 hostname
+  protected resolvePublicUrl(matched: string): string {
+    return matched;
+  }
 
-  // 确保二进制存在；用户指定了路径但不存在时直接报错（不自动下载到别处）
+  // 确保二进制存在；用户指定了路径但不存在时回退自动下载（参考 17_xianyu 行为）
+  // 为什么回退而非直接报错：用户可能先填了路径但文件被删，回退下载更友好
   protected async ensureBinary(): Promise<void> {
     if (fs.existsSync(this.binary)) return;
     if (this.binaryPath) {
-      throw new BinaryDownloadError(
-        `指定的二进制文件不存在: ${this.binaryPath}`,
-        this.binaryPath,
-        this.downloadUrls(),
-      );
+      // 用户指定了路径但不存在：打 warning 后回退到 data/ 目录自动下载
+      console.warn(`[tunnel] 配置的二进制路径不存在: ${this.binaryPath}，回退到自动下载`);
+      this.binary = path.resolve(process.cwd(), 'data', this.binaryName());
     }
     await this.downloadBinary();
   }
@@ -79,45 +106,69 @@ abstract class TunnelProvider {
   // 子类钩子：启动前准备（如 cpolar 配置 authtoken）
   protected beforeStart(): void {}
 
-  // 启动隧道子进程，等待公网 URL 出现（15 秒超时）
+  // 启动隧道子进程，等待成功标志出现（超时抛含诊断信息的异常）
   async start(): Promise<void> {
     await this.ensureBinary();
     this.beforeStart();
+    this.recentLines = [];
 
     const args = this.startCommand();
     // windowsHide 等价于 Python 的 CREATE_NO_WINDOW，避免弹出黑窗
+    // stdin=ignore 防止子进程卡在等待用户输入（cpolar 首次运行可能提示确认）
     this.proc = spawn(this.binary, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.exited = false;
 
-    // 监听 exit：子进程崩溃时更新状态（前端轮询可感知）
-    this.proc.on('exit', () => {
+    this.proc.on('exit', (code) => {
       this.exited = true;
       this.publicUrl = null;
+      if (code !== null && code !== 0) {
+        this.appendRecentLine(`[进程退出] exit code=${code}`);
+      }
     });
 
-    await this.waitForUrl(15000);
+    await this.waitForSuccess(this.startTimeoutMs());
   }
 
-  // 从 stdout/stderr 读取并匹配公网 URL
-  private waitForUrl(timeoutMs: number): Promise<void> {
+  protected abstract startCommand(): string[];
+
+  // 等待成功标志出现，超时抛含进程状态+最近输出的诊断异常
+  private waitForSuccess(timeoutMs: number): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       if (!this.proc) {
         return reject(new Error('子进程未启动'));
       }
       const proc = this.proc;
-      const pattern = this.urlPattern();
+      const pattern = this.successPattern();
       const timer = setTimeout(() => {
         cleanup();
-        reject(new Error(`等待公网 URL 超时（${timeoutMs / 1000}s）`));
+        this.stop();
+        // 诊断信息：进程状态 + 最近输出，帮助定位网络/凭证/端口等问题
+        const processStatus = proc.exitCode !== null
+          ? `已退出（exit code=${proc.exitCode}）`
+          : '仍在运行（可能卡住等待输入或网络连接）';
+        const recentOutput = this.recentLines.length > 0
+          ? this.recentLines.join('\n')
+          : '（无输出）';
+        reject(new Error(
+          `[${this.binaryName()}] 启动超时（${timeoutMs / 1000}s），未能获取公网 URL。\n` +
+          `进程状态: ${processStatus}\n最近输出:\n${recentOutput}`,
+        ));
       }, timeoutMs);
 
       const handleData = (chunk: Buffer): void => {
-        const match = chunk.toString().match(pattern);
+        const text = chunk.toString();
+        for (const line of text.split(/\r?\n/)) {
+          const stripped = line.trim();
+          if (stripped) {
+            this.appendRecentLine(stripped);
+          }
+        }
+        const match = text.match(pattern);
         if (match) {
-          this.publicUrl = match[0];
+          this.publicUrl = this.resolvePublicUrl(match[0]);
           cleanup();
           resolve();
         }
@@ -145,6 +196,14 @@ abstract class TunnelProvider {
     });
   }
 
+  protected appendRecentLine(line: string): void {
+    this.recentLines.push(line);
+    if (this.recentLines.length > TunnelProvider.MAX_RECENT_LINES) {
+      this.recentLines.shift();
+    }
+    console.log(`[${this.binaryName()}] ${line}`);
+  }
+
   // 同步终止子进程（cloudflared/cpolar 被 kill 后立即退出，无需 graceful wait）
   stop(): void {
     if (!this.proc) return;
@@ -170,6 +229,26 @@ abstract class TunnelProvider {
 // Cloudflare quick tunnel：免注册，自动分配 trycloudflare 域名。
 // 大陆访问可能不稳定，但开箱即用。
 class CloudflareProvider extends TunnelProvider {
+  private readonly tunnelMode: 'quick' | 'named';
+  private readonly tunnelId: string;
+  private readonly credentialsFile: string;
+  private readonly hostname: string;
+
+  constructor(
+    localPort: number,
+    binaryPath: string,
+    tunnelMode: 'quick' | 'named',
+    tunnelId: string,
+    credentialsFile: string,
+    hostname: string,
+  ) {
+    super(localPort, binaryPath);
+    this.tunnelMode = tunnelMode;
+    this.tunnelId = tunnelId;
+    this.credentialsFile = credentialsFile;
+    this.hostname = hostname;
+  }
+
   binaryName(): string {
     return 'cloudflared.exe';
   }
@@ -177,17 +256,62 @@ class CloudflareProvider extends TunnelProvider {
     return 'cloudflare';
   }
   downloadUrls(): string[] {
-    // 主源 latest + 备源固定版本（均走 GitHub，大陆可能不稳定，失败时前端引导手动下载）
+    // 主源 GitHub latest + jsDelivr CDN 备源（大陆访问更稳定）+ 固定版本兜底
     return [
       'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
+      'https://cdn.jsdelivr.net/gh/cloudflare/cloudflared@latest/cloudflared-windows-amd64.exe',
       'https://github.com/cloudflare/cloudflared/releases/download/2024.12.2/cloudflared-windows-amd64.exe',
     ];
   }
+
+  protected startTimeoutMs(): number {
+    // named tunnel 注册连接需更久（连接 Cloudflare 边缘节点）
+    return this.tunnelMode === 'named' ? 60000 : 15000;
+  }
+
+  successPattern(): RegExp {
+    if (this.tunnelMode === 'named') {
+      // named tunnel 成功标志：兼容新旧 cloudflared 输出
+      return /Registered tunnel (?:connection|connector)/;
+    }
+    return /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+  }
+
+  protected resolvePublicUrl(_matched: string): string {
+    // named tunnel 域名是固定的，直接用配置的 hostname
+    return this.tunnelMode === 'named' ? `https://${this.hostname}` : _matched;
+  }
+
   startCommand(): string[] {
+    if (this.tunnelMode === 'named') {
+      // named tunnel 通过 config.yml 加载 tunnel_id + credentials-file + ingress 规则
+      // 为什么用 config.yml 而非命令行参数：cloudflared 要求 ingress 规则必须在配置文件中
+      const configPath = this.generateConfigYml();
+      return ['--config', configPath, '--no-autoupdate', 'tunnel', 'run'];
+    }
     return ['tunnel', '--url', `http://localhost:${this.localPort}`, '--no-autoupdate'];
   }
-  urlPattern(): RegExp {
-    return /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+
+  // 生成 cloudflared config.yml：ingress 规则将 hostname 流量路由到本地端口
+  // 为什么每次启动都重新生成：local_port 可能从配置继承不同值，确保 ingress 指向正确端口
+  private generateConfigYml(): string {
+    const configDir = path.resolve(process.cwd(), 'data', 'cloudflared');
+    fs.mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, 'config.yml');
+    // credentials-file 用绝对路径，避免 cloudflared 因相对路径找不到文件
+    const credAbs = path.resolve(this.credentialsFile);
+    // ingress 末尾必须有 http_status:404 兜底规则（cloudflared 强制要求最后一条不能有 hostname）
+    const yml = [
+      `tunnel: ${this.tunnelId}`,
+      `credentials-file: ${credAbs}`,
+      'ingress:',
+      `  - hostname: ${this.hostname}`,
+      `    service: http://localhost:${this.localPort}`,
+      '  - service: http_status:404',
+      '',
+    ].join('\n');
+    fs.writeFileSync(configPath, yml, 'utf8');
+    return configPath;
   }
 }
 
@@ -213,11 +337,19 @@ class CpolarProvider extends TunnelProvider {
       'https://www.cpolar.com/static/downloads/releases/3.3.18/cpolar-stable-windows-amd64.zip',
     ];
   }
+
+  // cpolar 免费版首次连接需 ~22s，15s 会超时失败
+  protected startTimeoutMs(): number {
+    return 40000;
+  }
+
+  // 正则匹配多级子域名（含区域中间层 xxx.r5.cpolar.top），单级正则会导致 URL 不匹配超时
+  successPattern(): RegExp {
+    return /https:\/\/[a-z0-9-]+(?:\.[a-z0-9]+)*\.cpolar\.[a-z]+/;
+  }
+
   startCommand(): string[] {
     return ['http', String(this.localPort)];
-  }
-  urlPattern(): RegExp {
-    return /https:\/\/[a-z0-9-]+\.cpolar\.(top|io|cn|com)/;
   }
 
   // cpolar 下载的是 zip，用 Windows 10 内置的 tar 解压（避免 PowerShell 中文路径编码问题）
@@ -258,6 +390,243 @@ class CpolarProvider extends TunnelProvider {
     } catch {
       // authtoken 已配置时重复执行会报错，忽略
     }
+  }
+}
+
+// Tailscale Funnel：免费固定 ts.net 地址，不下载二进制而是检测系统安装。
+// 与其他 provider 根本不同：CLI 是配置工具（--bg 后台模式），命令返回后系统服务接管，
+// 因此 status 必须主动查询 funnel status --json，而非靠子进程存活判断。
+class TailscaleProvider extends TunnelProvider {
+  private detectedBinary: string | null = null;
+
+  constructor(localPort: number, binaryPath: string) {
+    super(localPort, binaryPath);
+  }
+
+  binaryName(): string {
+    return 'tailscale.exe';
+  }
+  providerName(): string {
+    return 'tailscale';
+  }
+  // 不下载二进制：Tailscale 是系统级服务，必须用户预装
+  downloadUrls(): string[] {
+    return [];
+  }
+  successPattern(): RegExp {
+    // 实际成功检测在覆写的 start() 中用字符串包含匹配，这里不使用
+    return /Funnel started|listening on/i;
+  }
+
+  protected startTimeoutMs(): number {
+    // 30s：基于前端 fetch 超时约束倒推，确保后端在超时前返回授权链接
+    return 30000;
+  }
+
+  // 覆写 ensureBinary：检测系统安装而非下载
+  protected async ensureBinary(): Promise<void> {
+    if (this.binaryPath && fs.existsSync(this.binaryPath)) {
+      this.detectedBinary = this.binaryPath;
+      return;
+    }
+    if (this.binaryPath && !fs.existsSync(this.binaryPath)) {
+      throw new Error(`配置的 Tailscale 路径不存在: ${this.binaryPath}`);
+    }
+    // 检测顺序：where 命令 → Program Files 标准路径
+    let discovered: string | null = null;
+    try {
+      const { stdout } = await execAsync('where tailscale', { windowsHide: true, timeout: 5000 });
+      const first = stdout.split(/\r?\n/)[0]?.trim();
+      if (first && fs.existsSync(first)) {
+        discovered = first;
+      }
+    } catch {
+      // where 找不到，继续尝试标准路径
+    }
+    if (!discovered) {
+      const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+      const standardPath = path.join(programFiles, 'Tailscale', 'tailscale.exe');
+      if (fs.existsSync(standardPath)) {
+        discovered = standardPath;
+      }
+    }
+    if (!discovered) {
+      throw new Error('未检测到 Tailscale。请先安装并登录 Tailscale：https://tailscale.com/download/windows');
+    }
+    this.detectedBinary = discovered;
+  }
+
+  // 覆写 start：tailscale funnel --bg 是配置命令，成功后系统服务接管
+  async start(): Promise<void> {
+    await this.ensureBinary();
+    this.recentLines = [];
+
+    // 前置检查：Tailscale 必须已登录 + 启用 MagicDNS
+    const statusResult = this.runCli(['status', '--json']);
+    const statusData = JSON.parse(statusResult) as Record<string, unknown>;
+    if (statusData.BackendState !== 'Running') {
+      throw new Error('请先打开并登录 Tailscale，然后重新启动隧道');
+    }
+    const selfInfo = statusData.Self as Record<string, unknown> | undefined;
+    const dnsName = String(selfInfo?.DNSName ?? '').trim().replace(/\.$/, '');
+    if (!dnsName.toLowerCase().endsWith('.ts.net')) {
+      throw new Error('Tailscale 尚未启用 MagicDNS，无法生成固定 ts.net 地址');
+    }
+
+    // Popen 非阻塞读取：首次启用会输出授权链接后不退出，等待用户浏览器授权
+    const binary = this.detectedBinary!;
+    const args = ['funnel', '--bg', '--yes', `http://127.0.0.1:${this.localPort}`];
+    this.proc = spawn(binary, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    this.exited = false;
+
+    await this.waitForTailscaleFunnel(dnsName);
+  }
+
+  // Tailscale 专用等待逻辑：检测成功标志或一次性授权链接
+  private waitForTailscaleFunnel(dnsName: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (!this.proc) {
+        return reject(new Error('子进程未启动'));
+      }
+      const proc = this.proc;
+      const authUrlPattern = /https:\/\/login\.tailscale\.com\/f\/funnel\?node=\S+/;
+      const timer = setTimeout(() => {
+        cleanup();
+        this.stop();
+        // 优先抛 TailscaleFunnelAuthError（已收集到授权链接）
+        const authLine = this.recentLines.find((l) => authUrlPattern.test(l));
+        if (authLine) {
+          const match = authLine.match(authUrlPattern);
+          reject(new TailscaleFunnelAuthError(
+            '首次启用 Funnel 需要在浏览器完成授权，请点击下方链接完成授权后重新启动隧道',
+            match?.[0],
+          ));
+          return;
+        }
+        const processStatus = proc.exitCode !== null
+          ? `已退出（exit code=${proc.exitCode}）`
+          : '仍在运行';
+        const recentOutput = this.recentLines.length > 0
+          ? this.recentLines.join('\n')
+          : '（无输出）';
+        reject(new Error(
+          `Tailscale Funnel 启动超时（30s），未能确认 Funnel 状态。\n` +
+          `进程状态: ${processStatus}\n输出:\n${recentOutput}`,
+        ));
+      }, this.startTimeoutMs());
+
+      const handleData = (chunk: Buffer): void => {
+        const text = chunk.toString();
+        for (const line of text.split(/\r?\n/)) {
+          const stripped = line.trim();
+          if (stripped) {
+            this.appendRecentLine(stripped);
+          }
+        }
+        // 检测成功标志
+        if (/Funnel started|listening on/i.test(text)) {
+          this.publicUrl = `https://${dnsName}`;
+          cleanup();
+          resolve();
+          return;
+        }
+        // 检测授权链接：立即抛异常让前端渲染向导
+        const authMatch = text.match(authUrlPattern);
+        if (authMatch) {
+          cleanup();
+          this.stop();
+          reject(new TailscaleFunnelAuthError(
+            '首次启用 Funnel 需要在浏览器完成授权，请点击下方链接完成授权后重新启动隧道',
+            authMatch[0],
+          ));
+        }
+      };
+      const onExit = (code: number | null): void => {
+        cleanup();
+        if (code === 0) {
+          // 进程退出码 0 可能是配置成功后正常退出
+          this.publicUrl = `https://${dnsName}`;
+          resolve();
+        } else {
+          reject(new Error(`Tailscale Funnel 进程退出，code=${code}`));
+        }
+      };
+      const onError = (err: Error): void => {
+        cleanup();
+        reject(err);
+      };
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        proc.stdout?.removeListener('data', handleData);
+        proc.stderr?.removeListener('data', handleData);
+        proc.removeListener('error', onError);
+        proc.removeListener('exit', onExit);
+      };
+
+      proc.stdout?.on('data', handleData);
+      proc.stderr?.on('data', handleData);
+      proc.on('error', onError);
+      proc.on('exit', onExit);
+    });
+  }
+
+  startCommand(): string[] {
+    // 实际命令在覆写的 start() 中构造，这里不会被调用
+    return [];
+  }
+
+  // 覆写 stop：执行 tailscale funnel off 关闭系统服务
+  stop(): void {
+    if (this.detectedBinary) {
+      try {
+        execFileSync(this.detectedBinary, ['funnel', 'off'], {
+          windowsHide: true,
+          timeout: 10000,
+        });
+      } catch {
+        // stop 失败不阻塞调用方（配置保存/服务关闭）
+      }
+    }
+    this.detectedBinary = null;
+    this.publicUrl = null;
+    this.exited = true;
+  }
+
+  // 覆写 status：主动查询 funnel status --json，而非靠子进程存活判断
+  get status(): 'running' | 'stopped' {
+    if (!this.detectedBinary) return 'stopped';
+    try {
+      const result = this.runCli(['funnel', 'status', '--json']);
+      const data = JSON.parse(result) as Record<string, unknown>;
+      const allowFunnel = data.AllowFunnel as Record<string, boolean> | undefined;
+      if (!allowFunnel) return 'stopped';
+      for (const [endpoint, enabled] of Object.entries(allowFunnel)) {
+        if (!enabled) continue;
+        const host = endpoint.split(':')[0].replace(/\.$/, '');
+        if (host.toLowerCase().endsWith('.ts.net')) {
+          this.publicUrl = `https://${host}`;
+          return 'running';
+        }
+      }
+      return 'stopped';
+    } catch {
+      this.publicUrl = null;
+      return 'stopped';
+    }
+  }
+
+  private runCli(args: string[]): string {
+    if (!this.detectedBinary) {
+      throw new Error('Tailscale 二进制未检测到');
+    }
+    return execFileSync(this.detectedBinary, args, {
+      windowsHide: true,
+      timeout: 20000,
+      encoding: 'utf8',
+    });
   }
 }
 
@@ -314,19 +683,28 @@ export class TunnelService {
   private provider: TunnelProvider | null = null;
   private currentConfig: TunnelConfig | null = null;
 
-  // 端口解析优先级：tunnel.localPort > 0 则用 localPort，否则从 server.port 继承
+  // 端口解析优先级：TUNNEL_PORT 环境变量 > tunnel.localPort > server.port
+  // 为什么支持环境变量：命令行启动时临时覆盖隧道端口而不改 config.json
   static resolvePort(tunnel: TunnelConfig, serverPort: number): number {
+    const envPort = process.env.TUNNEL_PORT;
+    if (envPort) {
+      const p = parseInt(envPort, 10);
+      if (p > 0 && p <= 65535) return p;
+    }
     return tunnel.localPort > 0 ? tunnel.localPort : serverPort;
   }
 
   async start(config: TunnelConfig, serverPort: number): Promise<void> {
-    // 配置变更（provider/port/binaryPath/authtoken 任一变化）时重建 provider
+    // 配置变更（provider/port/binaryPath/authtoken/named tunnel 字段任一变化）时重建 provider
     const configChanged =
       !this.currentConfig ||
       this.currentConfig.provider !== config.provider ||
       this.currentConfig.localPort !== config.localPort ||
       this.currentConfig.binaryPath !== config.binaryPath ||
-      this.currentConfig.cpolarAuthtoken !== config.cpolarAuthtoken;
+      this.currentConfig.cpolarAuthtoken !== config.cpolarAuthtoken ||
+      this.currentConfig.tunnelMode !== config.tunnelMode ||
+      this.currentConfig.tunnelId !== config.tunnelId ||
+      this.currentConfig.hostname !== config.hostname;
 
     if (configChanged) {
       if (this.provider) {
@@ -372,10 +750,251 @@ export class TunnelService {
 function createProvider(config: TunnelConfig, localPort: number): TunnelProvider {
   switch (config.provider) {
     case 'cloudflare':
-      return new CloudflareProvider(localPort, config.binaryPath);
+      return new CloudflareProvider(
+        localPort,
+        config.binaryPath,
+        config.tunnelMode,
+        config.tunnelId,
+        config.credentialsFile,
+        config.hostname,
+      );
     case 'cpolar':
       return new CpolarProvider(localPort, config.binaryPath, config.cpolarAuthtoken);
+    case 'tailscale':
+      return new TailscaleProvider(localPort, config.binaryPath);
     default:
       throw new Error(`不支持的 provider: ${config.provider}`);
+  }
+}
+
+// ===== Cloudflare Named Tunnel 向导服务 =====
+// login 是两阶段操作（POST start + GET poll），必须在同一实例上调用，
+// 因为 _loginProcess / _loginOutput / _loginAuthUrl 状态保存在实例上。
+// 由 routes/tunnel.ts 持有全局单例，跨请求保持状态。
+export class CloudflareLoginService {
+  private loginProcess: ChildProcess | null = null;
+  private loginOutput: string[] = [];
+  private loginAuthUrl: string | null = null;
+
+  // 启动 cloudflared tunnel login 子进程，10s 内提取授权 URL
+  // 为什么用 async 而非同步 busy wait：Node.js 事件循环模型下 busy wait 会阻塞所有 I/O
+  async startLogin(binaryPath: string): Promise<{
+    status: 'waiting' | 'failed';
+    authUrl: string | null;
+    message: string;
+    output?: string;
+  }> {
+    // 已有 login 进行中：直接返回当前状态
+    if (this.loginProcess && this.loginProcess.exitCode === null) {
+      return {
+        status: 'waiting',
+        authUrl: this.loginAuthUrl,
+        message: 'login 已在进行中，请在浏览器中完成授权',
+      };
+    }
+
+    const binary = binaryPath || path.resolve(process.cwd(), 'data', 'cloudflared.exe');
+    // --no-autoupdate 是全局标志，必须在子命令 tunnel 之前
+    this.loginProcess = spawn(binary, ['--no-autoupdate', 'tunnel', 'login'], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    this.loginAuthUrl = null;
+    this.loginOutput = [];
+
+    // 后台读取 stdout，提取授权 URL（含 cloudflare 的 URL）
+    const urlPattern = /https:\/\/\S+/;
+    const collectOutput = (chunk: Buffer): void => {
+      const text = chunk.toString();
+      for (const line of text.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          this.loginOutput.push(trimmed);
+          if (this.loginAuthUrl === null) {
+            const match = trimmed.match(urlPattern);
+            if (match && match[0].includes('cloudflare')) {
+              this.loginAuthUrl = match[0];
+            }
+          }
+        }
+      }
+    };
+    this.loginProcess.stdout?.on('data', collectOutput);
+    this.loginProcess.stderr?.on('data', collectOutput);
+
+    // 非阻塞等待：每 500ms 检查一次，最多 10s
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      if (this.loginAuthUrl) break;
+      if (this.loginProcess.exitCode !== null) break;
+      await new Promise<void>((r) => setTimeout(r, 500));
+    }
+
+    if (this.loginAuthUrl) {
+      return {
+        status: 'waiting',
+        authUrl: this.loginAuthUrl,
+        message: '请在浏览器中完成 Cloudflare 授权',
+      };
+    }
+
+    if (this.loginProcess.exitCode !== null) {
+      const output = this.loginOutput.join('\n');
+      const exitCode = this.loginProcess.exitCode;
+      this.cleanupLoginProcess();
+      return {
+        status: 'failed',
+        authUrl: null,
+        message: `cloudflared login 进程已退出（exit code=${exitCode}）`,
+        output,
+      };
+    }
+
+    // 进程仍在运行但未输出 URL：浏览器可能已自动打开
+    return {
+      status: 'waiting',
+      authUrl: null,
+      message: 'cloudflared login 已启动，浏览器应该已自动打开。如果未打开，请稍等...',
+    };
+  }
+
+  // 检查 login 状态：success/failed/waiting/idle 四种
+  checkLoginStatus(): {
+    status: 'waiting' | 'success' | 'failed' | 'idle';
+    authUrl: string | null;
+    certFile?: string;
+    message: string;
+    output?: string;
+    checkedPaths?: string[];
+  } {
+    if (!this.loginProcess) {
+      return { status: 'idle', authUrl: null, message: 'login 未启动' };
+    }
+
+    // 检查所有可能的 cert.pem 位置
+    const certPaths = this.findCertPemPaths();
+    for (const p of certPaths) {
+      if (fs.existsSync(p)) {
+        const certFile = p;
+        this.cleanupLoginProcess();
+        return {
+          status: 'success',
+          authUrl: this.loginAuthUrl,
+          certFile,
+          message: '授权成功，cert.pem 已生成',
+        };
+      }
+    }
+
+    if (this.loginProcess.exitCode !== null) {
+      const output = this.loginOutput.join('\n');
+      const exitCode = this.loginProcess.exitCode;
+      this.cleanupLoginProcess();
+      if (exitCode === 0) {
+        return {
+          status: 'failed',
+          authUrl: null,
+          message: 'login 进程已退出但未找到 cert.pem',
+          output,
+          checkedPaths: certPaths,
+        };
+      }
+      return {
+        status: 'failed',
+        authUrl: null,
+        message: `login 失败（exit code=${exitCode}）`,
+        output,
+      };
+    }
+
+    return {
+      status: 'waiting',
+      authUrl: this.loginAuthUrl,
+      message: '等待用户在浏览器中完成授权...',
+    };
+  }
+
+  // 创建命名隧道：cloudflared tunnel --origincert <cert> create <name>
+  createTunnel(tunnelName: string, certFile: string, binaryPath: string): {
+    tunnelId: string;
+    credentialsFile: string;
+    tunnelName: string;
+  } {
+    const binary = binaryPath || path.resolve(process.cwd(), 'data', 'cloudflared.exe');
+    const args = ['--no-autoupdate', 'tunnel', '--origincert', certFile, 'create', tunnelName];
+    const output = execFileSync(binary, args, {
+      windowsHide: true,
+      timeout: 30000,
+      encoding: 'utf8',
+    });
+
+    // 解析 tunnel_id（UUID 格式）
+    const idMatch = output.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    if (!idMatch) {
+      throw new Error(`无法从输出解析 tunnel_id: ${output}`);
+    }
+    // 兼容新旧 cloudflared 输出格式，路径可能被引号包裹
+    const credMatch = output.match(/(?:credentials file|tunnel credentials written to)\s+"?(.+?\.json)"?/i);
+    if (!credMatch) {
+      throw new Error(`无法从输出解析 credentials_file: ${output}`);
+    }
+    return {
+      tunnelId: idMatch[0],
+      credentialsFile: credMatch[1],
+      tunnelName,
+    };
+  }
+
+  // 配置 DNS CNAME：cloudflared tunnel --origincert <cert> route dns <name> <hostname>
+  routeDns(
+    tunnelNameOrId: string,
+    hostname: string,
+    certFile: string,
+    binaryPath: string,
+  ): string {
+    const binary = binaryPath || path.resolve(process.cwd(), 'data', 'cloudflared.exe');
+    const args = [
+      '--no-autoupdate', 'tunnel', '--origincert', certFile,
+      'route', 'dns', tunnelNameOrId, hostname,
+    ];
+    execFileSync(binary, args, {
+      windowsHide: true,
+      timeout: 30000,
+      encoding: 'utf8',
+    });
+    return `https://${hostname}`;
+  }
+
+  // 查找所有可能的 cert.pem 位置（不同 Windows 版本/cloudflared 版本路径不同）
+  private findCertPemPaths(): string[] {
+    const paths: string[] = [];
+    // Windows 默认：%USERPROFILE%\.cloudflared\cert.pem
+    paths.push(path.join(os.homedir(), '.cloudflared', 'cert.pem'));
+    // 部分 Windows 版本使用 LOCALAPPDATA
+    if (process.env.LOCALAPPDATA) {
+      paths.push(path.join(process.env.LOCALAPPDATA, '.cloudflared', 'cert.pem'));
+    }
+    // APPDATA 兜底
+    if (process.env.APPDATA) {
+      paths.push(path.join(process.env.APPDATA, '.cloudflared', 'cert.pem'));
+    }
+    // 从 login 输出正则提取路径（cloudflared 可能输出 cert.pem 的绝对路径）
+    const output = this.loginOutput.join('\n');
+    const m = output.match(/[A-Za-z]:[\\\/][^\s]*cert\.pem|\/[^\s]*cert\.pem/);
+    if (m) {
+      paths.push(m[0]);
+    }
+    return paths;
+  }
+
+  // 清理 login 子进程：terminate → kill
+  private cleanupLoginProcess(): void {
+    if (!this.loginProcess) return;
+    try {
+      this.loginProcess.kill();
+    } catch {
+      // 忽略 kill 失败
+    }
+    this.loginProcess = null;
   }
 }

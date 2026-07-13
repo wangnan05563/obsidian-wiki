@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed } from 'vue';
 import { Promotion, Loading, Close, Minus } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import RobotAvatar from './RobotAvatar.vue';
 import { useQueryStore } from '../stores/query';
+import { apiErrorMessage } from '../utils/apiError';
+import { renderMarkdown } from '../utils/markdown';
+import type { ThinkingStep } from '../types';
 
 const store = useQueryStore();
 const isOpen = ref(false);
@@ -10,7 +14,38 @@ const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 let abortController: AbortController | null = null;
 
+// §5.2 接收当前是否在 Query 页面的标志：Query 页面时悬浮按钮移到左下角避免遮挡输入区
+const props = defineProps<{ inQueryPage?: boolean }>();
+
 const hasMessages = computed(() => store.messages.length > 0);
+
+// 检测是否在 Tauri 桌面环境（非浏览器）
+// 为什么需要检测：浏览器环境下 invoke 不存在，需做兼容处理避免报错
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+// 启动时打印 Tauri 环境检测结果，便于诊断 invoke 问题
+if (typeof window !== 'undefined' && window.location.hash === '#floating') {
+  console.log('[FloatingChat] Tauri env detect:', {
+    isTauri,
+    hasInternals: '__TAURI_INTERNALS__' in window,
+    hasTauri: '__TAURI__' in window,
+    hash: window.location.hash,
+  });
+}
+
+// 调用 Tauri 命令调整悬浮窗口尺寸
+// 为什么用动态 import：浏览器环境无 @tauri-apps/api，需运行时按需加载避免构建报错
+// 为什么不预检测 isTauri：__TAURI_INTERNALS__ 注入可能有延迟，直接 try import 更可靠
+async function invokeToggleSize(expanded: boolean) {
+  console.log('[FloatingChat] invokeToggleSize start, expanded:', expanded);
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    console.log('[FloatingChat] invoke imported successfully');
+    await invoke('toggle_floating_size', { expanded });
+    console.log('[FloatingChat] invoke toggle_floating_size succeeded');
+  } catch (e) {
+    console.error('[FloatingChat] invoke toggle_floating_size FAILED:', e);
+  }
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -46,10 +81,25 @@ function handleSSEEvent(eventType: string, data: string) {
       store.appendAnswer(parsed.text || '');
     } else if (eventType === 'refs') {
       store.setRefs(parsed.refs || []);
+    } else if (eventType === 'thinking') {
+      // 补全 thinking 事件处理，与 Query.vue 保持一致
+      const step: ThinkingStep = {
+        phase: parsed.phase,
+        message: parsed.message,
+        tool: parsed.tool,
+        args: parsed.args,
+        ts: new Date().toISOString(),
+      };
+      store.appendThinking(step);
+    } else if (eventType === 'progress') {
+      store.setProgress(parsed.step, parsed.count);
+    } else if (eventType === 'followups') {
+      store.setFollowups(parsed.followups || []);
     } else if (eventType === 'done') {
       store.finalizeAnswer(parsed.sessionId, parsed.messageIndex);
     } else if (eventType === 'error') {
       store.handleError(parsed.message || '问答出错');
+      ElMessage.warning(parsed.message || '问答出错');
     }
   } catch {
     // 非 JSON 数据跳过
@@ -100,6 +150,7 @@ async function sendQuestion(question: string) {
     if ((err as Error).name === 'AbortError') return;
     const msg = (err as Error).message;
     store.handleError(msg);
+    ElMessage.warning(apiErrorMessage('问答失败', err));
   } finally {
     abortController = null;
   }
@@ -126,7 +177,11 @@ function handleNewSession() {
 }
 
 function toggleOpen() {
+  console.log('[FloatingChat] toggleOpen clicked, current isOpen:', isOpen.value);
   isOpen.value = !isOpen.value;
+  console.log('[FloatingChat] isOpen changed to:', isOpen.value);
+  // 展开时把窗口尺寸调大（420x560），收起时调回小圆按钮（80x80）
+  void invokeToggleSize(isOpen.value);
   if (isOpen.value) {
     nextTick(() => scrollToBottom());
   }
@@ -134,6 +189,8 @@ function toggleOpen() {
 
 function handleClose() {
   isOpen.value = false;
+  // 关闭面板时把窗口尺寸调回小圆按钮
+  void invokeToggleSize(false);
 }
 </script>
 
@@ -141,8 +198,8 @@ function handleClose() {
   <!-- 悬浮按钮：固定在右下角 -->
   <transition name="float-fade">
     <div v-if="isOpen" class="floating-panel glass-card">
-      <!-- 面板头部 -->
-      <div class="panel-header">
+      <!-- 面板头部（可拖动区域：Tauri data-tauri-drag-region 原生拖动支持） -->
+      <div class="panel-header" data-tauri-drag-region>
         <div class="panel-title">
           <RobotAvatar :size="28" />
           <span>AI 知识库问答</span>
@@ -194,7 +251,7 @@ function handleClose() {
               <RobotAvatar v-else :size="32" :floating="false" />
             </div>
             <div class="msg-bubble" :class="msg.role">
-              <div class="msg-content">{{ msg.content }}</div>
+              <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
               <div v-if="msg.refs" class="msg-refs">
                 <span class="refs-label">参考：</span>
                 <span
@@ -220,7 +277,7 @@ function handleClose() {
               <RobotAvatar :size="32" :floating="true" />
             </div>
             <div class="msg-bubble assistant streaming">
-              <div class="msg-content">{{ store.streamingAnswer || '思考中...' }}</div>
+              <div class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '思考中...')"></div>
             </div>
           </div>
         </div>
@@ -247,13 +304,14 @@ function handleClose() {
     </div>
   </transition>
 
-  <!-- 悬浮按钮 -->
+  <!-- 悬浮按钮：固定在右下角（不加 drag-region，避免与 click 冲突） -->
   <transition name="float-btn">
     <button
       v-if="!isOpen"
       class="float-btn glass-card"
+      :class="{ 'in-query': props.inQueryPage }"
       @click="toggleOpen"
-      title="AI 知识库问答"
+      title="AI 知识库问答（展开后可拖动）"
     >
       <RobotAvatar :size="40" :floating="false" />
     </button>
@@ -270,7 +328,7 @@ function handleClose() {
   height: 56px;
   border-radius: 50%;
   border: 2px solid var(--neon-cyan);
-  background: rgba(0, 245, 255, 0.1);
+  background: var(--accent-cyan-a10);
   backdrop-filter: blur(12px);
   cursor: pointer;
   z-index: 1000;
@@ -279,13 +337,20 @@ function handleClose() {
   justify-content: center;
   padding: 0;
   transition: all 0.3s ease;
-  box-shadow: 0 4px 20px rgba(0, 245, 255, 0.3);
+  box-shadow: var(--glow-cyan);
 }
 
 .float-btn:hover {
   transform: scale(1.1);
-  box-shadow: 0 6px 28px rgba(0, 245, 255, 0.5);
-  background: rgba(0, 245, 255, 0.2);
+  box-shadow: var(--glow-cyan);
+  background: var(--accent-cyan-a20);
+}
+
+/* §5.2 Query 页面时悬浮按钮移到左下角，避免遮挡右侧发送按钮 */
+.float-btn.in-query {
+  bottom: 24px;
+  left: 24px;
+  right: auto;
 }
 
 /* ========== 悬浮面板 ========== */
@@ -296,14 +361,14 @@ function handleClose() {
   width: 420px;
   height: 560px;
   border-radius: 16px;
-  border: 1px solid rgba(0, 245, 255, 0.3);
-  background: rgba(10, 10, 20, 0.85);
+  border: 1px solid var(--accent-cyan-a30);
+  background: var(--bg-card-solid);
   backdrop-filter: blur(16px);
   z-index: 1000;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5), 0 0 30px rgba(0, 245, 255, 0.15);
+  box-shadow: var(--glow-soft), 0 0 30px var(--accent-cyan-a15);
 }
 
 /* 面板头部 */
@@ -312,7 +377,7 @@ function handleClose() {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid rgba(0, 245, 255, 0.15);
+  border-bottom: 1px solid var(--accent-cyan-a15);
   flex-shrink: 0;
 }
 
@@ -332,7 +397,7 @@ function handleClose() {
 }
 
 .panel-actions .el-button {
-  --el-button-text-color: rgba(0, 245, 255, 0.6);
+  --el-button-text-color: var(--accent-cyan-a60);
   --el-button-hover-text-color: var(--neon-cyan);
 }
 
@@ -371,8 +436,8 @@ function handleClose() {
 
 .suggestion-chip {
   padding: 6px 14px;
-  background: rgba(176, 38, 255, 0.1);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  background: var(--accent-purple-a10);
+  border: 1px solid var(--accent-purple-a30);
   border-radius: 20px;
   font-size: 12px;
   color: var(--text-base);
@@ -381,7 +446,7 @@ function handleClose() {
 }
 
 .suggestion-chip:hover {
-  background: rgba(176, 38, 255, 0.2);
+  background: var(--accent-purple-a20);
   border-color: var(--neon-purple);
   color: var(--neon-cyan);
 }
@@ -432,8 +497,8 @@ function handleClose() {
 }
 
 .msg-bubble.assistant {
-  background: rgba(0, 245, 255, 0.06);
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  background: var(--accent-cyan-a06);
+  border: 1px solid var(--accent-cyan-a20);
   border-top-left-radius: 4px;
 }
 
@@ -465,7 +530,7 @@ function handleClose() {
 .msg-refs {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px dashed rgba(176, 38, 255, 0.2);
+  border-top: 1px dashed var(--accent-purple-a20);
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -479,8 +544,8 @@ function handleClose() {
 
 .ref-chip {
   padding: 2px 8px;
-  background: rgba(176, 38, 255, 0.12);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  background: var(--accent-purple-a12);
+  border: 1px solid var(--accent-purple-a30);
   border-radius: 12px;
   font-size: 10px;
   color: var(--neon-purple);
@@ -503,8 +568,8 @@ function handleClose() {
 
 .followup-chip {
   padding: 3px 10px;
-  background: rgba(0, 245, 255, 0.08);
-  border: 1px solid rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a08);
+  border: 1px solid var(--accent-cyan-a25);
   border-radius: 16px;
   font-size: 11px;
   color: var(--neon-cyan);
@@ -513,7 +578,7 @@ function handleClose() {
 }
 
 .followup-chip:hover {
-  background: rgba(0, 245, 255, 0.18);
+  background: var(--accent-cyan-a18);
   border-color: var(--neon-cyan);
 }
 
@@ -522,7 +587,7 @@ function handleClose() {
   display: flex;
   gap: 10px;
   padding: 12px 16px;
-  border-top: 1px solid rgba(0, 245, 255, 0.15);
+  border-top: 1px solid var(--accent-cyan-a15);
   align-items: flex-end;
   flex-shrink: 0;
 }
@@ -530,9 +595,9 @@ function handleClose() {
 .panel-textarea {
   flex: 1;
   padding: 10px 14px;
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  border: 1px solid var(--accent-cyan-a20);
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--bg-scene);
   color: var(--text-base);
   font-size: 13px;
   font-family: var(--font-body);
@@ -546,7 +611,7 @@ function handleClose() {
 
 .panel-textarea:focus {
   border-color: var(--neon-cyan);
-  box-shadow: 0 0 8px rgba(0, 245, 255, 0.2);
+  box-shadow: 0 0 8px var(--accent-cyan-a20);
 }
 
 .panel-textarea:disabled {
@@ -598,12 +663,12 @@ function handleClose() {
 }
 
 .panel-messages::-webkit-scrollbar-thumb {
-  background: rgba(0, 245, 255, 0.2);
+  background: var(--accent-cyan-a20);
   border-radius: 4px;
 }
 
 .panel-messages::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 245, 255, 0.4);
+  background: var(--accent-cyan-a40);
 }
 
 /* 响应式 */

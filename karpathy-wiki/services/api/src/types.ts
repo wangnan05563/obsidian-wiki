@@ -9,6 +9,10 @@ export interface EngineAdapter {
   healthCheck(): Promise<HealthReport>;
   // §4.6 一键修复：走 LLM 引擎，SSE 流式返回修复进度
   healthCheckFix(input: FixInput): AsyncIterable<FixProgressEvent>;
+  // §5.2 模型即时切换：前端 ModelSelector 切换时调用，无需重启
+  // provider/baseUrl/apiKey 变更需同步 LLM 实例，支持预设切换时完整更新
+  // §5.2 webSearchConfig 变更需同步内存实例，避免重启服务才生效
+  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig }): void;
 }
 
 export interface CompileInput {
@@ -30,6 +34,23 @@ export interface ProgressEvent {
 export interface QueryInput {
   question: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  // §5.2 模式切换：'web' 联网搜索 / 'deep' 深度思考 / '' 默认
+  mode?: string;
+  // 是否启用联网搜索工具
+  webSearch?: boolean;
+  // 附件 base64 列表（data URL 格式：data:image/png;base64,xxx）
+  // 为什么用 base64：IndexedDB blob 在前端，后端无法直接读取，内嵌到请求体最简单
+  attachments?: Array<{ data: string; mimeType: string; filename: string }>;
+  // 当前请求使用的模型（用于即时切换，覆盖 config.llm.model）
+  model?: string;
+}
+
+// 思考步骤：与前端 ThinkingStep 类型对齐
+export interface ThinkingChunk {
+  phase: 'thinking' | 'tool_call' | 'composing';
+  message: string;
+  tool?: string;
+  args?: Record<string, unknown>;
 }
 
 export interface AnswerChunk {
@@ -38,6 +59,17 @@ export interface AnswerChunk {
   // [[页面名]] 引用
   refs?: string[];
   done?: boolean;
+  // §5.2 思考过程推送（前端 ThinkingBlock 渲染）
+  thinking?: ThinkingChunk;
+  // §5.2 联网搜索进度推送
+  progress?: { step: string; count?: number };
+  // §5.2 图片推送（多模态场景）
+  image?: { url: string; alt: string; width?: number; height?: number };
+  // §5.2 追问建议
+  followups?: string[];
+  // §5.1 done 事件附带的会话信息（供归档用）
+  sessionId?: string;
+  messageIndex?: number;
 }
 
 export interface HealthReport {
@@ -67,12 +99,21 @@ export interface FixProgressEvent {
 
 // 内网穿透配置（参考 17_xianyu 项目，适配本架构）。
 // localPort=0 表示从 server.port 继承；cpolarAuthtoken 仅 cpolar provider 需要。
+// tunnelMode/hostname 等 named tunnel 字段仅 cloudflare provider + named 模式生效。
 export interface TunnelConfig {
-  provider: 'cloudflare' | 'cpolar';
+  provider: 'cloudflare' | 'cpolar' | 'tailscale';
   localPort: number;
   cpolarAuthtoken: string;
   binaryPath: string;
   autoStart: boolean;
+  // Cloudflare Named Tunnel：固定域名模式（参考 17_xianyu）
+  // quick=临时 trycloudflare 域名（每次重启变化）；named=固定域名（需三步向导配置）
+  tunnelMode: 'quick' | 'named';
+  tunnelName: string;
+  tunnelId: string;
+  credentialsFile: string;
+  hostname: string;
+  certFile: string;
 }
 
 export interface WebSearchConfig {
@@ -80,6 +121,15 @@ export interface WebSearchConfig {
   apiKeyRef: string;
   apiKey?: string;
   maxResults?: number;
+}
+
+// 日志配置：控制 Fastify pino logger 级别与请求级日志开关
+// 为什么需要：前端报错时后端日志无反馈，需可配置的请求级日志覆盖 HTTP 层
+export interface LoggingConfig {
+  // pino 日志级别：'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace'
+  level: string;
+  // 是否启用 onRequest/onResponse/onError 钩子记录每个 HTTP 请求
+  enableRequestLog: boolean;
 }
 
 // 应用配置。
@@ -96,6 +146,7 @@ export interface AppConfig {
   healthCheck: { staleDays: number };
   tunnel: TunnelConfig;
   webSearch?: WebSearchConfig;
+  logging?: LoggingConfig;
 }
 
 // ===== 系统清理模块类型 =====

@@ -295,24 +295,41 @@ export interface TunnelStatus {
   provider: string;
 }
 
-// 隧道配置响应（GET /api/tunnel/config，authtoken 脱敏）
+// 隧道 provider 联合类型（与后端 TunnelConfig.provider 对齐）
+export type TunnelProvider = 'cloudflare' | 'cpolar' | 'tailscale';
+
+// 隧道配置响应（GET /api/tunnel/config，authtoken/certFile 脱敏）
+// certFile 含敏感凭证仅返回是否已配置，路径不回显
 export interface TunnelConfigData {
-  provider: 'cloudflare' | 'cpolar';
+  provider: TunnelProvider;
   localPort: number;
   cpolarAuthtokenMasked: string;
   cpolarAuthtokenConfigured: boolean;
   binaryPath: string;
   autoStart: boolean;
+  // Cloudflare Named Tunnel 字段
+  tunnelMode: 'quick' | 'named';
+  tunnelName: string;
+  tunnelId: string;
+  credentialsFile: string;
+  hostname: string;
+  certFileConfigured: boolean;
 }
 
 // 隧道配置保存请求体（POST /api/tunnel/config）
 // cpolarAuthtoken 空串表示"不修改已有 token"
+// Named Tunnel 字段可选：切换模式时传新值，留空保留已有值
 export interface TunnelConfigBody {
-  provider: 'cloudflare' | 'cpolar';
+  provider: TunnelProvider;
   localPort: number;
   cpolarAuthtoken: string;
   binaryPath: string;
   autoStart: boolean;
+  tunnelMode?: 'quick' | 'named';
+  tunnelName?: string;
+  tunnelId?: string;
+  credentialsFile?: string;
+  hostname?: string;
 }
 
 // 二进制下载失败错误（POST /api/tunnel/start 返回 500 时）
@@ -321,6 +338,50 @@ export interface TunnelDownloadError {
   errorType: 'binary_download_failed';
   manualPath: string;
   downloadUrls: string[];
+}
+
+// Tailscale Funnel 首次授权错误（POST /api/tunnel/start 返回 500 时）
+// 携带授权链接供前端渲染授权向导
+export interface TunnelAuthError {
+  detail: string;
+  errorType: 'tailscale_funnel_auth';
+  authUrl: string;
+}
+
+// ===== Cloudflare Named Tunnel 向导类型 =====
+
+// POST /api/tunnel/cloudflare/login 返回（启动 login 子进程）
+export interface CloudflareLoginStartResult {
+  status: 'waiting' | 'failed';
+  authUrl: string | null;
+  message: string;
+  output?: string;
+}
+
+// GET /api/tunnel/cloudflare/login/status 返回（轮询 login 状态）
+export interface CloudflareLoginStatusResult {
+  status: 'waiting' | 'success' | 'failed' | 'idle';
+  authUrl: string | null;
+  certFile?: string;
+  message: string;
+  output?: string;
+  checkedPaths?: string[];
+}
+
+// POST /api/tunnel/cloudflare/create 返回（创建命名隧道）
+export interface CloudflareCreateResult {
+  ok: boolean;
+  tunnelId: string;
+  credentialsFile: string;
+  tunnelName: string;
+  message: string;
+}
+
+// POST /api/tunnel/cloudflare/route-dns 返回（配置 DNS CNAME）
+export interface CloudflareRouteDnsResult {
+  ok: boolean;
+  publicUrl: string;
+  message: string;
 }
 
 // ===== AI 服务相关类型 =====

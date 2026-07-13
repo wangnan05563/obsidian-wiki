@@ -3,6 +3,7 @@
 // 职责：展示工具按钮（联网搜索/深度思考/附件等），点击切换 activeMode。
 // 设计选择：图标内置为自定义 SVG（霓虹科技风线条风格），不依赖 emoji 或第三方图标库。
 //   每个 tool.key 对应一个手绘 SVG path，保证视觉一致性。
+// §5.2 iconOnly 模式：仅显示图标不显示文字标签，鼠标悬浮显示 title 提示
 
 interface Tool {
   key: string;
@@ -12,15 +13,17 @@ interface Tool {
 const props = defineProps<{
   tools: Tool[];
   activeMode: string;
+  iconOnly?: boolean;
 }>();
 const emit = defineEmits<{ select: [mode: string] }>();
 </script>
 
 <template>
-  <div class="input-toolbar">
+  <div class="input-toolbar" :class="{ 'icon-only': props.iconOnly }">
     <button v-for="tool in props.tools" :key="tool.key"
       class="tool-chip"
-      :class="{ active: props.activeMode === tool.key }"
+      :class="{ active: props.activeMode === tool.key, 'icon-only': props.iconOnly }"
+      :title="props.iconOnly ? tool.label : undefined"
       @click="emit('select', tool.key)">
       <!-- 联网搜索图标：地球 + 信号线，表达"连接互联网" -->
       <svg v-if="tool.key === 'web'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -41,7 +44,7 @@ const emit = defineEmits<{ select: [mode: string] }>();
         <line x1="10.5" y1="15.5" x2="7.5" y2="19" stroke="currentColor" stroke-width="1.2"/>
         <line x1="13.5" y1="15.5" x2="16.5" y2="19" stroke="currentColor" stroke-width="1.2"/>
       </svg>
-      <span class="tool-label">{{ tool.label }}</span>
+      <span v-if="!props.iconOnly" class="tool-label">{{ tool.label }}</span>
     </button>
   </div>
 </template>
@@ -79,6 +82,11 @@ const emit = defineEmits<{ select: [mode: string] }>();
   border-color: var(--neon-cyan, #00f5ff);
   color: var(--neon-cyan, #00f5ff);
   box-shadow: 0 0 12px rgba(0, 245, 255, 0.3);
+}
+/* §5.2 iconOnly 模式：方形按钮，仅图标，悬浮显示 title */
+.tool-chip.icon-only {
+  padding: 8px;
+  border-radius: 10px;
 }
 .tool-icon {
   flex-shrink: 0;

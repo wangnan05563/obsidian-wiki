@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { execSync, spawn } from 'node:child_process';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import { loadConfig } from './config.js';
+import { loadConfig, getEffectiveApiKey } from './config.js';
 import { VaultService } from './vault/vault-service.js';
 import { HarnessAdapter } from './engine/harness-adapter.js';
 import { registerCompileRoute } from './routes/compile.js';
@@ -17,10 +17,12 @@ import { registerStatsRoute } from './routes/stats.js';
 import { registerSchemaRoutes } from './routes/schema.js';
 import { registerConfigRoute } from './routes/config.js';
 import { registerRunsRoute } from './routes/runs.js';
-import { registerSearchRoute } from './routes/search.js';
+import { registerSearchRoute, registerWebSearchRoute } from './routes/search.js';
 import { registerVaultRoute } from './routes/vault.js';
 import { registerAiRoute } from './routes/ai.js';
 import { registerCleanupRoute } from './routes/cleanup.js';
+import { registerTunnelRoute } from './routes/tunnel.js';
+import { TunnelService } from './tunnel/tunnel-service.js';
 
 // CJS 模式下 __dirname 由 Node.js 原生提供；ESM 模式下需要从 import.meta.url 派生
 // esbuild 打包时会自动保留 __dirname 引用，TypeScript 编译需声明此变量
@@ -47,7 +49,8 @@ function applyEnvLine(line: string): void {
 }
 
 function loadEnvFile(): void {
-  if (!IS_PACKAGED) return;
+  // 开发模式和打包模式都加载 .env，避免依赖启动脚本是否加载 .env
+  // 之前仅 IS_PACKAGED 模式加载，但 start-service.ps1 不加载 .env 导致 401
   const candidates = [
     path.resolve(process.cwd(), '.env'),
     path.resolve(process.cwd(), 'services', 'api', '.env'),
@@ -126,8 +129,10 @@ async function main(): Promise<void> {
   const vault = new VaultService(config.vaultPath);
   await vault.init();
 
-  // 构造 HarnessAdapter。API Key 通过环境变量读取，不落盘（M-7）
-  const apiKey = process.env[config.llm.apiKeyRef];
+  // 构造 HarnessAdapter。API Key 读取优先级：config.json.llm.apiKey > process.env[apiKeyRef]
+  // 为什么用 getEffectiveApiKey：开发模式不加载 .env，仅靠环境变量会拿到空串导致 401
+  // §5.2 传递 webSearchConfig：query workflow 注入 web_search 工具时使用
+  const apiKey = getEffectiveApiKey(config);
   const adapter = new HarnessAdapter(
     {
       llm: {
@@ -141,9 +146,49 @@ async function main(): Promise<void> {
     },
     vault,
     config.healthCheck.staleDays,
+    config.webSearch,
   );
 
-  const app = Fastify({ logger: true });
+  // 配置驱动的 Fastify logger：level 从 config.json 读取，默认 info
+  // 为什么不用 logger: true：默认配置无法控制级别，且不记录请求级日志
+  const loggingConfig = config.logging ?? { level: 'info', enableRequestLog: true };
+  const app = Fastify({
+    logger: {
+      level: loggingConfig.level,
+      // 序列化请求关键字段，避免日志中包含敏感的完整 body
+      serializers: {
+        req(req) {
+          return { method: req.method, url: req.url };
+        },
+      },
+    },
+  });
+
+  // 请求级日志钩子：覆盖 HTTP 层，确保前端报错时后端日志有反馈
+  // 为什么需要：路由 catch 块只通过 SSE 推错误给前端，后端日志流无记录
+  if (loggingConfig.enableRequestLog) {
+    // onRequest：记录请求进入（method + url）
+    app.addHook('onRequest', async (request) => {
+      request.log.info({ method: request.method, url: request.url }, 'incoming request');
+    });
+
+    // onResponse：记录请求完成（method + url + statusCode + 耗时）
+    app.addHook('onResponse', async (request, reply) => {
+      const elapsedMs = reply.elapsedTime.toFixed(2);
+      request.log.info(
+        { method: request.method, url: request.url, statusCode: reply.statusCode, elapsedMs },
+        'request completed',
+      );
+    });
+
+    // onError：记录请求处理中抛出的错误（未捕获的异常）
+    app.addHook('onError', async (request, reply, error) => {
+      request.log.error(
+        { method: request.method, url: request.url, statusCode: reply.statusCode, err: error },
+        'request error',
+      );
+    });
+  }
 
   // 注册 multipart 插件以支持 compile 路由的文件上传
   await app.register(multipart, {
@@ -164,11 +209,23 @@ async function main(): Promise<void> {
   const stateDir = path.resolve(config.vaultPath, '..', '.harness', 'state');
   registerRunsRoute(app, stateDir);
   // §5.1 全文检索 + Vault 初始化
+  // §5.2 联网搜索路由：供前端直接调用展示搜索结果
   registerSearchRoute(app, vault);
+  registerWebSearchRoute(app, config.webSearch);
   registerVaultRoute(app, vault);
   // AI 配置管理 + 系统清理：参考 17_xianyu 项目新增模块
-  registerAiRoute(app);
+  registerAiRoute(app, adapter);
   registerCleanupRoute(app, vault);
+
+  // 内网穿透：TunnelService 单例注入路由，路由内部按需 start/stop
+  const tunnel = new TunnelService();
+  registerTunnelRoute(app, tunnel);
+  // autoStart 开启时服务启动即建立隧道，失败不阻断主服务
+  if (config.tunnel.autoStart) {
+    tunnel.start(config.tunnel, config.server.port).catch((err) => {
+      app.log.error({ err }, '隧道开机自启失败');
+    });
+  }
 
   // 健康检查端点（供 docker-compose healthcheck 用）
   app.get('/health', async () => ({ ok: true }));
@@ -216,6 +273,16 @@ async function main(): Promise<void> {
     app.log.error(err);
     process.exit(1);
   }
+
+  // shutdown 优雅停止：优先停隧道，避免调度器停止后隧道仍转发流量到已关闭服务
+  // 为什么用 process 信号而非 Fastify 钩子：pkg 打包模式下 Ctrl+C 走 SIGINT，需在进程级捕获
+  const shutdown = (signal: string): void => {
+    console.log(`[关闭] 收到 ${signal}，正在停止隧道...`);
+    tunnel.stop();
+    process.exit(0);
+  };
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch((err) => { // NOSONAR: ESM 入口标准模式，main() 是异步入口函数调用非 top-level await
