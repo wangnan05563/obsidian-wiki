@@ -1,0 +1,47 @@
+{
+  "_comment": "示例配置文件。apiKey 字段留空，实际密钥通过 apiKeyRef 指向的环境变量读取（如 DEEPSEEK_KEY、TAVILY_API_KEY）。复制为 config.json 后按需填写非敏感字段。",
+  "vaultPath": "../data/vault",
+  "adapter": "harness",
+  "llm": {
+    "provider": "deepseek",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-chat",
+    "apiKeyRef": "DEEPSEEK_KEY",
+    "apiKey": ""
+  },
+  "budget": {
+    "maxSteps": 20,
+    "tokenBudget": 50000
+  },
+  "server": {
+    "host": "localhost",
+    "port": 3000
+  },
+  "localOnly": true,
+  "healthCheck": {
+    "staleDays": 30
+  },
+  "tunnel": {
+    "provider": "cloudflare",
+    "localPort": 0,
+    "cpolarAuthtoken": "",
+    "binaryPath": "",
+    "autoStart": false,
+    "tunnelMode": "quick",
+    "tunnelName": "",
+    "tunnelId": "",
+    "credentialsFile": "",
+    "hostname": "",
+    "certFile": ""
+  },
+  "logging": {
+    "level": "info",
+    "enableRequestLog": true
+  },
+  "webSearch": {
+    "provider": "tavily",
+    "apiKeyRef": "TAVILY_API_KEY",
+    "apiKey": "",
+    "maxResults": 5
+  }
+}

@@ -137,7 +137,7 @@ wiki-harness/                     # @wiki/harness 独立仓库（独立 npm 包�
 └── package.json
 ```
 
-两个仓库：主仓库 `karpathy-wiki` 与独立仓库 `wiki-harness`。阶段2 主仓库通过 `npm install @wiki/harness` 引用独立组件。`prompts/` 位于 `services/api/src/prompts/`，阶段1 Skill 文件直接 `import` 或字符串拼接引用，阶段2 harness 通过 `beforeLoop` Hook 注入，保证两阶段 prompt 等价（M-3）。
+两个仓库：主仓库 `karpathy-wiki` 与独立仓库 `wiki-harness`。阶段2 主仓库通过 `npm install @wiki/harness` 引用独立组件。`prompts/` 位于 `api/src/prompts/`，阶段1 Skill 文件直接 `import` 或字符串拼接引用，阶段2 harness 通过 `beforeLoop` Hook 注入，保证两阶段 prompt 等价（M-3）。
 
 ### 2.4 技术栈选型
 
@@ -379,7 +379,7 @@ npx @wiki/harness resume --runId <id>
 ### 4.2 包结构
 
 ```
-services/api/
+api/
 ├── src/
 │   ├── index.ts                  # Fastify 启动入口
 │   ├── routes/                   # REST 路由
@@ -947,7 +947,7 @@ Tauri 打包：用 `bun build --compile` 将 Fastify 后端编译为单 binary�
 **策略调整**：
 - 原阶段1（TRAE CLI 验证）+ 阶段2（自研）合并为新阶段1（自研 `@wiki/harness` + 业务层 + 桥接 API + Web 前端）
 - `TraeCliAdapter` 暂不实现，`EngineAdapter` 接口保留但默认实现为 `HarnessAdapter`
-- `trae-skills/` 目录移除，prompt 资产仍存于 `services/api/src/prompts/`，供 harness `beforeLoop` Hook 注入与 Trae IDE 手动验证共用
+- `trae-skills/` 目录移除，prompt 资产仍存于 `api/src/prompts/`，供 harness `beforeLoop` Hook 注入与 Trae IDE 手动验证共用
 - 阶段3 迭代优化不变
 
 ### 11.1 阶段1：自研 `@wiki/harness` + 业务层 + Web 前端
@@ -1004,7 +1004,7 @@ Tauri 打包：用 `bun build --compile` 将 Fastify 后端编译为单 binary�
 | M-7 | 中 | API Key 明文落盘 | §7.5 改为 apiKeyRef 引用环境变量，不落盘 |
 | M-8 | 中 | 敏感资料开关缺失 | §7.5 + §4.5 补充 localOnly 开关与降级逻辑 |
 | M-9 | 中 | SCHEMA 可视化编辑缺失 | §6.X 新增 Monaco 编辑器 + 版本对比 + 失效传播 |
-| M-10 | 中 | trae-skills 目录不一致 | §2.3 统一至 services/api/trae-skills/ |
+| M-10 | 中 | trae-skills 目录不一致 | §2.3 统一至 api/trae-skills/ |
 | L-1 | 轻 | 配置冗余 | §7.5 合并 engine 与 llm 为统一配置 |
 | L-2 | 轻 | LLMConfig 类型未定义 | §3.3.7 补充 LLMConfig 类型 |
 | L-3 | 轻 | Docker 端口易混淆 | §9.2 改为 3001:80 + 健康检查 |
@@ -1022,8 +1022,8 @@ Tauri 打包：用 `bun build --compile` 将 Fastify 后端编译为单 binary�
 | 编号 | 严重度 | 问题 | 修正措施 |
 | --- | --- | --- | --- |
 | A-1 | 严重 | healthCheck 阶段1 路径矛盾：§4.6 称不调 LLM，但 §11.1 列了 health-check Skill | §4.3/§4.6/§11.1 明确 healthCheck 不走 Skill，两阶段均绕过引擎直接调用 build_link_graph；仅 /api/health-check/fix 走引擎；trae-skills 仅 compile/query |
-| A-2 | 严重 | §2.3 目录树与 §4.2 路径冲突：tools/trae-skills vs services/api/trae-skills | §2.3 目录树删除 tools/，trae-skills 仅保留在 services/api/ 下 |
-| A-3 | 严重 | §2.3 遗漏 prompts/ 目录（V1.1 评审声称修复但实际遗漏） | §2.3 补 services/api/src/prompts/，明确阶段1 Skill 与阶段2 harness 共引用机制 |
+| A-2 | 严重 | §2.3 目录树与 §4.2 路径冲突：tools/trae-skills vs api/trae-skills | §2.3 目录树删除 tools/，trae-skills 仅保留在 api/ 下 |
+| A-3 | 严重 | §2.3 遗漏 prompts/ 目录（V1.1 评审声称修复但实际遗漏） | §2.3 补 api/src/prompts/，明确阶段1 Skill 与阶段2 harness 共引用机制 |
 | A-4 | 严重 | §9.2 docker-compose.yml wiki-api 键重复（YAML 非法） | 合并为单个 wiki-api 块，restart/healthcheck 并入 |
 | A-5 | 中 | 两阶段控制权差异未说明，易误判语义不等价 | §4.4.1 后补 A-5 说明：阶段1 prompt 驱动 vs 阶段2 harness 编排 + Hook 兜底，控制权从 LLM 收回到确定性逻辑，是阶段升级价值 |
 | A-6 | 中 | localOnly 在 TraeCliAdapter 实现空白 | §4.3 + §7.5 补降级路径：Adapter 内部判断，不构造子进程/harness，compile 仅存档、query 退化为关键词检索 |
@@ -1311,7 +1311,7 @@ export class McpAdapter implements EngineAdapter {
 
 当 §12.4.1 触发条件满足时，按以下顺序实施：
 
-1. 新增 `services/api/src/engine/mcp-adapter.ts`（实现 `EngineAdapter`）
+1. 新增 `api/src/engine/mcp-adapter.ts`（实现 `EngineAdapter`）
 2. 新增 `wiki-harness/src/mcp/server.ts`（harness 包装为 MCP Server，复用 `examples/` 中的工具 schema）
 3. `config.json` 新增 `adapter: "mcp"` 选项与 `mcp: { command, args }` 配置
 4. 在 `index.ts` 启动时根据 `adapter` 字段实例化 `McpAdapter`
@@ -1326,4 +1326,4 @@ export class McpAdapter implements EngineAdapter {
 - 下一阶段：详细设计与编码实施（阶段1 优先）
 - 下一阶段智能体：全栈开发智能体
 - 下一阶段技能：web-dev-trae / fullstack-developer / 前端设计技能
-- 交接上下文：本概要设计 V1.2（评审通过）作为设计基准。下一阶段须依据本设计与需规 V2.2 进行详细设计与编码。**前置任务**：阶段1 进入详细设计前须先完成 TRAE CLI Skill 输出协议 PoC（S-1）。优先交付阶段1：TRAE CLI Skill（仅 compile/query）+ 桥接 API + Web 前端 + 一键安装 + SCHEMA 编辑器 + 快速上手指南。`@wiki/harness` 独立组件包可在阶段1 并行启动（不阻塞主线）。`EngineAdapter` 接口须在阶段1 即落地，确保阶段2 平滑切换。prompt 资产单点存储于 `services/api/src/prompts/`，双引擎共引用。**V1.2 新增待办**（§12.3 第 5-8 项）：并发控制、部分失败事务性、配置热加载边界、harness 运行日志去向，须在详细设计阶段明确。
+- 交接上下文：本概要设计 V1.2（评审通过）作为设计基准。下一阶段须依据本设计与需规 V2.2 进行详细设计与编码。**前置任务**：阶段1 进入详细设计前须先完成 TRAE CLI Skill 输出协议 PoC（S-1）。优先交付阶段1：TRAE CLI Skill（仅 compile/query）+ 桥接 API + Web 前端 + 一键安装 + SCHEMA 编辑器 + 快速上手指南。`@wiki/harness` 独立组件包可在阶段1 并行启动（不阻塞主线）。`EngineAdapter` 接口须在阶段1 即落地，确保阶段2 平滑切换。prompt 资产单点存储于 `api/src/prompts/`，双引擎共引用。**V1.2 新增待办**（§12.3 第 5-8 项）：并发控制、部分失败事务性、配置热加载边界、harness 运行日志去向，须在详细设计阶段明确。

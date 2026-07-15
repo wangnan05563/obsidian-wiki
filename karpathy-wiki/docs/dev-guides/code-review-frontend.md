@@ -1,4 +1,4 @@
-﻿# Wiki Frontend Code Review Skill
+# Wiki Frontend Code Review Skill
 
 ## 概述
 
@@ -21,8 +21,8 @@
 
 ### 1.2 审查工具
 
-- TypeScript 编译器：`tsc --noEmit -p packages/web/tsconfig.json`
-- ESLint：`eslint packages/web/src/**/*.vue`
+- TypeScript 编译器：`tsc --noEmit -p karpathy-wiki/frontend/tsconfig.json`
+- ESLint：`eslint karpathy-wiki/frontend/src/**/*.vue`
 - 视觉检查：确保组件在不同主题下正常显示
 
 ---
@@ -87,7 +87,7 @@
 
 **问题：** 后端新增字段后，前端 `AiConfig` 接口未更新。
 
-**修复：** 后端类型变更后，立即同步更新前端 `packages/web/src/types.ts`。
+**修复：** 后端类型变更后，立即同步更新前端 `karpathy-wiki/frontend/src/types.ts`。
 
 ### 3.2 状态泄漏
 
@@ -124,7 +124,7 @@
 ```markdown
 ## 前端代码审查报告
 
-**文件：** `packages/web/src/views/Config.vue`
+**文件：** `karpathy-wiki/frontend/src/views/Config.vue`
 **审查人：** [姓名]
 **日期：** YYYY-MM-DD
 

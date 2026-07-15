@@ -767,7 +767,7 @@ fastify.post('/api/search/web', async (request, reply) => {
 ### 9.1 依赖新增
 
 ```json
-// packages/web/package.json 新增
+// frontend/package.json 新增
 {
   "dependencies": {
     "idb": "^8.0.0",

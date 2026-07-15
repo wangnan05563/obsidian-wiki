@@ -33,7 +33,7 @@ function refIcon(source: string): string {
       <span class="toggle">{{ expanded ? '▼' : '▶' }}</span>
     </div>
     <div class="refs-body" v-if="expanded">
-      <div v-for="(ref, i) in refs" :key="i"
+      <div v-for="(ref, i) in refs" :key="ref.url || ref.path"
         class="ref-item"
         :class="ref.source"
         @click="handleRefClick(ref)">

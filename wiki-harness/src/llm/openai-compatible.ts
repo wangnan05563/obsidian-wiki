@@ -54,6 +54,8 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
+      // 60s 超时：防止网络挂起导致整个 agent loop 卡死无响应
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!response.ok) {
@@ -91,6 +93,8 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
+      // 60s 超时：防止网络挂起导致整个 agent loop 卡死无响应
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!response.ok) {

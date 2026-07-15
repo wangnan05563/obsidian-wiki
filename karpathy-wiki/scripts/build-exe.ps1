@@ -1,4 +1,4 @@
-﻿# scripts/build-exe.ps1
+# scripts/build-exe.ps1
 # Karpathy-Wiki EXE 构建脚本
 #
 # 用法：
@@ -90,7 +90,7 @@ if ($SkipDeps) { Write-Host "Mode: SkipDeps（跳过依赖安装）" }
 if ($SkipSPA)  { Write-Host "Mode: SkipSPA（跳过 SPA 构建）" }
 
 # ============== 1. 检查依赖 ==============
-Write-Host "`n[1/7] 检查依赖..." -ForegroundColor Yellow
+Write-Host "`n[1/8] 检查依赖..." -ForegroundColor Yellow
 
 # Node.js 版本检查
 $nodeVersion = (node --version 2>$null) -replace '[v\n\r]', ''
@@ -136,7 +136,7 @@ foreach ($tool in $buildTools) {
 Write-Ok "构建工具就绪（@yao-pkg/pkg + esbuild）"
 
 # ============== 2. 构建 @wiki/harness ==============
-Write-Host "`n[2/7] 构建 @wiki/harness..." -ForegroundColor Yellow
+Write-Host "`n[2/8] 构建 @wiki/harness..." -ForegroundColor Yellow
 
 $harnessPath = Join-Path $repoRoot "..\wiki-harness"
 if (Test-Path (Join-Path $harnessPath "package.json")) {
@@ -163,7 +163,7 @@ if (Test-Path (Join-Path $harnessPath "package.json")) {
 }
 
 # ============== 3. 构建 SPA ==============
-Write-Host "`n[3/7] 构建 SPA..." -ForegroundColor Yellow
+Write-Host "`n[3/8] 构建 SPA..." -ForegroundColor Yellow
 
 $spaIndex = Join-Path $repoRoot "api\public\index.html"
 if ($SkipSPA -and (Test-Path $spaIndex)) {
@@ -180,7 +180,7 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
 }
 
 # ============== 4. esbuild 打包后端 TS → CJS 单文件 ==============
-Write-Host "`n[4/7] esbuild 打包后端..." -ForegroundColor Yellow
+Write-Host "`n[4/8] esbuild 打包后端..." -ForegroundColor Yellow
 
 # 为什么用 esbuild：项目使用 ESM（"type": "module"），pkg 对 ESM 支持有限
 # esbuild 把所有 TS 打包成单个 CJS 文件，pkg 再打包成 exe
@@ -223,7 +223,7 @@ if (Test-Path $harnessNodeModules) {
 Write-Ok "esbuild 打包完成：$bundleFile"
 
 # ============== 5. @yao-pkg/pkg 打包 → exe ==============
-Write-Host "`n[5/7] pkg 打包 exe..." -ForegroundColor Yellow
+Write-Host "`n[5/8] pkg 打包 exe..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-3 分钟（首次需下载 Node.js 二进制）" -ForegroundColor DarkGray
 
 $pkgOutputDir = Join-Path $distDir "karpathy-wiki"
@@ -232,28 +232,11 @@ if (Test-Path $pkgOutputDir) {
     Remove-Item -Recurse -Force $pkgOutputDir
 }
 
-# pkg 配置文件
-$pkgConfig = @{
-    name = "karpathy-wiki"
-    bin = $bundleFile
-    pkg = @{
-        targets = @("node24-win-x64")
-        output = $pkgOutputDir
-        assets = @(
-            "api\prompts\**\*",
-            "api\src\prompts\**\*"
-        )
-        scripts = @()
-    }
-}
-$pkgConfigPath = Join-Path $buildDir "pkg-config.json"
-$pkgConfig | ConvertTo-Json -Depth 5 | Set-Content $pkgConfigPath -Encoding UTF8
-
 # 设置 pkg 缓存目录（避免重复下载 Node 二进制）
 $env:PKG_CACHE_PATH = $cacheDir
 
 # ============== 5. pkg --sea 打包 exe（使用 Node.js 官方 SEA 功能，无需预下载特殊二进制）==============
-Write-Host "`n[5/7] pkg --sea 打包 exe..." -ForegroundColor Yellow
+Write-Host "`n[6/8] pkg --sea 打包 exe..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-2 分钟（需下载 Node.js 官方二进制）" -ForegroundColor DarkGray
 
 $exePath = Join-Path $pkgOutputDir "karpathy-wiki.exe"
@@ -274,7 +257,7 @@ if (-not (Test-Path $exePath)) {
 Write-Ok "exe 生成完成：$exePath"
 
 # ============== 6. 复制外置资源 ==============
-Write-Host "`n[6/7] 复制外置资源..." -ForegroundColor Yellow
+Write-Host "`n[7/8] 复制外置资源..." -ForegroundColor Yellow
 
 # 6.1 SPA 静态资源（前端构建产物）
 Write-Host "  [6.1] 复制 SPA 静态资源..."
@@ -359,7 +342,7 @@ if (Test-Path $promptsSource) {
 Set-Content -Path $buildReadyMarker -Value (Get-Date -Format o) -Encoding UTF8
 
 # ============== 7. 制作安装包（Inno Setup） ==============
-Write-Host "`n[7/7] 制作安装包（Inno Setup）..." -ForegroundColor Yellow
+Write-Host "`n[8/8] 制作安装包（Inno Setup）..." -ForegroundColor Yellow
 
 function Find-ISCC {
     $cmd = Get-Command iscc -ErrorAction SilentlyContinue

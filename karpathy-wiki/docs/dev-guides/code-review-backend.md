@@ -1,4 +1,4 @@
-﻿# Wiki Backend Code Review Skill
+# Wiki Backend Code Review Skill
 
 ## 概述
 
@@ -21,7 +21,7 @@
 
 ### 1.2 审查工具
 
-- TypeScript 编译器：`tsc --noEmit -p services/api/tsconfig.json`
+- TypeScript 编译器：`tsc --noEmit -p karpathy-wiki/api/tsconfig.json`
 - 静态分析：`rg` 搜索潜在硬编码
 - 运行时测试：启动服务验证配置变更
 
@@ -136,7 +136,7 @@ logging: parsed.logging
 ```markdown
 ## 后端代码审查报告
 
-**文件：** `services/api/src/routes/ai.ts`
+**文件：** `karpathy-wiki/api/src/routes/ai.ts`
 **审查人：** [姓名]
 **日期：** YYYY-MM-DD
 

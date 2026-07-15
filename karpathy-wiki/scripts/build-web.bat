@@ -40,7 +40,7 @@ if exist "api\public" (
 
 echo.
 echo [3/4] Cleaning TypeScript/Vue compile artifacts...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -Path 'frontend\\src' -Recurse -Filter '*.js' -Exclude '*.d.ts.js' | Remove-Item -Force -ErrorAction SilentlyContinue"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -Path 'frontend\\src' -Recurse -Filter '*.js' -Exclude '*.vue.js','*.ts.js' | Remove-Item -Force -ErrorAction SilentlyContinue"
 echo   Cleaned stray .js files from src/
 
 echo.

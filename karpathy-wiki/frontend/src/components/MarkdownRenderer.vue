@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import MarkdownIt from 'markdown-it';
 
 // Markdown 渲染组件。
@@ -29,17 +29,24 @@ const previewSrc = ref('');
 const previewVisible = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
 
+// 事件委托处理器：提取为命名函数以便卸载时移除
+const handleClick = (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  if (target.tagName === 'IMG') {
+    e.preventDefault();
+    previewSrc.value = (target as HTMLImageElement).src;
+    previewVisible.value = true;
+  }
+};
+
 // 事件委托：监听根元素 click，若点击目标是 img 则触发预览
 // 为什么用事件委托而非在 v-html 中注入 onclick：v-html 内容不经过 Vue 编译，无法绑定 Vue 事件
 onMounted(() => {
-  rootRef.value?.addEventListener('click', (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.tagName === 'IMG') {
-      e.preventDefault();
-      previewSrc.value = (target as HTMLImageElement).src;
-      previewVisible.value = true;
-    }
-  });
+  rootRef.value?.addEventListener('click', handleClick);
+});
+
+onBeforeUnmount(() => {
+  rootRef.value?.removeEventListener('click', handleClick);
 });
 </script>
 

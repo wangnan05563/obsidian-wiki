@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import matter from 'gray-matter';
 import type { EngineAdapter, QueryInput } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
+import { withCompileLock } from '../compile-queue.js';
 
 // §5.1 L-7 防篡改归档：会话存储。
 // 内存 Map 存储问答对，archive 路由从服务端存储取答案，不信任客户端传内容。
@@ -15,10 +16,35 @@ interface QaRecord {
 }
 const sessions = new Map<string, QaRecord[]>();
 
+// LRU 上限：防止长期运行后 sessions Map 无限增长导致内存泄漏
+const MAX_SESSIONS = 100;
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1小时
+
+// 超限时先淘汰过期会话，仍超限则按插入顺序删除最早会话
+function trimSessions(): void {
+  if (sessions.size <= MAX_SESSIONS) return;
+  const now = Date.now();
+  for (const [key, records] of sessions) {
+    const lastTs = records[records.length - 1]?.ts;
+    if (lastTs && now - new Date(lastTs).getTime() > SESSION_TTL_MS) {
+      sessions.delete(key);
+    }
+  }
+  // 如果仍然超限，删除最早的（Map 保持插入顺序）
+  while (sessions.size > MAX_SESSIONS) {
+    const firstKey = sessions.keys().next().value;
+    if (firstKey) sessions.delete(firstKey);
+    else break;
+  }
+}
+
 // 注册 POST /api/query 路由。
 // §5.2 改造：请求体扩展 mode/webSearch/attachments/model；SSE 事件扩展 thinking/progress/followups
 export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter) {
-  app.post('/api/query', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/query', {
+    // 破坏性端点更严格限流：query 触发 LLM 调用，20/min 防 token 耗尽
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       question?: string;
       history?: QueryInput['history'];
@@ -104,6 +130,7 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
             ts: new Date().toISOString(),
           });
           sessions.set(sessionId, records);
+          trimSessions();
           // done 事件附带 sessionId + messageIndex，客户端保存供归档用
           send('done', { sessionId, messageIndex });
         } else if ((chunk.refs?.length ?? 0) > 0) {
@@ -171,14 +198,19 @@ export function registerQueryArchiveRoute(app: FastifyInstance, vault: VaultServ
     );
 
     try {
-      await vault.writeFile(relPath, content);
-      // 追加到 index.md
-      await vault.appendIndex(
-        frontmatter.title,
-        `归档问答：${record.question.slice(0, 40)}`,
-      );
-      // 记录操作日志
-      await vault.appendLog('query', [relPath], `归档问答: ${record.question.slice(0, 40)}`);
+      // 串行化 vault 写入：与 compile 路由共用锁，避免 index.md/log.md 追加竞态
+      await withCompileLock(async () => {
+        await vault.writeFile(relPath, content);
+        // 追加到 index.md
+        await vault.appendIndex(
+          frontmatter.title,
+          `归档问答：${record.question.slice(0, 40)}`,
+        );
+        // 记录操作日志
+        await vault.appendLog('query', [relPath], `归档问答: ${record.question.slice(0, 40)}`);
+      });
+      // 归档成功后释放会话内存，避免已归档问答长期驻留导致内存泄漏
+      sessions.delete(body.sessionId);
       return reply.send({ ok: true, path: relPath });
     } catch (err: unknown) {
       return reply.code(500).send({

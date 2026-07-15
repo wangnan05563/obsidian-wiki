@@ -7,14 +7,26 @@ import path from 'node:path';
 export class FileStateStore implements StateStore {
   constructor(private dir: string = '.harness/state') {}
 
+  // 防 path traversal：runId 直接拼接到文件路径，非 UUID 值可能越权访问目录外文件
+  private validateRunId(runId: string): void {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
+      throw new Error(`Invalid runId format: ${runId}`);
+    }
+  }
+
   async save(runId: string, state: RunState): Promise<void> {
+    this.validateRunId(runId);
     // 确保目录存在，recursive 模式幂等
     await fs.mkdir(this.dir, { recursive: true });
     const filePath = path.join(this.dir, `${runId}.json`);
-    await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+    // 原子写入：先写临时文件再 rename，避免并发或写入中断产生半截 JSON 文件
+    const tmpPath = `${filePath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
+    await fs.rename(tmpPath, filePath);
   }
 
   async load(runId: string): Promise<RunState | null> {
+    this.validateRunId(runId);
     const filePath = path.join(this.dir, `${runId}.json`);
     try {
       const content = await fs.readFile(filePath, 'utf-8');

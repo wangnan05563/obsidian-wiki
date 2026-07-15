@@ -1,4 +1,4 @@
-﻿# Wiki Code Development Skill
+# Wiki Code Development Skill
 
 ## 概述
 
@@ -104,8 +104,8 @@
 3. 更新默认配置（config.ts defaultConfig()）
 4. 更新配置加载/保存逻辑（config.ts loadConfig/saveAiConfig）
 5. 更新 API 路由（routes/ai.ts GET/PUT）
-6. 更新前端类型（packages/web/src/types.ts）
-7. 更新前端组件（packages/web/src/views/Config.vue）
+6. 更新前端类型（karpathy-wiki/frontend/src/types.ts）
+7. 更新前端组件（karpathy-wiki/frontend/src/views/Config.vue）
 8. 运行 TypeScript 编译器验证（tsc --noEmit）
 9. 运行 git diff 确认变更范围
 ```
@@ -332,7 +332,7 @@
 **构建命令：** cd karpathy-wiki/packages/web && npm run build（等价于 ue-tsc && vite build）
 
 **输出路径：**
-- 构建产物 -> ../../services/api/public/（从 web package 相对路径）
+- 构建产物 -> ../../karpathy-wiki/api/public/（从 web package 相对路径）
 - 部署路径 -> karpathy-wiki/dist/karpathy-wiki/public/
 
 **PowerShell 编辑陷阱：**

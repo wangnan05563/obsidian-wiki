@@ -85,11 +85,11 @@
 
 | 任务 ID | 任务 | 文件 | 说明 |
 | --- | --- | --- | --- |
-| S1-T1 | 安装前端依赖 | `packages/web/package.json` | 新增 `idb@^8.0.0` + `@vueuse/core@^10.0.0` |
-| S1-T2 | 扩展前端类型 | `packages/web/src/types.ts` | 新增 Reference/ThinkingStep/ConversationRecord/Attachment |
+| S1-T1 | 安装前端依赖 | `frontend/package.json` | 新增 `idb@^8.0.0` + `@vueuse/core@^10.0.0` |
+| S1-T2 | 扩展前端类型 | `frontend/src/types.ts` | 新增 Reference/ThinkingStep/ConversationRecord/Attachment |
 | S1-T3 | 扩展后端类型 | `services/api/src/types.ts` | AnswerChunk 新增 thinking/image/progress 字段 |
 | S1-T4 | 扩展 config.json | `services/api/src/config.ts` | 新增 llm.presets + webSearch + attachments 配置 |
-| S1-T5 | IndexedDB 初始化 | `packages/web/src/stores/conversations.ts` | DB 创建 + 迁移函数 |
+| S1-T5 | IndexedDB 初始化 | `frontend/src/stores/conversations.ts` | DB 创建 + 迁移函数 |
 
 ### 3.2 执行步骤
 
@@ -343,28 +343,28 @@ npx playwright test
 
 | 操作 | 文件 | 阶段 |
 | --- | --- | --- |
-| 新增 | `packages/web/src/components/ThinkingBlock.vue` | S3 |
-| 新增 | `packages/web/src/components/ConversationSidebar.vue` | S3 |
-| 新增 | `packages/web/src/components/RefsList.vue` | S3 |
-| 新增 | `packages/web/src/components/MessageActions.vue` | S4 |
-| 新增 | `packages/web/src/components/ModelSelector.vue` | S4 |
-| 新增 | `packages/web/src/components/InputToolbar.vue` | S4 |
-| 新增 | `packages/web/src/components/AttachmentUploader.vue` | S4 |
-| 新增 | `packages/web/src/components/TtsController.vue` | S4 |
-| 改造 | `packages/web/src/components/FollowupsChips.vue` | S3 |
-| 改造 | `packages/web/src/components/MarkdownRenderer.vue` | S3 |
-| 改造 | `packages/web/src/views/Query.vue` | S5 |
-| 改造 | `packages/web/src/stores/query.ts` | S3 |
-| 新增 | `packages/web/src/stores/conversations.ts` | S3 |
-| 新增 | `packages/web/src/stores/model.ts` | S4 |
-| 新增 | `packages/web/src/stores/tts.ts` | S4 |
-| 新增 | `packages/web/src/stores/attachments.ts` | S4 |
-| 新增 | `packages/web/src/composables/useTTS.ts` | S4 |
-| 新增 | `packages/web/src/composables/useClipboard.ts` | S4 |
-| 新增 | `packages/web/src/composables/useImageCompress.ts` | S4 |
-| 改造 | `packages/web/src/composables/useSSEStream.ts` | S3 |
-| 改造 | `packages/web/src/types.ts` | S1 |
-| 改造 | `packages/web/package.json` | S1 |
+| 新增 | `frontend/src/components/ThinkingBlock.vue` | S3 |
+| 新增 | `frontend/src/components/ConversationSidebar.vue` | S3 |
+| 新增 | `frontend/src/components/RefsList.vue` | S3 |
+| 新增 | `frontend/src/components/MessageActions.vue` | S4 |
+| 新增 | `frontend/src/components/ModelSelector.vue` | S4 |
+| 新增 | `frontend/src/components/InputToolbar.vue` | S4 |
+| 新增 | `frontend/src/components/AttachmentUploader.vue` | S4 |
+| 新增 | `frontend/src/components/TtsController.vue` | S4 |
+| 改造 | `frontend/src/components/FollowupsChips.vue` | S3 |
+| 改造 | `frontend/src/components/MarkdownRenderer.vue` | S3 |
+| 改造 | `frontend/src/views/Query.vue` | S5 |
+| 改造 | `frontend/src/stores/query.ts` | S3 |
+| 新增 | `frontend/src/stores/conversations.ts` | S3 |
+| 新增 | `frontend/src/stores/model.ts` | S4 |
+| 新增 | `frontend/src/stores/tts.ts` | S4 |
+| 新增 | `frontend/src/stores/attachments.ts` | S4 |
+| 新增 | `frontend/src/composables/useTTS.ts` | S4 |
+| 新增 | `frontend/src/composables/useClipboard.ts` | S4 |
+| 新增 | `frontend/src/composables/useImageCompress.ts` | S4 |
+| 改造 | `frontend/src/composables/useSSEStream.ts` | S3 |
+| 改造 | `frontend/src/types.ts` | S1 |
+| 改造 | `frontend/package.json` | S1 |
 | 改造 | `services/api/src/types.ts` | S1 |
 | 改造 | `services/api/src/routes/query.ts` | S2 |
 | 新增 | `services/api/src/routes/search.ts` | S2 |

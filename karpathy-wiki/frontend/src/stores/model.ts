@@ -28,7 +28,12 @@ function saveApiKeyFor(presetKey: string, apiKey: string): void {
 }
 
 export const useModelStore = defineStore('model', () => {
-  const selectedPresetKey = ref<string>(localStorage.getItem(SELECTED_PRESET_KEY) || '');
+  // 防止 SSR 或隐私模式下 localStorage 不可用
+  const savedPresetKey = (() => {
+    try { return localStorage.getItem(SELECTED_PRESET_KEY); }
+    catch { return null; }
+  })();
+  const selectedPresetKey = ref<string>(savedPresetKey || '');
   const currentModel = ref<string>('');
   // 当前预设的 apiKey，切换预设时自动回填
   const apiKey = ref<string>('');

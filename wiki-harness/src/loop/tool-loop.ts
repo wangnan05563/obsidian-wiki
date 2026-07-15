@@ -2,7 +2,6 @@ import type {
   RunContext,
   RunResult,
   StepResult,
-  Hooks,
   BudgetConfig,
   RetryConfig,
   Message,
@@ -18,8 +17,12 @@ interface LoopConfig {
   tools: ToolDefinition[];
   budget: BudgetConfig;
   retry: RetryConfig;
-  hooks: Partial<Hooks>;
+  // 直接接收 HookManager 实例：避免 harness 与 loop 各创建一份实例导致 hook 状态分裂
+  hooks: HookManager;
 }
+
+// 工具结果截断阈值：防大对象（如读取大文件、爬虫结果）撑爆 token 预算
+const MAX_TOOL_RESULT_LENGTH = 8000;
 
 // 取最后一条 assistant 消息内容作为 finalContent
 function getLastAssistantContent(messages: Message[]): string {
@@ -34,7 +37,7 @@ function getLastAssistantContent(messages: Message[]): string {
 // 工具调用循环：LLM 返回 tool_calls → 逐个执行 → 结果回填 → 下一轮
 // 终止条件：LLM 返回纯文本无 tool_calls（done），或预算耗尽（budget_exceeded）
 export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunResult> {
-  const hooks = new HookManager(config.hooks);
+  const hooks = config.hooks;
 
   while (true) {
     // 预算检查：步数或 token 任一耗尽立即终止，防止失控循环
@@ -44,7 +47,8 @@ export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunR
         status: 'budget_exceeded',
         messages: ctx.messages,
         finalContent: getLastAssistantContent(ctx.messages),
-        step: ctx.step,
+        // 与 done 路径保持一致：返回已执行到的步数，而非上一步编号
+        step: ctx.step + 1,
         tokenUsed: ctx.tokenUsed,
       };
     }
@@ -74,8 +78,11 @@ export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunR
       ctx.messages.push(assistantMessage);
 
       // 累加 token：优先用 API 返回值，缺失时用字符数估算
+      // 为什么用 prompt+completion：仅计 completion 会大幅低估实际消耗，预算控制失效
       const stepTokens =
-        response.usage?.completion_tokens ?? config.llm.countTokens([assistantMessage]);
+        response.usage
+          ? (response.usage.prompt_tokens + response.usage.completion_tokens)
+          : config.llm.countTokens([assistantMessage]);
       ctx.tokenUsed += stepTokens;
       stepResult.tokenUsed = stepTokens;
 
@@ -110,10 +117,15 @@ export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunR
           }
         }
         stepResult.toolResults.push(result);
+        // 工具结果截断：大对象会直接耗尽 token 预算导致后续 LLM 调用失败
+        const resultStr = JSON.stringify(result);
+        const truncatedContent = resultStr.length > MAX_TOOL_RESULT_LENGTH
+          ? resultStr.slice(0, MAX_TOOL_RESULT_LENGTH) + '\n...[truncated]'
+          : resultStr;
         // 工具结果以 role='tool' 消息回填，带 tool_call_id 供 LLM 关联
         ctx.messages.push({
           role: 'tool',
-          content: JSON.stringify(result),
+          content: truncatedContent,
           tool_call_id: toolCall.id,
         });
       }
@@ -125,7 +137,8 @@ export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunR
         status: 'failed',
         messages: ctx.messages,
         finalContent: err instanceof Error ? err.message : String(err),
-        step: ctx.step,
+        // 与 done 路径保持一致：返回已执行到的步数，而非上一步编号
+        step: ctx.step + 1,
         tokenUsed: ctx.tokenUsed,
       };
     }

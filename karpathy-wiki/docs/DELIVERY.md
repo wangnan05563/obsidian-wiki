@@ -264,8 +264,8 @@
 
 | 变量名 | 说明 | 配置位置 |
 |--------|------|----------|
-| `DEEPSEEK_KEY` | DeepSeek API Key | `services/api/.env` |
-| `GLM_KEY` | 智谱 GLM API Key（备选） | `services/api/.env` |
+| `DEEPSEEK_KEY` | DeepSeek API Key | `karpathy-wiki/api/.env` |
+| `GLM_KEY` | 智谱 GLM API Key（备选） | `karpathy-wiki/api/.env` |
 
 API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落盘（M-7 安全要求）。
 
@@ -365,16 +365,16 @@ API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落
 
 | 模块 | 文件 | 说明 |
 |------|------|------|
-| 隧道服务核心 | `services/api/src/tunnel/tunnel-service.ts` | Provider 抽象基类 + Cloudflare/Cpolar 实现 + 二进制下载 + 子进程管理 |
-| 隧道路由 | `services/api/src/routes/tunnel.ts` | 5 个端点：status/start/stop/config(GET)/config(POST) |
+| 隧道服务核心 | `karpathy-wiki/api/src/tunnel/tunnel-service.ts` | Provider 抽象基类 + Cloudflare/Cpolar 实现 + 二进制下载 + 子进程管理 |
+| 隧道路由 | `karpathy-wiki/api/src/routes/tunnel.ts` | 5 个端点：status/start/stop/config(GET)/config(POST) |
 
 ### 11.3 后端修改文件
 
 | 文件 | 修改内容 |
 |------|----------|
-| `services/api/src/types.ts` | 新增 `TunnelConfig` 接口 + `AppConfig.tunnel` 字段 |
-| `services/api/src/config.ts` | 新增 `getConfigPath()` + `defaultConfig().tunnel` + `loadConfig()` 合并 tunnel 段 |
-| `services/api/src/index.ts` | 注册 tunnel 路由 + autoStart 钩子 + SIGINT/SIGTERM 优雅停止 |
+| `karpathy-wiki/api/src/types.ts` | 新增 `TunnelConfig` 接口 + `AppConfig.tunnel` 字段 |
+| `karpathy-wiki/api/src/config.ts` | 新增 `getConfigPath()` + `defaultConfig().tunnel` + `loadConfig()` 合并 tunnel 段 |
+| `karpathy-wiki/api/src/index.ts` | 注册 tunnel 路由 + autoStart 钩子 + SIGINT/SIGTERM 优雅停止 |
 
 ### 11.4 新增 API 端点（5 个）
 
@@ -390,14 +390,14 @@ API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落
 
 | 模块 | 文件 | 说明 |
 |------|------|------|
-| 内网穿透视图 | `packages/web/src/views/Tunnel.vue` | 状态卡片 + 下载失败指引 + 配置表单 + 使用说明 |
+| 内网穿透视图 | `karpathy-wiki/frontend/src/views/Tunnel.vue` | 状态卡片 + 下载失败指引 + 配置表单 + 使用说明 |
 
 ### 11.6 前端修改文件
 
 | 文件 | 修改内容 |
 |------|----------|
-| `packages/web/src/types.ts` | 新增 TunnelStatus / TunnelConfigData / TunnelConfigBody / TunnelDownloadError 类型 |
-| `packages/web/src/App.vue` | 导入 Tunnel.vue + ViewName 添加 'tunnel' + 导航 tab 添加"内网穿透" + 视图切换 |
+| `karpathy-wiki/frontend/src/types.ts` | 新增 TunnelStatus / TunnelConfigData / TunnelConfigBody / TunnelDownloadError 类型 |
+| `karpathy-wiki/frontend/src/App.vue` | 导入 Tunnel.vue + ViewName 添加 'tunnel' + 导航 tab 添加"内网穿透" + 视图切换 |
 
 ### 11.7 配置结构
 
@@ -466,14 +466,14 @@ API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落
 
 | 模块 | 文件 | 说明 |
 |------|------|------|
-| 清理路由 | `services/api/src/routes/cleanup.ts` | 2 个端点：status(GET) + cleanup(POST)，target 分发 + dry_run 预览 + days 下限保护 + JSONL 审计 |
+| 清理路由 | `karpathy-wiki/api/src/routes/cleanup.ts` | 2 个端点：status(GET) + cleanup(POST)，target 分发 + dry_run 预览 + days 下限保护 + JSONL 审计 |
 
 ### 12.3 后端修改文件
 
 | 文件 | 修改内容 |
 |------|----------|
-| `services/api/src/types.ts` | 新增 `CleanupRequest` / `CleanupResult` / `CleanupStorageStatus` 类型定义 |
-| `services/api/src/index.ts` | 注册 cleanup 路由（`registerCleanupRoute(app, vault)`） |
+| `karpathy-wiki/api/src/types.ts` | 新增 `CleanupRequest` / `CleanupResult` / `CleanupStorageStatus` 类型定义 |
+| `karpathy-wiki/api/src/index.ts` | 注册 cleanup 路由（`registerCleanupRoute(app, vault)`） |
 
 ### 12.4 新增 API 端点（2 个）
 
@@ -486,14 +486,14 @@ API Key 仅通过环境变量引用（`apiKeyRef` 字段存变量名），不落
 
 | 模块 | 文件 | 说明 |
 |------|------|------|
-| 系统清理视图 | `packages/web/src/views/Cleanup.vue` | 4 列状态卡片 + 4 个独立清理表单 + dry_run 开关 + ElMessageBox 二次确认 + 结果展示 |
+| 系统清理视图 | `karpathy-wiki/frontend/src/views/Cleanup.vue` | 4 列状态卡片 + 4 个独立清理表单 + dry_run 开关 + ElMessageBox 二次确认 + 结果展示 |
 
 ### 12.6 前端修改文件
 
 | 文件 | 修改内容 |
 |------|----------|
-| `packages/web/src/types.ts` | 新增 `CleanupTarget` / `CleanupBody` / `CleanupResult` / `CleanupStorageStatus` 类型（与后端对齐） |
-| `packages/web/src/App.vue` | 导入 Cleanup.vue + ViewName 添加 'cleanup' + 导航 tab 添加"系统清理" + 视图切换 |
+| `karpathy-wiki/frontend/src/types.ts` | 新增 `CleanupTarget` / `CleanupBody` / `CleanupResult` / `CleanupStorageStatus` 类型（与后端对齐） |
+| `karpathy-wiki/frontend/src/App.vue` | 导入 Cleanup.vue + ViewName 添加 'cleanup' + 导航 tab 添加"系统清理" + 视图切换 |
 
 ### 12.7 设计决策
 
