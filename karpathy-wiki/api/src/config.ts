@@ -72,19 +72,42 @@ export function getConfigPath(): string | null {
   return candidates[0];
 }
 
+// 简单的内存缓存
+interface ConfigCache {
+  data: AppConfig | null;
+  path: string | null;
+  loadedAt: number;
+}
+
+const configCache: ConfigCache = { data: null, path: null, loadedAt: 0 };
+const CONFIG_CACHE_TTL_MS = 30 * 1000; // 30秒缓存
+
 // 从 config.json 加载配置，合并默认值。
 // apiKeyRef 仅存环境变量名，API Key 在使用方通过 process.env[apiKeyRef] 读取（M-7）。
 export async function loadConfig(): Promise<AppConfig> {
+  const now = Date.now();
+  // 先获取当前路径，用于缓存有效性校验
+  const currentPath = getConfigPath();
+  // 检查缓存是否有效：路径必须一致 + TTL 未过期
+  if (configCache.data && configCache.path === currentPath && (now - configCache.loadedAt) < CONFIG_CACHE_TTL_MS) {
+    return configCache.data;
+  }
+
   const defaults = defaultConfig();
-  const p = getConfigPath();
-  if (!p) {
+  if (!currentPath) {
+    configCache.data = defaults;
+    configCache.path = currentPath;
+    configCache.loadedAt = now;
     return defaults;
   }
 
   let raw: string;
   try {
-    raw = await fs.readFile(p, 'utf8');
+    raw = await fs.readFile(currentPath, 'utf8');
   } catch {
+    configCache.data = defaults;
+    configCache.path = currentPath;
+    configCache.loadedAt = now;
     return defaults;
   }
 
@@ -92,11 +115,14 @@ export async function loadConfig(): Promise<AppConfig> {
   try {
     parsed = JSON.parse(raw) as Partial<AppConfig>;
   } catch {
+    configCache.data = defaults;
+    configCache.path = currentPath;
+    configCache.loadedAt = now;
     return defaults;
   }
 
   // 浅合并嵌套对象，避免下层数据丢失
-  return {
+  const merged = {
     ...defaults,
     ...parsed,
     llm: { ...defaults.llm, ...parsed.llm },
@@ -113,6 +139,12 @@ export async function loadConfig(): Promise<AppConfig> {
       ? { ...defaults.webSearch!, ...parsed.webSearch }
       : defaults.webSearch,
   };
+
+  // 写入缓存
+  configCache.data = merged;
+  configCache.path = currentPath;
+  configCache.loadedAt = now;
+  return merged;
 }
 
 // §12.3-7 配置热加载：重新读取 config.json 并返回新配置。

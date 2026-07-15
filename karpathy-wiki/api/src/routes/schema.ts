@@ -21,12 +21,11 @@ interface DiffLine {
   newLine?: number;
 }
 
-// 简单的内存缓存：key -> { data, expiry }
-interface CacheEntry<T> { data: T; expiry: number; }
+// 模块级缓存：key -> { data, expiry }
 const SCHEMA_HISTORY_CACHE_TTL_MS = 5 * 60 * 1000; // 5分钟
-const cache = new Map<string, CacheEntry<{ commits: SchemaCommit[]; gitEnabled: boolean }>>();
+const cache = new Map<string, { data: { commits: SchemaCommit[]; gitEnabled: boolean }; expiry: number }>();
 
-function getFromCache<T>(data: T | null, key: string): T | null {
+function getFromCache(key: string): { commits: SchemaCommit[]; gitEnabled: boolean } | null {
   const entry = cache.get(key);
   if (!entry) return null;
   if (Date.now() > entry.expiry) {
@@ -53,6 +52,10 @@ async function runGit(vaultPath: string, args: string[]): Promise<string> {
   }
 }
 
+// 清除 schema/history 缓存（供外部调用，如 config reload 时）
+export function invalidateSchemaHistoryCache(): void {
+  cache.clear();
+}
 export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) {
   app.get('/api/schema', async (_request, reply) => {
     try {
@@ -88,7 +91,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
     const cacheKey = vaultPath;
 
     // 先查缓存
-    const cached = getFromCache(null, cacheKey);
+    const cached = getFromCache(cacheKey);
     if (cached) {
       return reply.send(cached);
     }
@@ -155,3 +158,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
     return reply.send({ lines, hasChanges: lines.length > 0 });
   });
 }
+
+
+
+
