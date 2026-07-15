@@ -3,7 +3,7 @@
  * 编码体检脚本
  *
  * 扫描两部分：
- *   1) packages/web/src 和 services/api/src 下所有 .vue / .ts 真实源文件
+ *   1) frontend/src 和 api/src 下所有 .vue / .ts 真实源文件
  *   2) 项目根元配置文件（.gitignore / .editorconfig / .vscode/settings.json）+ 根目录 .md
  *
  * 识别因被保存为 GBK 而导致的乱码问题。
@@ -30,8 +30,8 @@ const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const SCAN_ROOTS = [
-  path.join(REPO_ROOT, 'packages', 'web', 'src'),
-  path.join(REPO_ROOT, 'services', 'api', 'src'),
+  path.join(REPO_ROOT, 'frontend', 'src'),
+  path.join(REPO_ROOT, 'api', 'src'),
 ];
 
 // 只扫真实源文件；Volar 副本与手写 .js 副本显式排除

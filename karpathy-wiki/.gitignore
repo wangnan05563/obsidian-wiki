@@ -5,9 +5,9 @@ node_modules/
 # ---------- 构建产物 ----------
 dist/
 build/
-services/api/dist/
+api/dist/
 # vite 构建产物（build-web.bat 输出），完整忽略 public/ 目录
-services/api/public/
+api/public/
 
 # ---------- 缓存目录（可重建） ----------
 .cache/
@@ -17,18 +17,6 @@ services/api/public/
 .mypy_cache/
 __pycache__/
 .harness/
-
-# ---------- Tauri / Cargo 构建缓存与日志 ----------
-.build/
-packages/desktop/src-tauri/target/
-# Tauri CLI 自动生成的 ACL 清单与 schema（tauri dev/build 时重新生成）
-packages/desktop/src-tauri/gen/
-cargo-check.log
-
-# ---------- 编译生成的二进制 wrapper ----------
-# windres.exe 由 windres-wrapper.c 编译生成，tauri-setup-env.ps1 自动编译
-# 保留 .c 源码入库，二进制产物忽略
-scripts/windres.exe
 
 # ---------- SonarQube 调试日志 ----------
 sonar-scan-*.log
@@ -43,18 +31,7 @@ scripts/test_report.json
 # vue-tsc 生成的虚拟代码文件，不应提交或扫描
 *.vue.js
 # TypeScript 编译产物（vue-tsc/tsc 输出），源码目录下不应存在 .js
-packages/web/src/**/*.js
-
-# ---------- 一次性调试脚本（根目录） ----------
-add-scene-vars.js
-cleanup-scene-vars.js
-replace-rgba.js
-
-# ---------- 开发调试截图（根目录） ----------
-macaron_*.png
-enterprise_config.png
-product_config.png
-theme_switcher_open.png
+frontend/src/**/*.js
 
 # ---------- 运行时数据 ----------
 # vault 迁至 karpathy-wiki/data/vault/，仅保留 concepts/comparisons/SCHEMA.md 作为种子入库

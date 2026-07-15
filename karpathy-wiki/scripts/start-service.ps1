@@ -157,7 +157,15 @@ Write-Host '  按任意键关闭此窗口...' -ForegroundColor DarkGray
         $apiLogDir = Split-Path $apiLogFile -Parent
         if (-not (Test-Path $apiLogDir)) { New-Item -ItemType Directory -Path $apiLogDir -Force | Out-Null }
         # 清空旧日志避免新旧日志混淆（与 Web silent 分支保持一致）
-        if (Test-Path $apiLogFile) { Remove-Item $apiLogFile -Force }
+        # 为什么用 try/catch 兜底：taskkill 后文件句柄可能尚未完全释放，Remove-Item 会失败；
+        # 此时改用 Clear-Content 清空内容，避免阻塞启动。两者都失败时 > 重定向仍会覆盖。
+        if (Test-Path $apiLogFile) {
+            try { Remove-Item $apiLogFile -Force -ErrorAction Stop }
+            catch {
+                try { Clear-Content -LiteralPath $apiLogFile -Force -ErrorAction Stop }
+                catch { Write-Log "旧日志文件被占用，将以追加模式写入: $apiLogFile" -Level WARN -Step "3/4" }
+            }
+        }
         Start-Process cmd.exe -ArgumentList "/c", "$pkgManager run $apiCmd > `"$apiLogFile`" 2>&1" -WorkingDirectory $Root -WindowStyle Hidden
         Write-Log "API 后台运行（静默），日志文件: $apiLogFile" -Level INFO -Step "3/4"
     }
@@ -221,8 +229,14 @@ $pkgManager run $webCmd
         $webLogFile = Join-Path $Root ($Config.startup.web_log_file)
         $webLogDir = Split-Path $webLogFile -Parent
         if (-not (Test-Path $webLogDir)) { New-Item -ItemType Directory -Path $webLogDir -Force | Out-Null }
-        # 清空旧日志避免混淆
-        if (Test-Path $webLogFile) { Remove-Item $webLogFile -Force }
+        # 清空旧日志避免混淆（与 API silent 分支保持一致的容错策略）
+        if (Test-Path $webLogFile) {
+            try { Remove-Item $webLogFile -Force -ErrorAction Stop }
+            catch {
+                try { Clear-Content -LiteralPath $webLogFile -Force -ErrorAction Stop }
+                catch { Write-Log "旧日志文件被占用，将以追加模式写入: $webLogFile" -Level WARN -Step "3/4" }
+            }
+        }
         Start-Process cmd.exe -ArgumentList "/c", "$pkgManager run $webCmd > `"$webLogFile`" 2>&1" -WorkingDirectory $Root -WindowStyle Hidden
         Write-Log "Web 后台运行（静默），日志文件: $webLogFile" -Level INFO -Step "3/4"
     }

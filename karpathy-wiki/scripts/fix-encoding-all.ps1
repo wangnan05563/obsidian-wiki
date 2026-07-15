@@ -1,7 +1,7 @@
-﻿﻿﻿﻿﻿﻿# fix-encoding-all.ps1
+﻿# fix-encoding-all.ps1
 #
 # 扫描以下范围内的文本文件，将 GBK 编码文件转为 UTF-8 无 BOM。
-#   1) packages/web/src 与 services/api/src 下所有 .vue / .ts
+#   1) frontend/src 与 api/src 下所有 .vue / .ts
 #   2) 项目根 .gitignore / .editorconfig / .vscode/*.json / 根 *.md
 # 跳过 .vue.js / .ts.js（Volar 预转换副本）。
 #
@@ -15,8 +15,8 @@ $gbk = [System.Text.Encoding]::GetEncoding('GBK')
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 $srcRoots = @(
-  'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\packages\web\src',
-  'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\services\api\src'
+  'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\frontend\src',
+  'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\api\src'
 )
 
 $repoRoot = 'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki'

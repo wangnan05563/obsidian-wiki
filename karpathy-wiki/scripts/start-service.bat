@@ -12,10 +12,10 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Start failed, check red ERROR logs above
     echo.
-    pause
+    if not "%KARPATHY_AUTOMATION%"=="1" pause
     exit /b 1
 )
 
 echo.
-pause
+if not "%KARPATHY_AUTOMATION%"=="1" pause
 exit

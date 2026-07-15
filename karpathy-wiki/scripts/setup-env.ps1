@@ -121,8 +121,8 @@ function Invoke-Safe {
 
 $Script:ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $Script:HarnessPath = Join-Path $ProjectRoot "..\wiki-harness"
-$Script:EnvFile = Join-Path $ProjectRoot "services\api\.env"
-$Script:ConfigFile = Join-Path $ProjectRoot "services\api\config.json"
+$Script:EnvFile = Join-Path $ProjectRoot "api\.env"
+$Script:ConfigFile = Join-Path $ProjectRoot "api\config.json"
 $Script:LogsDir = Join-Path $ProjectRoot "logs"
 
 # 版本门槛：与 package.json engines 对齐
@@ -317,9 +317,9 @@ if (-not $SkipWizard) {
         }
         $envLines += "$ApiKeyRef=$ApiKey"
         $envLines | Set-Content $EnvFile -Encoding UTF8
-        Write-Ok "API Key 已写入 services/api/.env（已排除 git 跟踪）"
+        Write-Ok "API Key 已写入 api/.env（已排除 git 跟踪）"
     } else {
-        Write-Warn "未配置 API Key，问答功能暂不可用。可稍后编辑 services/api/.env 添加 $ApiKeyRef=你的Key"
+        Write-Warn "未配置 API Key，问答功能暂不可用。可稍后编辑 api/.env 添加 $ApiKeyRef=你的Key"
     }
 
     $Config = @{
@@ -337,7 +337,7 @@ if (-not $SkipWizard) {
         healthCheck = @{ staleDays = 30 }
     }
     $Config | ConvertTo-Json -Depth 5 | Set-Content $ConfigFile -Encoding UTF8
-    Write-Ok "配置已写入 services/api/config.json"
+    Write-Ok "配置已写入 api/config.json"
 
     # --- 步骤3：SCHEMA.md ---
     Write-Host "步骤 3/4：SCHEMA.md" -ForegroundColor Cyan
@@ -355,7 +355,7 @@ if (-not $SkipWizard) {
 
 Write-Step "[6/7] 检查 .gitignore..."
 $Gitignore = Join-Path $ProjectRoot ".gitignore"
-$ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/', 'services/api/public/')
+$ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/', 'api/public/')
 $existing = if (Test-Path $Gitignore) { Get-Content $Gitignore } else { @() }
 $updated = $existing
 foreach ($rule in $ignoreRules) {
@@ -378,7 +378,7 @@ $checklist = @(
     @{ Name = "Node.js"; Test = { Test-CommandAvailable 'node' } },
     @{ Name = "根目录 node_modules"; Test = { Test-Path (Join-Path $ProjectRoot "node_modules") } },
     @{ Name = "@wiki/harness"; Test = { Test-Path (Join-Path $HarnessPath "dist") } },
-    @{ Name = "services/api/config.json"; Test = { Test-Path $ConfigFile } },
+    @{ Name = "api/config.json"; Test = { Test-Path $ConfigFile } },
     @{ Name = "Vault 目录"; Test = { Test-Path $VaultFull } }
 )
 
@@ -417,7 +417,7 @@ Write-Host "  4. 打包 EXE：双击 scripts\build-exe.bat"
 Write-Host ""
 
 if (-not $ApiKey) {
-    Write-Warn "提醒：尚未配置 API Key，问答功能将返回错误。请编辑 services/api/.env 添加后重启。"
+    Write-Warn "提醒：尚未配置 API Key，问答功能将返回错误。请编辑 api/.env 添加后重启。"
 }
 
 # ---------- 可选：启动服务 ----------

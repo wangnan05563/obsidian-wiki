@@ -71,7 +71,7 @@ if (Test-Path (Join-Path $HarnessPath "package.json")) {
     Push-Location $HarnessPath
     try {
         Invoke-Install
-        # 构建 harness 产物，供 services/api 通过 file: 引用
+        # 构建 harness 产物，供 api 通过 file: 引用
         Write-Step "构建 @wiki/harness..."
         if ($UsePnpm) { pnpm run build } else { npm run build }
     } finally {
@@ -155,7 +155,7 @@ if (-not $SkipWizard) {
 
     if ($ApiKey) {
         # M-7 安全要求：API Key 写入 .env 文件（.gitignore 排除），config.json 仅存 apiKeyRef
-        $EnvFile = Join-Path $Root "services\api\.env"
+        $EnvFile = Join-Path $Root "api\.env"
         $envLines = @()
         if (Test-Path $EnvFile) {
             # 移除同名的旧 key 行，避免重复
@@ -163,9 +163,9 @@ if (-not $SkipWizard) {
         }
         $envLines += "$ApiKeyRef=$ApiKey"
         $envLines | Set-Content $EnvFile -Encoding UTF8
-        Write-Ok "API Key 已写入 services/api/.env（已排除 git 跟踪）"
+        Write-Ok "API Key 已写入 api/.env（已排除 git 跟踪）"
     } else {
-        Write-Warn "未配置 API Key，问答功能暂不可用。可稍后编辑 services/api/.env 添加 $ApiKeyRef=你的Key"
+        Write-Warn "未配置 API Key，问答功能暂不可用。可稍后编辑 api/.env 添加 $ApiKeyRef=你的Key"
     }
 
     # 写入 config.json（含模型配置，不含实际 Key）
@@ -183,9 +183,9 @@ if (-not $SkipWizard) {
         localOnly = $true
         healthCheck = @{ staleDays = 30 }
     }
-    $ConfigFile = Join-Path $Root "services\api\config.json"
+    $ConfigFile = Join-Path $Root "api\config.json"
     $Config | ConvertTo-Json -Depth 5 | Set-Content $ConfigFile -Encoding UTF8
-    Write-Ok "配置已写入 services/api/config.json"
+    Write-Ok "配置已写入 api/config.json"
 
     # --- 步骤3：SCHEMA.md 提示 ---
     Write-Host "步骤 3/4：SCHEMA.md" -ForegroundColor Cyan
@@ -239,5 +239,5 @@ Write-Host "  后端 API：http://localhost:3000"
 Write-Host "  前端 Web：http://localhost:5173"
 Write-Host ""
 if (-not $ApiKey) {
-    Write-Warn "提醒：尚未配置 API Key，问答功能将返回错误。请编辑 services/api/.env 添加后重启。"
+    Write-Warn "提醒：尚未配置 API Key，问答功能将返回错误。请编辑 api/.env 添加后重启。"
 }

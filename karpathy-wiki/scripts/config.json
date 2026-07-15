@@ -55,52 +55,5 @@
   "shutdown": {
     "verify_wait_seconds": 1,
     "exit_delay_seconds": 2
-  },
-  "tauri": {
-    "name": "karpathy-wiki-desktop",
-    "desktop_dir": "packages/desktop",
-    "src_tauri_dir": "packages/desktop/src-tauri",
-    "exe_name": "karpathy-wiki-desktop.exe",
-    "main_window_title": "Karpathy Wiki",
-    "port": 3000,
-    "health_check_path": "/health",
-    "health_check_max_tries": 120,
-    "ping_interval_seconds": 2,
-    "log_file": "logs/tauri-dev.log",
-    "pid_file": "logs/tauri.pid",
-    "dev_script": "dev",
-    "build_script": "build",
-    "bundle_output_dir": "dist/tauri-bundle"
-  },
-  "rust": {
-    "toolchain": "stable-x86_64-pc-windows-gnu",
-    "cargo_bin_env": "USERPROFILE\\.cargo\\bin",
-    "rustup_env": "RUSTUP_TOOLCHAIN",
-    "rustflags_template": "-C linker={ld_lld} -C linker-flavor=ld.lld -C link-arg=-L{lib1} -C link-arg=-L{lib2} -C link-self-contained=yes"
-  },
-  "mingw": {
-    "root_rel": "..\\w64devkit\\w64devkit",
-    "bin_subdir": "bin",
-    "lib_subdir": "lib",
-    "gcc_lib_subdir": "lib\\gcc\\x86_64-w64-mingw32\\16.1.0",
-    "ld_lld_name": "ld.lld.exe",
-    "windres_name": "windres.exe"
-  },
-  "windres_wrapper": {
-    "ps1_script": "scripts\\windres-wrapper.ps1",
-    "exe_wrapper": "scripts\\windres.exe",
-    "env_var_name": "WRAPPER_PS1"
-  },
-  "disk_space": {
-    "debug_min_gb": 3,
-    "release_min_gb": 5,
-    "warn_threshold_gb": 1
-  },
-  "encoding": {
-    "bat_strategy": "ascii",
-    "bat_chcp": "65001",
-    "ps1_output_encoding": "UTF8",
-    "ps1_bom": true,
-    "line_ending": "CRLF"
   }
 }
