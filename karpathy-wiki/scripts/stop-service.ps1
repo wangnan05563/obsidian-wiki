@@ -108,6 +108,21 @@ if (-not $webKilled) {
 taskkill /F /FI "WINDOWTITLE eq $($Config.process.api_window_title)*" >$null 2>&1
 taskkill /F /FI "WINDOWTITLE eq $($Config.process.web_window_title)*" >$null 2>&1
 
+# 通过命令行匹配清理残留的日志重定向进程树
+# 为什么需要：start-service.ps1 用 Start-Process cmd.exe 启动的日志重定向进程（pnpm run dev:api > api-dev.log 2>&1）
+# 不监听端口，端口扫描找不到它；当主进程被杀后它可能成为孤儿，持续持有日志文件句柄
+$strayProcs = Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -and (
+        $_.CommandLine -like "*$Root*" -and ($_.CommandLine -like "*dev:api*" -or $_.CommandLine -like "*dev:web*")
+    )
+}
+foreach ($p in $strayProcs) {
+    taskkill /F /T /PID $p.ProcessId >$null 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "已清理残留进程 (PID $($p.ProcessId), $($p.Name))" -Level OK -Step "2/3"
+    }
+}
+
 Start-Sleep -Seconds $Config.shutdown.verify_wait_seconds
 
 # ============================================================

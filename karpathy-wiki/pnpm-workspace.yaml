@@ -1,6 +1,6 @@
 packages:
-  - 'packages/*'
-  - 'services/*'
+  - 'frontend'
+  - 'api'
 allowBuilds:
   esbuild: false
   vue-demi: false

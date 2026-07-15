@@ -26,11 +26,7 @@ logs/
 Thumbs.db
 desktop.ini
 
-# 外部工具链（w64devkit 属开发环境依赖，不应入库，由 tauri-setup 脚本自动安装）
-w64devkit/
-
 # 测试运行时产物（截图、临时结果）
-test_screenshots/
 test_buttons_result.json
 test_result.json
 

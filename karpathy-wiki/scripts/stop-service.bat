@@ -9,5 +9,5 @@ echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-service.ps1" %*
 
 echo.
-pause
+if not "%KARPATHY_AUTOMATION%"=="1" pause
 exit

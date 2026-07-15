@@ -15,7 +15,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 # 加载 .env 文件（M-7：API Key 存于此，不落盘 config.json）
 # 将 .env 中的 KEY=VALUE 注入当前进程环境变量，子进程自动继承
 # ============================================================
-$EnvFile = Join-Path $Root "services\api\.env"
+$EnvFile = Join-Path $Root "api\.env"
 if (Test-Path $EnvFile) {
     Write-Host "[启动] 加载 .env：$EnvFile" -ForegroundColor Cyan
     Get-Content $EnvFile | ForEach-Object {

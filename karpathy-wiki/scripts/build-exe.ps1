@@ -12,7 +12,7 @@
 # 构建步骤：
 # 1. 检查依赖（Node.js / pnpm / @yao-pkg/pkg / esbuild）
 # 2. 构建 @wiki/harness（如存在本地包）
-# 3. 构建 SPA（vite build → services/api/public）
+# 3. 构建 SPA（vite build → api/public）
 # 4. esbuild 打包后端 TS → CJS 单文件 bundle
 # 5. @yao-pkg/pkg 打包 → exe
 # 6. 复制外置资源（SPA + config.json + vault 默认结构）
@@ -165,11 +165,11 @@ if (Test-Path (Join-Path $harnessPath "package.json")) {
 # ============== 3. 构建 SPA ==============
 Write-Host "`n[3/7] 构建 SPA..." -ForegroundColor Yellow
 
-$spaIndex = Join-Path $repoRoot "services\api\public\index.html"
+$spaIndex = Join-Path $repoRoot "api\public\index.html"
 if ($SkipSPA -and (Test-Path $spaIndex)) {
     Write-Ok "SPA 已存在且 -SkipSPA 已指定，跳过构建"
 } else {
-    # 构建前端：vite.config.ts 中 outDir 指向 services/api/public
+    # 构建前端：vite.config.ts 中 outDir 指向 api/public
     & $pkgCmd run build
     if ($LASTEXITCODE -ne 0) { throw "SPA 构建失败" }
 
@@ -184,7 +184,7 @@ Write-Host "`n[4/7] esbuild 打包后端..." -ForegroundColor Yellow
 
 # 为什么用 esbuild：项目使用 ESM（"type": "module"），pkg 对 ESM 支持有限
 # esbuild 把所有 TS 打包成单个 CJS 文件，pkg 再打包成 exe
-$entryFile = Join-Path $repoRoot "services\api\src\index.ts"
+$entryFile = Join-Path $repoRoot "api\src\index.ts"
 $bundleFile = Join-Path $buildDir "bundle.cjs"
 
 $esbuildArgs = @(
@@ -199,6 +199,9 @@ $esbuildArgs = @(
     "--target=node18",
     "--outfile=$bundleFile",
     "--loader:.node=copy",       # 原生 .node 模块直接复制
+    # 将 import.meta.url 替换为 CJS 等价表达式，避免 "import.meta is not available" 警告
+    # 源码用 ESM 原生的 import.meta.url（开发模式 tsx），打包时替换为 require('url').pathToFileURL(__filename).href
+    "--define:import.meta.url=require('url').pathToFileURL(__filename).href",
     "--log-level=info"
 )
 
@@ -237,8 +240,8 @@ $pkgConfig = @{
         targets = @("node24-win-x64")
         output = $pkgOutputDir
         assets = @(
-            "services\api\prompts\**\*",
-            "services\api\src\prompts\**\*"
+            "api\prompts\**\*",
+            "api\src\prompts\**\*"
         )
         scripts = @()
     }
@@ -275,7 +278,7 @@ Write-Host "`n[6/7] 复制外置资源..." -ForegroundColor Yellow
 
 # 6.1 SPA 静态资源（前端构建产物）
 Write-Host "  [6.1] 复制 SPA 静态资源..."
-$spaSource = Join-Path $repoRoot "services\api\public"
+$spaSource = Join-Path $repoRoot "api\public"
 $spaTarget = Join-Path $pkgOutputDir "public"
 if (Test-Path $spaSource) {
     Copy-Item -Recurse -Force $spaSource $spaTarget
@@ -286,7 +289,7 @@ if (Test-Path $spaSource) {
 
 # 6.2 配置文件（config.json）
 Write-Host "  [6.2] 复制配置文件..."
-$configSource = Join-Path $repoRoot "services\api\config.json"
+$configSource = Join-Path $repoRoot "api\config.json"
 $configTarget = Join-Path $pkgOutputDir "config.json"
 if (Test-Path $configSource) {
     Copy-Item -Force $configSource $configTarget
@@ -343,7 +346,7 @@ Write-Ok "默认 Vault 目录已创建"
 
 # 6.5 prompts 目录（编译/问答/体检的 prompt 模板）
 Write-Host "  [6.5] 复制 prompts 目录..."
-$promptsSource = Join-Path $repoRoot "services\api\src\prompts"
+$promptsSource = Join-Path $repoRoot "api\src\prompts"
 $promptsTarget = Join-Path $pkgOutputDir "prompts"
 if (Test-Path $promptsSource) {
     Copy-Item -Recurse -Force $promptsSource $promptsTarget
@@ -426,12 +429,11 @@ OutputDir=dist
 OutputBaseFilename=KarpathyWiki-Setup-v{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 DisableProgramGroupPage=yes
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"

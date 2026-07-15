@@ -9,7 +9,7 @@ tags: [神经网络, 密集参数, 模型架构]
 
 # 稠密模型
 
-**稠密模型（Dense Model）** 是一种传统的神经网络架构，在推理时激活全部参数。与 [[Mixture of Experts]] 的稀疏激活方式不同，稠密模型的计算成本与总参数量严格正相关。
+**稠密模型（Dense Model）** 是一种传统的神经网络架构，在推理时激活全部参数。与 [[mixture-of-experts|Mixture of Experts]] 的稀疏激活方式不同，稠密模型的计算成本与总参数量严格正相关。
 
 ## 特点
 
@@ -26,4 +26,4 @@ tags: [神经网络, 密集参数, 模型架构]
 
 ## 关联页面
 
-- [[Mixture of Experts]] — 稀疏激活的替代架构
+- [[mixture-of-experts|Mixture of Experts]] — 稀疏激活的替代架构

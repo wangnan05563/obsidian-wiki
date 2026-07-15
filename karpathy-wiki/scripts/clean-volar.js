@@ -1,6 +1,6 @@
 // 用法：node scripts/clean-volar.js
 //
-// 清理 packages/web/src 下所有 Volar 预转换副本：
+// 清理 frontend/src 下所有 Volar 预转换副本：
 //   - *.vue.js
 //   - *.ts.js
 //   - 根目录的 types.js（vue-tsc 2.x 也会生成这个）
@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.join(__dirname, '..', 'packages', 'web', 'src');
+const ROOT = path.join(__dirname, '..', 'frontend', 'src');
 
 function walk(dir, out) {
   for (const name of fs.readdirSync(dir)) {

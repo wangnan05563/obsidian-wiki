@@ -140,18 +140,18 @@ function Invoke-EnvCheck {
     }
     Write-Host "  [OK] 根 node_modules" -ForegroundColor Green
 
-    # 4. 后端依赖（services\api\node_modules）
-    if (-not (Test-Path -LiteralPath "services\api\node_modules")) {
-        Write-Host "  [FAIL] services\api\node_modules 不存在" -ForegroundColor Red
+    # 4. 后端依赖（api\node_modules）
+    if (-not (Test-Path -LiteralPath "api\node_modules")) {
+        Write-Host "  [FAIL] api\node_modules 不存在" -ForegroundColor Red
         Write-Host "         请运行 $pkgCmd install（workspace 会自动安装子包依赖）" -ForegroundColor Yellow
         Write-Log -LogAction $Action -Step "env-check" -Result "fail" -Msg "api node_modules missing"
         return $false
     }
     Write-Host "  [OK] 后端 node_modules" -ForegroundColor Green
 
-    # 5. 前端依赖（packages\web\node_modules）
-    if (-not (Test-Path -LiteralPath "packages\web\node_modules")) {
-        Write-Host "  [FAIL] packages\web\node_modules 不存在" -ForegroundColor Red
+    # 5. 前端依赖（frontend\node_modules）
+    if (-not (Test-Path -LiteralPath "frontend\node_modules")) {
+        Write-Host "  [FAIL] frontend\node_modules 不存在" -ForegroundColor Red
         Write-Host "         请运行 $pkgCmd install" -ForegroundColor Yellow
         Write-Log -LogAction $Action -Step "env-check" -Result "fail" -Msg "web node_modules missing"
         return $false
@@ -181,13 +181,40 @@ function Invoke-Bat {
     }
 
     Write-Host "  调用 $BatName ..." -ForegroundColor Cyan
-    # cmd /c 包裹 .bat，避免 PowerShell 解析 .bat 中的 & 等特殊字符
-    # -NoNewWindow：在当前控制台输出，便于实时观察
-    # start-service.bat 内部会 start 新窗口跑后端/前端，主进程会等待验证完成
-    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$batPath`"" -NoNewWindow -Wait -PassThru
-    if ($process.ExitCode -ne 0) {
-        Write-Host "  [FAIL] $BatName 退出码 $($process.ExitCode)" -ForegroundColor Red
-        Write-Log -LogAction $Action -Step "call-bat" -Result "fail" -Msg "$BatName exit=$($process.ExitCode)"
+    # 设置自动化标记环境变量，让 .bat 跳过 pause 避免阻塞
+    # 为什么用环境变量而非参数：.bat 的参数会透传给 start-service.ps1 的 param()，导致参数解析错误
+    $env:KARPATHY_AUTOMATION = "1"
+    # 为什么用超时等待而非 -Wait：start-service.bat 启动的后台 API/Web 进程继承 cmd.exe 的标准输出句柄，
+    # 导致 cmd.exe 不退出（即使 start-service.ps1 已 exit），-Wait 会永久阻塞。
+    # 超时 90 秒后强制继续，由后续端口验证判断启动是否成功。
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$batPath`"" -NoNewWindow -PassThru
+    # 为什么用轮询等待而非 -Wait：start-service.bat 启动的后台 API/Web 进程继承 cmd.exe 的标准输出句柄，
+    # 导致 cmd.exe 不退出（即使 start-service.ps1 已 exit），-Wait 会永久阻塞。
+    # 对于 start/rebuild 动作：API 端口就绪后立即继续（start-service.ps1 内部已完成验证）。
+    # 对于 stop/build 动作：cmd.exe 无后台进程，会正常退出。
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline) {
+        if ($process.HasExited) { break }
+        if ($Action -eq 'start' -or $Action -eq 'rebuild') {
+            if (Test-PortListening -Port $API_PORT) { break }
+        }
+        Start-Sleep -Seconds 2
+    }
+    # 清除自动化标记，避免影响后续手动调用的 .bat
+    Remove-Item Env:\KARPATHY_AUTOMATION -ErrorAction SilentlyContinue
+    # 超时未退出时 HasExited=$false，不能访问 ExitCode（会抛异常）
+    if (-not $process.HasExited) {
+        Write-Host "  [WARN] $BatName 超时未退出，继续验证端口..." -ForegroundColor Yellow
+        Write-Log -LogAction $Action -Step "call-bat" -Result "skip" -Msg "$BatName timeout, will verify by port"
+        return $true
+    }
+    # 确保进程完全退出后再读 ExitCode（PowerShell 在进程刚退出时 ExitCode 可能为 $null）
+    $process.WaitForExit(2000) | Out-Null
+    $exitCode = $process.ExitCode
+    # ExitCode 为 $null 时按成功处理（cmd.exe exit 不带退出码，或进程被外力终止）
+    if ($null -ne $exitCode -and $exitCode -ne 0) {
+        Write-Host "  [FAIL] $BatName 退出码 $exitCode" -ForegroundColor Red
+        Write-Log -LogAction $Action -Step "call-bat" -Result "fail" -Msg "$BatName exit=$exitCode"
         return $false
     }
 
@@ -375,14 +402,14 @@ function Action-Rebuild {
     }
 
     # 验证构建产物
-    if (-not (Test-Path -LiteralPath "services\api\public\index.html")) {
+    if (-not (Test-Path -LiteralPath "api\public\index.html")) {
         Write-Host ""
-        Write-Host "[ERROR] 构建完成但未找到 services\api\public\index.html" -ForegroundColor Red
+        Write-Host "[ERROR] 构建完成但未找到 api\public\index.html" -ForegroundColor Red
         Write-Host "        请检查 vite.config.ts 的 outDir 配置" -ForegroundColor Yellow
         Write-Log -LogAction "rebuild" -Step "build" -Result "fail" -Msg "index.html not found after build"
         return 1
     }
-    Write-Host "  [OK] 构建产物验证通过：services\api\public\index.html" -ForegroundColor Green
+    Write-Host "  [OK] 构建产物验证通过：api\public\index.html" -ForegroundColor Green
     Write-Log -LogAction "rebuild" -Step "build" -Result "pass"
 
     # Step 3/3：重新启动
@@ -392,7 +419,7 @@ function Action-Rebuild {
     if ($startResult -ne 0) {
         Write-Host ""
         Write-Host "[ERROR] 启动服务失败，构建产物已保留" -ForegroundColor Red
-        Write-Host "        请检查后端日志与 services\api\config.json 配置" -ForegroundColor Yellow
+        Write-Host "        请检查后端日志与 api\config.json 配置" -ForegroundColor Yellow
         Write-Log -LogAction "rebuild" -Step "start" -Result "fail" -Msg "start failed after build"
         return 1
     }
@@ -461,8 +488,8 @@ function Action-Check {
 
     # 4. 后端依赖
     Write-Host ""
-    Write-Host "[4/11] 后端 services\api\node_modules..." -ForegroundColor Cyan
-    if (Test-Path -LiteralPath "services\api\node_modules") {
+    Write-Host "[4/11] 后端 api\node_modules..." -ForegroundColor Cyan
+    if (Test-Path -LiteralPath "api\node_modules") {
         Write-Host "  [OK] 存在" -ForegroundColor Green
     }
     else {
@@ -472,8 +499,8 @@ function Action-Check {
 
     # 5. 前端依赖
     Write-Host ""
-    Write-Host "[5/11] 前端 packages\web\node_modules..." -ForegroundColor Cyan
-    if (Test-Path -LiteralPath "packages\web\node_modules") {
+    Write-Host "[5/11] 前端 frontend\node_modules..." -ForegroundColor Cyan
+    if (Test-Path -LiteralPath "frontend\node_modules") {
         Write-Host "  [OK] 存在" -ForegroundColor Green
     }
     else {
@@ -483,8 +510,8 @@ function Action-Check {
 
     # 6. 后端入口
     Write-Host ""
-    Write-Host "[6/11] 后端入口 services\api\src\index.ts..." -ForegroundColor Cyan
-    if (Test-Path -LiteralPath "services\api\src\index.ts") {
+    Write-Host "[6/11] 后端入口 api\src\index.ts..." -ForegroundColor Cyan
+    if (Test-Path -LiteralPath "api\src\index.ts") {
         Write-Host "  [OK] 存在" -ForegroundColor Green
     }
     else {
@@ -494,8 +521,8 @@ function Action-Check {
 
     # 7. 前端入口
     Write-Host ""
-    Write-Host "[7/11] 前端入口 packages\web\index.html..." -ForegroundColor Cyan
-    if (Test-Path -LiteralPath "packages\web\index.html") {
+    Write-Host "[7/11] 前端入口 frontend\index.html..." -ForegroundColor Cyan
+    if (Test-Path -LiteralPath "frontend\index.html") {
         Write-Host "  [OK] 存在" -ForegroundColor Green
     }
     else {
@@ -505,8 +532,8 @@ function Action-Check {
 
     # 8. 构建产物（开发模式可选，生产模式必需）
     Write-Host ""
-    Write-Host "[8/11] 构建产物 services\api\public\index.html..." -ForegroundColor Cyan
-    if (Test-Path -LiteralPath "services\api\public\index.html") {
+    Write-Host "[8/11] 构建产物 api\public\index.html..." -ForegroundColor Cyan
+    if (Test-Path -LiteralPath "api\public\index.html") {
         Write-Host "  [OK] 存在（生产模式可启动）" -ForegroundColor Green
     }
     else {

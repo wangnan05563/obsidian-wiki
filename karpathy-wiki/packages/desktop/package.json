@@ -1,9 +1,0 @@
-{
-  "name": "@karpathy-wiki/desktop",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build"
-  }
-}
