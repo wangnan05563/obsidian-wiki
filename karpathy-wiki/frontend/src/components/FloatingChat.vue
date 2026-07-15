@@ -224,10 +224,10 @@ function handleClose() {
               <div v-if="msg.refs" class="msg-refs">
                 <span class="refs-label">参考：</span>
                 <span
-                  v-for="(ref, i) in (msg.refs as any[])"
+                  v-for="(ref, i) in (msg.refs as Array<string | { title: string; url?: string; path?: string; snippet?: string }>)"
                   :key="i"
                   class="ref-chip"
-                >{{ ref.title || ref.path || ref }}</span>
+                >{{ typeof ref === 'string' ? ref : (ref.title || ref.path || ref.url) }}</span>
               </div>
               <div v-if="msg.followups" class="msg-followups">
                 <span class="followups-label">猜猜你想问：</span>

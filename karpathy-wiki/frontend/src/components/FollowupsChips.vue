@@ -10,7 +10,7 @@ const emit = defineEmits<{ click: [question: string] }>();
   <div class="followups-chips" v-if="props.followups.length > 0">
     <span class="followups-label">💭 你可能想问：</span>
     <div class="chips-scroll">
-      <button v-for="(f, i) in followups" :key="i"
+      <button v-for="(f, i) in followups" :key="f"
         class="followup-chip"
         @click="emit('click', f)"
         :title="'点击继续追问'">

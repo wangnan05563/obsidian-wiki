@@ -42,8 +42,8 @@
     }
   },
   "startup": {
-    "api_wait_max_tries": 15,
-    "web_wait_max_tries": 10,
+    "api_wait_max_tries": 30,
+    "web_wait_max_tries": 15,
     "ping_interval_seconds": 2,
     "open_browser": true,
     "browser_url": "http://localhost:5173",

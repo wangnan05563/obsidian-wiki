@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import { execSync, spawn } from 'node:child_process';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import { loadConfig, getEffectiveApiKey } from './config.js';
 import { VaultService } from './vault/vault-service.js';
 import { HarnessAdapter } from './engine/harness-adapter.js';
@@ -158,6 +161,8 @@ async function main(): Promise<void> {
         },
       },
     },
+    // 50MB：支持多附件上传场景，超过此大小的请求体直接拒绝
+    bodyLimit: 50 * 1024 * 1024,
   });
 
   // 请求级日志钩子：覆盖 HTTP 层，确保前端报错时后端日志有反馈
@@ -185,6 +190,32 @@ async function main(): Promise<void> {
       );
     });
   }
+
+  // CORS：限制 origin 为本地开发 + tunnel 域名白名单
+  // 为什么需要：默认跨域全放开会暴露内部 API，白名单收敛到本地与已配置 tunnel
+  await app.register(cors, {
+    origin: (origin, cb) => {
+      // 允许本地开发前端、同源请求（无 origin）和 tunnel 域名
+      if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+        cb(null, true);
+        return;
+      }
+      // tunnel 公网域名需要配置允许
+      cb(new Error('Not allowed by CORS'), false);
+    },
+    credentials: true,
+  });
+
+  // Helmet：安全响应头。CSP 在 SPA 模式下需特殊配置，暂不启用避免阻断前端资源
+  await app.register(helmet, {
+    contentSecurityPolicy: false,
+  });
+
+  // Rate-limit：防 LLM token 耗尽攻击。全局 60/min 兜底，破坏性端点在各路由 config 中设置更严格限流
+  await app.register(rateLimit, {
+    max: 60,
+    timeWindow: '1 minute',
+  });
 
   // 注册 multipart 插件以支持 compile 路由的文件上传
   await app.register(multipart, {

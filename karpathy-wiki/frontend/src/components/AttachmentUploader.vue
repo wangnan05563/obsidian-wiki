@@ -14,6 +14,8 @@ const emit = defineEmits<{
 const store = useAttachmentsStore();
 const dragOver = ref(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+// 组件根元素引用：用于绑定 paste 事件，替代全局监听
+const rootRef = ref<HTMLElement | null>(null);
 
 // 缩略图 URL 缓存：id -> objectURL
 // 为什么用 Map 而非 reactive 对象：避免频繁增删 key 触发多次响应式更新
@@ -68,12 +70,12 @@ function handlePaste(e: ClipboardEvent) {
   }
 }
 
-// 全局监听 paste 事件，支持在输入区粘贴图片
+// 组件根元素监听 paste 事件，避免全局监听影响其他组件
 onMounted(() => {
-  globalThis.addEventListener('paste', handlePaste);
+  rootRef.value?.addEventListener('paste', handlePaste);
 });
 onBeforeUnmount(() => {
-  globalThis.removeEventListener('paste', handlePaste);
+  rootRef.value?.removeEventListener('paste', handlePaste);
   // 释放所有 objectURL 避免内存泄漏
   thumbUrls.value.forEach(url => URL.revokeObjectURL(url));
 });
@@ -118,7 +120,7 @@ function handleRemove(id: string) {
 </script>
 
 <template>
-  <div class="attachment-uploader" :class="{ 'icon-only': props.iconOnly }">
+  <div ref="rootRef" class="attachment-uploader" :class="{ 'icon-only': props.iconOnly }">
     <input ref="fileInputRef" type="file"
       accept="image/jpeg,image/png,image/webp,image/gif"
       multiple

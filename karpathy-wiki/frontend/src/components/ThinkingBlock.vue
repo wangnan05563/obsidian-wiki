@@ -31,7 +31,7 @@ function phaseLabel(phase: string): string {
       <span class="toggle">{{ expanded ? '▼' : '▶' }}</span>
     </div>
     <div class="thinking-body" v-if="expanded">
-      <div v-for="(step, idx) in steps" :key="idx" class="thinking-step">
+      <div v-for="(step, idx) in steps" :key="step.message + idx" class="thinking-step">
         <span class="step-phase" :class="step.phase">{{ phaseLabel(step.phase) }}</span>
         <span class="step-message">{{ step.message }}</span>
         <span class="step-tool" v-if="step.tool">{{ step.tool }}</span>

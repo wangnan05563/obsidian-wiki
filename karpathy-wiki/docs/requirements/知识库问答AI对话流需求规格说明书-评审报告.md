@@ -49,7 +49,7 @@
 
 #### P0-2：ChatMessage 数据模型 breaking change 未声明迁移策略
 
-**位置**：§7.3 vs 现有 `packages/web/src/types.ts`
+**位置**：§7.3 vs 现有 `frontend/src/types.ts`
 
 **问题描述**：
 

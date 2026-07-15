@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Karpathy-Wiki 项目服务生命周期自动化执行器
 .DESCRIPTION
@@ -37,9 +37,16 @@ if (-not (Test-Path -LiteralPath "logs")) {
     New-Item -ItemType Directory -Path "logs" | Out-Null
 }
 
-# 端口常量（与 .bat 保持一致，便于后续修改）
-$API_PORT = 3000
-$WEB_PORT = 5173
+# 端口从 config.json 读取，与 start-service.ps1 保持一致
+$ScriptConfigPath = Join-Path $PSScriptRoot 'config.json'
+if (Test-Path $ScriptConfigPath) {
+    $ScriptConfig = Get-Content $ScriptConfigPath -Raw | ConvertFrom-Json
+    $API_PORT = $ScriptConfig.ports.api
+    $WEB_PORT = $ScriptConfig.ports.web
+} else {
+    $API_PORT = 3000
+    $WEB_PORT = 5173
+}
 
 # ============================================
 # 日志函数：写入 logs\automation.log

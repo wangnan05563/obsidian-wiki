@@ -1,4 +1,4 @@
-﻿# fix-encoding-all.ps1
+# fix-encoding-all.ps1
 #
 # 扫描以下范围内的文本文件，将 GBK 编码文件转为 UTF-8 无 BOM。
 #   1) frontend/src 与 api/src 下所有 .vue / .ts
@@ -14,12 +14,11 @@ $ErrorActionPreference = 'Stop'
 $gbk = [System.Text.Encoding]::GetEncoding('GBK')
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+$repoRoot = Resolve-Path "$PSScriptRoot\.."
 $srcRoots = @(
-  'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\frontend\src',
-  'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\api\src'
+    Join-Path $repoRoot 'frontend\src',
+    Join-Path $repoRoot 'api\src'
 )
-
-$repoRoot = 'd:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki'
 
 $countTotal = 0
 $countOk = 0

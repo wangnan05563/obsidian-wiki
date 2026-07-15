@@ -60,6 +60,7 @@ async function startCompile(payload: IngestPayload) {
 
 async function startResume(runId: string) {
   store.reset();
+  // 直接修改：compile store 未暴露 startCompile action，此字段是简单状态
   store.isCompiling = true;
   abortController = new AbortController();
   try {

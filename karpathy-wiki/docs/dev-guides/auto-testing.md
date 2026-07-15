@@ -1,4 +1,4 @@
-﻿# Obsidian Auto Testing Skill
+# Obsidian Auto Testing Skill
 
 ## 概述
 
@@ -54,7 +54,7 @@
 ### 2.2 快速验证流程（CI 友好）
 
 `
-1. tsc --noEmit -p packages/web/tsconfig.json
+1. tsc --noEmit -p karpathy-wiki/frontend/tsconfig.json
 2. 启动后端服务
 3. curl /api/health-check
 4. curl /api/ai/presets

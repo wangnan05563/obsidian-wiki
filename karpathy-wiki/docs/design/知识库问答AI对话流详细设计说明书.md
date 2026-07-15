@@ -47,7 +47,7 @@
 ### 1.3 文件路径约定
 
 ```
-packages/web/src/
+frontend/src/
 ├── views/Query.vue（改造）
 ├── components/
 │   ├── MarkdownRenderer.vue（改造）

@@ -42,7 +42,7 @@
 
 ### 1.2 项目背景
 
-Karpathy Wiki 知识库已完成三个阶段的交付，其中知识问答模块（`packages/web/src/views/Query.vue`）当前能力包括：
+Karpathy Wiki 知识库已完成三个阶段的交付，其中知识问答模块（`frontend/src/views/Query.vue`）当前能力包括：
 
 - SSE 流式输出 ✅（v0）
 - 引用页面 refs 展示 ✅（v0）

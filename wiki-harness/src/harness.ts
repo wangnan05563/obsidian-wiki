@@ -51,6 +51,8 @@ export class Harness {
 
   async run(task: { task: string; context?: Record<string, unknown> }): Promise<RunResult> {
     const runId = randomUUID();
+    // 在循环开始前记录时间戳：原实现放在循环结束后会丢失整个执行时长
+    const startedAt = new Date().toISOString();
     const ctx: RunContext = {
       runId,
       task: task.task,
@@ -73,7 +75,7 @@ export class Harness {
       tools: this.tools,
       budget: this.budget,
       retry: this.retry,
-      hooks: this.config.hooks ?? {},
+      hooks: this.hooks,
     });
 
     await this.hooks.afterLoop(ctx, result);
@@ -86,7 +88,7 @@ export class Harness {
       step: ctx.step,
       tokenUsed: ctx.tokenUsed,
       status: result.status === 'done' ? 'done' : result.status === 'failed' ? 'failed' : 'done',
-      startedAt: new Date().toISOString(),
+      startedAt,
     };
     await this.stateStore.save(runId, state);
 
@@ -116,7 +118,7 @@ export class Harness {
       tools: this.tools,
       budget: this.budget,
       retry: this.retry,
-      hooks: this.config.hooks ?? {},
+      hooks: this.hooks,
     });
 
     await this.hooks.afterLoop(ctx, result);

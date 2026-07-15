@@ -71,7 +71,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
   app.put('/api/schema', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { content?: string };
     if (!body || typeof body.content !== 'string') {
-      return reply.code(400).send({ error: '璇锋眰浣撻』鍚?content 瀛楁' });
+      return reply.code(400).send({ error: '请求体须含 content 字段' });
     }
     try {
       const full = path.resolve(vault.getVaultPath(), 'SCHEMA.md');
@@ -122,7 +122,14 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
   app.get('/api/schema/diff', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { from?: string; to?: string };
     if (!query.from) {
-      return reply.code(400).send({ error: '缂哄皯 from 鍙傛暟' });
+      return reply.code(400).send({ error: '缺少 from 参数' });
+    }
+    // 防参数注入：from/to 直接传入 git 命令，必须校验为 commit hash 格式
+    if (!/^[0-9a-f]{7,40}$/i.test(query.from)) {
+      return reply.code(400).send({ error: 'from 参数须为 commit hash 格式' });
+    }
+    if (query.to && query.to !== 'HEAD' && !/^[0-9a-f]{7,40}$/i.test(query.to)) {
+      return reply.code(400).send({ error: 'to 参数须为 commit hash 格式或 HEAD' });
     }
 
     const vaultPath = vault.getVaultPath();
@@ -141,7 +148,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
 
     for (const line of diff.split('\n')) {
       if (line.startsWith('@@')) {
-        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/); // NOSONAR: 鍗曟鍖归厤鍙?@@ 琛屽彿锛宮atch 杩斿洖鏁扮粍鏇撮€傚悎姝ゅ満鏅?
+        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/); // NOSONAR: 单次匹配取 @@ 行号，match 返回数组更适合此场景
         if (match) {
           oldLine = Number.parseInt(match[1], 10);
           newLine = Number.parseInt(match[2], 10);
@@ -158,6 +165,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
     return reply.send({ lines, hasChanges: lines.length > 0 });
   });
 }
+
 
 
 

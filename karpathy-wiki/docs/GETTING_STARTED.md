@@ -46,10 +46,10 @@ Karpathy-AI + Obsidian 知识库 —— 15 分钟从零搭建到问答闭环。
 ```
 
 向导结束后：
-- `services/api/config.json` —— 模型与路径配置（**不含** API Key）
-- `services/api/.env` —— API Key（已排除 git 跟踪，M-7 安全要求）
+- `karpathy-wiki/api/config.json` —— 模型与路径配置（**不含** API Key）
+- `karpathy-wiki/api/.env` —— API Key（已排除 git 跟踪，M-7 安全要求）
 
-> 若跳过了 API Key 输入，可稍后手动编辑 `services/api/.env`，添加一行：
+> 若跳过了 API Key 输入，可稍后手动编辑 `karpathy-wiki/api/.env`，添加一行：
 > `GLM_KEY=你的实际Key`
 
 ---
@@ -140,7 +140,7 @@ config.json   →  仅存 apiKeyRef（环境变量名，如 "GLM_KEY"）
 
 ### 切换模型
 
-编辑 `services/api/config.json`：
+编辑 `karpathy-wiki/api/config.json`：
 
 ```json
 {
@@ -153,7 +153,7 @@ config.json   →  仅存 apiKeyRef（环境变量名，如 "GLM_KEY"）
 }
 ```
 
-同时在 `services/api/.env` 添加对应 Key：
+同时在 `karpathy-wiki/api/.env` 添加对应 Key：
 
 ```
 QWEN_KEY=你的千问Key
@@ -193,7 +193,7 @@ Get-Content services\api\.env
 
 ### Q3：端口被占用
 
-修改 `services/api/config.json` 中 `server.port`，前端 `vite.config.ts` 中代理目标同步修改。
+修改 `karpathy-wiki/api/config.json` 中 `server.port`，前端 `vite.config.ts` 中代理目标同步修改。
 
 ### Q4：编译后没有生成页面
 
@@ -219,8 +219,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ```
 karpathy-wiki/
-├── packages/web/          前端（Vue 3 + Vite + Element Plus）
-├── services/api/          后端（Fastify + @wiki/harness）
+├── karpathy-wiki/frontend/          前端（Vue 3 + Vite + Element Plus）
+├── karpathy-wiki/api/          后端（Fastify + @wiki/harness）
 │   ├── src/
 │   │   ├── routes/        REST 路由（8 个）
 │   │   ├── workflows/     compile / query 工作流

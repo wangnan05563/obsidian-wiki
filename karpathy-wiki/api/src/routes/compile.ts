@@ -11,7 +11,10 @@ import { withCompileLock } from '../compile-queue.js';
 //   - application/json：{ type: 'url'|'text', content: string }
 // 响应为 SSE 流，事件格式：event: <type>\ndata: <json>\n\n
 export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapter) {
-  app.post('/api/compile', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/compile', {
+    // 破坏性端点更严格限流：compile 触发 LLM + 写 vault，10/min 防滥用
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     let input: CompileInput;
 
     const contentType = request.headers['content-type'] ?? '';
@@ -22,8 +25,10 @@ export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapte
         return reply.code(400).send({ error: '缺少 file 字段' });
       }
       const buffer = await file.toBuffer();
+      // sanitize filename：防路径穿越，剥离目录前缀并替换非法字符
+      const safeName = path.basename(file.filename).replace(/[^\w.-]/g, '_');
       // 落盘到临时目录，compile-workflow 会读取后存档到 raw/
-      const tmp = path.join(os.tmpdir(), `wiki-compile-${Date.now()}-${file.filename}`);
+      const tmp = path.join(os.tmpdir(), `wiki-compile-${Date.now()}-${safeName}`);
       await fs.writeFile(tmp, buffer);
       input = { type: 'file', content: tmp };
     } else {
@@ -79,6 +84,10 @@ export function registerCompileRoute(app: FastifyInstance, adapter: EngineAdapte
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
+      // 清理临时文件：仅 file 模式落盘了临时文件，避免 tmp 目录残留泄漏
+      if (input.type === 'file') {
+        await fs.unlink(input.content).catch(() => {});
+      }
       reply.raw.end();
     }
   });
