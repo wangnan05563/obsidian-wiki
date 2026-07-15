@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import matter from 'gray-matter';
 import type { VaultService } from '../vault/vault-service.js';
 
@@ -6,12 +6,25 @@ import type { VaultService } from '../vault/vault-service.js';
 //   GET  /api/files/tree          获取 Vault 目录树
 //   GET  /api/files?path=xxx      读取文件内容（含 frontmatter 解析）
 //   PUT  /api/files?path=xxx      写入文件内容
-// path 用 query 参数避免 URL 编码问题（L-5）。
+// path 由 query 参数避免 URL 编码问题（L-5）。
+
+// 目录树缓存（listTree 结果不变，可缓存）
+const FILES_TREE_CACHE_TTL_MS = 30 * 1000; // 30秒
+let filesTreeCache: { tree: unknown; cachedAt: number } | null = null;
+
 export function registerFilesRoutes(app: FastifyInstance, vault: VaultService) {
   // 目录树：返回 Vault 内所有文件与目录的嵌套结构，供前端 el-tree 渲染。
   app.get('/api/files/tree', async (_request, reply) => {
+    const now = Date.now();
+    // 检查缓存
+    if (filesTreeCache && (now - filesTreeCache.cachedAt) < FILES_TREE_CACHE_TTL_MS) {
+      return reply.send({ tree: filesTreeCache.tree });
+    }
+
     try {
       const tree = await vault.listTree();
+      // 写入缓存
+      filesTreeCache = { tree, cachedAt: now };
       return reply.send({ tree });
     } catch (err: unknown) {
       return reply.code(500).send({
@@ -50,10 +63,12 @@ export function registerFilesRoutes(app: FastifyInstance, vault: VaultService) {
     }
     const body = request.body as { content?: string };
     if (!body || typeof body.content !== 'string') {
-      return reply.code(400).send({ error: '请求体须含 content 字段' });
+      return reply.code(400).send({ error: '请求体须有 content 字段' });
     }
     try {
       await vault.writeFile(query.path, body.content);
+      // 文件变更后使目录树缓存失效
+      filesTreeCache = null;
       return reply.send({ ok: true, path: query.path });
     } catch (err: unknown) {
       return reply.code(403).send({

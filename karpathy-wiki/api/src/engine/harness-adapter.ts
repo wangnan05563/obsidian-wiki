@@ -1,4 +1,4 @@
-import type { HarnessConfig } from '@wiki/harness';
+﻿import type { HarnessConfig } from '@wiki/harness';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent, WebSearchConfig } from '../types.js';
@@ -7,14 +7,19 @@ import { compileWorkflow, resumeCompileWorkflow } from '../workflows/compile-wor
 import { queryWorkflow } from '../workflows/query-workflow.js';
 import { healthCheckFixWorkflow } from '../workflows/health-check-fix-workflow.js';
 
-// HarnessAdapter：阶段2 默认实现。
+// HarnessAdapter：阶段 3 默认实现。
 // healthCheck 绕过 harness 直接走确定性逻辑（M-2），compile/query 通过工作流调用 harness。
 export class HarnessAdapter implements EngineAdapter {
   private readonly harnessConfig: HarnessConfig;
   private readonly vault: VaultService;
   private staleDays: number;
-  // §5.2 联网搜索配置：query workflow 注入 web_search 工具时需要
+  // §5.2 联网搜索配置：Query workflow 注入 web_search 工具时需要
   private webSearchConfig?: WebSearchConfig;
+
+  // 健康检查缓存
+  private healthReportCache: HealthReport | null = null;
+  private healthReportCachedAt = 0;
+  private readonly HEALTH_CHECK_CACHE_TTL_MS = 60 * 1000; // 60秒缓存
 
   constructor(config: HarnessConfig, vault: VaultService, staleDays = 30, webSearchConfig?: WebSearchConfig) {
     this.harnessConfig = config;
@@ -24,8 +29,8 @@ export class HarnessAdapter implements EngineAdapter {
   }
 
   // §12.3-7 配置热加载：更新运行时可变参数。
-  // model/budget/staleDays 即时生效；provider/baseUrl/apiKey 变更同步到 harnessConfig.llm，
-  // 下次 harness.run 时 OpenAICompatibleAdapter 会读取新值构造请求。
+  // model/budget/staleDays 即时生效；provider/baseUrl/apiKey 变更同步到 harnessConfig.llm；
+  // 下次 harness.run 时 OpenAICompatibleAdapter 会读新值构造请求。
   // 为什么不需要重建 LLM 实例：OpenAICompatibleAdapter 持有 config 引用，构造请求时即时读取。
   // §5.2 webSearchConfig 变更同步内存实例，支持 Config 页面保存后即时生效
   updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig }): void {
@@ -67,7 +72,7 @@ export class HarnessAdapter implements EngineAdapter {
     yield* resumeCompileWorkflow(this.harnessConfig, this.vault, runId);
   }
 
-  // §5.2 query 改造：传递 webSearchConfig 给 workflow，支持联网搜索工具注入
+  // §5.2 query 改造：传入 webSearchConfig 给 workflow，支持联网搜索工具注入
   async *query(input: QueryInput): AsyncIterable<AnswerChunk> {
     yield* queryWorkflow(this.harnessConfig, this.vault, input, {
       webSearchConfig: this.webSearchConfig,
@@ -82,6 +87,22 @@ export class HarnessAdapter implements EngineAdapter {
   // 纯确定性逻辑，不调 LLM。检测孤立页/断链/过期页（4.6 health-check 工作流）。
   // §11.2 并发体检：断链扫描与过期检测并行化，提升大规模知识库体检速度。
   async healthCheck(): Promise<HealthReport> {
+    const now = Date.now();
+    // 检查缓存是否有效
+    if (this.healthReportCache && (now - this.healthReportCachedAt) < this.HEALTH_CHECK_CACHE_TTL_MS) {
+      return this.healthReportCache;
+    }
+
+    const report = await this.doHealthCheck();
+
+    // 写入缓存
+    this.healthReportCache = report;
+    this.healthReportCachedAt = now;
+    return report;
+  }
+
+  // 实际执行健康检查的逻辑（私有方法）
+  private async doHealthCheck(): Promise<HealthReport> {
     const graph = await this.vault.buildLinkGraph();
 
     // 入链集合：被任何页面 [[页面名]] 引用过的页面路径
@@ -89,7 +110,7 @@ export class HarnessAdapter implements EngineAdapter {
     const orphans = graph.nodes.filter((n) => !linked.has(n));
 
     // 断链检测：扫描每个页面的 [[link]]，对照已存在的页面名集合。
-    // buildLinkGraph 只记录"目标存在"的边，这里补出"目标不存在"的断链。
+    // buildLinkGraph 只记录 "目标存在" 的边，这里补 "目标不存在" 的断链。
     const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
     const nameToPath = new Map<string, string>();
     for (const rel of graph.nodes) {
@@ -151,5 +172,11 @@ export class HarnessAdapter implements EngineAdapter {
     const stale = staleResults.filter((n): n is string => n !== null);
 
     return { orphans, brokenLinks, stale };
+  }
+
+  // 清除健康检查缓存（用于手动触发重新体检）
+  invalidateHealthCheckCache(): void {
+    this.healthReportCache = null;
+    this.healthReportCachedAt = 0;
   }
 }

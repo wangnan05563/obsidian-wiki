@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { EngineAdapter, FixInput } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 
@@ -6,18 +6,18 @@ import { withCompileLock } from '../compile-queue.js';
 //   POST /api/health-check       体检（确定性逻辑，JSON 响应）
 //   POST /api/health-check/fix   一键修复（走 LLM，SSE 流式响应）
 //
-// fix 走 withCompileLock 串行队列，避免与 compile 并发写入冲突（§12.3-5）。
+// fix 走 withCompileLock 串行队列，避免与 compile 并发写入冲突。
 export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAdapter) {
   app.post('/api/health-check', async (_request, reply) => {
     const report = await adapter.healthCheck();
     return reply.send(report);
   });
 
-  // §4.6 一键修复：SSE 流式返回修复进度（L-6 事件 schema：scan/fixing/fixed/done）
+  // 一键修复：SSE 流式返回修复进度
   app.post('/api/health-check/fix', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Partial<FixInput>;
     if (!body || (body.issueType !== 'broken_link' && body.issueType !== 'orphan') || !body.target) {
-      return reply.code(400).send({ error: '请求体须含 issueType(broken_link|orphan) 与 target' });
+      return reply.code(400).send({ error: '请求体须有 issueType(broken_link|orphan) 和 target' });
     }
 
     reply.raw.writeHead(200, {
@@ -36,7 +36,6 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
       // 串行队列保护：fix 可能调用 write_file，与 compile 共享 vault 写入
       await withCompileLock(async () => {
         for await (const ev of adapter.healthCheckFix(body as FixInput)) {
-          // scan/fixing/update_log → progress；fixed → fixed；done → done
           if (ev.step === 'done') {
             send('done', ev);
           } else if (ev.step === 'fixed') {
@@ -47,7 +46,6 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
         }
       });
     } catch (err: unknown) {
-      // 为什么同时调用 request.log.error：SSE 错误只推前端，后端日志流需独立记录以便排障
       request.log.error(
         { err, issueType: body.issueType },
         'health-check fix SSE stream error',
