@@ -2,15 +2,15 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 文档版本 | v1.1.0 |
+| 文档版本 | v1.1.1 |
 | 编写日期 | 2026-07-10 |
-| 修订日期 | 2026-07-11 |
+| 修订日期 | 2026-07-17 |
 | 编写人 | wiki-code-dev |
 | 适用项目 | Karpathy AI + Obsidian 知识库（karpathy-wiki） |
 | 设计基线 | 《Karpathy-AI+Obsidian 知识库概要设计说明书》V1.3 §12.5（问答降级链 + 流式输出） |
 | 上一版本交付 | DELIVERY.md §14：Markdown 渲染 + 联想提问（v1 已完成） |
 | 范围 | 知识库问答（Query）页面全量升级，引入豆包 / Trae Work 级 AI 对话流能力 |
-| 修订记录 | v1.1.0：按评审报告修正 3 项 P0 + 4 项 P1 + 4 项 P2 共 11 项问题 |
+| 修订记录 | v1.1.0：按评审报告修正 3 项 P0 + 4 项 P1 + 4 项 P2 共 11 项问题<br>v1.1.1：补齐 P0-3 代码层（queryWithSearchFallback 降级链 + per-session Lock），关闭全部 P0 评审项 |
 
 ---
 
@@ -770,15 +770,23 @@ v2 迭代必须继承 v1 已落地的三项核心架构机制，不得绕过或�
 
 #### 6.0.1 降级链机制
 
-源自《概要设计说明书》V1.3 §12.5，现有实现位于 `services/api/src/workflows/query-workflow.ts`：
+源自《概要设计说明书》V1.3 §12.5，**v1.1.1 已实施**，代码位于 `api/src/workflows/query-workflow.ts`：
 
 ```
-queryWithHarness（首选，走 @wiki/harness ReAct 循环）
-  ↓ 失败
-queryWithSearchFallback（降级，直接调用 search_pages + LLM 单轮）
-  ↓ 失败
-兜底提示（返回友好错误）
+queryWorkflow（编排器）
+  ├─ queryWithHarness（首选，走 @wiki/harness ReAct 循环）
+  │     ↓ catch（harness.run 抛错或 yield 异常）
+  ├─ queryWithSearchFallback（降级，searchPages Top-5 + 单页 2000 字截断 + maxSteps=1 单轮 LLM）
+  │     ↓ catch（无命中 / 全部读失败 / harness 返回 failed）
+  └─ 兜底提示（返回静态文本"知识库未覆盖此问题..."）
 ```
+
+**v1.1.1 实施细节**：
+- 三个独立 generator 函数：`queryWithHarness` / `queryWithSearchFallback` / `queryWorkflow`（编排器）
+- 降级链以 `try { ... } catch { /* 落入下一级 */ }` 模式串联，前一级 throw 触发下一级接管
+- `queryWithSearchFallback` 强制 `tools: []` + `budget: { maxSteps: 1, tokenBudget: 8000 }`，避免降级时仍走 ReAct 多轮
+- `yieldAnswerInSentences` 辅助函数按句切分长答案，保证 SSE 流式效果
+- 编排器在降级各阶段推送 `thinking { phase: 'composing', message: '降级搜索中...' }` 事件，保证用户体验连续（对应 R11 风险缓解）
 
 **v2 扩展点**：
 - 新增的 `thinking` 事件在降级链各阶段均需推送（`queryWithHarness` 推送工具调用，`queryWithSearchFallback` 推送"降级搜索"提示）
@@ -787,23 +795,45 @@ queryWithSearchFallback（降级，直接调用 search_pages + LLM 单轮）
 
 #### 6.0.2 per-session Lock 串行化
 
-源自《概要设计说明书》V1.3 §12.5，现有实现按 question 前 32 字符做 key 串行化：
+源自《概要设计说明书》V1.3 §12.5，**v1.1.1 已实施**，代码位于 `api/src/session-lock.ts`：
 
 ```typescript
-// 现有实现：同一 question 前缀的请求串行执行，避免并发冲突
-class SessionLock {
-  private locks = new Map<string, Promise<void>>();
-  async acquire(key: string): Promise<() => void> { /* ... */ }
+// v1.1.1 实施：按 question 前 32 字符做 key 串行化，同 key 排队、不同 key 完全独立
+const locks = new Map<string, Promise<unknown>>();
+const KEY_PREFIX_LEN = 32;
+
+export function withSessionLock<T>(
+  question: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const key = question.slice(0, KEY_PREFIX_LEN);
+  const prev = locks.get(key) ?? Promise.resolve();
+  // prev.then(task, task) 双分支确保前一次异常不级联拒绝，仅串行不传递错误
+  const next = prev.then(() => task(), () => task());
+  locks.set(
+    key,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
 }
 ```
+
+**接入位置**：`api/src/routes/query.ts` SSE 路由层，用 `withSessionLock(input.question, async () => { for await ... })` 包裹整个 SSE 流，覆盖所有 chunk 推送。
+
+**v1.1.1 实施细节**：
+- 设计仿 `api/src/compile-queue.ts` 的 `withCompileLock` 模式，Promise 链式队列
+- key 长度取 32 字符而非全文，避免长问题哈希开销与 Map 内存膨胀
+- 锁的粒度是整个 SSE 流（含 LLM 调用 + 推送），而非仅 LLM 调用，确保同问题并发请求完全串行，避免 LLM 重复调用浪费 token
 
 **v2 扩展点**：
 - 多模态图片上传不改变 Lock 粒度（仍按 question 文本前 32 字符）
 - 模型切换时，若有 in-flight 问答，需等待当前问答 done 或 error 后再切换（见 §9.1 风险 R7）
-
 #### 6.0.3 EngineAdapter 接口
 
-源自《概要设计说明书》V1.3，阶段切换抽象点，现有实现位于 `services/api/src/engine/harness-adapter.ts`：
+源自《概要设计说明书》V1.3，阶段切换抽象点，**v1.1.1 已实施**，代码位于 `api/src/engine/harness-adapter.ts`：
 
 ```typescript
 interface EngineAdapter {
@@ -1287,13 +1317,14 @@ function migrateV1Message(msg: v1.ChatMessage): ChatMessage {
 | --- | --- | --- |
 | v1.0.0 | 2026-07-10 | 初版：13 项核心功能完整规格 |
 | v1.1.0 | 2026-07-11 | 按评审报告修正 11 项问题：<br>**P0**：①删除矛盾的 `/api/conversations` API，统一本地存储；②保留 ChatMessage v1 字段 + 新增迁移函数；③新增 §6.0 现有架构继承（降级链/per-session Lock/EngineAdapter）<br>**P1**：④补充 5 项遗漏风险（R7~R11）；⑤删除 §1.5.3 重复量化表；⑥补充 §6.4.1 store 拆分边界图；⑦修正 F-3.9 模型切换描述对齐 updateConfig<br>**P2**：⑧F-3.12 验收标准补充；⑨§4.5 引用编码门禁三层防御；⑩§1.2 引用 DELIVERY.md §14；⑪F-3.4 明确 mode 字段语义 |
+| v1.1.1 | 2026-07-17 | 补齐 P0-3 代码层（queryWithSearchFallback 降级链 + per-session Lock），关闭全部 P0 评审项：<br>**新增**：`api/src/session-lock.ts` 实现 withSessionLock；`api/src/workflows/query-workflow.ts` 重构为三函数降级链（queryWithHarness → queryWithSearchFallback → 兜底）；`api/src/routes/query.ts` SSE 路由接入 withSessionLock<br>**验证**：tsc 编译 exit 0，check-encoding.js 75 文件全部 UTF-8 无 BOM |
 
 ---
 
 ## 阶段交接声明
 
-- 当前阶段：SRS v1.1.0 评审修正完成 ✅
+- 当前阶段：SRS v1.1.1 代码层补齐完成 ✅
 - 下一阶段：v2 迭代实施
 - 下一阶段智能体：wiki-code-dev（实施）
 - 下一阶段技能：wiki-code-dev / wiki-frontend-code-review
-- 交接上下文：v1.1.0 已按评审报告修正全部 11 项问题（3 项 P0 + 4 项 P1 + 4 项 P2），接口契约一致、数据迁移策略明确、现有架构完整继承。v1 实现已 clean，技术债务为零，可作为 v2 启动基线。建议排期 4-6 周（按模块拆分）。
+- 交接上下文：v1.1.1 已完成 P0-3 代码层补齐：`api/src/session-lock.ts` 新增 withSessionLock；`api/src/workflows/query-workflow.ts` 重构为三函数降级链；`api/src/routes/query.ts` SSE 路由接入 withSessionLock。至此全部 3 项 P0 阻塞已闭环（P0-1 历史对话存储、P0-2 ChatMessage 迁移、P0-3 降级链 + per-session Lock），接口契约一致、数据迁移策略明确、现有架构完整继承。v1.1.1 技术债务为零，可作为 v2 启动基线。建议排期 4-6 周（按模块拆分）。
