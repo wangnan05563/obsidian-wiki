@@ -2,7 +2,6 @@
 import { ref, onMounted, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Warning, CircleCheck, Tools } from '@element-plus/icons-vue';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import type { HealthReport, FixRequest, FixProgressEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 
@@ -130,7 +129,6 @@ onMounted(() => {
       <div class="card-deco"></div>
 
       <div class="health-head">
-        <RobotAvatar :size="56" :floating="loading" />
         <div class="head-text">
           <span class="head-tag">// SYSTEM DIAGNOSTIC</span>
           <h2 class="head-title grad-text">知识库体检</h2>
@@ -152,8 +150,7 @@ onMounted(() => {
 
       <!-- 加载中 -->
       <div v-if="loading" class="health-loading">
-        <RobotAvatar :size="100" :floating="true" />
-        <p class="loading-text">// 扫描中…</p>
+<p class="loading-text">// 扫描中…</p>
       </div>
 
       <!-- 体检详情 -->
@@ -167,8 +164,8 @@ onMounted(() => {
               {{ orphanCount }}
             </span>
           </div>
-          <div class="section-desc">没有任何页面通过 [[链接]] 指向它们</div>
-          <div v-if="orphanCount > 0" class="issue-list">
+      <div class="section-desc">没有任何页面通过 [[链接]] 指向它们</div>
+      <div v-if="orphanCount > 0" class="issue-list">
             <div v-for="p in report.orphans" :key="p" class="issue-item">
               <code>{{ p }}</code>
               <el-button
@@ -183,7 +180,7 @@ onMounted(() => {
               </el-button>
             </div>
           </div>
-          <div v-else class="no-issue">▸ 无孤立页面</div>
+      <div v-else class="no-issue">▸ 无孤立页面</div>
         </div>
 
         <!-- 断链 -->
@@ -195,8 +192,8 @@ onMounted(() => {
               {{ brokenCount }}
             </span>
           </div>
-          <div class="section-desc">指向不存在页面的 [[链接]]</div>
-          <div v-if="brokenCount > 0" class="issue-list">
+      <div class="section-desc">指向不存在页面的 [[链接]]</div>
+      <div v-if="brokenCount > 0" class="issue-list">
             <div v-for="(b, idx) in report.brokenLinks" :key="idx" class="issue-item broken">
               <code>{{ b.from }}</code>
               <span class="arrow">⟶</span>
@@ -213,7 +210,7 @@ onMounted(() => {
               </el-button>
             </div>
           </div>
-          <div v-else class="no-issue">▸ 无断链</div>
+      <div v-else class="no-issue">▸ 无断链</div>
         </div>
 
         <!-- 过期页面 -->
@@ -225,13 +222,13 @@ onMounted(() => {
               {{ staleCount }}
             </span>
           </div>
-          <div class="section-desc">长时间未更新的页面（默认 30 天）</div>
-          <div v-if="staleCount > 0" class="issue-list">
+      <div class="section-desc">长时间未更新的页面（默认 30 天）</div>
+      <div v-if="staleCount > 0" class="issue-list">
             <div v-for="p in report.stale" :key="p" class="issue-item">
               <code>{{ p }}</code>
             </div>
           </div>
-          <div v-else class="no-issue">▸ 无过期页面</div>
+      <div v-else class="no-issue">▸ 无过期页面</div>
         </div>
 
         <!-- 修复进度日志 -->
@@ -240,7 +237,7 @@ onMounted(() => {
             <span class="section-icon icon-fix">⚡</span>
             <span class="section-title">修复进度</span>
           </div>
-          <div class="fix-log-list">
+      <div class="fix-log-list">
             <div
               v-for="(log, idx) in fixLogs"
               :key="idx"
@@ -310,9 +307,9 @@ onMounted(() => {
 }
 
 .head-title {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.02em;
 }
@@ -320,7 +317,7 @@ onMounted(() => {
 .head-tip {
   margin: 0;
   color: var(--text-soft);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .neon-btn {

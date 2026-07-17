@@ -2,7 +2,6 @@
 import { onMounted, onBeforeUnmount, computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading, Check, Close } from '@element-plus/icons-vue';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import { useCompileStore } from '../stores/compile';
 import type { IngestPayload, TimelineItem, RunSummary } from '../types';
 
@@ -175,8 +174,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       <div class="card-deco"></div>
       <!-- 不对称头部：机器人 + 状态文字 -->
       <div class="progress-head">
-        <RobotAvatar :size="100" :floating="store.isCompiling" />
-        <div class="head-text">
+<div class="head-text">
           <span class="head-tag">// COMPILE ENGINE</span>
           <h2 class="head-title">
             <span v-if="store.isCompiling" class="grad-text">机器人正在编译…</span>
@@ -212,8 +210,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
                 <span>{{ item.status }}</span>
               </span>
             </div>
-            <div class="tl-message">{{ item.message }}</div>
-            <div v-if="item.page" class="tl-page">
+      <div class="tl-message">{{ item.message }}</div>
+      <div v-if="item.page" class="tl-page">
               <span class="page-icon">◈</span> {{ item.page.title }}
               <code>{{ item.page.path }}</code>
             </div>
@@ -231,11 +229,10 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
         <span class="cache-icon">⚡</span>
         <span class="cache-text">内容已编译过（缓存命中），已跳过本次编译</span>
       </div>
-
       <div v-if="store.isDone && store.result" class="done-section">
         <div class="result-card">
           <div class="result-title">本次编译结果</div>
-          <div v-if="store.doneMessage" class="done-message">{{ store.doneMessage }}</div>
+      <div v-if="store.doneMessage" class="done-message">{{ store.doneMessage }}</div>
           <ul v-if="store.result.pages.length > 0" class="result-list">
             <li v-for="p in store.result.pages" :key="p">
               <code>{{ p }}</code>
@@ -245,13 +242,12 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             索引更新：<strong>{{ store.result.indexUpdated ? '是' : '否' }}</strong>
           </div>
         </div>
-        <div class="restart-bar">
+      <div class="restart-bar">
           <el-button type="primary" size="large" @click="handleRestart">
             再投一篇
           </el-button>
         </div>
       </div>
-
       <div v-else-if="store.errorMessage" class="restart-bar">
         <el-button type="primary" size="large" @click="handleRestart">
           重新投递
@@ -266,16 +262,16 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           </h3>
           <el-button size="small" :loading="store.loadingRuns" @click="store.loadRuns()">刷新</el-button>
         </div>
-        <div v-if="store.loadingRuns" class="section-loading">LOADING...</div>
-        <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务</div>
-        <div v-else class="runs-list">
+      <div v-if="store.loadingRuns" class="section-loading">LOADING...</div>
+      <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务</div>
+      <div v-else class="runs-list">
           <div v-for="run in store.runs" :key="run.runId" class="run-item hover-glow">
             <div class="run-info" @click="openLogDialog(run)">
               <span class="run-id">{{ run.runId.slice(0, 8) }}</span>
               <el-tag :type="runStatusType(run.status)" size="small">{{ runStatusLabel(run.status) }}</el-tag>
               <span class="run-meta">步骤 {{ run.step }} · {{ run.tokenUsed }} tokens</span>
             </div>
-            <div class="run-actions">
+      <div class="run-actions">
               <span class="run-time">{{ formatTime(run.startedAt) }}</span>
               <el-button
                 v-if="run.status === 'failed'"
@@ -358,9 +354,9 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 }
 
 .head-title {
-  margin: 0 0 8px;
+  margin: 0 0 2px;
   font-family: var(--font-display);
-  font-size: 26px;
+  font-size: 18px;
   font-weight: 900;
   color: var(--text-bright);
   letter-spacing: 1px;
@@ -369,7 +365,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 .head-tip {
   margin: 0;
   color: var(--text-soft);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .timeline {

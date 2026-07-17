@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
@@ -181,10 +180,10 @@ const aiForm = ref({
 // 当前选中的预设 key（用于按预设持久化配置）
 const selectedPresetKey = ref('');
 
-// 按预设持久化完整配置到 localStorage。
-// 为什么需要：切换预设标签时应返显该预设上次保存的 baseUrl/model/apiKey，
-// 仅靠后端全局配置无法区分不同预设的历史值。
-// 与 stores/model.ts 的 apiKey:${key} 保持兼容：保存时同步写入 apiKey 字段。
+// 按预设持久化非敏感 UI 状态（baseUrl/model）到 localStorage。
+// 为什么不存 apiKey：apiKey 明文存 localStorage 与后端 config.json 形成双轨，
+// 两者独立变化会导致状态不一致。apiKey 唯一权威源为后端 config.json。
+// 切换预设时 apiKey 从后端读取脱敏值返显，明文 key 仅用户输入时短暂存在内存。
 function presetStorageKey(presetKey: string): string {
   return `llmPresetConfig:${presetKey}`;
 }
@@ -192,35 +191,31 @@ function presetStorageKey(presetKey: string): string {
 interface PresetConfigCache {
   baseUrl: string;
   model: string;
-  apiKey: string; // 明文，与 model.ts 的 apiKey:${key} 一致
 }
 
 function loadPresetCache(presetKey: string): PresetConfigCache | null {
   const raw = localStorage.getItem(presetStorageKey(presetKey));
   if (raw) {
     try {
-      return JSON.parse(raw) as PresetConfigCache;
+      const parsed = JSON.parse(raw) as Partial<PresetConfigCache> & { apiKey?: string };
+      // 兼容旧格式（含 apiKey 字段）：忽略 apiKey，仅取 baseUrl/model
+      return {
+        baseUrl: parsed.baseUrl ?? '',
+        model: parsed.model ?? '',
+      };
     } catch {
       // 损坏数据忽略
     }
   }
-  // 兼容 model.ts 旧存储：仅存了 apiKey:${key}
-  const legacyApiKey = localStorage.getItem(`apiKey:${presetKey}`);
-  return legacyApiKey ? { baseUrl: '', model: '', apiKey: legacyApiKey } : null;
+  return null;
 }
 
 function savePresetCache(presetKey: string, cache: PresetConfigCache): void {
   localStorage.setItem(presetStorageKey(presetKey), JSON.stringify(cache));
-  // 同步写入 model.ts 读取的 key，保持两套机制一致
-  if (cache.apiKey) {
-    localStorage.setItem(`apiKey:${presetKey}`, cache.apiKey);
-  } else {
-    localStorage.removeItem(`apiKey:${presetKey}`);
-  }
 }
 
 function clearAllPresetCache(): void {
-  // 清除所有 llmPresetConfig:* 和 apiKey:* 条目
+  // 清除所有 llmPresetConfig:* 和遗留的 apiKey:* 条目（旧格式迁移清理）
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
@@ -268,11 +263,11 @@ async function loadPresets() {
   }
 }
 
-// 应用预设：切换标签时返显该预设上次保存的 baseUrl/model/apiKey。
-// 优先级：localStorage 按预设缓存 > 预设默认值（baseUrl/model）。
+// 应用预设：切换标签时返显该预设上次保存的 baseUrl/model。
+// apiKey 不从 localStorage 缓存读取，而是从后端 config.json 读取当前脱敏值。
 // 为什么切换时同步后端：后端 config.json 只有一份全局配置，
 //   切换预设后需同步到后端，确保 Query 页面等使用当前预设的配置。
-//   仅当该预设有缓存的 apiKey 时才同步，避免新预设空 apiKey 覆盖旧配置。
+//   不传 apiKey：后端收到 undefined 表示保留现有 key，避免切换预设清空 key。
 async function applyPreset(preset: LlmPreset) {
   selectedPresetKey.value = preset.key;
   const cache = loadPresetCache(preset.key);
@@ -280,32 +275,29 @@ async function applyPreset(preset: LlmPreset) {
   // 有缓存则用缓存的 baseUrl/model（用户可能修改过），否则用预设默认值
   aiForm.value.baseUrl = cache?.baseUrl || preset.baseUrl;
   aiForm.value.model = cache?.model || preset.model;
-  // apiKey 优先用缓存明文；无缓存则留空让用户重新输入
-  aiForm.value.apiKey = cache?.apiKey || '';
 
-  // 后台同步到后端 config.json（不阻塞表单返显）
-  // 为什么用明文 apiKey 判断：有缓存 key 说明该预设已配置过，应同步到后端
-  if (cache?.apiKey) {
-    try {
-      const res = await fetch('/api/ai/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: preset.provider,
-          baseUrl: aiForm.value.baseUrl,
-          model: aiForm.value.model,
-          // 发送明文 apiKey 让后端更新 config.json，确保后端配置与当前预设一致
-          apiKey: cache.apiKey,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.ok) aiConfig.value = data.config;
+  // 后台同步到后端 config.json（不传 apiKey，保留现有 key）
+  try {
+    const res = await fetch('/api/ai/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: preset.provider,
+        baseUrl: aiForm.value.baseUrl,
+        model: aiForm.value.model,
+        // 不传 apiKey：后端收到 undefined 表示不修改现有 key
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok) {
+        aiConfig.value = data.config;
+        // 从后端返回的脱敏值回填表单 apiKey
+        aiForm.value.apiKey = data.config.apiKeyMasked || '';
       }
-    } catch {
-      // 同步失败不阻断切换，用户可手动点"保存配置"
     }
-    // 同步后端后，表单 apiKey 保持明文不变（方便用户查看和测试连接）
+  } catch {
+    // 同步失败不阻断切换，用户可手动点"保存配置"
   }
 
   ElMessage.success(`已切换到 ${preset.label} 预设`);
@@ -338,23 +330,12 @@ async function saveAiConfig() {
     const data = await res.json();
     if (data.ok) {
       aiConfig.value = data.config;
-      // 保存成功后按预设持久化当前配置到 localStorage。
-      // 为什么在保存时持久化：此时配置已验证生效，下次切换该预设可直接返显。
-      // apiKey 存储逻辑：
-      //   - **** 开头是脱敏回传值（用户未修改），从 localStorage 取旧 key 保持不变
-      //   - 非脱敏值（明文或空串）是用户主动输入，直接持久化
-      //     其中空串表示用户清除 key，也需存空串而非取旧值
-      let apiKeyToStore: string;
-      if (aiForm.value.apiKey.startsWith('****')) {
-        apiKeyToStore = loadPresetCache(selectedPresetKey.value)?.apiKey ?? '';
-      } else {
-        apiKeyToStore = aiForm.value.apiKey;
-      }
+      // 保存成功后按预设持久化非敏感 UI 状态（baseUrl/model）到 localStorage。
+      // 为什么不存 apiKey：apiKey 唯一权威源为后端 config.json，避免双轨不一致。
       if (selectedPresetKey.value) {
         savePresetCache(selectedPresetKey.value, {
           baseUrl: aiForm.value.baseUrl,
           model: aiForm.value.model,
-          apiKey: apiKeyToStore,
         });
       }
       // 保存后更新表单 apiKey 为脱敏值
@@ -563,7 +544,6 @@ onMounted(async () => {
       <div class="card-deco"></div>
 
       <div class="config-head">
-        <RobotAvatar :size="56" />
         <div class="head-text">
           <span class="head-tag">// CONTROL PANEL</span>
           <h2 class="head-title grad-text">配置中心</h2>
@@ -589,8 +569,7 @@ onMounted(async () => {
                 </template>
               </div>
             </div>
-
-            <div v-if="loadingSchema" class="section-loading">// 加载中…</div>
+      <div v-if="loadingSchema" class="section-loading">// 加载中…</div>
 
             <el-input
               v-else-if="editingSchema"
@@ -609,11 +588,11 @@ onMounted(async () => {
                 <span class="section-desc">// 版本历史（Git）</span>
                 <el-button size="small" class="neon-btn" text :loading="loadingHistory" @click="loadHistory">刷新</el-button>
               </div>
-              <div v-if="!gitEnabled" class="history-disabled">
+      <div v-if="!gitEnabled" class="history-disabled">
                 Vault 未启用 Git，无法查看版本历史。在 Vault 目录执行 <code>git init</code> 即可启用。
               </div>
-              <div v-else-if="commits.length === 0" class="history-empty">? 暂无提交记录</div>
-              <div v-else class="commit-list">
+      <div v-else-if="commits.length === 0" class="history-empty">? 暂无提交记录</div>
+      <div v-else class="commit-list">
                 <div
                   v-for="c in commits"
                   :key="c.hash"
@@ -622,9 +601,9 @@ onMounted(async () => {
                   @click="selectedFrom = c.hash"
                 >
                   <div class="commit-hash">{{ c.hash.slice(0, 8) }}</div>
-                  <div class="commit-info">
+      <div class="commit-info">
                     <div class="commit-message">{{ c.message }}</div>
-                    <div class="commit-meta">{{ c.author }} · {{ c.date }}</div>
+      <div class="commit-meta">{{ c.author }} · {{ c.date }}</div>
                   </div>
                 </div>
               </div>
@@ -645,9 +624,9 @@ onMounted(async () => {
                     对比
                   </el-button>
                 </div>
-                <div v-if="showDiff && !loadingDiff" class="diff-result">
+      <div v-if="showDiff && !loadingDiff" class="diff-result">
                   <div v-if="diffLines.length === 0" class="diff-empty">? 无差异</div>
-                  <div v-else class="diff-lines">
+      <div v-else class="diff-lines">
                     <div
                       v-for="(line, idx) in diffLines"
                       :key="idx"
@@ -686,13 +665,12 @@ onMounted(async () => {
                 <span class="applied-tag">tokenBudget: {{ reloadResult.applied.tokenBudget }}</span>
                 <span class="applied-tag">staleDays: {{ reloadResult.applied.staleDays }}</span>
               </div>
-              <div v-if="reloadResult.requireRestart.length > 0" class="reload-warn">
+      <div v-if="reloadResult.requireRestart.length > 0" class="reload-warn">
                 ? 以下字段变更需重启服务才能生效：{{ reloadResult.requireRestart.join(', ') }}
               </div>
             </div>
-
-            <div v-if="loadingConfig" class="section-loading">// 加载中…</div>
-            <div v-else-if="config" class="config-grid">
+      <div v-if="loadingConfig" class="section-loading">// 加载中…</div>
+      <div v-else-if="config" class="config-grid">
               <!-- LLM 配置 -->
               <div class="config-block hover-glow">
                 <h3 class="block-title"><span class="block-bracket">[</span> LLM 模型 <span class="block-bracket">]</span></h3>
@@ -700,15 +678,15 @@ onMounted(async () => {
                   <span class="config-label">服务商</span>
                   <span class="config-value">{{ PROVIDER_LABELS[config.llm.provider] || config.llm.provider }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">模型</span>
                   <span class="config-value">{{ config.llm.model }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">API 地址</span>
                   <span class="config-value">{{ config.llm.baseUrl }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">API Key</span>
                   <span class="config-value">
                     <span :class="['key-status', config.llm.apiKeySet ? 'set' : 'unset']">
@@ -726,15 +704,15 @@ onMounted(async () => {
                   <span class="config-label">引擎</span>
                   <span class="config-value">{{ config.adapter }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">最大步数</span>
                   <span class="config-value">{{ config.budget.maxSteps }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">Token 预算</span>
                   <span class="config-value">{{ config.budget.tokenBudget }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">本地模式</span>
                   <span class="config-value">{{ config.localOnly ? '开启' : '关闭' }}</span>
                 </div>
@@ -747,15 +725,15 @@ onMounted(async () => {
                   <span class="config-label">监听地址</span>
                   <span class="config-value">{{ config.server.host }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">端口</span>
                   <span class="config-value">{{ config.server.port }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">Vault 路径</span>
                   <span class="config-value">{{ config.vaultPath }}</span>
                 </div>
-                <div class="config-row">
+      <div class="config-row">
                   <span class="config-label">过期阈值</span>
                   <span class="config-value">{{ config.healthCheck.staleDays }} 天</span>
                 </div>
@@ -764,7 +742,7 @@ onMounted(async () => {
               <!-- API Key 提示 -->
               <div v-if="!config.llm.apiKeySet" class="key-warning">
                 <div class="warning-icon">?</div>
-                <div class="warning-text">
+      <div class="warning-text">
                   <strong>API Key 未设置</strong>
                   <p>请设置环境变量 <code>{{ config.llm.apiKeyRef }}</code> 后重启服务，否则编译与问答将返回 401 错误。</p>
                 </div>
@@ -791,9 +769,8 @@ onMounted(async () => {
                 </span>
               </div>
             </div>
-
-            <div v-if="loadingAi" class="section-loading">// 加载中…</div>
-            <div v-else class="ai-form">
+      <div v-if="loadingAi" class="section-loading">// 加载中…</div>
+      <div v-else class="ai-form">
               <!-- 配置表单 -->
               <div class="config-block hover-glow">
                 <h3 class="block-title"><span class="block-bracket">[</span> 模型配置 <span class="block-bracket">]</span></h3>
@@ -805,7 +782,7 @@ onMounted(async () => {
                     class="form-input"
                   />
                 </div>
-                <div class="form-row">
+      <div class="form-row">
                   <label class="form-label">API Key</label>
                   <el-input
                     v-model="aiForm.apiKey"
@@ -815,7 +792,7 @@ onMounted(async () => {
                     class="form-input"
                   />
                 </div>
-                <div class="form-row">
+      <div class="form-row">
                   <label class="form-label" for="ai-model">模型</label>
                   <el-input
                     id="ai-model"
@@ -861,7 +838,7 @@ onMounted(async () => {
                     <span v-if="aiConfig.apiKeyMasked" class="masked-key">{{ aiConfig.apiKeyMasked }}</span>
                   </span>
                 </div>
-                <div v-if="!aiConfig.apiKeySet" class="key-hint">
+      <div v-if="!aiConfig.apiKeySet" class="key-hint">
                   <span class="hint-icon">?</span>
                   <span>请配置 API Key 或设置环境变量 <code>{{ aiConfig.apiKeyRef }}</code></span>
                 </div>
@@ -876,9 +853,8 @@ onMounted(async () => {
                   {{ webSearchStatus.apiKeySet ? '已启用' : '未配置 Key' }}
                 </span>
               </div>
-
-              <div v-if="loadingWebSearch" class="section-loading">// 加载中…</div>
-              <div v-else class="ai-form">
+      <div v-if="loadingWebSearch" class="section-loading">// 加载中…</div>
+      <div v-else class="ai-form">
                 <div class="config-block hover-glow">
                   <h3 class="block-title"><span class="block-bracket">[</span> 搜索引擎 <span class="block-bracket">]</span></h3>
                   <div class="form-row">
@@ -893,7 +869,7 @@ onMounted(async () => {
                       >{{ p.label }}</span>
                     </div>
                   </div>
-                  <div class="form-row">
+      <div class="form-row">
                     <label class="form-label">API Key</label>
                     <el-input
                       v-model="webSearchForm.apiKey"
@@ -903,7 +879,7 @@ onMounted(async () => {
                       class="form-input"
                     />
                   </div>
-                  <div class="form-row">
+      <div class="form-row">
                     <label class="form-label">最大结果数</label>
                     <el-input
                       v-model.number="webSearchForm.maxResults"
@@ -914,14 +890,12 @@ onMounted(async () => {
                     />
                   </div>
                 </div>
-
-                <div class="ai-actions">
+      <div class="ai-actions">
                   <el-button class="neon-btn-primary" :loading="savingWebSearch" @click="saveWebSearchConfig">
                     保存配置
                   </el-button>
                 </div>
-
-                <div v-if="webSearchStatus && !webSearchStatus.apiKeySet" class="key-hint">
+      <div v-if="webSearchStatus && !webSearchStatus.apiKeySet" class="key-hint">
                   <span class="hint-icon">?</span>
                   <span>未配置 API Key 时，知识库问答点击"联网搜索"将仅使用本地知识库。请配置 <code>{{ webSearchStatus.apiKeyRef }}</code></span>
                 </div>
@@ -997,9 +971,9 @@ onMounted(async () => {
 }
 
 .head-title {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.02em;
 }
@@ -1007,7 +981,7 @@ onMounted(async () => {
 .head-tip {
   margin: 0;
   color: var(--text-soft);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 /* Tab 标签霓虹化 */

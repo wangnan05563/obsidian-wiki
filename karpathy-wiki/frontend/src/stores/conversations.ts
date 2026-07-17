@@ -4,7 +4,7 @@ import type { ChatMessage, ConversationRecord } from '../types';
 import { dbDelete, dbGet, dbGetAll, dbPut } from '../services/chatDb';
 import { useQueryStore } from './query';
 
-// IndexedDB 常量
+// IndexedDB 常量（保留作为离线缓存，权威数据源为后端 API）
 const STORE_CONVERSATIONS = 'conversations';
 
 // v1 ChatMessage → v2 ChatMessage 字段升级
@@ -49,28 +49,61 @@ async function migrateV1ToV2() {
   }
 }
 
+// 一次性迁移：将 IndexedDB 中的会话上传到后端，避免用户历史数据因 origin 切换而"丢失"
+// 为什么需要：用户之前在 IndexedDB 积累的会话需迁移到后端持久化，否则切换访问方式后看不到旧会话
+// 幂等设计：上传时后端 PUT 为 upsert，重复调用不会产生重复记录
+async function migrateIndexedDbToBackend() {
+  const allConversations = await dbGetAll<ConversationRecord>(STORE_CONVERSATIONS);
+  if (allConversations.length === 0) return;
+
+  // 并发上传所有会话，失败不阻断（下次启动可重试）
+  await Promise.all(allConversations.map(async (conv) => {
+    try {
+      await fetch(`/api/conversations/${conv.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(conv),
+      });
+    } catch {
+      // 后端不可用时静默失败，保留 IndexedDB 数据供下次迁移
+    }
+  }));
+}
+
 export const useConversationsStore = defineStore('conversations', () => {
   const conversations = ref<ConversationRecord[]>([]);
   const currentConversationId = ref<string | null>(null);
   const searchKeyword = ref('');
 
   // 加载所有历史会话列表（启动时调用）
+  // 权威数据源为后端 API；IndexedDB 仅作离线缓存与一次性迁移源
   async function loadConversations() {
     await migrateV1ToV2();
+    // 一次性迁移：将 IndexedDB 旧会话上传到后端
+    await migrateIndexedDbToBackend();
+
+    try {
+      const res = await fetch('/api/conversations');
+      if (res.ok) {
+        const data = await res.json() as { conversations: ConversationRecord[] };
+        conversations.value = data.conversations ?? [];
+        return;
+      }
+    } catch {
+      // 后端不可用时降级读 IndexedDB 缓存
+    }
     conversations.value = await dbGetAll<ConversationRecord>(STORE_CONVERSATIONS);
   }
 
-  // 持久化当前对话到 IndexedDB
+  // 持久化当前对话到后端（IndexedDB 同步写入作为离线缓存）
   // 为什么需要：每轮问答完成后需落盘，支持侧栏历史列表与会话恢复
-  // 为什么用 structuredClone：store.messages 是 Vue reactive proxy，
-  // IndexedDB structured clone 无法直接克隆 Proxy 对象，需先深拷贝剥离代理层
   async function persistConversation(messages: ChatMessage[]) {
     if (messages.length === 0) return;
 
     const id = currentConversationId.value || crypto.randomUUID();
     const existing = conversations.value.find((conversation) => conversation.id === id);
 
-    // 深拷贝：剥离 Vue reactive proxy，转为纯对象供 IndexedDB structured clone
+    // 深拷贝：剥离 Vue reactive proxy，转为纯对象供 fetch JSON 序列化与 IndexedDB structured clone
     // 为什么用 JSON 而非 structuredClone：structuredClone 无法克隆 Vue 3 reactive proxy 数组，
     // 会抛出 "[object Array] could not be cloned"；JSON.stringify 会自动遍历 proxy 属性生成纯对象
     const plainMessages: ChatMessage[] = JSON.parse(JSON.stringify(messages));
@@ -86,7 +119,21 @@ export const useConversationsStore = defineStore('conversations', () => {
       messages: plainMessages,
     };
 
-    await dbPut(STORE_CONVERSATIONS, record);
+    // 后端持久化（权威）；IndexedDB 写入仅作缓存兜底，失败不影响主流程
+    try {
+      await fetch(`/api/conversations/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      });
+    } catch {
+      // 后端不可用时仅写 IndexedDB 缓存
+    }
+    try {
+      await dbPut(STORE_CONVERSATIONS, record);
+    } catch {
+      // IndexedDB 失败不阻断（如隐私模式）
+    }
 
     // 同步更新内存列表（深拷贝避免 reactive proxy 污染）
     const idx = conversations.value.findIndex((conversation) => conversation.id === id);
@@ -99,7 +146,16 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function deleteConversation(id: string) {
-    await dbDelete(STORE_CONVERSATIONS, id);
+    try {
+      await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+    } catch {
+      // 后端不可用时降级操作 IndexedDB
+    }
+    try {
+      await dbDelete(STORE_CONVERSATIONS, id);
+    } catch {
+      // IndexedDB 失败不阻断
+    }
     conversations.value = conversations.value.filter(c => c.id !== id);
     if (currentConversationId.value === id) {
       currentConversationId.value = null;
@@ -107,16 +163,36 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function renameConversation(id: string, title: string) {
-    const record = await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id);
-    if (record) {
-      record.title = title;
-      await dbPut(STORE_CONVERSATIONS, record);
-      const idx = conversations.value.findIndex((conversation) => conversation.id === id);
-      if (idx >= 0) conversations.value[idx].title = title;
+    try {
+      await fetch(`/api/conversations/${id}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+    } catch {
+      // 后端不可用时降级操作 IndexedDB
+      const record = await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id);
+      if (record) {
+        record.title = title;
+        await dbPut(STORE_CONVERSATIONS, record);
+      }
     }
+    const idx = conversations.value.findIndex((conversation) => conversation.id === id);
+    if (idx >= 0) conversations.value[idx].title = title;
   }
 
   async function togglePin(id: string) {
+    try {
+      const res = await fetch(`/api/conversations/${id}/pin`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json() as { isPinned: boolean };
+        const idx = conversations.value.findIndex((conversation) => conversation.id === id);
+        if (idx >= 0) conversations.value[idx].isPinned = data.isPinned;
+        return;
+      }
+    } catch {
+      // 后端不可用时降级操作 IndexedDB
+    }
     const record = await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id);
     if (record) {
       record.isPinned = !record.isPinned;
@@ -127,12 +203,24 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   // 切换到某历史会话：设置 currentId 并加载消息到 query store
+  // 优先从后端读取完整会话（含 messages），后端不可用降级读 IndexedDB
   async function selectConversation(id: string) {
     currentConversationId.value = id;
-    const record = await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id);
-    if (record) {
-      useQueryStore().loadMessages(record.messages);
+    let messages: ChatMessage[] | null = null;
+    try {
+      const res = await fetch(`/api/conversations/${id}`);
+      if (res.ok) {
+        const data = await res.json() as { conversation: ConversationRecord };
+        messages = data.conversation.messages;
+      }
+    } catch {
+      // 后端不可用时降级读 IndexedDB
     }
+    if (!messages) {
+      const record = await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id);
+      messages = record?.messages ?? [];
+    }
+    useQueryStore().loadMessages(messages);
   }
 
   function startNewConversation() {

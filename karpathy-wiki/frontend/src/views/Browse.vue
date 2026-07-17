@@ -3,8 +3,6 @@ import { ref, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import type { TreeNode, FileContent, SearchHit } from '../types';
-import RobotAvatar from '../components/RobotAvatar.vue';
-
 const treeData = ref<TreeNode[]>([]);
 const currentNode = ref<string>('');
 const fileContent = ref<FileContent | null>(null);
@@ -169,7 +167,6 @@ onMounted(async () => {
       <div class="card-deco"></div>
       <!-- 不对称头部 -->
       <div class="browse-head">
-        <RobotAvatar :size="52" />
         <div class="head-text">
           <span class="head-tag">// KNOWLEDGE BROWSER</span>
           <h2 class="head-title grad-text">知识浏览</h2>
@@ -177,7 +174,6 @@ onMounted(async () => {
         </div>
         <el-button size="small" @click="loadTree">刷新目录</el-button>
       </div>
-
       <div class="browse-body">
         <!-- 左侧目录树 + 搜索 -->
         <div class="tree-panel">
@@ -199,8 +195,8 @@ onMounted(async () => {
               <span class="search-count">{{ searchHits.length }} 条结果</span>
               <el-button size="small" text @click="clearSearch">返回目录</el-button>
             </div>
-            <div v-if="searching" class="search-loading">SEARCHING...</div>
-            <div v-else-if="searchHits.length === 0" class="search-empty">未找到匹配页面</div>
+      <div v-if="searching" class="search-loading">SEARCHING...</div>
+      <div v-else-if="searchHits.length === 0" class="search-empty">未找到匹配页面</div>
             <div
               v-for="hit in searchHits"
               :key="hit.path"
@@ -208,8 +204,8 @@ onMounted(async () => {
               @click="handleSearchHit(hit)"
             >
               <div class="hit-title">{{ hit.title }}</div>
-              <div class="hit-path">{{ hit.path }}</div>
-              <div class="hit-snippet">{{ hit.snippet }}</div>
+      <div class="hit-path">{{ hit.path }}</div>
+      <div class="hit-snippet">{{ hit.snippet }}</div>
             </div>
           </div>
 
@@ -242,16 +238,12 @@ onMounted(async () => {
         <!-- 右侧内容区 -->
         <div class="content-panel">
           <div v-if="loading" class="content-loading">
-            <RobotAvatar :size="80" :floating="true" />
-            <p>加载中…</p>
+<p>加载中…</p>
           </div>
-
-          <div v-else-if="!fileContent" class="content-empty">
-            <RobotAvatar :size="120" :floating="true" />
-            <p class="empty-tip">选择左侧文件查看内容</p>
+      <div v-else-if="!fileContent" class="content-empty">
+<p class="empty-tip">选择左侧文件查看内容</p>
           </div>
-
-          <div v-else class="content-show">
+      <div v-else class="content-show">
             <!-- frontmatter 元信息 -->
             <div v-if="fileContent.frontmatter && Object.keys(fileContent.frontmatter).length > 0" class="frontmatter-bar">
               <span v-for="(val, key) in fileContent.frontmatter" :key="key" class="fm-chip">
@@ -339,13 +331,13 @@ onMounted(async () => {
   color: var(--neon-cyan);
   letter-spacing: 2px;
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .head-title {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 900;
   letter-spacing: 1px;
 }
@@ -353,7 +345,7 @@ onMounted(async () => {
 .head-tip {
   margin: 0;
   color: var(--text-soft);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .browse-body {

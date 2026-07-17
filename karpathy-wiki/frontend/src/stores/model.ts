@@ -3,29 +3,11 @@ import { ref } from 'vue';
 import type { LlmPreset } from '../types';
 
 // §3.3 useModelStore — 模型预设管理。
-// 职责：加载预设列表、切换当前模型并持久化到 localStorage、同步到后端即时生效。
-// §5.2 增强：每个预设的 apiKey 独立持久化到 localStorage，切换预设时回填对应 apiKey。
-// 为什么按预设存储 apiKey：不同 provider 的 key 互不通用，切换预设时若不复用历史 key 体验差。
-// 安全取舍：localStorage 明文有 XSS 风险，但用户明确选择体验优先（与 config.json 落盘策略一致）。
+// 职责：加载预设列表、切换当前模型并持久化"选中预设"到 localStorage、同步到后端即时生效。
+// apiKey 权威源：后端 config.json。前端不再 localStorage 明文存储 apiKey，
+// 避免 localStorage 与 config.json 双轨保存导致状态不一致。
+// 切换预设时从后端读取当前脱敏 apiKey 返显，明文 key 仅用户输入时短暂存在内存。
 const SELECTED_PRESET_KEY = 'selectedModelPreset';
-
-// 按预设 key 存储 apiKey，避免不同 provider 的 key 互相覆盖
-function apiKeyStorageKey(presetKey: string): string {
-  return `apiKey:${presetKey}`;
-}
-
-function loadApiKeyFor(presetKey: string): string {
-  return localStorage.getItem(apiKeyStorageKey(presetKey)) || '';
-}
-
-function saveApiKeyFor(presetKey: string, apiKey: string): void {
-  if (apiKey) {
-    localStorage.setItem(apiKeyStorageKey(presetKey), apiKey);
-  } else {
-    // 空串表示清除，移除条目避免遗留空值
-    localStorage.removeItem(apiKeyStorageKey(presetKey));
-  }
-}
 
 export const useModelStore = defineStore('model', () => {
   // 防止 SSR 或隐私模式下 localStorage 不可用
@@ -35,8 +17,9 @@ export const useModelStore = defineStore('model', () => {
   })();
   const selectedPresetKey = ref<string>(savedPresetKey || '');
   const currentModel = ref<string>('');
-  // 当前预设的 apiKey，切换预设时自动回填
-  const apiKey = ref<string>('');
+  // 当前预设的 apiKey 脱敏值（从后端读取，仅用于展示是否已设置）
+  const apiKeyMasked = ref<string>('');
+  const apiKeySet = ref<boolean>(false);
   const presets = ref<LlmPreset[]>([]);
   const loadError = ref('');
 
@@ -49,8 +32,17 @@ export const useModelStore = defineStore('model', () => {
       const selected = presets.value.find(p => p.key === selectedPresetKey.value) ?? presets.value[0];
       selectedPresetKey.value = selected?.key ?? '';
       currentModel.value = selected?.model ?? '';
-      // 回填当前预设持久化的 apiKey
-      apiKey.value = selected ? loadApiKeyFor(selected.key) : '';
+      // 从后端读取当前生效的 apiKey 状态（脱敏值 + 是否已设置）
+      try {
+        const cfgRes = await fetch('/api/ai/config');
+        if (cfgRes.ok) {
+          const cfg = await cfgRes.json() as { apiKeyMasked?: string; apiKeySet?: boolean };
+          apiKeyMasked.value = cfg.apiKeyMasked ?? '';
+          apiKeySet.value = Boolean(cfg.apiKeySet);
+        }
+      } catch {
+        // 后端不可用时不阻断预设加载
+      }
       loadError.value = presets.value.length ? '' : '暂无可用模型预设';
     } catch (err) {
       loadError.value = err instanceof Error ? err.message : String(err);
@@ -58,49 +50,58 @@ export const useModelStore = defineStore('model', () => {
     }
   }
 
-  // 切换预设：更新 selectedPresetKey、currentModel、apiKey，并同步到后端即时生效。
-  // 为什么同步到后端：后端 config.json 是全局唯一 LLM 配置，切换预设需覆盖之。
+  // 切换预设：更新 selectedPresetKey、currentModel，并同步到后端即时生效。
+  // 为什么不同步 apiKey：后端 config.json 是全局唯一 LLM 配置，切换预设时
+  // 后端会保留当前 apiKey（除非用户主动清除），避免切换预设导致 key 丢失。
   async function switchModel(key: string) {
     const preset = presets.value.find(item => item.key === key);
     if (!preset) return;
     selectedPresetKey.value = preset.key;
     currentModel.value = preset.model;
-    // 切换预设后回填对应 apiKey
-    apiKey.value = loadApiKeyFor(preset.key);
     localStorage.setItem(SELECTED_PRESET_KEY, preset.key);
     try {
-      await fetch('/api/ai/config', {
+      const res = await fetch('/api/ai/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        // 不传 apiKey：后端收到 undefined 表示不修改现有 key
         body: JSON.stringify({
           provider: preset.provider,
           baseUrl: preset.baseUrl,
           model: preset.model,
-          // 同步 apiKey 到后端 config.json
-          // 空串表示该预设未配置 key，后端将落盘空串清除原值
-          apiKey: apiKey.value,
         }),
       });
+      if (res.ok) {
+        const data = await res.json() as { config?: { apiKeyMasked?: string; apiKeySet?: boolean } };
+        if (data.config) {
+          apiKeyMasked.value = data.config.apiKeyMasked ?? '';
+          apiKeySet.value = Boolean(data.config.apiKeySet);
+        }
+      }
     } catch (err) {
       console.error('切换模型失败:', err);
     }
   }
 
-  // 保存当前预设的 apiKey 到 localStorage 并同步到后端。
-  // 供 AI 配置页面「保存」按钮调用。
+  // 保存 apiKey 到后端 config.json（唯一权威源）。
+  // 供 AI 配置页面「保存」按钮调用。前端不再 localStorage 存储 apiKey 明文。
   async function saveApiKey(newKey: string) {
-    apiKey.value = newKey;
-    saveApiKeyFor(selectedPresetKey.value, newKey);
     try {
-      await fetch('/api/ai/config', {
+      const res = await fetch('/api/ai/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey: newKey }),
       });
+      if (res.ok) {
+        const data = await res.json() as { config?: { apiKeyMasked?: string; apiKeySet?: boolean } };
+        if (data.config) {
+          apiKeyMasked.value = data.config.apiKeyMasked ?? '';
+          apiKeySet.value = Boolean(data.config.apiKeySet);
+        }
+      }
     } catch (err) {
       console.error('保存 API Key 失败:', err);
     }
   }
 
-  return { currentModel, selectedPresetKey, apiKey, presets, loadError, loadPresets, switchModel, saveApiKey };
+  return { currentModel, selectedPresetKey, apiKeyMasked, apiKeySet, presets, loadError, loadPresets, switchModel, saveApiKey };
 });

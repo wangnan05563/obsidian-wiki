@@ -1,0 +1,209 @@
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import path from 'node:path';
+
+// 历史会话后端持久化路由。
+// 为什么需要：前端 IndexedDB 绑定浏览器 origin（协议+域名+端口），
+// 开发模式（localhost:5173）与生产模式（localhost:3000）origin 不同导致会话"丢失"。
+// 改为后端落盘到 data/conversations/，所有访问方式共享同一份数据。
+//
+// 存储：每个会话一个 JSON 文件，文件名 = {id}.json，id 必须为 UUID 防路径穿越。
+// 与前端 ConversationRecord 字段对齐，前端直接读写，无字段转换。
+//
+// 路由：
+//   GET    /api/conversations           列出所有会话摘要（不含 messages）
+//   GET    /api/conversations/:id       读取单个会话完整内容（含 messages）
+//   PUT    /api/conversations/:id       保存/更新会话（upsert）
+//   DELETE /api/conversations/:id       删除会话
+//   POST   /api/conversations/:id/pin   切换置顶状态
+//   POST   /api/conversations/:id/rename 重命名
+
+interface ConversationRecord {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  isPinned: boolean;
+  preview: string;
+  messages: unknown[];
+}
+
+// UUID v4 正则：仅允许合法 UUID 作为文件名，杜绝路径穿越
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function registerConversationsRoute(app: FastifyInstance, dataDir: string) {
+  // 会话存储目录：dataDir/conversations/
+  // 为什么放在 data 下：与 vault 同级，遵循"运行时数据与源码分离"约定
+  const conversationsDir = path.resolve(dataDir, 'conversations');
+
+  // 启动时确保目录存在
+  fsSync.mkdirSync(conversationsDir, { recursive: true });
+
+  // 安全读取会话文件：校验 id 为合法 UUID，避免路径穿越
+  async function readConversation(id: string): Promise<ConversationRecord | null> {
+    if (!UUID_RE.test(id)) return null;
+    const file = path.join(conversationsDir, `${id}.json`);
+    try {
+      const raw = await fs.readFile(file, 'utf8');
+      return JSON.parse(raw) as ConversationRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  // 安全写入会话文件
+  async function writeConversation(record: ConversationRecord): Promise<void> {
+    if (!UUID_RE.test(record.id)) {
+      throw new Error('无效的会话 ID');
+    }
+    const file = path.join(conversationsDir, `${record.id}.json`);
+    await fs.writeFile(file, JSON.stringify(record, null, 2), 'utf8');
+  }
+
+  // GET /api/conversations：列出所有会话摘要（不含 messages，减少响应体积）
+  app.get('/api/conversations', async (_request, reply) => {
+    try {
+      const files = await fs.readdir(conversationsDir);
+      const summaries: Omit<ConversationRecord, 'messages'>[] = [];
+      for (const f of files) {
+        if (!f.endsWith('.json')) continue;
+        try {
+          const raw = await fs.readFile(path.join(conversationsDir, f), 'utf8');
+          const record = JSON.parse(raw) as ConversationRecord;
+          // 摘要不含 messages，前端列表渲染无需完整消息
+          summaries.push({
+            id: record.id,
+            title: record.title,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            messageCount: record.messageCount,
+            isPinned: record.isPinned,
+            preview: record.preview,
+          });
+        } catch {
+          // 单个文件损坏跳过，不影响整体列表
+        }
+      }
+      // 置顶优先，再按 updatedAt 倒序
+      summaries.sort((a, b) => {
+        if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+        return b.updatedAt.localeCompare(a.updatedAt);
+      });
+      return reply.send({ conversations: summaries });
+    } catch (err: unknown) {
+      return reply.code(500).send({
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // GET /api/conversations/:id：读取完整会话（含 messages）
+  app.get<{ Params: { id: string } }>(
+    '/api/conversations/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      const record = await readConversation(id);
+      if (!record) {
+        return reply.code(404).send({ error: '会话不存在' });
+      }
+      return reply.send({ conversation: record });
+    },
+  );
+
+  // PUT /api/conversations/:id：保存/更新会话（upsert）
+  // 前端每轮问答完成后调用，body 为完整 ConversationRecord
+  app.put<{ Params: { id: string } }>(
+    '/api/conversations/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!UUID_RE.test(id)) {
+        return reply.code(400).send({ error: '无效的会话 ID' });
+      }
+      const body = request.body as Partial<ConversationRecord>;
+      if (!body) {
+        return reply.code(400).send({ error: '请求体为空' });
+      }
+
+      // 读取已有记录用于合并（保留 createdAt 等）
+      const existing = await readConversation(id);
+      const record: ConversationRecord = {
+        id,
+        title: body.title ?? existing?.title ?? '新会话',
+        createdAt: body.createdAt ?? existing?.createdAt ?? new Date().toISOString(),
+        updatedAt: body.updatedAt ?? new Date().toISOString(),
+        messageCount: body.messageCount ?? body.messages?.length ?? 0,
+        isPinned: body.isPinned ?? existing?.isPinned ?? false,
+        preview: body.preview ?? existing?.preview ?? '',
+        messages: body.messages ?? existing?.messages ?? [],
+      };
+
+      try {
+        await writeConversation(record);
+        return reply.send({ ok: true, conversation: record });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.code(500).send({ error: msg });
+      }
+    },
+  );
+
+  // DELETE /api/conversations/:id：删除会话
+  app.delete<{ Params: { id: string } }>(
+    '/api/conversations/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!UUID_RE.test(id)) {
+        return reply.code(400).send({ error: '无效的会话 ID' });
+      }
+      const file = path.join(conversationsDir, `${id}.json`);
+      try {
+        await fs.unlink(file);
+        return reply.send({ ok: true });
+      } catch (err: unknown) {
+        // 文件不存在视为已删除
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          return reply.send({ ok: true });
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.code(500).send({ error: msg });
+      }
+    },
+  );
+
+  // POST /api/conversations/:id/pin：切换置顶状态
+  app.post<{ Params: { id: string } }>(
+    '/api/conversations/:id/pin',
+    async (request, reply) => {
+      const { id } = request.params;
+      const record = await readConversation(id);
+      if (!record) {
+        return reply.code(404).send({ error: '会话不存在' });
+      }
+      record.isPinned = !record.isPinned;
+      await writeConversation(record);
+      return reply.send({ ok: true, isPinned: record.isPinned });
+    },
+  );
+
+  // POST /api/conversations/:id/rename：重命名
+  app.post<{ Params: { id: string } }>(
+    '/api/conversations/:id/rename',
+    async (request, reply) => {
+      const { id } = request.params;
+      const body = request.body as { title?: string };
+      if (!body?.title?.trim()) {
+        return reply.code(400).send({ error: '标题不能为空' });
+      }
+      const record = await readConversation(id);
+      if (!record) {
+        return reply.code(404).send({ error: '会话不存在' });
+      }
+      record.title = body.title.trim();
+      await writeConversation(record);
+      return reply.send({ ok: true, title: record.title });
+    },
+  );
+}
