@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ToolDefinition, HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
-import type { QueryInput, AnswerChunk, ThinkingChunk } from '../types.js';
+import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef } from '../types.js';
 import type { WebSearchConfig } from '../types.js';
 import { searchPages } from '../search-util.js';
 import { createWebSearchTool } from '../tools/web-search.js';
@@ -141,21 +141,30 @@ function generateFollowups(question: string, answer: string, refs: string[]): st
   return [...new Set(followups)].slice(0, 3);
 }
 
-// 执行 query，返回 AsyncIterable<AnswerChunk>。
-// §5.2 改造点：
-//   1. 支持 options.webSearch 注入 web_search 工具
-//   2. 支持 options.mode='deep' 调整 prompt
-//   3. 支持 options.attachments 附加附件信息到 prompt
-//   4. 通过 harness afterStep hook 收集 thinking 步骤，run 完成后 yield
-//   5. harness.run 是非流式 Promise，这里把 finalContent 按句切分后逐块 yield
-export async function* queryWorkflow(
+// 把答案文本按中英文句号/问号/感叹号切分，逐块 yield 模拟流式输出。
+// 全角/半角标点经 NFKC 归一化后等价，去重保留全角作主分隔符（S5869）；
+// 显式分组明确 | 优先级（S5850）
+function* yieldAnswerInSentences(answer: string): Iterable<AnswerChunk> {
+  const sentences = answer.match(/(?:[^。！？.!]*[。！？.!]+)|(?:[^。！？.!]+$)/g) ?? [answer];
+  for (const s of sentences) {
+    if (s.trim()) {
+      yield { text: s };
+    }
+  }
+}
+
+// 降级链第 1 级：queryWithHarness
+// 走 @wiki/harness ReAct 循环，注入 search_pages/read_page/web_search 工具，由 LLM 自主调用。
+// 通过 afterStep hook 收集 thinking 步骤，run 完成后一次性 yield（harness.run 是阻塞 Promise，运行中无法 yield）。
+// 失败时（harness.run 抛异常或返回 status='failed'）通过 throw 让上层降级链接管。
+async function* queryWithHarness(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   input: QueryInput,
-  options: {
-    webSearchConfig?: WebSearchConfig;
-  } = {},
-): AsyncIterable<AnswerChunk> {
+  options: { webSearchConfig?: WebSearchConfig },
+  collectedThinking: ThinkingChunk[],
+  collectedWebRefs: WebRef[],
+): AsyncGenerator<AnswerChunk, void, unknown> {
   // 1. 构造 prompt：问答指令 + 用户问题 + 历史 + 附件提示 + 模式提示
   const promptTemplate = await loadQueryPrompt();
   const historyStr = input.history && input.history.length > 0
@@ -175,47 +184,27 @@ ${attachmentHint}
 ${deepHint}
 `;
 
-  // 2. 收集 thinking 步骤：通过 harness afterStep hook 在工具调用时收集
-  // 为什么用数组收集而非实时 yield：harness.run 是阻塞的 Promise，无法在运行中 yield
-  // run 完成后一次性 yield 所有 thinking，保证 thinking 在 answer 之前
-  const collectedThinking: ThinkingChunk[] = [];
-
-  // §5.2 联网搜索外部链接收集：web_search 工具返回的 WebSearchResult[] 在 afterStep 中解析后累加
-  // 为什么需要：LLM 看到搜索结果后，外部链接就是该问题的"参考来源"之一，需在最终 refs 事件中推送给前端
-  const collectedWebRefs: import('../types.js').WebRef[] = [];
-
-  // §5.2 深度思考模式提示：用户可见的 thinking 事件，确认模式已生效
-  if (input.mode === 'deep') {
-    collectedThinking.push({
-      phase: 'thinking',
-      message: '深度思考模式已启用，正在深入分析问题...',
-    });
-  }
-
-  // §5.2 联网搜索模式提示：检查 API Key 是否配置
-  // 为什么需要：用户点击联网搜索但未配置 API Key 时，工具静默不注入，用户困惑
+  // 2. 联网搜索可用性检查：用户点联网搜索但未配置 API Key 时提示
   let webSearchAvailable = false;
-  if (input.webSearch) {
-    if (options.webSearchConfig) {
-      const wsApiKey = options.webSearchConfig.apiKey || process.env[options.webSearchConfig.apiKeyRef];
-      if (wsApiKey) {
-        webSearchAvailable = true;
-        collectedThinking.push({
-          phase: 'thinking',
-          message: `联网搜索已启用（${options.webSearchConfig.provider}），可获取实时信息...`,
-        });
-      } else {
-        collectedThinking.push({
-          phase: 'thinking',
-          message: '联网搜索未配置 API Key，仅使用本地知识库。请在 config.json 中配置 webSearch.apiKey。',
-        });
-      }
+  if (input.webSearch && options.webSearchConfig) {
+    const wsApiKey = options.webSearchConfig.apiKey || process.env[options.webSearchConfig.apiKeyRef];
+    if (wsApiKey) {
+      webSearchAvailable = true;
+      collectedThinking.push({
+        phase: 'thinking',
+        message: `联网搜索已启用（${options.webSearchConfig.provider}），可获取实时信息...`,
+      });
     } else {
       collectedThinking.push({
         phase: 'thinking',
-        message: '联网搜索未配置，仅使用本地知识库。',
+        message: '联网搜索未配置 API Key，仅使用本地知识库。请在 config.json 中配置 webSearch.apiKey。',
       });
     }
+  } else if (input.webSearch) {
+    collectedThinking.push({
+      phase: 'thinking',
+      message: '联网搜索未配置，仅使用本地知识库。',
+    });
   }
 
   // 3. 构造 harness，注入工具与 afterStep hook
@@ -264,44 +253,31 @@ ${deepHint}
     },
   });
 
-  // 4. 先 yield thinking 起始事件
-  yield { thinking: { phase: 'thinking', message: '正在思考...' } };
-
-  // 5. 执行问答
+  // 4. 执行问答。harness.run 抛异常或返回 failed status 时让上层降级链接管。
   let result;
   try {
     result = await harness.run({ task, context: { question: input.question } });
-  } catch (err: unknown) {
-    yield { thinking: { phase: 'composing', message: '降级搜索中...' } };
-    yield { text: `问答失败: ${err instanceof Error ? err.message : String(err)}` };
-    yield { refs: [], done: true };
-    return;
+  } catch (err) {
+    // 让上层 queryWorkflow catch 触发降级链
+    throw err;
   }
 
-  // 6. yield 收集到的 thinking 步骤（工具调用历史）
+  if (result.status === 'failed') {
+    throw new Error(result.finalContent || 'harness run failed');
+  }
+
+  // 5. yield 收集到的 thinking 步骤（工具调用历史）
   for (const t of collectedThinking) {
     yield { thinking: t };
   }
 
-  if (result.status === 'failed') {
-    yield { thinking: { phase: 'composing', message: '降级搜索中...' } };
-    yield { text: `问答失败: ${result.finalContent || '未知错误'}` };
-    yield { refs: [], done: true };
-    return;
-  }
-
-  // 7. 将 finalContent 按句切分，逐块 yield 模拟流式输出
+  // 6. 将 finalContent 按句切分，逐块 yield 模拟流式输出
   const answer = result.finalContent || '知识库未覆盖此问题。';
-  // 按中英文句号/问号/感叹号切分，保留分隔符。
-  // 全角/半角标点经 NFKC 归一化后等价，去重保留全角作主分隔符（S5869）；显式分组明确 | 优先级（S5850）
-  const sentences = answer.match(/(?:[^。！？.!]*[。！？.!]+)|(?:[^。！？.!]+$)/g) ?? [answer];
-  for (const s of sentences) {
-    if (s.trim()) {
-      yield { text: s };
-    }
+  for (const chunk of yieldAnswerInSentences(answer)) {
+    yield chunk;
   }
 
-  // 8. 提取引用并标记完成
+  // 7. 提取引用并标记完成
   const refs = extractRefs(answer);
   // §5.2 联网搜索引用：collectedWebRefs 已在 afterStep 中累加。
   // 去重（同 url 多次出现时只保留首次），限制最多 8 条避免 UI 过长
@@ -317,4 +293,165 @@ ${deepHint}
     yield { followups };
   }
   yield { refs, webRefs, done: true };
+}
+
+// 降级链第 2 级：queryWithSearchFallback
+// 决策理由：harness.run 失败（LLM 限流、工具循环异常、预算耗尽）时，绕过 ReAct 循环，
+// 直接调 searchPages 拿到 Top-K 相关页面，拼到 prompt 里让 LLM 单轮回答。
+// 无工具循环、无 ReAct，故障面小，给用户一个降级但可用的回答。
+// 实现关键：复用 harnessConfig 的 llm 配置，但 tools=[] + maxSteps=1 强制单轮。
+async function* queryWithSearchFallback(
+  harnessConfig: HarnessConfig,
+  vault: VaultService,
+  input: QueryInput,
+): AsyncGenerator<AnswerChunk, void, unknown> {
+  // 1. 直接调 searchPages 拿到 Top-K 相关页面
+  // 截断避免长问题拖慢搜索（searchPages 按 includes 匹配，长字符串扫描慢）
+  const keywords = input.question.slice(0, 100);
+  const hits = await searchPages(vault, keywords, 5);
+
+  if (hits.length === 0) {
+    // 无命中：让上层降级链落到兜底
+    throw new Error('search fallback: no hits');
+  }
+
+  // 2. 读取命中页面内容（截断到 2000 字符避免 prompt 过长）
+  const pageContents: string[] = [];
+  const refTitles: string[] = [];
+  for (const h of hits) {
+    try {
+      const content = await vault.readFile(h.path);
+      // 单页 2000 字符上限，5 页合计约 10K token，可控
+      pageContents.push(`## ${h.title}\n${content.slice(0, 2000)}`);
+      refTitles.push(h.title);
+    } catch {
+      // 跳过读取失败的页面
+    }
+  }
+
+  if (pageContents.length === 0) {
+    throw new Error('search fallback: all page reads failed');
+  }
+
+  // 3. 构造单轮 prompt：检索结果 + 用户问题
+  const fallbackPrompt = `你是知识库助手。以下是检索到的相关页面：
+
+${pageContents.join('\n\n---\n\n')}
+
+## 用户问题
+${input.question}
+
+请基于上述页面内容回答，并在合适位置使用 [[页面名]] 引用对应页面。`;
+
+  // 4. 复用 harnessConfig 的 LLM 配置，但禁用工具（强制单轮）
+  // 为什么 maxSteps:1：单轮 LLM 调用即可，不需要 ReAct 循环
+  // 为什么 tokenBudget 缩小：避免 fallback 也耗光预算
+  const fallbackConfig: HarnessConfig = {
+    ...harnessConfig,
+    tools: [],
+    budget: { maxSteps: 1, tokenBudget: 8000 },
+    hooks: {},
+  };
+  const harness = new Harness(fallbackConfig);
+
+  let result;
+  try {
+    result = await harness.run({ task: fallbackPrompt });
+  } catch (err) {
+    // LLM 调用也失败：让上层降级链落到兜底
+    throw err;
+  }
+
+  if (result.status === 'failed') {
+    throw new Error(result.finalContent || 'fallback harness run failed');
+  }
+
+  // 5. 流式输出
+  const answer = result.finalContent || '知识库未覆盖此问题。';
+  for (const chunk of yieldAnswerInSentences(answer)) {
+    yield chunk;
+  }
+
+  // 6. 提取引用（合并 search hits 与 [[页面名]]）
+  const extractedRefs = new Set<string>(refTitles);
+  for (const r of extractRefs(answer)) {
+    extractedRefs.add(r);
+  }
+  const refs = Array.from(extractedRefs).slice(0, 8);
+  yield { refs, done: true };
+}
+
+// 执行 query，返回 AsyncIterable<AnswerChunk>。
+// §6.0.1 降级链编排：queryWithHarness → queryWithSearchFallback → 兜底提示
+// §5.2 改造点：
+//   1. 支持 options.webSearch 注入 web_search 工具
+//   2. 支持 options.mode='deep' 调整 prompt
+//   3. 支持 options.attachments 附加附件信息到 prompt
+//   4. 通过 harness afterStep hook 收集 thinking 步骤，run 完成后 yield
+//   5. harness.run 是非流式 Promise，这里把 finalContent 按句切分后逐块 yield
+export async function* queryWorkflow(
+  harnessConfig: HarnessConfig,
+  vault: VaultService,
+  input: QueryInput,
+  options: {
+    webSearchConfig?: WebSearchConfig;
+  } = {},
+): AsyncIterable<AnswerChunk> {
+  // thinking 收集器：harness 阶段收集，fallback 阶段不再追加
+  const collectedThinking: ThinkingChunk[] = [];
+  // webRefs 收集器：仅 harness 阶段（联网搜索）收集
+  const collectedWebRefs: WebRef[] = [];
+
+  // 模式提示 thinking：在降级链各分支前 push 一次，harness 阶段 yield 出来
+  if (input.mode === 'deep') {
+    collectedThinking.push({
+      phase: 'thinking',
+      message: '深度思考模式已启用，正在深入分析问题...',
+    });
+  }
+
+  // 起始 thinking 事件（让前端立即看到"正在思考"动画）
+  yield { thinking: { phase: 'thinking', message: '正在思考...' } };
+
+  // 降级链第 1 级：queryWithHarness
+  let harnessSucceeded = false;
+  try {
+    for await (const chunk of queryWithHarness(
+      harnessConfig,
+      vault,
+      input,
+      options,
+      collectedThinking,
+      collectedWebRefs,
+    )) {
+      yield chunk;
+    }
+    harnessSucceeded = true;
+  } catch {
+    // harness 失败（LLM 异常、预算耗尽、工具循环错误），落入降级链
+  }
+
+  if (harnessSucceeded) return;
+
+  // 降级链第 2 级：queryWithSearchFallback
+  yield { thinking: { phase: 'composing', message: '降级搜索中...' } };
+  let fallbackSucceeded = false;
+  try {
+    for await (const chunk of queryWithSearchFallback(
+      harnessConfig,
+      vault,
+      input,
+    )) {
+      yield chunk;
+    }
+    fallbackSucceeded = true;
+  } catch {
+    // fallback 也失败，落入兜底
+  }
+
+  if (fallbackSucceeded) return;
+
+  // 降级链第 3 级：兜底提示
+  yield { text: '知识库未覆盖此问题，或当前问答服务暂不可用。' };
+  yield { refs: [], done: true };
 }

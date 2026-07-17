@@ -4,6 +4,8 @@ import matter from 'gray-matter';
 import type { EngineAdapter, QueryInput } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { withCompileLock } from '../compile-queue.js';
+// §6.0.2 per-session Lock：按 question 前 32 字符做 key 串行化
+import { withSessionLock } from '../session-lock.js';
 
 // §5.1 L-7 防篡改归档：会话存储。
 // 内存 Map 存储问答对，archive 路由从服务端存储取答案，不信任客户端传内容。
@@ -92,59 +94,66 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
     };
 
     try {
-      for await (const chunk of adapter.query(input)) {
-        // §5.2 thinking 事件：前端 ThinkingBlock 渲染
-        if (chunk.thinking) {
-          send('thinking', chunk.thinking);
-        }
-        // §5.2 progress 事件：联网搜索进度
-        if (chunk.progress) {
-          send('progress', chunk.progress);
-        }
-        // §5.2 image 事件：多模态图片推送
-        if (chunk.image) {
-          send('image', chunk.image);
-        }
-        // §5.2 followups 事件：追问建议
-        if (chunk.followups) {
-          send('followups', { followups: chunk.followups });
-        }
-        // §5.2 联网搜索引用：缓存最新 webRefs，与 refs 一起在 done 时发送
-        if (chunk.webRefs && chunk.webRefs.length > 0) {
-          webRefs = chunk.webRefs;
-        }
-
-        if (chunk.done) {
-          if ((chunk.refs?.length ?? 0) > 0) {
-            refs = chunk.refs ?? [];
+      // §6.0.2 per-session Lock：同 question 的并发请求串行化，避免 LLM 重复调用浪费 token
+      // 为什么包裹整个 SSE 流而非只包裹 LLM 调用：
+      //   1. 同问题重复请求必须等前一次完成才允许第二次开始，否则 LLM 调用并发会浪费 token
+      //   2. 第二次请求开始时复用前一次的 SSE 流式输出已无意义（用户已看到第一次答案）
+      // 代价：用户同问题重复点击会卡住等前一次完成，这是 SRS 设计意图
+      await withSessionLock(input.question, async () => {
+        for await (const chunk of adapter.query(input)) {
+          // §5.2 thinking 事件：前端 ThinkingBlock 渲染
+          if (chunk.thinking) {
+            send('thinking', chunk.thinking);
           }
-          // refs 与 webRefs 一起发送：前端 RefsList 合并渲染"参考来源"
-          send('refs', { refs, webRefs });
-          // 存入会话存储，供 archive 防篡改取用
-          const records = sessions.get(sessionId) ?? [];
-          const messageIndex = records.length;
-          records.push({
-            question: body.question,
-            answer: answerBuffer.join(''),
-            refs,
-            ts: new Date().toISOString(),
-          });
-          sessions.set(sessionId, records);
-          trimSessions();
-          // done 事件附带 sessionId + messageIndex，客户端保存供归档用
-          send('done', { sessionId, messageIndex });
-        } else if ((chunk.refs?.length ?? 0) > 0) {
-          // 兜底：非 done 时收到 refs 也下发（兼容 v1 行为）
-          send('refs', { refs: chunk.refs, webRefs });
-        } else if (chunk.text) {
-          answerBuffer.push(chunk.text);
-          send('answer', { text: chunk.text });
+          // §5.2 progress 事件：联网搜索进度
+          if (chunk.progress) {
+            send('progress', chunk.progress);
+          }
+          // §5.2 image 事件：多模态图片推送
+          if (chunk.image) {
+            send('image', chunk.image);
+          }
+          // §5.2 followups 事件：追问建议
+          if (chunk.followups) {
+            send('followups', { followups: chunk.followups });
+          }
+          // §5.2 联网搜索引用：缓存最新 webRefs，与 refs 一起在 done 时发送
+          if (chunk.webRefs && chunk.webRefs.length > 0) {
+            webRefs = chunk.webRefs;
+          }
+
+          if (chunk.done) {
+            if ((chunk.refs?.length ?? 0) > 0) {
+              refs = chunk.refs ?? [];
+            }
+            // refs 与 webRefs 一起发送：前端 RefsList 合并渲染"参考来源"
+            send('refs', { refs, webRefs });
+            // 存入会话存储，供 archive 防篡改取用
+            const records = sessions.get(sessionId) ?? [];
+            const messageIndex = records.length;
+            records.push({
+              question: input.question,
+              answer: answerBuffer.join(''),
+              refs,
+              ts: new Date().toISOString(),
+            });
+            sessions.set(sessionId, records);
+            trimSessions();
+            // done 事件附带 sessionId + messageIndex，客户端保存供归档用
+            send('done', { sessionId, messageIndex });
+          } else if ((chunk.refs?.length ?? 0) > 0) {
+            // 兜底：非 done 时收到 refs 也下发（兼容 v1 行为）
+            send('refs', { refs: chunk.refs, webRefs });
+          } else if (chunk.text) {
+            answerBuffer.push(chunk.text);
+            send('answer', { text: chunk.text });
+          }
         }
-      }
+      });
     } catch (err: unknown) {
       // 为什么同时调用 request.log.error：SSE 错误只推前端，后端日志流需独立记录以便排障
       request.log.error(
-        { err, question: body.question, sessionId },
+        { err, question: input.question, sessionId },
         'query SSE stream error',
       );
       send('error', {
