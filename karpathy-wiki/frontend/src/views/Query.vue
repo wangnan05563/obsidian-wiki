@@ -2,7 +2,6 @@
 import { ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Promotion, Loading } from '@element-plus/icons-vue';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import AttachmentUploader from '../components/AttachmentUploader.vue';
 import InputToolbar from '../components/InputToolbar.vue';
@@ -286,8 +285,7 @@ onBeforeUnmount(() => {
 
       <div ref="chatBodyRef" class="chat-body">
         <div v-if="store.messages.length === 0 && !store.streamingAnswer" class="chat-empty">
-          <RobotAvatar :size="120" :floating="true" />
-          <p class="empty-tip">// 还没有对话，试试问个问题吧</p>
+<p class="empty-tip">// 还没有对话，试试问个问题吧</p>
           <div class="empty-suggestions">
             <span class="suggestion-chip" @click="inputQuestion = '什么是 LLM Wiki？'">
               什么是 LLM Wiki？
@@ -301,10 +299,9 @@ onBeforeUnmount(() => {
         <template v-for="(msg, idx) in store.messages" :key="msg.id || idx">
           <div class="msg-row" :class="msg.role">
             <div class="msg-avatar">
-              <RobotAvatar v-if="msg.role === 'assistant'" :size="36" />
-              <div v-else class="user-avatar">ME</div>
+              <div class="user-avatar">ME</div>
             </div>
-            <div class="msg-bubble" :class="msg.role">
+      <div class="msg-bubble" :class="msg.role">
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
               <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
               <RefsList v-if="normalizeRefs(msg.refs).length > 0" :refs="normalizeRefs(msg.refs)" />
@@ -317,7 +314,7 @@ onBeforeUnmount(() => {
                   @click="inputQuestion = f"
                 >{{ f }}</span>
               </div>
-              <div v-if="msg.role === 'assistant' && msg.sessionId" class="msg-actions">
+      <div v-if="msg.role === 'assistant' && msg.sessionId" class="msg-actions">
                 <el-button
                   size="small"
                   text
@@ -333,16 +330,13 @@ onBeforeUnmount(() => {
 
         <!-- 流式输出中的 assistant 答案 -->
         <div v-if="store.streamingAnswer || store.isLoading" class="msg-row assistant">
-          <div class="msg-avatar">
-            <RobotAvatar :size="36" />
-          </div>
           <div class="msg-bubble assistant streaming">
             <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" />
             <div v-if="store.searchProgress" class="search-progress">
               {{ store.searchProgress.step }}
               <span v-if="store.searchProgress.count">（{{ store.searchProgress.count }} 条）</span>
             </div>
-            <div class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '思考中...')"></div>
+      <div class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '思考中...')"></div>
             <RefsList v-if="store.currentRefs.length > 0" :refs="store.currentRefs" />
           </div>
         </div>

@@ -41,7 +41,7 @@ $apiPidFile = Join-Path $pidDir "api.pid"
 if (Test-Path $apiPidFile) {
     $savedPid = (Get-Content $apiPidFile -Raw).Trim()
     if ($savedPid) {
-        taskkill /F /T /PID $savedPid >$null 2>&1
+        try { taskkill /F /T /PID $savedPid 2>&1 | Out-Null } catch { }
         if ($LASTEXITCODE -eq 0) {
             Write-Log "API 已停止 (PID $savedPid，通过 PID 文件)" -Level OK -Step "1/3"
             $apiKilled = $true
@@ -54,7 +54,7 @@ if (Test-Path $apiPidFile) {
 if (-not $apiKilled) {
     $apiPids = Get-PidOnPort -Port $apiPort
     foreach ($procId in $apiPids) {
-        taskkill /F /T /PID $procId >$null 2>&1
+        try { taskkill /F /T /PID $procId 2>&1 | Out-Null } catch { }
         if ($LASTEXITCODE -eq 0) {
             Write-Log "API 已停止 (PID $procId，通过端口扫描)" -Level OK -Step "1/3"
             $apiKilled = $true
@@ -79,7 +79,7 @@ $webPidFile = Join-Path $pidDir "web.pid"
 if (Test-Path $webPidFile) {
     $savedPid = (Get-Content $webPidFile -Raw).Trim()
     if ($savedPid) {
-        taskkill /F /T /PID $savedPid >$null 2>&1
+        try { taskkill /F /T /PID $savedPid 2>&1 | Out-Null } catch { }
         if ($LASTEXITCODE -eq 0) {
             Write-Log "Web 已停止 (PID $savedPid，通过 PID 文件)" -Level OK -Step "2/3"
             $webKilled = $true
@@ -92,7 +92,7 @@ if (Test-Path $webPidFile) {
 if (-not $webKilled) {
     $webPids = Get-PidOnPort -Port $webPort
     foreach ($procId in $webPids) {
-        taskkill /F /T /PID $procId >$null 2>&1
+        try { taskkill /F /T /PID $procId 2>&1 | Out-Null } catch { }
         if ($LASTEXITCODE -eq 0) {
             Write-Log "Web 已停止 (PID $procId，通过端口扫描)" -Level OK -Step "2/3"
             $webKilled = $true
@@ -105,8 +105,8 @@ if (-not $webKilled) {
 }
 
 # 通过窗口标题清理残留进程（对标闲鱼 taskkill /FI WINDOWTITLE 逻辑）
-taskkill /F /FI "WINDOWTITLE eq $($Config.process.api_window_title)*" >$null 2>&1
-taskkill /F /FI "WINDOWTITLE eq $($Config.process.web_window_title)*" >$null 2>&1
+try { taskkill /F /FI "WINDOWTITLE eq $($Config.process.api_window_title)*" 2>&1 | Out-Null } catch { }
+try { taskkill /F /FI "WINDOWTITLE eq $($Config.process.web_window_title)*" 2>&1 | Out-Null } catch { }
 
 # 通过命令行匹配清理残留的日志重定向进程树
 # 为什么需要：start-service.ps1 用 Start-Process cmd.exe 启动的日志重定向进程（pnpm run dev:api > api-dev.log 2>&1）
@@ -117,7 +117,7 @@ $strayProcs = Get-CimInstance Win32_Process | Where-Object {
     )
 }
 foreach ($p in $strayProcs) {
-    taskkill /F /T /PID $p.ProcessId >$null 2>&1
+    try { taskkill /F /T /PID $p.ProcessId 2>&1 | Out-Null } catch { }
     if ($LASTEXITCODE -eq 0) {
         Write-Log "已清理残留进程 (PID $($p.ProcessId), $($p.Name))" -Level OK -Step "2/3"
     }

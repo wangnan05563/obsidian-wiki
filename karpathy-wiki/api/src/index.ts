@@ -23,6 +23,7 @@ import { registerSearchRoute, registerWebSearchRoute } from './routes/search.js'
 import { registerVaultRoute } from './routes/vault.js';
 import { registerAiRoute } from './routes/ai.js';
 import { registerCleanupRoute } from './routes/cleanup.js';
+import { registerConversationsRoute } from './routes/conversations.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
 import { TunnelService } from './tunnel/tunnel-service.js';
 
@@ -235,6 +236,10 @@ async function main(): Promise<void> {
   // §11.2 断点续传：查询中断任务列表（完整 resume 待详细设计）
   const stateDir = path.resolve(config.vaultPath, '..', '.harness', 'state');
   registerRunsRoute(app, stateDir);
+  // 历史会话后端持久化：落盘到 dataDir/conversations/
+  // dataDir 与 vaultPath 同级（data/），遵循"运行时数据与源码分离"约定
+  const dataDir = path.resolve(config.vaultPath, '..');
+  registerConversationsRoute(app, dataDir);
   // §5.1 全文检索 + Vault 初始化
   // §5.2 联网搜索路由：供前端直接调用展示搜索结果
   registerSearchRoute(app, vault);

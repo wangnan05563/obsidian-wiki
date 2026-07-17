@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import type { CleanupBody, CleanupResult, CleanupStorageStatus, CleanupTarget } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 
@@ -151,7 +150,6 @@ onMounted(() => {
       <div class="card-deco"></div>
 
       <div class="cleanup-head">
-        <RobotAvatar :size="56" />
         <div class="head-text">
           <span class="head-tag">// SYSTEM CLEANUP</span>
           <h2 class="head-title grad-text">系统清理</h2>
@@ -166,30 +164,30 @@ onMounted(() => {
       <div class="status-grid">
         <div class="status-block hover-glow">
           <div class="status-title">编译缓存</div>
-          <div class="status-value">{{ status?.compileCache.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
-          <div class="status-meta">
+      <div class="status-value">{{ status?.compileCache.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
+      <div class="status-meta">
             <span :class="['dot', status?.compileCache.exists ? 'set' : 'unset']"></span>
             {{ status?.compileCache.exists ? `${status.compileCache.entryCount} 条缓存` : '未创建' }}
           </div>
         </div>
-        <div class="status-block hover-glow">
+      <div class="status-block hover-glow">
           <div class="status-title">运行状态</div>
-          <div class="status-value">{{ status?.runState.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
-          <div class="status-meta">
+      <div class="status-value">{{ status?.runState.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
+      <div class="status-meta">
             {{ status?.runState.fileCount ?? 0 }} 个文件<template v-if="status?.runState.oldest"> · 最早 {{ status.runState.oldest }}</template>
           </div>
         </div>
-        <div class="status-block hover-glow">
+      <div class="status-block hover-glow">
           <div class="status-title">运行日志</div>
-          <div class="status-value">{{ status?.runLogs.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
-          <div class="status-meta">
+      <div class="status-value">{{ status?.runLogs.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
+      <div class="status-meta">
             {{ status?.runLogs.fileCount ?? 0 }} 个文件<template v-if="status?.runLogs.oldest"> · 最早 {{ status.runLogs.oldest }}</template>
           </div>
         </div>
-        <div class="status-block hover-glow">
+      <div class="status-block hover-glow">
           <div class="status-title">原始资料</div>
-          <div class="status-value">{{ status?.rawArchive.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
-          <div class="status-meta">
+      <div class="status-value">{{ status?.rawArchive.sizeMb.toFixed(2) ?? '0.00' }} <span class="unit">MB</span></div>
+      <div class="status-meta">
             {{ status?.rawArchive.fileCount ?? 0 }} 个文件<template v-if="status?.rawArchive.oldest"> · 最早 {{ status.rawArchive.oldest }}</template>
           </div>
         </div>
@@ -202,7 +200,7 @@ onMounted(() => {
             <span class="block-bracket">[</span> {{ card.title }} <span class="block-bracket">]</span>
           </h3>
           <div class="block-desc">{{ card.desc }}</div>
-          <div class="block-detail">{{ card.detail }}</div>
+      <div class="block-detail">{{ card.detail }}</div>
 
           <!-- 保留天数（仅 run_logs/raw_archive 显示） -->
           <div v-if="card.showDays" class="form-row">
@@ -255,7 +253,7 @@ onMounted(() => {
                 {{ item }}
               </div>
             </div>
-            <div v-if="results[card.key]!.errors.length > 0" class="result-errors">
+      <div v-if="results[card.key]!.errors.length > 0" class="result-errors">
               <div
                 v-for="(err, idx) in results[card.key]!.errors"
                 :key="idx"
@@ -328,9 +326,9 @@ onMounted(() => {
 }
 
 .head-title {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.02em;
 }
@@ -338,7 +336,7 @@ onMounted(() => {
 .head-tip {
   margin: 0;
   color: var(--text-soft);
-  font-size: 13px;
+  font-size: 12px;
   font-family: var(--font-mono);
 }
 

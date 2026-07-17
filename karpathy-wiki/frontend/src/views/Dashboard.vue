@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { ElMessage } from 'element-plus';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import type { StatsData } from '../types';
 
 // 使用函数类型写法替代类型字面量（S6598）
@@ -59,10 +58,6 @@ onMounted(() => {
   <div class="dashboard-page">
     <!-- 不对称英雄区：左侧机器人 + 右侧标题，破格倾斜 -->
     <div class="glass-card welcome-card fade-up">
-      <div class="welcome-bg"></div>
-      <div class="welcome-left">
-        <RobotAvatar :size="110" :floating="true" />
-      </div>
       <div class="welcome-right">
         <span class="welcome-tag">// KNOWLEDGE ENGINE</span>
         <h2 class="welcome-title grad-text">Karpathy AI 知识库</h2>
@@ -91,8 +86,8 @@ onMounted(() => {
         :style="{ animationDelay: (idx * 0.1) + 's' }"
       >
         <div class="stat-icon" :class="card.grad">{{ card.icon }}</div>
-        <div class="stat-num grad-text">{{ card.num }}</div>
-        <div class="stat-label">{{ card.label }}</div>
+      <div class="stat-num grad-text">{{ card.num }}</div>
+      <div class="stat-label">{{ card.label }}</div>
       </div>
     </div>
 
@@ -114,9 +109,8 @@ onMounted(() => {
             <span class="dir-count">{{ count }}</span>
           </div>
         </div>
-        <div v-else class="section-loading">LOADING...</div>
+      <div v-else class="section-loading">LOADING...</div>
       </div>
-
       <div class="glass-card section-card hover-glow fade-up" style="animation-delay: 0.4s">
         <h3 class="section-title">
           <span class="title-bracket">[</span> 快捷入口 <span class="title-bracket">]</span>
@@ -150,7 +144,6 @@ onMounted(() => {
 
     <!-- 空状态引导 -->
     <div v-if="!hasContent && !loading" class="glass-card empty-guide fade-up">
-      <RobotAvatar :size="90" />
       <p class="guide-text">知识库还是空的，先初始化目录结构，再投递第一份资料</p>
       <div class="guide-actions">
         <el-button type="primary" :loading="initializing" @click="initVault">初始化知识库</el-button>
@@ -169,7 +162,7 @@ onMounted(() => {
 
 /* 英雄区：不对称布局，左侧机器人偏小，右侧文字偏大 */
 .welcome-card {
-  padding: 36px 40px;
+  padding: 16px 32px;
   position: relative;
   overflow: hidden;
 }
@@ -188,11 +181,6 @@ onMounted(() => {
   pointer-events: none;
 }
 
-.welcome-left {
-  display: inline-block;
-  vertical-align: middle;
-  margin-right: 32px;
-}
 
 .welcome-right {
   display: inline-block;
@@ -210,13 +198,14 @@ onMounted(() => {
 }
 
 .welcome-title {
-  margin: 0 0 12px;
+  margin: 0 0 6px;
   font-family: var(--font-display);
-  font-size: 36px;
+  font-size: 26px;
   font-weight: 900;
   letter-spacing: 1px;
   line-height: 1.1;
 }
+
 
 .welcome-tip {
   margin: 0 0 16px;
@@ -236,16 +225,6 @@ onMounted(() => {
 
 .welcome-stats strong {
   color: var(--neon-magenta);
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.ws-dot {
-  width: 4px;
-  height: 4px;
-  background: var(--neon-purple);
-  border-radius: 50%;
-  box-shadow: var(--glow-purple);
 }
 
 /* 统计卡片：4 列网格 */
@@ -262,7 +241,7 @@ onMounted(() => {
 }
 
 .stat-icon {
-  font-size: 32px;
+  font-size: 24px;
   margin-bottom: 12px;
   display: inline-block;
   -webkit-background-clip: text;
@@ -277,7 +256,7 @@ onMounted(() => {
 
 .stat-num {
   font-family: var(--font-display);
-  font-size: 36px;
+  font-size: 26px;
   font-weight: 900;
   line-height: 1;
   margin-bottom: 6px;

@@ -2,7 +2,6 @@
 import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import { useCompileStore } from '../stores/compile';
 
 // 使用函数类型写法替代类型字面量（S6598）
@@ -72,9 +71,6 @@ function resetInputs() {
     <!-- 不对称英雄区：机器人偏左，标题偏右 -->
     <div class="hero-section fade-up">
       <div class="hero-orb"></div>
-      <div class="hero-left">
-        <RobotAvatar :size="150" :floating="true" />
-      </div>
       <div class="hero-right">
         <span class="hero-tag">// INGEST PIPELINE</span>
         <h2 class="hero-title grad-text">投递第一篇资料</h2>
@@ -83,8 +79,7 @@ function resetInputs() {
         </p>
       </div>
     </div>
-
-    <div class="glass-card ingest-card fade-up" style="animation-delay: 0.2s">
+      <div class="glass-card ingest-card fade-up" style="animation-delay: 0.2s">
       <div class="card-deco"></div>
       <el-tabs v-model="activeTab" class="ingest-tabs">
         <el-tab-pane label="文件上传" name="file">
@@ -99,8 +94,8 @@ function resetInputs() {
           >
             <div class="upload-inner">
               <div class="upload-icon">↓</div>
-              <div class="upload-text">将文件拖到此处，或点击上传</div>
-              <div class="upload-hint">SUPPORT: md / txt / pdf / html / json</div>
+      <div class="upload-text">将文件拖到此处，或点击上传</div>
+      <div class="upload-hint">SUPPORT: md / txt / pdf / html / json</div>
             </div>
           </el-upload>
         </el-tab-pane>
@@ -154,7 +149,7 @@ function resetInputs() {
 /* 英雄区：不对称布局 + 发光球装饰 */
 .hero-section {
   position: relative;
-  padding: 36px 40px;
+  padding: 16px 32px;
   display: flex;
   align-items: center;
   gap: 36px;
@@ -193,9 +188,9 @@ function resetInputs() {
 }
 
 .hero-title {
-  margin: 0 0 12px;
+  margin: 0 0 6px;
   font-family: var(--font-display);
-  font-size: 30px;
+  font-size: 22px;
   font-weight: 900;
   letter-spacing: 1px;
   line-height: 1.1;
@@ -205,8 +200,8 @@ function resetInputs() {
   margin: 0;
   color: var(--text-soft);
   max-width: 480px;
-  line-height: 1.7;
-  font-size: 14px;
+  line-height: 1.6;
+  font-size: 13px;
 }
 
 .ingest-card {

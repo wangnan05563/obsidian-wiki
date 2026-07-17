@@ -3,7 +3,6 @@ import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Network, type Options } from 'vis-network';
 import { DataSet } from 'vis-data';
-import RobotAvatar from '../components/RobotAvatar.vue';
 import type { GraphData } from '../types';
 
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -254,13 +253,12 @@ watch(loading, () => {
       <div class="card-deco"></div>
 
       <div class="graph-head">
-        <RobotAvatar :size="56" :floating="loading" />
         <div class="head-text">
           <span class="head-tag">// NEURAL GRAPH</span>
           <h2 class="head-title grad-text">知识图谱</h2>
           <p class="head-tip">页面间的双向链接关系可视化</p>
         </div>
-        <div class="graph-stats">
+      <div class="graph-stats">
           <span class="stat-chip grad-cool-text">
             <span class="chip-num">{{ nodeCount }}</span>
             <span class="chip-label">节点</span>
@@ -309,34 +307,30 @@ watch(loading, () => {
       <!-- 图谱画布 -->
       <div v-if="!listView" class="graph-canvas-wrapper">
         <div v-if="loading" class="graph-loading">
-          <RobotAvatar :size="100" :floating="true" />
-          <p class="loading-text">// 构建图谱中…</p>
+<p class="loading-text">// 构建图谱中…</p>
         </div>
-        <div v-else-if="nodeCount === 0" class="graph-empty">
-          <RobotAvatar :size="120" :floating="true" />
-          <p class="empty-tip">知识库还是空的，没有图谱数据</p>
+      <div v-else-if="nodeCount === 0" class="graph-empty">
+<p class="empty-tip">知识库还是空的，没有图谱数据</p>
         </div>
-        <div ref="containerRef" class="graph-canvas" v-show="!loading && nodeCount > 0"></div>
+      <div ref="containerRef" class="graph-canvas" v-show="!loading && nodeCount > 0"></div>
       </div>
 
       <!-- §12.3-3 列表视图（小屏降级 / 手动切换） -->
       <div v-else class="list-view-wrapper">
         <div v-if="loading" class="graph-loading">
-          <RobotAvatar :size="80" :floating="true" />
-          <p class="loading-text">// 加载中…</p>
+<p class="loading-text">// 加载中…</p>
         </div>
-        <div v-else-if="listData.length === 0" class="graph-empty">
-          <RobotAvatar :size="120" :floating="true" />
-          <p class="empty-tip">知识库还是空的，没有图谱数据</p>
+      <div v-else-if="listData.length === 0" class="graph-empty">
+<p class="empty-tip">知识库还是空的，没有图谱数据</p>
         </div>
-        <div v-else class="list-groups">
+      <div v-else class="list-groups">
           <div v-for="group in listData" :key="group.dir" class="list-group hover-glow">
             <div class="group-head">
               <span class="group-dot" :style="{ background: group.color, boxShadow: `0 0 12px ${group.color}` }"></span>
               <span class="group-name">{{ group.dir }}</span>
               <span class="group-count">{{ group.pages.length }} 页</span>
             </div>
-            <div class="group-pages">
+      <div class="group-pages">
               <div v-for="page in group.pages" :key="page.path" class="page-item">
                 <span class="page-name">▸ {{ page.name }}</span>
                 <span class="page-links">⟶ {{ page.links }}</span>
@@ -405,9 +399,9 @@ watch(loading, () => {
 }
 
 .head-title {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.02em;
 }
@@ -415,7 +409,7 @@ watch(loading, () => {
 .head-tip {
   margin: 0;
   color: var(--text-soft);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .graph-stats {

@@ -1,10 +1,17 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AppConfig } from './types.js';
 
-// 配置文件默认查找路径：CWD/config.json 或 api/config.json
+// 配置文件名。路径解析见 getConfigPath()
 const CONFIG_FILENAME = 'config.json';
+
+// 通过 import.meta.url 获取 api 源码目录，与 CWD 解耦
+// 为什么需要：开发模式 CWD 可能是项目根（pnpm --filter），打包模式 CWD 可能是 exe 同级目录，
+// 两者读取的 config.json 不同，导致配置"丢失"假象。统一以源码定位 api/config.json 作为权威路径
+const API_SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
+const API_CONFIG_PATH = path.resolve(API_SRC_DIR, '..', CONFIG_FILENAME);
 
 // 默认配置（NPR-05-7 默认值清单）。
 // vaultPath 默认 '../data/vault'（相对 api，指向 karpathy-wiki/data/vault），
@@ -53,13 +60,24 @@ function defaultConfig(): AppConfig {
   };
 }
 
-// 解析 config.json 实际路径，供 tunnel 路由落盘复用。
-// 优先 CWD/config.json，其次 api/config.json；找不到返回 null。
+// 解析 config.json 实际路径，供 tunnel 路由等落盘复用。
+// 查找顺序（与 CWD 解耦）：
+//   1. exe 同级 config.json（pkg 打包模式：与 exe 同目录，便于用户编辑）
+//   2. api/config.json（开发模式 + tsx 模式：源码目录下，所有启动方式读同一文件）
+//   3. 找不到时返回 api/config.json 作为写入目标（保持向后兼容）
+// 为什么这样设计：避免 CWD 切换导致读写不同文件，造成配置"丢失"假象
 export function getConfigPath(): string | null {
-  const candidates = [
-    path.resolve(process.cwd(), CONFIG_FILENAME),
-    path.resolve(process.cwd(), 'api', CONFIG_FILENAME),
-  ];
+  const candidates: string[] = [];
+
+  // pkg 打包模式：process.pkg 存在时，配置文件与 exe 同级
+  const isPackaged = !!(process as NodeJS.Process & { pkg?: unknown }).pkg;
+  if (isPackaged) {
+    candidates.push(path.resolve(process.cwd(), CONFIG_FILENAME));
+  }
+
+  // 开发模式权威路径：api/config.json（基于 import.meta.url 定位）
+  candidates.push(API_CONFIG_PATH);
+
   for (const p of candidates) {
     try {
       fsSync.accessSync(p);
@@ -68,8 +86,8 @@ export function getConfigPath(): string | null {
       // 尝试下一个候选路径
     }
   }
-  // 候选路径都不存在时，返回首个候选路径作为写入目标
-  return candidates[0];
+  // 候选路径都不存在时，返回 api/config.json 作为写入目标（创建新配置文件）
+  return API_CONFIG_PATH;
 }
 
 // 简单的内存缓存
@@ -155,6 +173,15 @@ export async function reloadConfig(): Promise<AppConfig> {
   return loadConfig();
 }
 
+// 写盘后刷新内存缓存，避免 30s TTL 内读到旧值。
+// 为什么需要：saveAiConfig/resetAiConfig/saveWebSearchConfig 写盘后若不刷新缓存，
+// 紧接着的 GET /api/ai/config 会命中缓存返回旧值，用户看到"保存未生效"假象。
+function refreshConfigCache(data: AppConfig): void {
+  configCache.data = data;
+  configCache.path = getConfigPath();
+  configCache.loadedAt = Date.now();
+}
+
 // 保存 AI 配置到 config.json（部分更新，仅合并 llm 字段）。
 // 为什么需要：前端 AI 服务配置页面需要持久化用户输入的 provider/baseUrl/model/apiKey。
 // 安全考量：apiKey 以明文写入 config.json，需确保 .gitignore 排除了 config.json（M-7）。
@@ -183,6 +210,8 @@ export async function saveAiConfig(updates: {
     await fs.writeFile(configPath, json, 'utf8');
   }
 
+  // 写盘后立即刷新缓存，避免后续 GET 命中旧缓存
+  refreshConfigCache(merged);
   return merged;
 }
 
@@ -221,6 +250,7 @@ export async function resetAiConfig(): Promise<AppConfig> {
     await fs.writeFile(configPath, json, 'utf8');
   }
 
+  refreshConfigCache(merged);
   return merged;
 }
 
@@ -259,5 +289,6 @@ export async function saveWebSearchConfig(updates: {
     await fs.writeFile(configPath, json, 'utf8');
   }
 
+  refreshConfigCache(merged);
   return merged;
 }
