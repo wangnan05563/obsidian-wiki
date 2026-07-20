@@ -25,6 +25,7 @@ import { registerAiRoute } from './routes/ai.js';
 import { registerCleanupRoute } from './routes/cleanup.js';
 import { registerConversationsRoute } from './routes/conversations.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
+import { registerAboutRoute } from './routes/about.js';
 import { TunnelService } from './tunnel/tunnel-service.js';
 
 // ESM 原生方式获取目录。esbuild 打包时通过 --define 替换 import.meta.url 为 CJS 等价表达式
@@ -248,6 +249,8 @@ async function main(): Promise<void> {
   // AI 配置管理 + 系统清理：参考 17_xianyu 项目新增模块
   registerAiRoute(app, adapter);
   registerCleanupRoute(app, vault);
+  // 关于页面 + 检查更新：参考 17_xianyu 项目 about 模块
+  registerAboutRoute(app);
 
   // 内网穿透：TunnelService 单例注入路由，路由内部按需 start/stop
   const tunnel = new TunnelService();

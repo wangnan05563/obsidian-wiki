@@ -1,4 +1,4 @@
-# 依赖
+﻿# 依赖
 node_modules/
 .pnpm-store/
 
@@ -30,4 +30,56 @@ desktop.ini
 test_buttons_result.json
 test_result.json
 
-# 锁文件保留（package-lock.json / pnpm-lock.yaml 需提交以保证可复现安装）
+# Python 编译产物
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE 配置文件
+*.swp
+*.swo
+*~
+.vscode/settings.json
+*.code-workspace
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Windows 缩略图缓存
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+
+# Lock files (保留 package-lock.json / pnpm-lock.yaml 需提交以保证可复现安装)
+# npm lock files are kept

@@ -1,4 +1,4 @@
-# ---------- 环境与依赖 ----------
+﻿# ---------- 环境与依赖 ----------
 .env
 node_modules/
 # config.json 含敏感字段（apiKey 等），仅本地保留；example 文件作为模板提交
@@ -59,3 +59,6 @@ logs/*.err
 .tmp-*
 scripts/measure.py
 scripts/verify_ui.py
+
+# ---------- 测试证据与截图 ----------
+docs/test-evidence/

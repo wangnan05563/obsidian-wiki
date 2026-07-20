@@ -186,6 +186,8 @@ ${deepHint}
 
   // 2. 联网搜索可用性检查：用户点联网搜索但未配置 API Key 时提示
   let webSearchAvailable = false;
+  // F-3.10 超时降级去重标记：harness 多步可能多次调用 web_search，仅推送一次降级提示
+  let webSearchDowngradeNotified = false;
   if (input.webSearch && options.webSearchConfig) {
     const wsApiKey = options.webSearchConfig.apiKey || process.env[options.webSearchConfig.apiKeyRef];
     if (wsApiKey) {
@@ -243,6 +245,16 @@ ${deepHint}
             | { error: string }
             | undefined;
           if (!toolResult || !Array.isArray(toolResult)) continue;
+          // F-3.10 超时降级提示：web_search 被调用但返回空数组，说明搜索超时或失败
+          // 为什么放这里：web-search.ts 的 handler 签名只返回数组，无法直接推送 thinking
+          // 用 webSearchDowngradeNotified 布尔避免多次 web_search 调用重复提示
+          if (toolResult.length === 0 && !webSearchDowngradeNotified) {
+            collectedThinking.push({
+              phase: 'thinking',
+              message: '联网搜索超时或未返回结果，已降级为仅本地知识库。',
+            });
+            webSearchDowngradeNotified = true;
+          }
           for (const r of toolResult) {
             if (r && r.url) {
               collectedWebRefs.push({ title: r.title, url: r.url, snippet: r.snippet });

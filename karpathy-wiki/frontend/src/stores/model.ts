@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import type { LlmPreset } from '../types';
 
 // §3.3 useModelStore — 模型预设管理。
@@ -22,6 +22,13 @@ export const useModelStore = defineStore('model', () => {
   const apiKeySet = ref<boolean>(false);
   const presets = ref<LlmPreset[]>([]);
   const loadError = ref('');
+
+  // F-3.5 vision 能力检测：当前选中的预设是否支持图片输入
+  // 用于 AttachmentUploader 灰显图片按钮（不支持 vision 时禁用上传 + tooltip 提示）
+  const currentPresetVision = computed(() => {
+    const preset = presets.value.find(p => p.key === selectedPresetKey.value);
+    return preset?.vision ?? false;
+  });
 
   async function loadPresets() {
     try {
@@ -103,5 +110,5 @@ export const useModelStore = defineStore('model', () => {
     }
   }
 
-  return { currentModel, selectedPresetKey, apiKeyMasked, apiKeySet, presets, loadError, loadPresets, switchModel, saveApiKey };
+  return { currentModel, selectedPresetKey, apiKeyMasked, apiKeySet, presets, loadError, currentPresetVision, loadPresets, switchModel, saveApiKey };
 });
