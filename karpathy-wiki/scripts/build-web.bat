@@ -1,10 +1,27 @@
 @echo off
+setlocal enabledelayedexpansion
 cd /d "%~dp0.."
 
 echo ============================================
 echo   Karpathy-Wiki Frontend Build
 echo ============================================
 echo.
+
+REM Capture configured node.exe dir from ps1 and prepend to PATH
+REM Why: .bat is pure ASCII cannot parse config.json. ps1 reads
+REM      tools.node.exe_path and outputs the dir; for /f captures it.
+REM      PATH update happens in cmd.exe process so it persists.
+REM Why enabledelayedexpansion: !NODE_DIR! reads runtime value inside if-block
+REM                              where %NODE_DIR% would be expanded at parse time
+set "NODE_DIR="
+for /f "delims=" %%i in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0prepend-node-path.ps1"') do set "NODE_DIR=%%i"
+
+if defined NODE_DIR (
+    set "PATH=!NODE_DIR!;%PATH%"
+    echo Using configured node from: !NODE_DIR!
+) else (
+    echo No configured node path, falling back to PATH
+)
 
 echo Node version:
 node --version

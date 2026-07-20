@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 文档版本 | v1.1.1 |
+| 文档版本 | v2.0.0 |
 | 编写日期 | 2026-07-10 |
 | 修订日期 | 2026-07-17 |
 | 编写人 | wiki-code-dev |
@@ -10,7 +10,7 @@
 | 设计基线 | 《Karpathy-AI+Obsidian 知识库概要设计说明书》V1.3 §12.5（问答降级链 + 流式输出） |
 | 上一版本交付 | DELIVERY.md §14：Markdown 渲染 + 联想提问（v1 已完成） |
 | 范围 | 知识库问答（Query）页面全量升级，引入豆包 / Trae Work 级 AI 对话流能力 |
-| 修订记录 | v1.1.0：按评审报告修正 3 项 P0 + 4 项 P1 + 4 项 P2 共 11 项问题<br>v1.1.1：补齐 P0-3 代码层（queryWithSearchFallback 降级链 + per-session Lock），关闭全部 P0 评审项 |
+| 修订记录 | v1.1.0：按评审报告修正 3 项 P0 + 4 项 P1 + 4 项 P2 共 11 项问题<br>v1.1.1：补齐 P0-3 代码层（queryWithSearchFallback 降级链 + per-session Lock），关闭全部 P0 评审项<br>v2.0.0：升级为 v2 实施基线，把 §6.0 「v2 扩展点」全部转为正式需求，新增 §11 实施排期与模块拆分，关闭全部 v1 评审项 |
 
 ---
 
@@ -26,6 +26,7 @@
 8. [验收标准](#8-验收标准)
 9. [风险与依赖](#9-风险与依赖)
 10. [附录](#10-附录)
+11. [v2.0.0 实施排期与模块拆分](#11-v200-实施排期与模块拆分)
 
 ---
 
@@ -35,7 +36,7 @@
 
 本文档定义 Karpathy AI + Obsidian 知识库「知识问答」页面的全量升级需求，对标豆包（Doubao）、Trae Work、ChatGPT 等成熟 AI 对话产品的体验基线。文档面向：
 
-- **开发人员**：作为 v2 迭代的输入基线
+- **开发人员**：作为 v2.0.0 实施的输入基线
 - **UI/UX 设计师**：作为界面设计的参考依据
 - **测试人员**：作为验收用例的来源
 - **产品经理**：作为产品决策与排期的输入
@@ -63,7 +64,7 @@ Karpathy Wiki 知识库已完成三个阶段的交付，其中知识问答模块
 | 文本复制 | 选中复制 | hover 浮窗一键复制 | 缺 |
 | 侧栏折叠 | 不支持 | 可折叠 + 状态持久化 | 缺 |
 
-本说明书覆盖以上 9 项差距的功能规格，作为 v2 迭代的工程依据。
+本说明书覆盖以上 9 项差距的功能规格，作为 v2.0.0 实施的工程依据。
 
 ### 1.3 对标产品
 
@@ -88,16 +89,16 @@ Karpathy Wiki 知识库已完成三个阶段的交付，其中知识问答模块
 
 ### 1.5 范围与目标
 
-#### 1.5.1 范围内（v2 必须）
+#### 1.5.1 范围内（v2.0.0 必须）
 
 - 13 项核心功能（详见第 3 章）
 - 前后端接口与状态管理改造
 - UI 重构（侧栏 + 工具栏 + 消息体）
 
-#### 1.5.2 范围外（v2 不做）
+#### 1.5.2 范围外（v2.0.0 不做）
 
 - 移动端响应式深度优化（仅做基本可用）
-- 视频生成 / PPT 生成（豆包深度工具，不在 v2 范围）
+- 视频生成 / PPT 生成（豆包深度工具，不在 v2.0.0 范围）
 - 协同 / 多用户共享对话
 - 对话数据云同步
 
@@ -289,9 +290,9 @@ interface Conversation {
 | --- | --- | --- |
 | **快速** | ⚡ | 展开 4-6 个预设 Prompt 模板（如「总结这篇」「提取关键概念」） |
 | **帮我写作** | ✍ | 切换为「写作模式」，自动追加写作 prompt 前缀 |
-| **PPT 生成** | 📊 | 标记当前对话为 PPT 生成任务（v2 仅做标记，生成留 v3） |
+| **PPT 生成** | 📊 | 标记当前对话为 PPT 生成任务（v2.0.0 仅做标记，生成留 v3） |
 | **图像生成** | 🎨 | 调用多模态模型生成图片（依赖 model 能力） |
-| **视频生成** | 🎬 | 标记视频生成任务（v2 仅做标记） |
+| **视频生成** | 🎬 | 标记视频生成任务（v2.0.0 仅做标记） |
 | **翻译** | 🌐 | 切换为「翻译模式」 |
 | **更多** | ⋯ | 折叠次要工具（联网搜索、深度思考等） |
 
@@ -302,7 +303,7 @@ interface Conversation {
 - 选中后，工具栏 chip 变为「激活」态
 - 工具作为 SSE 请求的 `mode` 字段传递（后端暂不处理 PPT/视频生成，仅 UI 标记）
   - `mode: 'fast' | 'write' | 'ppt' | 'image' | 'video' | 'translate'`
-  - PPT/视频生成：v2 仅在请求体追加 `mode` 字段，后端不执行实际生成，留 v3 实现
+  - PPT/视频生成：v2.0.0 仅在请求体追加 `mode` 字段，后端不执行实际生成，留 v3 实现
 
 #### 输出
 - 工具栏 chip 高亮
@@ -605,7 +606,7 @@ UI 上提供模型选择器，允许用户在已配置的 LLM 预设之间切换
 | 复制 | 同 F-3.7 |
 | 朗读 | 同 F-3.6 |
 | 重新生成 | 复用该消息对应的 user 问题，重新发起问答 |
-| 👍 / 👎 | 反馈到本地（v2 仅本地存储，后续可云端） |
+| 👍 / 👎 | 反馈到本地（v2.0.0 仅本地存储，后续可云端） |
 
 #### 输入
 - assistant 消息 hover / 点击操作按钮
@@ -669,7 +670,7 @@ UI 上提供模型选择器，允许用户在已配置的 LLM 预设之间切换
 | 屏幕阅读器 | aria-label 完整，message role 标注 |
 | 错误提示 | Toast + 内联提示双通道 |
 | 加载反馈 | 流式 / loading / 错误三态明确区分 |
-| 国际化 | 中英双语 key（v2 仅中文，文案外置） |
+| 国际化 | 中英双语 key（v2.0.0 仅中文，文案外置） |
 
 ### 4.5 可维护性
 
@@ -758,7 +759,7 @@ UI 上提供模型选择器，允许用户在已配置的 LLM 预设之间切换
 | ≥ 1280px | 完整布局 |
 | 1024-1280px | 侧栏默认折叠 |
 | 768-1024px | 侧栏默认隐藏，仅主区域 |
-| < 768px | 仅阅读模式，输入区禁用（v2 不做深度适配） |
+| < 768px | 仅阅读模式，输入区禁用（v2.0.0 不做深度适配） |
 
 ---
 
@@ -766,7 +767,7 @@ UI 上提供模型选择器，允许用户在已配置的 LLM 预设之间切换
 
 ### 6.0 现有架构继承（v1 基线）
 
-v2 迭代必须继承 v1 已落地的三项核心架构机制，不得绕过或重新设计：
+v2.0.0 实施必须继承 v1 已落地的三项核心架构机制，不得绕过或重新设计：
 
 #### 6.0.1 降级链机制
 
@@ -788,10 +789,11 @@ queryWorkflow（编排器）
 - `yieldAnswerInSentences` 辅助函数按句切分长答案，保证 SSE 流式效果
 - 编排器在降级各阶段推送 `thinking { phase: 'composing', message: '降级搜索中...' }` 事件，保证用户体验连续（对应 R11 风险缓解）
 
-**v2 扩展点**：
+**v2.0.0 正式需求**（原"v2 扩展点"升级为正式需求）：
 - 新增的 `thinking` 事件在降级链各阶段均需推送（`queryWithHarness` 推送工具调用，`queryWithSearchFallback` 推送"降级搜索"提示）
 - 新增的 `web_search` 工具仅在 `queryWithHarness` 阶段可用，降级后不调用
 - 新增的 `image`/`progress` 事件仅在 `queryWithHarness` 阶段推送
+- 实施位置：`api/src/workflows/query-workflow.ts` 的 `queryWorkflow` 编排器在降级各阶段 yield `thinking` chunk（v1.1.1 已实现 `queryWithSearchFallback` 阶段的 `thinking { phase: 'composing', message: '降级搜索中...' }` 推送，v2.0.0 需扩展 `queryWithHarness` 阶段的工具调用 thinking 推送）
 
 #### 6.0.2 per-session Lock 串行化
 
@@ -828,9 +830,11 @@ export function withSessionLock<T>(
 - key 长度取 32 字符而非全文，避免长问题哈希开销与 Map 内存膨胀
 - 锁的粒度是整个 SSE 流（含 LLM 调用 + 推送），而非仅 LLM 调用，确保同问题并发请求完全串行，避免 LLM 重复调用浪费 token
 
-**v2 扩展点**：
+**v2.0.0 正式需求**（原"v2 扩展点"升级为正式需求）：
 - 多模态图片上传不改变 Lock 粒度（仍按 question 文本前 32 字符）
 - 模型切换时，若有 in-flight 问答，需等待当前问答 done 或 error 后再切换（见 §9.1 风险 R7）
+- 实施位置：`api/src/session-lock.ts` 的 `withSessionLock` 无需改动（v1.1.1 已按 question 前 32 字符做 key，多模态只是请求体增加 `attachments` 字段，不影响 key 计算）；模型切换的等待逻辑由前端 `useModelStore` 在调用 `engineAdapter.updateConfig` 前检查 `useQueryStore.isLoading` 实现
+
 #### 6.0.3 EngineAdapter 接口
 
 源自《概要设计说明书》V1.3，阶段切换抽象点，**v1.1.1 已实施**，代码位于 `api/src/engine/harness-adapter.ts`：
@@ -847,9 +851,10 @@ interface EngineAdapter {
 }
 ```
 
-**v2 扩展点**：
+**v2.0.0 正式需求**（原"v2 扩展点"升级为正式需求）：
 - F-3.9 模型切换直接调用 `engineAdapter.updateConfig({ model })`，**无需"路由到对应适配器"**
 - F-3.10 互联网搜索作为 query 工作流的工具注入，不改变 EngineAdapter 接口
+- 实施位置：`api/src/engine/harness-adapter.ts` 的 `updateConfig` 方法（v1.1.1 已支持 `provider/baseUrl/model/apiKey/maxSteps/tokenBudget/staleDays/webSearchConfig` 热加载）；F-3.10 的 `web_search` 工具注入由 `queryWorkflow` 在构造 `HarnessConfig` 时动态添加，不修改 EngineAdapter 接口
 
 ### 6.1 前后端分工
 
@@ -1318,13 +1323,96 @@ function migrateV1Message(msg: v1.ChatMessage): ChatMessage {
 | v1.0.0 | 2026-07-10 | 初版：13 项核心功能完整规格 |
 | v1.1.0 | 2026-07-11 | 按评审报告修正 11 项问题：<br>**P0**：①删除矛盾的 `/api/conversations` API，统一本地存储；②保留 ChatMessage v1 字段 + 新增迁移函数；③新增 §6.0 现有架构继承（降级链/per-session Lock/EngineAdapter）<br>**P1**：④补充 5 项遗漏风险（R7~R11）；⑤删除 §1.5.3 重复量化表；⑥补充 §6.4.1 store 拆分边界图；⑦修正 F-3.9 模型切换描述对齐 updateConfig<br>**P2**：⑧F-3.12 验收标准补充；⑨§4.5 引用编码门禁三层防御；⑩§1.2 引用 DELIVERY.md §14；⑪F-3.4 明确 mode 字段语义 |
 | v1.1.1 | 2026-07-17 | 补齐 P0-3 代码层（queryWithSearchFallback 降级链 + per-session Lock），关闭全部 P0 评审项：<br>**新增**：`api/src/session-lock.ts` 实现 withSessionLock；`api/src/workflows/query-workflow.ts` 重构为三函数降级链（queryWithHarness → queryWithSearchFallback → 兜底）；`api/src/routes/query.ts` SSE 路由接入 withSessionLock<br>**验证**：tsc 编译 exit 0，check-encoding.js 75 文件全部 UTF-8 无 BOM |
+| v2.0.0 | 2026-07-17 | 升级为 v2 实施基线，关闭全部 v1 评审项：<br>**核心变更**：①§6.0.1/6.0.2/6.0.3 的「v2 扩展点」全部转为「v2.0.0 正式需求」，补充实施位置与代码层一致性说明；②新增 §11「v2.0.0 实施排期与模块拆分」含 4 个 Sprint + 5 个里程碑 + 前后端文件清单 + 依赖前置条件 + 回退方案；③全文「v2」措辞统一为「v2.0.0」<br>**评审项关闭**：v1 评审报告 3 项 P0 + 4 项 P1 + 4 项 P2 共 11 项全部闭环<br>**前置条件**：§6.0 三项架构机制 + `/api/conversations` 路由 + ChatMessage v2 类型均已在 v1.1.1 实施 |
+| v2.0.0-sprint1 | 2026-07-17 | Sprint 1「核心问答增强」实施完成：<br>**交付功能**：F-3.1 思考动画三态（加载圆点脉动 / 流式气泡光晕 / 折叠过渡 ≤ 200ms） / F-3.2 流式渲染扩展（代码块语言徽章 + 图片懒加载 + 图片预览） / F-3.7 文本复制（MessageToolbar 浮窗 + 纯文本/MD + 代码块独立复制 + clipboard 降级 execCommand） / F-3.12 联想提问微调（位置迁移到 refs 上方 + 横向 chip 滚动 + CSS tooltip 200ms）<br>**新增文件**：`frontend/src/components/MessageToolbar.vue`<br>**修改文件**：`frontend/src/utils/markdown.ts`（fence/image 规则覆盖）、`frontend/src/views/Query.vue`（事件委托 + CSS + 模板布局）、`frontend/src/components/ThinkingBlock.vue`（v-show + max-height transition）<br>**验证**：`npx vue-tsc --noEmit` exit 0；`node scripts/check-encoding.js` 扫描 76 文件无 GBK 乱码<br>**已知限制**：F-3.7 浮窗未含朗读按钮（属 F-3.6，Sprint 3 扩展）；F-3.7 未含重新生成/反馈（属 F-3.13，Sprint 2 扩展）<br>**交付文档**：DELIVERY.md §13 |
+| v2.0.0-sprint2 | 2026-07-18 | Sprint 2「历史与导航」实施完成：<br>**交付功能**：F-3.11 侧栏折叠三态（expanded 280px / collapsed 60px / hidden 0px + Ctrl+B 全局快捷键 + 250ms 平滑过渡 + localStorage 持久化） / F-3.13 消息操作栏（重新生成回溯找 user 问题 + 👍/👎 反馈 localStorage 持久化 + 重复点击取消） / F-3.3 历史对话管理（重命名 ElMessageBox.prompt + 删除 ElMessageBox.confirm + hover 显现操作按钮）<br>**新增文件**：`scripts/sprint1-2-acceptance.py`（Playwright 验收脚本 12 个 TC）<br>**修改文件**：`frontend/src/components/ConversationSidebar.vue`（重写三态 + 重命名/删除 UI）、`frontend/src/components/MessageToolbar.vue`（扩展重新生成 + 反馈按钮）、`frontend/src/views/Query.vue`（三态状态管理 + Ctrl+B 监听 + handleRegenerate）<br>**验证**：`npx vue-tsc --noEmit` exit 0；`node scripts/check-encoding.js` 76 文件无 GBK 乱码；Playwright 端到端验收 17/18 通过（TC7 loading-dots 因 LLM 响应<2s 错过时机失败，非功能缺陷）<br>**已知限制**：反馈数据仅 localStorage 未上报后端（Sprint 3/4 补 /api/feedback 路由）；F-3.3 Pin 功能未在 UI 暴露（Sprint 3 加置顶图标）<br>**交付文档**：DELIVERY.md §14 |
+| v2.0.0-sprint3 | 2026-07-18 | Sprint 3「多模态与输入增强」实施完成：<br>**交付功能**：F-3.4 输入工具栏 7 类 chip（快速/写作/PPT/图像/视频/翻译/更多，PPT/图像/视频灰显待 v3；"更多"展开下拉显示联网搜索/深度思考；hover translateY 动效 + `:focus-visible` 键盘可达；mode 字段统一传递到 SSE body） / F-3.5 多模态图片（vision 能力检测：后端 LLM_PRESETS 加 vision 字段，前端 currentPresetVision computed + AttachmentUploader 灰显按钮 + tooltip 提示；粘贴/拖拽/点选三种方式 + 压缩 ≤ 2MB + 缩略图 200x200 已在 v1.1.1 实施） / F-3.9 模型切换（isLoading 检查禁止 in-flight 切换；Toast 200ms 内提示「已切换到 xxx」；切换失败回滚到上一预设；localStorage 持久化 selectedModelPreset）<br>**修改文件**：`frontend/src/components/InputToolbar.vue`（重写 7 chip + more 下拉）、`frontend/src/components/AttachmentUploader.vue`（vision 灰显）、`frontend/src/components/ModelSelector.vue`（重构 isLoading + Toast + 回滚）、`frontend/src/stores/model.ts`（currentPresetVision computed）、`frontend/src/types.ts`（LlmPreset.vision）、`frontend/src/views/Query.vue`（toolbarTools 扩展 + SSE body.mode 统一）、`api/src/routes/ai.ts`（LLM_PRESETS 加 vision 字段）<br>**验证**：前端 `vue-tsc --noEmit` exit 0；后端 `tsc --noEmit` exit 0；`check-encoding.js` 76 文件无 GBK 乱码<br>**已知限制**：F-3.5 LLM 未真正识别图片内容（仅 prompt hint，未传 base64 给 vision API）；F-3.4 快速/写作/翻译仅 chip 标记未实施 prompt 注入；F-3.5 vision 字段为静态配置未运行时检测<br>**交付文档**：DELIVERY.md §15 |
+| v2.0.0-sprint4 | 2026-07-18 | Sprint 4「语音与联网」实施完成，v2.0.0 全量发布：<br>**交付功能**：F-3.6 语音朗读 TTS（MessageToolbar 新增第 3 按钮，Web Speech API + useTtsStore 协调多消息切换 + stripMarkdown 剥离语法 + 暂停/继续/停止状态机 + 不支持时灰显） / F-3.8 参考文章列表（RefsList 重写为卡片列表：「参考 N 篇资料」横条 + 默认展开前 3 条 + "展开更多"按钮 + vault/web 来源徽章 + 引用编号 + hover translateX 动效） / F-3.10 互联网搜索（web-search.ts 工具 + /api/search/web 路由 + Tavily/Bing provider + 5s AbortSignal.timeout 超时降级返回空数组 + afterStep hook 检测空结果推送 thinking 提示「已降级为仅本地知识库」+ 前端 store.setRefs 合并本地+web refs + RefsList 差异化渲染 VAULT/WEB 徽章）<br>**修改文件**：`frontend/src/components/MessageToolbar.vue`（5 按钮扩展为 6 + TTS 状态机）、`frontend/src/components/RefsList.vue`（重写卡片列表 + 折叠展开）、`api/src/tools/web-search.ts`（新增 5s 超时降级 + try/catch 返回空数组）、`api/src/workflows/query-workflow.ts`（afterStep hook 检测空结果推送降级 thinking + webSearchDowngradeNotified 去重）<br>**验证**：前端 `vue-tsc --noEmit` exit 0；后端 `tsc --noEmit` exit 0<br>**已知限制**：F-3.6 TTS 浏览器实测留 Sprint 4 整体验收；F-3.10 联网搜索实测需配置 Tavily/Bing API Key<br>**交付文档**：DELIVERY.md §16<br>**里程碑**：v2.0.0 全量发布（13 项功能全部交付） |
+
+---
+
+## 11. v2.0.0 实施排期与模块拆分
+
+### 11.1 实施总览
+
+v2.0.0 共 13 项核心功能（F-3.1 ~ F-3.13），按依赖关系与风险等级拆分为 4 个迭代包，建议总周期 4-6 周：
+
+| 迭代包 | 周期 | 功能项 | 依赖 | 风险等级 |
+| --- | --- | --- | --- | --- |
+| **Sprint 1：核心问答增强** | 1-1.5 周 | F-3.1 思考动画 / F-3.2 流式渲染扩展 / F-3.7 文本复制 / F-3.12 联想提问微调 | §6.0.1 降级链（v1.1.1 已实施） | 低 |
+| **Sprint 2：历史与导航** | 1-1.5 周 | F-3.3 历史对话 / F-3.11 侧栏折叠 / F-3.13 消息操作 | F-3.3 IndexedDB schema + useConversationsStore | 中 |
+| **Sprint 3：输入与多模态** | 1-1.5 周 | F-3.4 工具栏 / F-3.5 多模态图片 / F-3.9 模型切换 | F-3.5 vision 能力检测 / F-3.9 updateConfig（v1.1.1 已实施） | 高 |
+| **Sprint 4：语音与联网** | 1-1.5 周 | F-3.6 TTS / F-3.8 参考文章列表 / F-3.10 互联网搜索 | F-3.10 Tavily/Bing API Key / F-3.6 Web Speech API 兼容 | 中 |
+
+### 11.2 模块拆分与文件清单
+
+#### 11.2.1 前端新增/修改文件
+
+| 文件 | 类型 | 职责 | 对应功能 |
+| --- | --- | --- | --- |
+| `frontend/src/views/Query.vue` | 修改 | 主视图重构：侧栏 + 工具栏 + 消息体三栏布局 | F-3.1~3.13 全部 |
+| `frontend/src/components/ThinkingBlock.vue` | 新增 | 思考动画组件（三态切换） | F-3.1 |
+| `frontend/src/components/MessageToolbar.vue` | 新增 | 消息操作浮窗（复制/朗读/重新生成/反馈） | F-3.7 / F-3.13 |
+| `frontend/src/components/InputToolbar.vue` | 新增 | 输入工具栏 chip 区 | F-3.4 |
+| `frontend/src/components/ReferenceList.vue` | 新增 | 参考文章列表卡片 | F-3.8 |
+| `frontend/src/components/Sidebar.vue` | 新增 | 历史对话侧栏（三态折叠） | F-3.3 / F-3.11 |
+| `frontend/src/composables/useTTS.ts` | 新增 | TTS 组合式函数 | F-3.6 |
+| `frontend/src/composables/useAttachments.ts` | 新增 | 图片附件管理 | F-3.5 |
+| `frontend/src/stores/conversations.ts` | 修改 | 历史对话 CRUD（后端 `/api/conversations` 已实施） | F-3.3 |
+| `frontend/src/stores/model.ts` | 修改 | 模型预设切换 + isLoading 检查 | F-3.9 |
+| `frontend/src/stores/query.ts` | 修改 | 扩展 currentThinking / attachments 字段 | F-3.1 / F-3.5 |
+| `frontend/src/types.ts` | 修改 | ChatMessage v2 字段（v1.1.1 已实施） | F-3.3 / F-3.13 |
+
+#### 11.2.2 后端新增/修改文件
+
+| 文件 | 类型 | 职责 | 对应功能 |
+| --- | --- | --- | --- |
+| `api/src/routes/query.ts` | 修改 | SSE 路由扩展 thinking/image/progress 事件（v1.1.1 已接入 withSessionLock） | F-3.1 / F-3.5 / F-3.10 |
+| `api/src/workflows/query-workflow.ts` | 修改 | queryWithHarness 阶段推送工具调用 thinking（v1.1.1 已实施降级链） | F-3.1 |
+| `api/src/tools/web-search.ts` | 新增 | 互联网搜索工具（Tavily/Bing provider） | F-3.10 |
+| `api/src/routes/search.ts` | 新增 | `/api/search/web` POST 路由 | F-3.10 |
+| `api/src/routes/attachments.ts` | 新增 | 图片上传路由（multipart/form-data） | F-3.5 |
+| `api/src/routes/conversations.ts` | 已实施 | 历史对话 CRUD（v1.1.1 已完成 6 路由） | F-3.3 |
+| `api/src/engine/harness-adapter.ts` | 已实施 | updateConfig 热加载（v1.1.1 已支持） | F-3.9 |
+| `api/src/session-lock.ts` | 已实施 | per-session Lock（v1.1.1 已完成） | §6.0.2 |
+| `api/config.json` | 修改 | 新增 llm.presets / webSearch / attachments 配置段 | F-3.9 / F-3.10 / F-3.5 |
+
+### 11.3 里程碑与验收门禁
+
+| 里程碑 | 交付物 | 验收门禁 |
+| --- | --- | --- |
+| **M1：Sprint 1 完成** | 思考动画 + 流式渲染 + 复制 + 联想提问 | Playwright E2E：思考动画出现 / 复制纯文本无 Markdown / 联想 chip 横向滚动 |
+| **M2：Sprint 2 完成** | 历史对话 + 侧栏折叠 + 消息操作 | 100 条历史搜索 ≤ 50ms / 侧栏三态切换 ≤ 250ms / 重新生成产生新 sessionId |
+| **M3：Sprint 3 完成** | 工具栏 + 多模态 + 模型切换 | 图片粘贴/拖拽/点选三种方式 / vision 能力灰显 / 模型切换 Toast 200ms |
+| **M4：Sprint 4 完成** | TTS + 参考列表 + 联网搜索 | 中文 voice 自动选 / 17 条 ref 渲染 ≤ 300ms / 联网搜索 5s 内返回 |
+| **M5：v2.0.0 发布** | 全部 13 项功能 + 文档 | TypeScript 0 error / SonarQube 0 新增 issue / check-encoding.js 通过 / Playwright 100% |
+
+### 11.4 依赖与前置条件
+
+| 依赖项 | 状态 | 说明 |
+| --- | --- | --- |
+| §6.0.1 降级链 | ✅ v1.1.1 已实施 | `api/src/workflows/query-workflow.ts` 三函数降级链 |
+| §6.0.2 per-session Lock | ✅ v1.1.1 已实施 | `api/src/session-lock.ts` + `query.ts` 接入 |
+| §6.0.3 EngineAdapter | ✅ v1.1.1 已实施 | `api/src/engine/harness-adapter.ts` updateConfig 热加载 |
+| `/api/conversations` 路由 | ✅ v1.1.1 已实施 | 6 路由 + UUID 防穿越 |
+| ChatMessage v2 类型 | ✅ v1.1.1 已实施 | `frontend/src/types.ts` 联合类型兼容旧数据 |
+| Tavily/Bing API Key | ⏳ 待配置 | Sprint 4 前需在 `config.json.webSearch.apiKeyRef` 配置 |
+| LLM vision 能力 | ⏳ 视模型 | Sprint 3 需检测模型 vision 能力，不支持时灰显图片按钮 |
+
+### 11.5 回退方案
+
+若 v2.0.0 实施过程中出现阻塞：
+
+- **Sprint 阻塞**：该 Sprint 内功能降级为 v2.1.0，不阻塞后续 Sprint（除 Sprint 1 阻塞 Sprint 2 外）
+- **整体回退**：v1.1.1 代码基线保留，v2.0.0 未完成功能不影响 v1.1.1 已实施的核心架构（降级链 / per-session Lock / EngineAdapter）
+- **数据迁移失败**：按 R9 风险缓解，应用启动时检测 schema 版本，迁移失败则降级为只读模式
 
 ---
 
 ## 阶段交接声明
 
-- 当前阶段：SRS v1.1.1 代码层补齐完成 ✅
-- 下一阶段：v2 迭代实施
+- 当前阶段：SRS v2.0.0 编制完成 ✅
+- 下一阶段：v2.0.0 迭代实施（按 §11 排期推进 Sprint 1-4）
 - 下一阶段智能体：wiki-code-dev（实施）
-- 下一阶段技能：wiki-code-dev / wiki-frontend-code-review
-- 交接上下文：v1.1.1 已完成 P0-3 代码层补齐：`api/src/session-lock.ts` 新增 withSessionLock；`api/src/workflows/query-workflow.ts` 重构为三函数降级链；`api/src/routes/query.ts` SSE 路由接入 withSessionLock。至此全部 3 项 P0 阻塞已闭环（P0-1 历史对话存储、P0-2 ChatMessage 迁移、P0-3 降级链 + per-session Lock），接口契约一致、数据迁移策略明确、现有架构完整继承。v1.1.1 技术债务为零，可作为 v2 启动基线。建议排期 4-6 周（按模块拆分）。
+- 下一阶段技能：wiki-code-dev / wiki-frontend-code-review / webapp-testing
+- 交接上下文：v2.0.0 已完成 SRS 升级——①§6.0「v2 扩展点」全部转为「v2.0.0 正式需求」，与 v1.1.1 代码层一致；②新增 §11 实施排期（4 Sprint / 5 里程碑 / 前后端文件清单 / 依赖前置 / 回退方案）；③v1 评审报告 11 项问题（3 P0 + 4 P1 + 4 P2）全部闭环；④全文措辞统一为 v2.0.0。前置条件全部满足：§6.0 三项架构机制 + `/api/conversations` 路由 + ChatMessage v2 类型均已在 v1.1.1 实施。建议按 Sprint 1→2→3→4 顺序推进，每个 Sprint 完成后运行 Playwright E2E 验收。

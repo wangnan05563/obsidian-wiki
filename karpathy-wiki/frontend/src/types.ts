@@ -400,6 +400,7 @@ export interface AiConfig {
 }
 
 // LLM 预设项（GET /api/ai/presets）
+// vision 字段（F-3.5）：标识模型是否支持图片输入，前端据此决定图片按钮是否灰显
 export interface LlmPreset {
   key: string;
   label: string;
@@ -408,6 +409,7 @@ export interface LlmPreset {
   model: string;
   apiKeyRef: string;
   apiKeyUrl: string;
+  vision?: boolean;
 }
 
 // 测试连接响应（POST /api/ai/test-connection）

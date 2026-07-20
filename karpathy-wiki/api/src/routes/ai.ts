@@ -14,6 +14,7 @@ import type { EngineAdapter } from '../types.js';
 export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   // LLM 预设列表：统一 OpenAI 兼容协议，前端可一键切换。
   // 为什么需要：降低用户配置成本，常见厂商预填 baseUrl/model/apiKeyRef。
+  // vision 字段：标识模型是否支持图片输入（F-3.5 多模态能力检测），前端据此决定图片按钮是否灰显
   const LLM_PRESETS = [
     {
       key: 'openai',
@@ -23,6 +24,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'gpt-4o-mini',
       apiKeyRef: 'OPENAI_API_KEY',
       apiKeyUrl: 'https://platform.openai.com/api-keys',
+      vision: true,
     },
     {
       key: 'deepseek',
@@ -32,6 +34,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'deepseek-chat',
       apiKeyRef: 'DEEPSEEK_KEY',
       apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+      vision: false,
     },
     {
       key: 'glm',
@@ -41,6 +44,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'glm-4-flash',
       apiKeyRef: 'GLM_KEY',
       apiKeyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+      vision: true,
     },
     {
       key: 'qwen',
@@ -50,6 +54,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'qwen-plus',
       apiKeyRef: 'DASHSCOPE_API_KEY',
       apiKeyUrl: 'https://dashscope.console.aliyun.com/apiKey',
+      vision: true,
     },
     {
       key: 'moonshot',
@@ -59,6 +64,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'moonshot-v1-8k',
       apiKeyRef: 'MOONSHOT_API_KEY',
       apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys',
+      vision: false,
     },
     {
       key: 'doubao',
@@ -68,6 +74,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'doubao-pro-32k',
       apiKeyRef: 'ARK_API_KEY',
       apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+      vision: true,
     },
     {
       key: 'ollama',
@@ -77,6 +84,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'qwen2.5:7b',
       apiKeyRef: 'OLLAMA_API_KEY',
       apiKeyUrl: '',
+      vision: false,
     },
     {
       // Agnes AI：全模态免费 API，OpenAI 兼容协议
@@ -88,6 +96,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model: 'agnes-2.0-flash',
       apiKeyRef: 'AGNES_API_KEY',
       apiKeyUrl: 'https://agnes-ai.com',
+      vision: true,
     },
   ];
 

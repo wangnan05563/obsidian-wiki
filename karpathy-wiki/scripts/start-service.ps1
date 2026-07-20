@@ -24,6 +24,12 @@ Set-Location $Root
 . (Join-Path $PSScriptRoot 'logger.ps1')
 Initialize-Logger -Config $Config
 
+# 加载 node 路径解析模块（配置驱动，使用 tools.node.exe_path 指定的 node）
+. (Join-Path $PSScriptRoot 'node-resolver.ps1')
+$NodeExe = Resolve-NodeExe -Config $Config
+# 将 node.exe 所在目录加入 PATH 头部，让后续 pnpm/npm 自动找到指定版本
+if ($NodeExe) { Invoke-WithNodePath -NodeExePath $NodeExe }
+
 # ============================================================
 # [1/4] 清理旧进程：通过端口扫描杀掉占用 API/Web 端口的进程
 # 对标闲鱼start-service.bat [1/4] 逻辑
@@ -61,14 +67,13 @@ Start-Sleep -Seconds 1
 # ============================================================
 Write-Log "正在检查依赖..." -Level INFO -Step "2/4"
 
-# 检查 Node.js（对标闲鱼检查 .venv\Scripts\python.exe）
-$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-if (-not $nodeCmd) {
-    Write-Log "未检测到 Node.js，请先运行 scripts\setup-env.bat 安装" -Level ERROR -Step "2/4"
+# 检查 Node.js（路径已由脚本头部 Resolve-NodeExe 解析，避免 PATH 旧版优先）
+if (-not $NodeExe) {
+    Write-Log "未检测到 Node.js，请检查 scripts/config.json 中 tools.node 配置或运行 scripts\setup-env.bat 安装" -Level ERROR -Step "2/4"
     exit 1
 }
-$nodeVer = & node --version
-Write-Log "Node.js 版本: $nodeVer (路径: $($nodeCmd.Source))" -Level OK -Step "2/4"
+$nodeVer = & $NodeExe --version
+Write-Log "Node.js 版本: $nodeVer (路径: $NodeExe)" -Level OK -Step "2/4"
 
 # 检查 node_modules（对标闲鱼检查 .venv 虚拟环境）
 if (-not (Test-Path (Join-Path $Root "node_modules"))) {

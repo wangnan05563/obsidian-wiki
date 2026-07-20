@@ -96,6 +96,8 @@ function Write-LogBanner {
 function Get-PidOnPort {
     # 工具函数：获取监听指定端口的进程 PID 列表
     # 对标闲鱼启动脚本中的 netstat + findstr 端口扫描逻辑
+    # 为什么保留 netstat：PID 查询只能通过 netstat，TcpClient 无法获取 PID
+    # 仅在端口已就绪后调用一次（不在 Wait-PortReady 循环中调用），避免性能问题
     param([Parameter(Mandatory)][int]$Port)
     $pids = @()
     # 用 Select-String 替代 findstr，保持 PowerShell 原生风格
@@ -109,9 +111,38 @@ function Get-PidOnPort {
     return $pids | Sort-Object -Unique
 }
 
+function Test-PortListening {
+    # 工具函数：用 TcpClient 探测端口是否监听（同时尝试 IPv4 和 IPv6）
+    # 为什么不用 netstat：netstat -aon 输出全部连接再过滤，单次耗时 0.5~2s
+    # 在 Wait-PortReady 循环中累计 15~60s 额外开销，导致超时判断失真
+    # TcpClient 直接 TCP 握手，单次 <10ms，且能区分"端口未监听"和"进程已崩溃"
+    # 为什么同时尝试 IPv4 和 IPv6：Vite 默认监听 [::1]:5173（仅 IPv6），
+    # Fastify 默认同时监听 127.0.0.1 和 [::1]，仅探测 IPv4 会导致 Vite 端口永远判为未就绪
+    param([Parameter(Mandatory)][int]$Port)
+    foreach ($host_ in @('127.0.0.1', '::1')) {
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            # 200ms 超时：本机回环足够，避免卡在 SYN 排队
+            $iar = $client.BeginConnect($host_, $Port, $null, $null)
+            $ok = $iar.AsyncWaitHandle.WaitOne(200)
+            if ($ok -and $client.Connected) {
+                $client.EndConnect($iar)
+                $client.Close()
+                return $true
+            }
+            $client.Close()
+        } catch {
+            # 当前地址族不匹配或连接被拒，继续尝试下一个地址
+        }
+    }
+    return $false
+}
+
 function Wait-PortReady {
     # 工具函数：轮询等待端口就绪
     # 对标闲鱼启动脚本的 :wait_web 循环逻辑
+    # 为什么用 Test-PortListening 而非 Get-PidOnPort：
+    # 循环中只需判断"是否监听"，不需要 PID；PID 查询留到就绪后调用一次
     param(
         [Parameter(Mandatory)][int]$Port,
         [Parameter(Mandatory)][int]$MaxTries,
@@ -119,8 +150,7 @@ function Wait-PortReady {
     )
     for ($i = 1; $i -le $MaxTries; $i++) {
         Start-Sleep -Seconds $IntervalSeconds
-        $pids = Get-PidOnPort -Port $Port
-        if ($pids.Count -gt 0) { return $true }
+        if (Test-PortListening -Port $Port) { return $true }
     }
     return $false
 }

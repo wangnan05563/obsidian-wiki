@@ -30,7 +30,8 @@ function phaseLabel(phase: string): string {
       <span class="thinking-summary">{{ summary }}</span>
       <span class="toggle">{{ expanded ? '▼' : '▶' }}</span>
     </div>
-    <div class="thinking-body" v-if="expanded">
+    <!-- 用 v-show + max-height transition 替代 v-if，实现 200ms 平滑展开/折叠（F-3.1 验收标准） -->
+    <div class="thinking-body" v-show="expanded">
       <div v-for="(step, idx) in steps" :key="step.message + idx" class="thinking-step">
         <span class="step-phase" :class="step.phase">{{ phaseLabel(step.phase) }}</span>
         <span class="step-message">{{ step.message }}</span>
@@ -56,10 +57,28 @@ function phaseLabel(phase: string): string {
   font-size: 13px;
   color: var(--text-soft, #888);
 }
+/* F-3.1 加载态：thinking-icon 脉动，让用户感知 AI 正在工作 */
+.thinking-icon {
+  display: inline-block;
+  animation: thinking-pulse 1.5s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+/* F-3.1 折叠/展开过渡 ≤ 200ms：用 max-height + opacity transition 实现平滑动画 */
 .thinking-body {
   margin-top: 8px;
   max-height: 200px;
   overflow-y: auto;
+  /* 展开时 max-height 200px + opacity 1；折叠时 max-height 0 + opacity 0 */
+  transition: max-height 200ms ease, opacity 200ms ease, margin-top 200ms ease;
+}
+.thinking-block.collapsed .thinking-body {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  overflow: hidden;
 }
 .thinking-step {
   display: flex;

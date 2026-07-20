@@ -8,6 +8,7 @@ import InputToolbar from '../components/InputToolbar.vue';
 import ThinkingBlock from '../components/ThinkingBlock.vue';
 import ModelSelector from '../components/ModelSelector.vue';
 import RefsList from '../components/RefsList.vue';
+import MessageToolbar from '../components/MessageToolbar.vue';
 import { useQueryStore } from '../stores/query';
 import { useConversationsStore } from '../stores/conversations';
 import { useModelStore } from '../stores/model';
@@ -16,6 +17,55 @@ import { dbGet, CHAT_STORES } from '../services/chatDb';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
 import type { Attachment, Reference, ThinkingStep } from '../types';
+
+// F-3.2 图片点击放大预览：v-html 内容不经过 Vue 编译，无法绑定 Vue 事件，需事件委托
+// 参考 MarkdownRenderer.vue 同款实现模式：监听根元素 click，target.tagName === 'IMG' 触发预览
+const previewSrc = ref('');
+const previewVisible = ref(false);
+const handleImgClick = (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  if (target.tagName === 'IMG') {
+    e.preventDefault();
+    previewSrc.value = (target as HTMLImageElement).src;
+    previewVisible.value = true;
+  }
+};
+
+// F-3.7 代码块复制：事件委托捕获 .code-copy-btn 点击，从兄弟 pre > code 取 textContent
+// 为什么从 DOM 取而非 data 属性：避免长代码 HTML 转义/属性大小限制
+async function copyCodeToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+const handleCodeCopyClick = async (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  // 命中复制按钮或其子节点
+  const btn = target.closest('[data-action="copy-code"]') as HTMLElement | null;
+  if (!btn) return;
+  e.preventDefault();
+  // 从兄弟 pre > code 取原始代码
+  const wrapper = btn.closest('.code-block-wrapper');
+  const codeEl = wrapper?.querySelector('pre code');
+  if (!codeEl) return;
+  const code = codeEl.textContent || '';
+  const ok = await copyCodeToClipboard(code);
+  ElMessage[ok ? 'success' : 'warning'](ok ? '已复制代码' : '复制失败，请手动选择');
+};
 
 // §2.1 Query.vue 完整重构：集成侧栏/模型选择/附件/工具栏/思考块/引用列表/追问。
 // 设计参考：知识库问答AI对话流详细设计说明书 §2.1.2 / §2.1.3
@@ -28,22 +78,82 @@ const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 let abortController: AbortController | null = null;
 
-// 侧栏折叠状态持久化到 localStorage，刷新页面后保留
-const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true');
+// F-3.11 三态侧栏：expanded(280px) / collapsed(60px,仅图标) / hidden(0,仅浮动展开按钮)
+// 为什么用字符串而非 boolean：三态无法用 true/false 表达，字符串可读性更好
+// 状态持久化到 localStorage，刷新后保留
+type SidebarState = 'expanded' | 'collapsed' | 'hidden';
+const sidebarState = ref<SidebarState>(
+  (localStorage.getItem('sidebarState') as SidebarState) || 'expanded'
+);
+function setSidebarState(state: SidebarState) {
+  sidebarState.value = state;
+  localStorage.setItem('sidebarState', state);
+}
+// 三态循环：expanded → collapsed → hidden → expanded
 function toggleSidebar() {
-  sidebarCollapsed.value = !sidebarCollapsed.value;
-  localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed.value));
+  const next: SidebarState =
+    sidebarState.value === 'expanded' ? 'collapsed'
+    : sidebarState.value === 'collapsed' ? 'hidden'
+    : 'expanded';
+  setSidebarState(next);
+}
+// F-3.11 Ctrl+B 快捷键：全局监听，三态循环切换
+// 为什么用 keydown 而非 keystroke：Ctrl+B 是浏览器默认"加粗"快捷键，需 preventDefault 屏蔽
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+    e.preventDefault();
+    toggleSidebar();
+  }
 }
 
-// §5.2 工具栏模式：'' 默认 / 'web' 联网搜索 / 'deep' 深度思考
+// F-3.4 工具栏模式（SRS F-3.4 工具清单）
+// v2.0.0 范围：
+//   - fast/write/translate：mode 字段传递，后端按需处理
+//   - ppt/image/video：v2.0.0 仅 UI 标记 + mode 字段传递，实际生成留 v3（disabled 灰显）
+//   - more：点击展开 secondaryTools 下拉
+//   - web/deep：放入"更多"下拉层（保留现有 SSE 处理逻辑：web→webSearch, deep→mode）
 const activeMode = ref('');
+const moreOpen = ref(false);
 const toolbarTools = [
+  { key: 'fast', label: '快速' },
+  { key: 'write', label: '帮我写作' },
+  {
+    key: 'ppt',
+    label: 'PPT 生成',
+    disabled: true,
+    disabledReason: 'v3 待实现（v2.0.0 仅做标记）',
+  },
+  {
+    key: 'image',
+    label: '图像生成',
+    disabled: true,
+    disabledReason: 'v3 待实现（v2.0.0 仅做标记）',
+  },
+  {
+    key: 'video',
+    label: '视频生成',
+    disabled: true,
+    disabledReason: 'v3 待实现（v2.0.0 仅做标记）',
+  },
+  { key: 'translate', label: '翻译' },
+  { key: 'more', label: '更多' },
+];
+const secondaryTools = [
   { key: 'web', label: '联网搜索' },
   { key: 'deep', label: '深度思考' },
 ];
-// 点击同一工具切换为关闭，点击不同工具切换为该模式
+// 点击同一工具切换为关闭；点击不同工具切换为该模式；点击"更多"切换下拉
 function handleSelectMode(mode: string) {
+  if (mode === 'more') {
+    moreOpen.value = !moreOpen.value;
+    return;
+  }
   activeMode.value = activeMode.value === mode ? '' : mode;
+  // 选择主工具后自动关闭"更多"下拉，避免视觉遮挡
+  moreOpen.value = false;
+}
+function handleToggleMore() {
+  moreOpen.value = !moreOpen.value;
 }
 
 // 附件 id 列表（绑定 AttachmentUploader，提交后清空）
@@ -120,13 +230,15 @@ async function sendQuestion(question: string) {
   attachmentsStore.flush();
   pendingAttachmentIds.value = [];
 
-  // 构造请求体：按当前模式构造，模型切换由 PUT /api/ai/config 统一处理
+  // 构造请求体：F-3.4 工具栏 mode 字段统一传递到 SSE
+  // 模型切换由 PUT /api/ai/config 统一处理，不在此处传 model
   const body: Record<string, unknown> = { question, history };
-  if (activeMode.value === 'web') {
-    body.mode = 'web';
-    body.webSearch = true;
-  } else if (activeMode.value === 'deep') {
-    body.mode = 'deep';
+  if (activeMode.value) {
+    body.mode = activeMode.value;
+    // 联网搜索需要同时打开 webSearch 标志（向后端 query-workflow 传递）
+    if (activeMode.value === 'web') {
+      body.webSearch = true;
+    }
   }
   if (attachments.length > 0) {
     body.attachments = attachments;
@@ -258,23 +370,69 @@ async function archiveMessage(idx: number) {
   }
 }
 
+// F-3.13 重新生成：复用该消息对应的 user 问题，丢弃原 assistant 回答，触发新问答
+// 为什么不直接重发：SRS 要求"重新生成产生新 sessionId"，所以必须重新走完整 SSE 流程
+// 策略：找到 idx-1 的 user 消息内容 → removeMessagesFrom(idx) 丢弃 assistant 回答 → sendQuestion
+function handleRegenerate(idx: number) {
+  if (store.isLoading) {
+    ElMessage.warning('回答生成中，请稍后');
+    return;
+  }
+  // 找到当前 assistant 消息对应的 user 问题（按 idx-1 回溯）
+  // 兼容 user 消息可能不在 idx-1 的场景（如归档消息），向下回溯到第一个 user 消息
+  let userIdx = -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      userIdx = i;
+      break;
+    }
+  }
+  if (userIdx < 0) {
+    ElMessage.warning('未找到原始问题，无法重新生成');
+    return;
+  }
+  const question = store.messages[userIdx].content;
+  // 丢弃从 idx 开始的所有消息（assistant 回答 + 可能的后续追问）
+  // 保留 user 问题，让用户看到"重新生成"的上下文
+  store.removeMessagesFrom(idx);
+  void sendQuestion(question);
+}
+
 onMounted(async () => {
   try {
     await conversationsStore.loadConversations();
   } catch {
     // IndexedDB 不可用时静默降级，仅内存态
   }
+  // F-3.2 注册图片点击事件委托：监听聊天区，捕获 v-html 中 img 的点击
+  chatBodyRef.value?.addEventListener('click', handleImgClick);
+  // F-3.7 注册代码块复制事件委托：捕获 .code-copy-btn 点击
+  chatBodyRef.value?.addEventListener('click', handleCodeCopyClick);
+  // F-3.11 注册全局 Ctrl+B 快捷键：window 监听，三态循环切换
+  window.addEventListener('keydown', handleGlobalKeydown);
 });
 
 onBeforeUnmount(() => {
   abortController?.abort();
+  // F-3.2 / F-3.7 卸载事件委托，避免内存泄漏
+  chatBodyRef.value?.removeEventListener('click', handleImgClick);
+  chatBodyRef.value?.removeEventListener('click', handleCodeCopyClick);
+  // F-3.11 卸载 Ctrl+B 监听
+  window.removeEventListener('keydown', handleGlobalKeydown);
 });
 </script>
 
 <template>
   <div class="query-page">
+    <!-- F-3.11 隐藏态浮动展开按钮：sidebarState='hidden' 时显示在左上角 -->
+    <button
+      v-if="sidebarState === 'hidden'"
+      class="sidebar-show-btn"
+      title="展开侧栏（Ctrl+B）"
+      @click="setSidebarState('expanded')"
+    >☰</button>
     <ConversationSidebar
-      :collapsed="sidebarCollapsed"
+      :state="sidebarState"
       @toggle="toggleSidebar"
       @new-session="handleNewSession"
       @select="handleSelectConversation"
@@ -298,22 +456,38 @@ onBeforeUnmount(() => {
 
         <template v-for="(msg, idx) in store.messages" :key="msg.id || idx">
           <div class="msg-row" :class="msg.role">
-            <div class="msg-avatar">
+            <!-- 仅 user 消息保留"ME"头像；assistant 消息靠左对齐已足够区分双方，去除图标保持简洁 -->
+            <div v-if="msg.role === 'user'" class="msg-avatar">
               <div class="user-avatar">ME</div>
             </div>
       <div class="msg-bubble" :class="msg.role">
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
               <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
-              <RefsList v-if="normalizeRefs(msg.refs).length > 0" :refs="normalizeRefs(msg.refs)" />
+              <!-- F-3.7 / F-3.13 浮窗工具栏：hover assistant 气泡时淡入，提供复制 / 重新生成 / 反馈 -->
+              <MessageToolbar
+                v-if="msg.role === 'assistant'"
+                :content="msg.content"
+                :msg-id="msg.id"
+                :can-regenerate="!store.isLoading"
+                @regenerate="handleRegenerate(idx)"
+              />
+              <!-- F-3.12 联想提问位置迁移：从 refs 下方移到 refs 上方，紧贴答案末尾，符合阅读流 -->
               <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
                 <span class="followups-label">追问：</span>
-                <span
-                  v-for="(f, i) in msg.followups"
-                  :key="i"
-                  class="followup-chip"
-                  @click="inputQuestion = f"
-                >{{ f }}</span>
+                <div class="followups-track">
+                  <span
+                    v-for="(f, i) in msg.followups"
+                    :key="i"
+                    class="followup-chip"
+                    @click="inputQuestion = f"
+                  >
+                    {{ f }}
+                    <!-- F-3.12 CSS tooltip：hover 200ms 内淡入，无需 JS 库 -->
+                    <span class="chip-tooltip">点击继续追问</span>
+                  </span>
+                </div>
               </div>
+              <RefsList v-if="normalizeRefs(msg.refs).length > 0" :refs="normalizeRefs(msg.refs)" />
       <div v-if="msg.role === 'assistant' && msg.sessionId" class="msg-actions">
                 <el-button
                   size="small"
@@ -330,13 +504,20 @@ onBeforeUnmount(() => {
 
         <!-- 流式输出中的 assistant 答案 -->
         <div v-if="store.streamingAnswer || store.isLoading" class="msg-row assistant">
-          <div class="msg-bubble assistant streaming">
+          <div class="msg-bubble assistant" :class="{ streaming: !!store.streamingAnswer, loading: store.isLoading && !store.streamingAnswer }">
             <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" />
             <div v-if="store.searchProgress" class="search-progress">
               {{ store.searchProgress.step }}
               <span v-if="store.searchProgress.count">（{{ store.searchProgress.count }} 条）</span>
             </div>
-      <div class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '思考中...')"></div>
+            <!-- F-3.1 加载态：首字节前显示 3 圆点脉动 + "正在思考…" 文案；首字节后切换为流式答案 -->
+            <div v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0" class="loading-dots">
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="loading-text">正在思考…</span>
+            </div>
+            <div v-else class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '')"></div>
             <RefsList v-if="store.currentRefs.length > 0" :refs="store.currentRefs" />
           </div>
         </div>
@@ -365,9 +546,12 @@ onBeforeUnmount(() => {
             />
             <InputToolbar
               :tools="toolbarTools"
+              :secondary-tools="secondaryTools"
               :active-mode="activeMode"
               :icon-only="true"
+              :more-open="moreOpen"
               @select="handleSelectMode"
+              @toggle-more="handleToggleMore"
             />
           </div>
           <!-- 模型选择下拉条：紧贴发送按钮左侧，与工具栏同行，避免占据独立行放大输入区视野 -->
@@ -387,6 +571,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    <!-- F-3.2 图片点击放大预览：通过事件委托捕获 v-html 中的 img 点击触发 -->
+    <el-image-viewer
+      v-if="previewVisible"
+      :url-list="[previewSrc]"
+      @close="previewVisible = false"
+    />
   </div>
 </template>
 
@@ -399,6 +589,30 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   height: 100%;
+  position: relative;
+}
+
+/* F-3.11 隐藏态浮动展开按钮：fixed 在左上角，hidden 态时可见
+   为什么用 fixed 而非 absolute：sidebar 宽度 0 后按钮需脱离布局流，避免挤压主区 */
+.sidebar-show-btn {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  background: rgba(0, 245, 255, 0.1);
+  color: var(--neon-cyan, #00f5ff);
+  cursor: pointer;
+  font-size: 16px;
+  backdrop-filter: var(--blur);
+  transition: all 0.2s ease;
+}
+.sidebar-show-btn:hover {
+  background: rgba(0, 245, 255, 0.2);
+  border-color: var(--neon-cyan, #00f5ff);
 }
 
 .query-card {
@@ -559,7 +773,9 @@ onBeforeUnmount(() => {
 .msg-bubble.user {
   background: var(--grad-fire);
   border-top-right-radius: 4px;
-  color: #fff;
+  /* 文字颜色随主题切换：深色主题下 --text-bright 为浅紫近白，浅色主题（macaron）下为深紫
+     避免 macaron 主题下浅粉背景 + 白色文字导致看不清的问题 */
+  color: var(--text-bright);
   box-shadow: 0 4px 20px rgba(255, 0, 110, 0.3);
 }
 
@@ -592,14 +808,18 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
 }
 
+/* F-3.12 联想提问：横向 chip 布局，超出横向滚动，不换行
+   位置已迁移到 refs 上方，紧贴答案末尾 */
 .msg-followups {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px dashed rgba(176, 38, 255, 0.2);
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
   align-items: center;
+  gap: 8px;
+  /* 横向滚动：track 负责滚动区，label 固定不滚 */
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 .followups-label {
@@ -607,10 +827,33 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
   font-family: var(--font-mono);
   letter-spacing: 1px;
+  flex-shrink: 0;
 }
 
+/* F-3.12 track：横向 chip 容器，超出可横向滚动 */
+.followups-track {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 245, 255, 0.3) transparent;
+  /* 隐藏横向滚动条视觉，保持纯净 */
+  -ms-overflow-style: none;
+}
+.followups-track::-webkit-scrollbar {
+  height: 4px;
+}
+.followups-track::-webkit-scrollbar-thumb {
+  background: rgba(0, 245, 255, 0.3);
+  border-radius: 2px;
+}
+
+/* F-3.12 chip：nowrap 保证 chip 内文字不换行，track 才能横向滚动 */
 .followup-chip {
-  padding: 3px 10px;
+  position: relative;
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 4px 12px;
   background: rgba(0, 245, 255, 0.08);
   border: 1px solid rgba(0, 245, 255, 0.25);
   border-radius: var(--radius-pill);
@@ -625,6 +868,29 @@ onBeforeUnmount(() => {
   background: rgba(0, 245, 255, 0.18);
   border-color: var(--neon-cyan);
   transform: translateY(-1px);
+}
+
+/* F-3.12 CSS tooltip：hover 200ms 内淡入，无需 JS 库
+   为什么用 CSS 而非 el-tooltip：轻量零依赖，transition-duration 精确控制 200ms */
+.chip-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 10px;
+  font-family: var(--font-body);
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  z-index: 10;
+}
+.followup-chip:hover .chip-tooltip {
+  opacity: 1;
 }
 
 .msg-actions {
@@ -688,5 +954,133 @@ onBeforeUnmount(() => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* F-3.1 流式输出态：气泡脉动光晕，首字节后激活，让用户感知"正在生成" */
+@keyframes neon-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(0, 245, 255, 0);
+    border-color: rgba(0, 245, 255, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 20px 2px rgba(0, 245, 255, 0.35);
+    border-color: rgba(0, 245, 255, 0.6);
+  }
+}
+
+/* F-3.1 加载态：首字节前显示 3 圆点脉动 + "正在思考…" 文案 */
+.loading-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+.loading-dots .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--neon-cyan, #00f5ff);
+  /* 三个圆点依次延迟 0.2s 跳动，形成"波浪"脉动效果 */
+  animation: loading-bounce 1.2s ease-in-out infinite;
+}
+.loading-dots .dot:nth-child(1) { animation-delay: 0s; }
+.loading-dots .dot:nth-child(2) { animation-delay: 0.2s; }
+.loading-dots .dot:nth-child(3) { animation-delay: 0.4s; }
+.loading-dots .loading-text {
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--text-soft, #888);
+}
+@keyframes loading-bounce {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* F-3.2 代码块语言徽章：wrapper 提供定位上下文，徽章绝对定位在 pre 右上角
+   为什么用 wrapper 而非直接给 pre 加伪元素：徽章是独立 DOM 节点，方便后续扩展复制按钮 */
+.markdown-body :deep(.code-block-wrapper) {
+  position: relative;
+  margin: 0.75em 0;
+}
+
+.markdown-body :deep(.code-lang-badge) {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--neon-cyan, #00f5ff);
+  background: rgba(0, 245, 255, 0.12);
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  border-radius: 4px;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1;
+  letter-spacing: 0.5px;
+}
+
+/* 让 wrapper 内的 pre 不再单独撑外边距，避免双重间距 */
+.markdown-body :deep(.code-block-wrapper pre) {
+  margin: 0;
+}
+
+/* F-3.2 图片悬停反馈：让用户感知图片可点击放大 */
+.markdown-body :deep(img) {
+  max-width: 100%;
+  border-radius: 8px;
+  cursor: zoom-in;
+  transition: opacity 0.2s ease;
+}
+
+.markdown-body :deep(img:hover) {
+  opacity: 0.9;
+}
+
+/* F-3.7 浮窗工具栏触发：hover 父气泡时显现
+   为什么放 Query.vue：scoped 隔离下父元素 hover 只能在父作用域定义 */
+.msg-bubble.assistant:hover .msg-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* F-3.7 代码块复制按钮：hover wrapper 时显现，避免常态视觉噪音 */
+.markdown-body :deep(.code-copy-btn) {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-soft, #888);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(0, 245, 255, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease, color 0.2s ease;
+  z-index: 2;
+  /* 与语言徽章错位：徽章在右上方，复制按钮在徽章下方
+     实际通过 right 偏移避免重叠 */
+}
+
+.markdown-body :deep(.code-block-wrapper:hover .code-copy-btn) {
+  opacity: 1;
+}
+
+.markdown-body :deep(.code-copy-btn:hover) {
+  color: var(--neon-cyan, #00f5ff);
+  border-color: rgba(0, 245, 255, 0.5);
+}
+
+/* 有语言徽章时，复制按钮下移避免与徽章重叠 */
+.markdown-body :deep(.code-lang-badge) ~ .code-copy-btn {
+  top: 28px;
 }
 </style>

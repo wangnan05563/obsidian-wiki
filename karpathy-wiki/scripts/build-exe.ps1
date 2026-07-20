@@ -1,4 +1,4 @@
-# scripts/build-exe.ps1
+﻿# scripts/build-exe.ps1
 # Karpathy-Wiki EXE 构建脚本
 #
 # 用法：
@@ -27,6 +27,16 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $repoRoot
+
+# 加载 node 路径解析模块（配置驱动，避免 PATH 旧版 node 优先）
+. (Join-Path $PSScriptRoot 'node-resolver.ps1')
+$scriptConfig = Get-Content (Join-Path $PSScriptRoot 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$NodeExe = Resolve-NodeExe -Config $scriptConfig
+if (-not $NodeExe) {
+    throw "未找到满足版本要求的 node.exe，请检查 scripts/config.json 中 tools.node 配置"
+}
+# 将 node.exe 所在目录加入 PATH 头部，让 pnpm.cmd / esbuild / pkg 自动找到指定版本
+Invoke-WithNodePath -NodeExePath $NodeExe
 
 # 缓存与产物目录（必须在引用 $cacheDir 前定义）
 $cacheDir = "$repoRoot\.cache"
@@ -92,17 +102,18 @@ if ($SkipSPA)  { Write-Host "Mode: SkipSPA（跳过 SPA 构建）" }
 # ============== 1. 检查依赖 ==============
 Write-Host "`n[1/8] 检查依赖..." -ForegroundColor Yellow
 
-# Node.js 版本检查
-$nodeVersion = (node --version 2>$null) -replace '[v\n\r]', ''
+# Node.js 版本检查（路径已由脚本头部 Resolve-NodeExe 解析，这里仅报告版本）
+# 为什么不用 PATH 中的 node：避免 PATH 中 nodejs14 优先于 nodejs24 导致 esbuild target=node18 失败
+$nodeVersion = (& $NodeExe --version 2>$null) -replace '[v\n\r]', ''
 if ($nodeVersion) {
     $nodeMajor = [int]($nodeVersion.Split('.')[0])
     if ($nodeMajor -lt 18) {
         Write-Err "Node $nodeVersion 版本过低，需要 Node 18+"
         throw "Node 版本过低（$nodeVersion），需要 18+"
     }
-    Write-Ok "Node 版本：$nodeVersion"
+    Write-Ok "Node 版本：$nodeVersion (路径: $NodeExe)"
 } else {
-    throw "未检测到 Node.js，请安装 Node 18+ 后重试"
+    throw "未检测到 Node.js，请检查 scripts/config.json 中 tools.node 配置"
 }
 
 # 检测包管理器
@@ -200,12 +211,18 @@ $esbuildArgs = @(
     "--outfile=$bundleFile",
     "--loader:.node=copy",       # 原生 .node 模块直接复制
     # 将 import.meta.url 替换为 CJS 等价表达式，避免 "import.meta is not available" 警告
-    # 源码用 ESM 原生的 import.meta.url（开发模式 tsx），打包时替换为 require('url').pathToFileURL(__filename).href
-    "--define:import.meta.url=require('url').pathToFileURL(__filename).href",
+    # 为什么用 banner+define 而非单一 define：
+    # esbuild 0.25+ 破坏性变更，--define 值只允许 entity name 或 JS literal，
+    # 不再允许函数调用表达式（如 require('url').pathToFileURL(...)）
+    # 方案：banner 在 bundle 顶部注入 var 定义，define 把 import.meta.url 替换为标识符
+    "--banner:js=var __import_meta_url=require('url').pathToFileURL(__filename).href",
+    "--define:import.meta.url=__import_meta_url",
     "--log-level=info"
 )
 
-& node @esbuildArgs
+# 为什么用 $NodeExe 而非 PATH 中的 node：esbuild 产物 target=node18，需用对应版本执行
+# 同时 $NodeExe 已通过 Invoke-WithNodePath 加入 PATH 头部，esbuild 内部 spawn 也能找到
+& $NodeExe @esbuildArgs
 if ($LASTEXITCODE -ne 0) { throw "esbuild 打包失败" }
 
 if (-not (Test-Path $bundleFile)) {
@@ -248,7 +265,7 @@ $pkgArgs = @(
     "--options", "max-old-space-size=512"
 )
 
-& node @pkgArgs
+& $NodeExe @pkgArgs
 if ($LASTEXITCODE -ne 0) { throw "pkg 打包失败" }
 
 if (-not (Test-Path $exePath)) {

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Karpathy-Wiki 项目服务生命周期自动化执行器
 .DESCRIPTION
@@ -46,6 +46,14 @@ if (Test-Path $ScriptConfigPath) {
 } else {
     $API_PORT = 3000
     $WEB_PORT = 5173
+}
+
+# 加载 node 路径解析模块（配置驱动，使用 tools.node.exe_path 指定的 node）
+. (Join-Path $PSScriptRoot 'node-resolver.ps1')
+if ($ScriptConfig) {
+    $Script:NodeExe = Resolve-NodeExe -Config $ScriptConfig
+    # 将 node.exe 所在目录加入 PATH 头部，让 pnpm/npm 自动找到指定版本
+    if ($Script:NodeExe) { Invoke-WithNodePath -NodeExePath $Script:NodeExe }
 }
 
 # ============================================
@@ -110,16 +118,15 @@ function Invoke-EnvCheck {
 
     $allPass = $true
 
-    # 1. Node.js
-    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-    if (-not $nodeCmd) {
+    # 1. Node.js（路径已由脚本头部 Resolve-NodeExe 解析，避免 PATH 旧版优先）
+    if (-not $Script:NodeExe) {
         Write-Host "  [FAIL] 未检测到 Node.js" -ForegroundColor Red
-        Write-Host "         请运行 scripts\setup-env.bat 一键安装环境" -ForegroundColor Yellow
-        Write-Log -LogAction $Action -Step "env-check" -Result "fail" -Msg "node not found"
+        Write-Host "         请检查 scripts/config.json 中 tools.node 配置或运行 scripts\setup-env.bat 一键安装环境" -ForegroundColor Yellow
+        Write-Log -LogAction $Action -Step "env-check" -Result "fail" -Msg "node not resolved from config"
         return $false
     }
-    $nodeVer = & node --version 2>$null
-    Write-Host "  [OK] Node.js $nodeVer" -ForegroundColor Green
+    $nodeVer = & $Script:NodeExe --version 2>$null
+    Write-Host "  [OK] Node.js $nodeVer (路径: $($Script:NodeExe))" -ForegroundColor Green
 
     # 2. 包管理器（pnpm 优先，回退 npm）
     $pkgCmd = $null
@@ -450,16 +457,15 @@ function Action-Check {
 
     $allPass = $true
 
-    # 1. Node.js
+    # 1. Node.js（路径已由脚本头部 Resolve-NodeExe 解析）
     Write-Host ""
     Write-Host "[1/11] Node.js..." -ForegroundColor Cyan
-    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-    if ($nodeCmd) {
-        $nodeVer = & node --version 2>$null
-        Write-Host "  [OK] Node.js $nodeVer ($($nodeCmd.Source))" -ForegroundColor Green
+    if ($Script:NodeExe) {
+        $nodeVer = & $Script:NodeExe --version 2>$null
+        Write-Host "  [OK] Node.js $nodeVer ($($Script:NodeExe))" -ForegroundColor Green
     }
     else {
-        Write-Host "  [FAIL] 未检测到 Node.js" -ForegroundColor Red
+        Write-Host "  [FAIL] 未检测到 Node.js（请检查 scripts/config.json 中 tools.node 配置）" -ForegroundColor Red
         $allPass = $false
     }
 

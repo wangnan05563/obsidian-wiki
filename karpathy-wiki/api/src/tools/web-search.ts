@@ -9,6 +9,11 @@ export interface WebSearchResult {
   snippet: string;
 }
 
+// F-3.10 联网搜索超时阈值（毫秒）。
+// 为什么是 5s：SRS F-3.10 验收要求「联网搜索结果 5s 内返回」，超时后降级为仅 vault 结果。
+// 为什么不放在 config：阈值是 SRS 硬性验收项，业务上无合理理由放宽，故常量化。
+const WEB_SEARCH_TIMEOUT_MS = 5000;
+
 // 工具定义：与 @wiki/harness 的 ToolDefinition 结构对齐
 export interface WebSearchTool {
   name: string;
@@ -44,10 +49,19 @@ export function createWebSearchTool(config: WebSearchConfig): WebSearchTool | nu
     handler: async (args: unknown) => {
       const { query, limit } = args as { query: string; limit?: number };
       const maxResults = limit || config.maxResults || 5;
-      if (config.provider === 'tavily') {
-        return tavilySearch(apiKey, query, maxResults);
+      // F-3.10 超时降级：用 AbortSignal.timeout 包裹 fetch，超时返回空数组让 workflow 继续走 vault 分支
+      // 为什么不在 catch 抛错：harness 会把工具异常视为 step 失败，可能触发整条 ReAct 链回退，与「仅降级联网」语义不符
+      try {
+        if (config.provider === 'tavily') {
+          return await tavilySearch(apiKey, query, maxResults);
+        }
+        return await bingSearch(apiKey, query, maxResults);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // 超时（AbortError / TimeoutError）或 API 错误统一降级为空结果
+        console.warn(`[web_search] provider=${config.provider} query="${query}" failed: ${msg}; fallback to empty results`);
+        return [];
       }
-      return bingSearch(apiKey, query, maxResults);
     },
   };
 }
@@ -63,6 +77,8 @@ async function tavilySearch(apiKey: string, query: string, maxResults: number): 
       max_results: maxResults,
       include_answer: false,
     }),
+    // F-3.10 5s 超时：AbortSignal.timeout 在 Node 18+ 原生支持，超时后 fetch 抛 AbortError
+    signal: AbortSignal.timeout(WEB_SEARCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Tavily API error: ${res.status}`);
   const data = await res.json() as { results?: Array<{ title: string; url: string; content: string }> };
@@ -78,6 +94,7 @@ async function bingSearch(apiKey: string, query: string, count: number): Promise
   const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(query)}&count=${count}`;
   const res = await fetch(url, {
     headers: { 'Ocp-Apim-Subscription-Key': apiKey },
+    signal: AbortSignal.timeout(WEB_SEARCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Bing API error: ${res.status}`);
   const data = await res.json() as { webPages?: { value?: Array<{ name: string; url: string; snippet: string }> } };

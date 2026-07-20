@@ -42,8 +42,8 @@
     }
   },
   "startup": {
-    "api_wait_max_tries": 30,
-    "web_wait_max_tries": 15,
+    "api_wait_max_tries": 60,
+    "web_wait_max_tries": 60,
     "ping_interval_seconds": 2,
     "open_browser": true,
     "browser_url": "http://localhost:5173",
@@ -55,5 +55,17 @@
   "shutdown": {
     "verify_wait_seconds": 1,
     "exit_delay_seconds": 2
+  },
+  "tools": {
+    "node": {
+      "exe_path": "D:\\code\\nodejs24\\node.exe",
+      "search_paths": [
+        "D:\\code\\nodejs24\\node.exe",
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files (x86)\\nodejs\\node.exe"
+      ],
+      "use_path_fallback": true,
+      "min_version": [18, 0]
+    }
   }
 }

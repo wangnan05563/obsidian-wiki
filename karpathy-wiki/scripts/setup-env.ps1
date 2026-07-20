@@ -129,6 +129,13 @@ $Script:LogsDir = Join-Path $ProjectRoot "logs"
 $Script:NodeMinMajor = 18
 $Script:NodeMinMinor = 0
 
+# 加载 node 路径解析模块（配置驱动，使用 tools.node.exe_path 指定的 node）
+. (Join-Path $PSScriptRoot 'node-resolver.ps1')
+$scriptConfig = Get-Content (Join-Path $PSScriptRoot 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$Script:NodeExe = Resolve-NodeExe -Config $scriptConfig
+# 将 node.exe 所在目录加入 PATH 头部，让后续 pnpm/npm 自动找到指定版本
+if ($Script:NodeExe) { Invoke-WithNodePath -NodeExePath $Script:NodeExe }
+
 # ============================================================
 # 主流程
 # ============================================================
@@ -153,8 +160,17 @@ if ($SkipSystem) {
     }
 
     # --- Node.js ---
+    # 优先使用 config.tools.node 解析出的路径（已通过 Invoke-WithNodePath 加入 PATH 头部）
+    # 仅当配置解析失败时才走 winget 安装路径
     $nodeExe = $null
-    if (Test-CommandAvailable 'node') {
+    if ($Script:NodeExe -and (Test-Path $Script:NodeExe)) {
+        $ver = Get-NodeVersion $Script:NodeExe
+        if ($ver -and (Test-VersionSatisfy $ver $NodeMinMajor $NodeMinMinor)) {
+            $nodeExe = $Script:NodeExe
+        }
+    }
+    # 配置路径未命中时回退 PATH 中的 node
+    if (-not $nodeExe -and (Test-CommandAvailable 'node')) {
         $ver = Get-NodeVersion 'node'
         if ($ver -and (Test-VersionSatisfy $ver $NodeMinMajor $NodeMinMinor)) {
             $nodeExe = 'node'
@@ -180,7 +196,7 @@ if ($SkipSystem) {
             }
         }
         if (-not $nodeExe) {
-            Write-Err "Node.js 安装失败。请手动安装 Node.js 18+ 后重跑此脚本（可加 -SkipSystem 跳过）"
+            Write-Err "Node.js 安装失败。请手动安装 Node.js 18+ 后重跑此脚本（可加 -SkipSystem 跳过），或在 scripts/config.json 的 tools.node.exe_path 中指定已有 node.exe 路径"
             throw "Node.js 不可用"
         }
         $ver = Get-NodeVersion $nodeExe

@@ -19,20 +19,31 @@ function Write-Err { param($msg) Write-Host "[错误] $msg" -ForegroundColor Red
 # 项目根目录（scripts/ 的上一级）
 $Root = Split-Path -Parent $PSScriptRoot
 
+# 加载 node 路径解析模块（配置驱动，使用 tools.node.exe_path 指定的 node）
+. (Join-Path $PSScriptRoot 'node-resolver.ps1')
+$scriptConfig = Get-Content (Join-Path $PSScriptRoot 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$NodeExe = Resolve-NodeExe -Config $scriptConfig
+# 将 node.exe 所在目录加入 PATH 头部，让后续 pnpm/npm 自动找到指定版本
+if ($NodeExe) { Invoke-WithNodePath -NodeExePath $NodeExe }
+
 # ============================================================
-# 步骤 1：检查 Node.js >= 18
+# 步骤 1：检查 Node.js >= 18（路径由配置解析，避免 PATH 旧版优先）
 # ============================================================
 Write-Step "检查 Node.js..."
+if (-not $NodeExe) {
+    Write-Err "未检测到 Node.js，请检查 scripts/config.json 中 tools.node 配置，或从 https://nodejs.org 安装 >= 18 版本后重试。"
+    exit 1
+}
 try {
-    $nodeVersion = (node --version).Trim()
+    $nodeVersion = (& $NodeExe --version).Trim()
     $major = [int]($nodeVersion -replace 'v(\d+)\..*', '$1')
     if ($major -lt 18) {
         Write-Err "Node.js 版本过低（$nodeVersion），需要 >= 18。请从 https://nodejs.org 升级。"
         exit 1
     }
-    Write-Ok "Node.js $nodeVersion"
+    Write-Ok "Node.js $nodeVersion (路径: $NodeExe)"
 } catch {
-    Write-Err "未检测到 Node.js，请从 https://nodejs.org 安装 >= 18 版本后重试。"
+    Write-Err "调用 node 失败：$_"
     exit 1
 }
 
