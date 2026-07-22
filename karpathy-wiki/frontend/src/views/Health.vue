@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { ElMessage } from 'element-plus';
-import { Warning, CircleCheck, Tools } from '@element-plus/icons-vue';
-import type { HealthReport, FixRequest, FixProgressEvent } from '../types';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Warning, CircleCheck, Tools, MagicStick } from '@element-plus/icons-vue';
+import type { HealthReport, FixRequest, FixProgressEvent, BatchFixRequest, BatchFixProgressEvent, BatchDoneEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 
 const report = ref<HealthReport | null>(null);
 const loading = ref(false);
 
-// 修复状态：fixing 标记当前正在修复的问题 key（格式：orphan:path 或 broken:idx）
+// 修复状态：fixingKey 标记当前正在修复的问题 key（格式：orphan:path 或 broken:idx）
 const fixingKey = ref<string>('');
 // 修复进度日志（时间线展示）
 const fixLogs = ref<FixProgressEvent[]>([]);
+
+// 批量修复状态
+// - batchFixing：是否正在执行批量修复（执行中禁用所有单个修复按钮）
+// - batchTotal：本次批量修复总问题数
+// - batchCurrent：当前正在处理第几个（1-based，0 表示尚未开始）
+// - batchDoneKeys：已完成的 issueKey 集合，前端据此高亮已完成项
+const batchFixing = ref(false);
+const batchTotal = ref(0);
+const batchCurrent = ref(0);
+const batchDoneKeys = ref<Set<string>>(new Set());
 
 // 三类问题的计数
 const orphanCount = computed(() => report.value?.orphans.length ?? 0);
@@ -23,6 +33,15 @@ const totalIssues = computed(() => orphanCount.value + brokenCount.value + stale
 const healthStatus = computed<'healthy' | 'warning'>(() =>
   totalIssues.value === 0 ? 'healthy' : 'warning',
 );
+
+// 是否禁用所有修复按钮：单个修复进行中 或 批量修复进行中
+const anyFixing = computed(() => fixingKey.value !== '' || batchFixing.value);
+
+// 批量修复进度百分比（0-100），用于 el-progress
+const batchProgress = computed(() => {
+  if (batchTotal.value === 0) return 0;
+  return Math.round((batchDoneKeys.value.size / batchTotal.value) * 100);
+});
 
 // 执行体检
 async function runCheck() {
@@ -117,6 +136,178 @@ async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: str
   }
 }
 
+// 构造批量修复请求体：把 orphan/broken 问题列表转为 FixRequest[] + issueKeys[]
+// 为什么前端生成 issueKey：列表项 key 已用 `${issueType}:${target}` 格式，复用保持一致
+function buildBatchItems(
+  issueType: 'broken_link' | 'orphan',
+  targets: Array<{ from: string; to: string } | string>,
+): { items: FixRequest[]; issueKeys: string[] } {
+  const items: FixRequest[] = [];
+  const issueKeys: string[] = [];
+  for (const target of targets) {
+    items.push({ issueType, target });
+    // orphan 的 target 是字符串路径，broken 的 target 是 {from,to}
+    if (issueType === 'orphan') {
+      issueKeys.push(`orphan:${target as string}`);
+    } else {
+      const ft = target as { from: string; to: string };
+      issueKeys.push(`broken:${ft.from}->${ft.to}`);
+    }
+  }
+  return { items, issueKeys };
+}
+
+// 处理批量修复 SSE 事件
+function handleBatchEvent(eventType: string, parsed: BatchFixProgressEvent | BatchDoneEvent | { totalIssues: number }): void {
+  if (eventType === 'batch_start') {
+    const payload = parsed as { totalIssues: number };
+    batchTotal.value = payload.totalIssues;
+    batchCurrent.value = 0;
+    batchDoneKeys.value = new Set();
+    fixLogs.value = [];
+    return;
+  }
+  if (eventType === 'issue_start') {
+    const ev = parsed as BatchFixProgressEvent;
+    batchCurrent.value = ev.issueIndex + 1;
+    fixLogs.value.push({
+      step: ev.step,
+      status: ev.status,
+      message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
+      tool: ev.tool,
+      data: ev.data,
+    });
+    return;
+  }
+  if (eventType === 'progress' || eventType === 'fixed') {
+    const ev = parsed as BatchFixProgressEvent;
+    fixLogs.value.push({
+      step: ev.step,
+      status: ev.status,
+      message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
+      tool: ev.tool,
+      data: ev.data,
+    });
+    return;
+  }
+  if (eventType === 'issue_done' || eventType === 'issue_error') {
+    const ev = parsed as BatchFixProgressEvent;
+    batchDoneKeys.value.add(ev.issueKey);
+    fixLogs.value.push({
+      step: ev.step,
+      status: ev.status,
+      message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
+      tool: ev.tool,
+      data: ev.data,
+    });
+    return;
+  }
+  if (eventType === 'batch_done') {
+    const ev = parsed as BatchDoneEvent;
+    fixLogs.value.push({
+      step: ev.step,
+      status: ev.status,
+      message: ev.message,
+    });
+    return;
+  }
+  if (eventType === 'error') {
+    const ev = parsed as FixProgressEvent;
+    fixLogs.value.push({
+      step: ev.step,
+      status: 'error',
+      message: ev.message || '批量修复出错',
+    });
+  }
+}
+
+// 批量修复入口：支持 'all'（全部）/ 'orphan'（仅孤立）/ 'broken'（仅断链）
+// 为什么需要二次确认：批量修复会调用 LLM 多次，耗时较长且消耗 token，需用户明确确认
+async function batchFix(scope: 'all' | 'orphan' | 'broken') {
+  if (!report.value || anyFixing.value) return;
+
+  // 按范围收集待修复问题
+  const allItems: FixRequest[] = [];
+  const allKeys: string[] = [];
+  if (scope === 'all' || scope === 'orphan') {
+    const { items, issueKeys } = buildBatchItems('orphan', report.value.orphans);
+    allItems.push(...items);
+    allKeys.push(...issueKeys);
+  }
+  if (scope === 'all' || scope === 'broken') {
+    const { items, issueKeys } = buildBatchItems('broken_link', report.value.brokenLinks);
+    allItems.push(...items);
+    allKeys.push(...issueKeys);
+  }
+
+  if (allItems.length === 0) {
+    ElMessage.info('当前范围无可修复的问题');
+    return;
+  }
+
+  // 二次确认
+  const scopeText = scope === 'all' ? '全部' : scope === 'orphan' ? '孤立页面' : '断开链接';
+  try {
+    await ElMessageBox.confirm(
+      `将串行修复 ${allItems.length} 个${scopeText}问题，可能耗时较长（每个问题调用一次 LLM）。是否继续？`,
+      '批量修复确认',
+      { confirmButtonText: '开始修复', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    // 用户取消
+    return;
+  }
+
+  batchFixing.value = true;
+  batchTotal.value = allItems.length;
+  batchCurrent.value = 0;
+  batchDoneKeys.value = new Set();
+  fixLogs.value = [];
+
+  const payload: BatchFixRequest = { items: allItems, issueKeys: allKeys };
+
+  try {
+    const res = await fetch('/api/health-check/fix/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const evt of events) {
+        const parsed = parseSSEEvent(evt);
+        if (!parsed) continue;
+        let data: unknown = null;
+        try {
+          data = JSON.parse(parsed.data);
+        } catch {
+          continue;
+        }
+        handleBatchEvent(parsed.eventType, data as BatchFixProgressEvent | BatchDoneEvent);
+      }
+    }
+
+    ElMessage.success(`批量修复完成：${batchDoneKeys.value.size}/${batchTotal.value} 个问题已处理`);
+    // 批量修复后重新体检刷新报告
+    await runCheck();
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('批量修复失败', err));
+  } finally {
+    batchFixing.value = false;
+    batchCurrent.value = 0;
+  }
+}
+
 onMounted(() => {
   runCheck();
 });
@@ -134,7 +325,20 @@ onMounted(() => {
           <h2 class="head-title grad-text">知识库体检</h2>
           <p class="head-tip">检测孤立页面、断链与过期内容</p>
         </div>
-        <el-button size="small" class="neon-btn" :loading="loading" @click="runCheck">重新体检</el-button>
+        <div class="head-actions">
+          <!-- 批量修复全部：仅当有可修复问题（orphan+broken>0）且非修复中时显示 -->
+          <el-button
+            v-if="report && (orphanCount + brokenCount) > 0 && !batchFixing"
+            size="small"
+            class="neon-btn batch-btn"
+            :icon="MagicStick"
+            :disabled="anyFixing"
+            @click="batchFix('all')"
+          >
+            批量修复全部
+          </el-button>
+          <el-button size="small" class="neon-btn" :loading="loading" :disabled="anyFixing" @click="runCheck">重新体检</el-button>
+        </div>
       </div>
 
       <!-- 体检结果摘要：霓虹状态徽章 -->
@@ -146,6 +350,21 @@ onMounted(() => {
             {{ healthStatus === 'healthy' ? '系统状态良好 · ALL CLEAR' : `发现 ${totalIssues} 个问题 · NEEDS ATTENTION` }}
           </span>
         </div>
+      </div>
+
+      <!-- 批量修复进度条：执行中显示 -->
+      <div v-if="batchFixing" class="batch-progress-bar">
+        <div class="batch-progress-head">
+          <span class="batch-progress-label">// 批量修复中</span>
+          <span class="batch-progress-count">{{ batchDoneKeys.size }} / {{ batchTotal }}</span>
+        </div>
+        <el-progress
+          :percentage="batchProgress"
+          :stroke-width="10"
+          :format="() => `当前第 ${batchCurrent} / ${batchTotal} 个`"
+          striped
+          striped-flow
+        />
       </div>
 
       <!-- 加载中 -->
@@ -163,16 +382,32 @@ onMounted(() => {
             <span class="section-count" :class="{ 'has-issue': orphanCount > 0 }">
               {{ orphanCount }}
             </span>
+            <!-- 修复本类：仅当该类有问题且非修复中时显示 -->
+            <el-button
+              v-if="orphanCount > 0 && !batchFixing"
+              size="small"
+              class="neon-btn batch-section-btn"
+              :icon="MagicStick"
+              :disabled="anyFixing"
+              @click="batchFix('orphan')"
+            >
+              修复本类
+            </el-button>
           </div>
       <div class="section-desc">没有任何页面通过 [[链接]] 指向它们</div>
       <div v-if="orphanCount > 0" class="issue-list">
-            <div v-for="p in report.orphans" :key="p" class="issue-item">
+            <div
+              v-for="p in report.orphans"
+              :key="p"
+              class="issue-item"
+              :class="{ 'issue-done': batchDoneKeys.has(`orphan:${p}`) }"
+            >
               <code>{{ p }}</code>
               <el-button
                 size="small"
                 class="neon-btn"
                 :loading="fixingKey === `orphan:${p}`"
-                :disabled="fixingKey !== ''"
+                :disabled="anyFixing"
                 :icon="Tools"
                 @click="fixIssue('orphan', p, `orphan:${p}`)"
               >
@@ -191,10 +426,26 @@ onMounted(() => {
             <span class="section-count" :class="{ 'has-issue': brokenCount > 0 }">
               {{ brokenCount }}
             </span>
+            <!-- 修复本类：仅当该类有问题且非修复中时显示 -->
+            <el-button
+              v-if="brokenCount > 0 && !batchFixing"
+              size="small"
+              class="neon-btn batch-section-btn"
+              :icon="MagicStick"
+              :disabled="anyFixing"
+              @click="batchFix('broken')"
+            >
+              修复本类
+            </el-button>
           </div>
       <div class="section-desc">指向不存在页面的 [[链接]]</div>
       <div v-if="brokenCount > 0" class="issue-list">
-            <div v-for="(b, idx) in report.brokenLinks" :key="idx" class="issue-item broken">
+            <div
+              v-for="(b, idx) in report.brokenLinks"
+              :key="idx"
+              class="issue-item broken"
+              :class="{ 'issue-done': batchDoneKeys.has(`broken:${b.from}->${b.to}`) }"
+            >
               <code>{{ b.from }}</code>
               <span class="arrow">⟶</span>
               <code class="broken-target">[[{{ b.to }}]]</code>
@@ -202,7 +453,7 @@ onMounted(() => {
                 size="small"
                 class="neon-btn"
                 :loading="fixingKey === `broken:${idx}`"
-                :disabled="fixingKey !== ''"
+                :disabled="anyFixing"
                 :icon="Tools"
                 @click="fixIssue('broken_link', b, `broken:${idx}`)"
               >
@@ -290,6 +541,68 @@ onMounted(() => {
   align-items: center;
   gap: 16px;
   margin-bottom: 20px;
+}
+
+.head-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 批量修复按钮：品红渐变突出，区别于普通青蓝 neon-btn */
+.batch-btn {
+  border-color: var(--accent-pink-a50) !important;
+  color: var(--neon-magenta) !important;
+}
+
+.batch-btn:hover:not(.is-disabled) {
+  border-color: var(--neon-magenta) !important;
+  box-shadow: 0 0 16px var(--accent-pink-a40) !important;
+}
+
+/* section 内的"修复本类"按钮：小型化，避免与 section-count 拥挤 */
+.batch-section-btn {
+  margin-left: auto;
+}
+
+/* 批量修复进度条容器 */
+.batch-progress-bar {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 20px;
+  padding: 14px 18px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-pink-a30);
+  border-radius: var(--radius-card);
+}
+
+.batch-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.batch-progress-label {
+  color: var(--neon-magenta);
+  letter-spacing: 0.08em;
+}
+
+.batch-progress-count {
+  color: var(--text-bright);
+  font-weight: 700;
+}
+
+/* 已完成问题项：青色高亮边框 + 半透明背景，与未完成项区分 */
+.issue-item.issue-done {
+  background: var(--accent-cyan-a10);
+  border-color: var(--accent-cyan-a40);
+}
+
+.issue-item.issue-done code {
+  opacity: 0.7;
 }
 
 .head-text {

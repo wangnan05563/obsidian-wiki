@@ -222,7 +222,8 @@ function handleRemove(id: string) {
 .upload-btn.disabled:hover {
   background: rgba(0, 245, 255, 0.05);
   border-color: rgba(0, 245, 255, 0.2);
-  color: var(--text-soft, #888);
+  /* 禁用态 hover 使用更深的 text-dim 以满足 WCAG 对比度（css:S7924） */
+  color: var(--text-dim, #5a5a5a);
   box-shadow: none;
 }
 .attachment-list {

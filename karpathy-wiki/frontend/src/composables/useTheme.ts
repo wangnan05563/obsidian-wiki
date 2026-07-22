@@ -3,6 +3,7 @@
  * 管理主题状态、持久化、DOM 属性同步
  * ============================================================ */
 import { ref, watch } from 'vue';
+import { STORAGE_KEYS } from '../constants/storageKeys';
 
 export type ThemeName =
   | 'macaron'
@@ -60,12 +61,10 @@ export const THEMES: ThemeMeta[] = [
   }
 ];
 
-const STORAGE_KEY = 'karpathy-wiki-theme';
-
 function readStoredTheme(): ThemeName {
   // 从 localStorage 读取用户上次选择，非法值回退到 creative
   // 通过 valid.key 返回而非 stored 类型断言，避免不安全的类型转换
-  const stored = localStorage.getItem(STORAGE_KEY);
+  const stored = localStorage.getItem(STORAGE_KEYS.THEME);
   const valid = THEMES.find((t) => t.key === stored);
   return valid ? valid.key : 'creative';
 }
@@ -75,7 +74,7 @@ const currentTheme = ref<ThemeName>(readStoredTheme());
 function applyTheme(theme: ThemeName) {
   // 同步到 <html data-theme="xxx">，CSS 变量随之切换
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem(STORAGE_KEY, theme);
+  localStorage.setItem(STORAGE_KEYS.THEME, theme);
 }
 
 // 监听变化自动应用，组件只需修改 currentTheme.value

@@ -164,6 +164,23 @@ async function saveConfig() {
   }
 }
 
+// 切换 Provider 时自动保存，避免用户以为切换了但后端仍用旧 provider 启动
+// 为什么自动保存：provider 是关键配置，切换后必须同步到 config.json，
+// 否则点击"启动隧道"时后端读 config.json 会用旧 provider，导致"选 Tailscale 却报 cloudflared 下载失败"
+async function onProviderChange() {
+  // 隧道运行中切换 provider：先停止当前隧道，避免旧 provider 继续占用
+  if (status.value?.status === 'running') {
+    try {
+      await fetch('/api/tunnel/stop', { method: 'POST' });
+      await loadStatus();
+      ElMessage.info('已停止当前隧道，请手动启动新 Provider');
+    } catch {
+      // stop 失败不阻塞保存
+    }
+  }
+  await saveConfig();
+}
+
 function openUrl() {
   if (status.value?.publicUrl) {
     window.open(status.value.publicUrl, '_blank');
@@ -416,9 +433,9 @@ onBeforeUnmount(() => {
       <div class="config-block">
         <!-- Provider 选择 -->
         <div class="config-row">
-          <label class="row-label">Provider</label>
+          <label class="row-label" for="tunnel-provider">Provider</label>
           <div class="row-value">
-            <el-select v-model="formProvider" placeholder="选择穿透服务">
+            <el-select id="tunnel-provider" v-model="formProvider" placeholder="选择穿透服务" @change="onProviderChange">
               <el-option label="Cloudflare Tunnel（免注册）" value="cloudflare" />
               <el-option label="cpolar（国内推荐）" value="cpolar" />
               <el-option label="Tailscale Funnel（免费固定地址）" value="tailscale" />
@@ -429,9 +446,9 @@ onBeforeUnmount(() => {
 
         <!-- Cloudflare 模式切换 -->
         <div class="config-row" v-if="formProvider === 'cloudflare'">
-          <label class="row-label">隧道模式</label>
+          <label class="row-label" for="tunnel-mode">隧道模式</label>
           <div class="row-value">
-            <el-radio-group v-model="formTunnelMode">
+            <el-radio-group id="tunnel-mode" v-model="formTunnelMode">
               <el-radio value="quick">Quick（临时域名，免注册）</el-radio>
               <el-radio value="named">Named（固定域名，需配置）</el-radio>
             </el-radio-group>
@@ -446,7 +463,7 @@ onBeforeUnmount(() => {
 
         <!-- Named Tunnel 配置状态 -->
         <div class="config-row" v-if="formProvider === 'cloudflare' && formTunnelMode === 'named'">
-          <label class="row-label">固定域名</label>
+          <span class="row-label">固定域名</span>
           <div class="row-value">
             <div v-if="config?.tunnelId" class="named-config-info">
               <div class="info-line">
@@ -468,9 +485,10 @@ onBeforeUnmount(() => {
 
         <!-- cpolar Authtoken -->
         <div class="config-row" v-if="formProvider === 'cpolar'">
-          <label class="row-label">Authtoken</label>
+          <label class="row-label" for="tunnel-authtoken">Authtoken</label>
           <div class="row-value">
             <el-input
+              id="tunnel-authtoken"
               v-model="formAuthtoken"
               type="password"
               show-password
@@ -481,7 +499,7 @@ onBeforeUnmount(() => {
 
         <!-- Tailscale 前置条件 -->
         <div class="config-row" v-if="formProvider === 'tailscale'">
-          <label class="row-label">前置条件</label>
+          <span class="row-label">前置条件</span>
           <div class="row-value">
             <div class="hint">
               1. 需预装 Tailscale：<a href="https://tailscale.com/download/windows" target="_blank">下载地址</a><br>
@@ -494,18 +512,18 @@ onBeforeUnmount(() => {
 
         <!-- 本地端口 -->
         <div class="config-row">
-          <label class="row-label">本地端口</label>
+          <label class="row-label" for="tunnel-port">本地端口</label>
           <div class="row-value">
-            <el-input-number v-model="formPort" :min="0" :max="65535" controls-position="right" />
+            <el-input-number id="tunnel-port" v-model="formPort" :min="0" :max="65535" controls-position="right" />
             <div class="hint">0 = 自动继承服务端口</div>
           </div>
         </div>
 
         <!-- 二进制路径（Tailscale 不需要，检测系统安装）-->
         <div class="config-row" v-if="formProvider !== 'tailscale'">
-          <label class="row-label">二进制路径</label>
+          <label class="row-label" for="tunnel-binary-path">二进制路径</label>
           <div class="row-value">
-            <el-input v-model="formBinaryPath" placeholder="留空则自动下载到 data/ 目录" />
+            <el-input id="tunnel-binary-path" v-model="formBinaryPath" placeholder="留空则自动下载到 data/ 目录" />
           </div>
         </div>
 

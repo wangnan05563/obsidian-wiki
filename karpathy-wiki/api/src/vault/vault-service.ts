@@ -13,6 +13,10 @@ export interface TreeNode {
 const WRITE_ALLOWED_DIRS = new Set(['raw', 'entities', 'concepts', 'comparisons', 'queries']);
 const WRITE_ALLOWED_FILES = new Set(['index.md', 'log.md']);
 
+// 页面目录列表：extractRefs 解析 [[页面名]] 与 buildLinkGraph 收集节点均复用此列表
+// 为什么抽取为常量：避免 resolvePageName 与 buildLinkGraph 两处硬编码不一致
+const PAGE_DIRS = ['entities', 'concepts', 'comparisons', 'queries'];
+
 // 默认 SCHEMA 内容。init 时若 SCHEMA.md 不存在则写入此内容，保证首次启动即可用。
 const DEFAULT_SCHEMA = `# 知识库页面规范 SCHEMA
 
@@ -93,6 +97,51 @@ export class VaultService {
     return fs.readFile(full, 'utf8');
   }
 
+  // 解析 [[页面名]] 为实际文件相对路径（如 llm-wiki → concepts/llm-wiki.md）。
+  // 为什么需要：RefsList 点击参考资料跳转 Browse 时，前端直接把 ref 字符串当作 path 传给 /api/files，
+  // 若 ref 是页面名（无目录前缀、无 .md 后缀），后端 readFile 找不到文件返回 404。
+  // 这里在 query 阶段就把页面名解析为路径，保证 refs 数组元素即文件相对路径。
+  // 找不到对应文件时返回 null，调用方保留原页面名作向后兼容。
+  // 两阶段匹配：
+  //   1. 精确匹配（向后兼容，文件名与页面名完全一致）
+  //   2. 规范化匹配（大小写不敏感 + 空格↔连字符），处理 LLM 命名变体
+  //      例如 [[LLM Wiki]] 对应文件 concepts/llm-wiki.md
+  async resolvePageName(pageName: string): Promise<string | null> {
+    // 阶段 1：精确匹配
+    for (const dir of PAGE_DIRS) {
+      const rel = `${dir}/${pageName}.md`;
+      try {
+        const full = this.resolve(rel);
+        await fs.access(full);
+        return rel;
+      } catch {
+        // 文件不存在，继续下一个目录
+      }
+    }
+    // 阶段 2：规范化匹配（大小写不敏感 + 空格转连字符）
+    // 为什么不直接用精确匹配：LLM 可能返回 [[LLM Wiki]] 但 vault 文件名是 llm-wiki.md，
+    // 精确匹配会 404。规范化后用 readdir 扫描目录，找到变体命名文件。
+    const normalized = pageName.toLowerCase().replace(/\s+/g, '-');
+    for (const dir of PAGE_DIRS) {
+      const dirFull = path.join(this.vaultPath, dir);
+      let entries: string[] = [];
+      try {
+        entries = await fs.readdir(dirFull);
+      } catch {
+        continue;
+      }
+      for (const f of entries) {
+        if (!f.endsWith('.md')) continue;
+        const baseName = f.slice(0, -3);
+        const normBase = baseName.toLowerCase().replace(/\s+/g, '-');
+        if (normBase === normalized) {
+          return `${dir}/${f}`;
+        }
+      }
+    }
+    return null;
+  }
+
   // 写入文件，含路径白名单校验。SCHEMA.md 不允许 AI 写（10.4 写入约束）。
   async writeFile(relativePath: string, content: string): Promise<void> {
     const full = this.resolve(relativePath);
@@ -160,22 +209,24 @@ export class VaultService {
   // 构建双向链接图。纯确定性逻辑，不调 LLM（M-2 healthCheck 与 harness 关系）。
   // 节点 = 页面文件（去 .md 后缀作页面名），边 = [[页面名]] 引用。
   // 页面收集与边抽取拆分为辅助方法，降低主函数认知复杂度（S3776）
+  // 并行化 IO：4 目录收集 + 全部页面边抽取用 Promise.all，避免串行 fs 等待
   async buildLinkGraph(): Promise<{ nodes: string[]; edges: Array<{ from: string; to: string }> }> {
-    const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
     const nameToPath = new Map<string, string>();
     const nodes: string[] = [];
 
-    // 收集所有页面，建立 页面名 → 相对路径 映射
-    for (const d of pageDirs) {
-      await this.collectPagesFromDir(d, nodes, nameToPath);
-    }
+    // 并行收集 4 个目录：Promise.all 同时发起 readdir，避免串行等待
+    await Promise.all(
+      PAGE_DIRS.map((d) => this.collectPagesFromDir(d, nodes, nameToPath)),
+    );
 
-    // 解析每个页面的 [[link]]，建立边
-    const edges: Array<{ from: string; to: string }> = [];
-    for (const [, fromPath] of nameToPath) {
-      const pageEdges = await this.extractEdgesFromPage(fromPath, nameToPath);
-      edges.push(...pageEdges);
-    }
+    // 并行读取所有页面并抽取边：每个文件 IO 独立，可同时进行
+    // 边数组最后合并，避免顺序依赖
+    const edgesArrays = await Promise.all(
+      Array.from(nameToPath).map(([, fromPath]) =>
+        this.extractEdgesFromPage(fromPath, nameToPath),
+      ),
+    );
+    const edges: Array<{ from: string; to: string }> = edgesArrays.flat();
 
     return { nodes, edges };
   }

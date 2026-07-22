@@ -234,7 +234,7 @@
 [data-theme="ecommerce"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
   background: rgba(255, 107, 53, 0.08) !important;
   border-color: #ff6b35 !important;
-  color: #c43c0e !important; /* NOSONAR: 电商主题橙色系设计要求，浅橙背景上实际对比度达标 */
+  color: #5a1a05 !important; /* 使用更深的橙棕色满足 WCAG 对比度（css:S7924） */
   box-shadow: 0 4px 12px rgba(255, 107, 53, 0.15) !important;
 }
 

@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { DocumentCopy, Document, RefreshRight, VideoPlay, VideoPause } from '@element-plus/icons-vue';
 import { useTtsStore } from '../stores/tts';
+import { msgFeedbackKey } from '../constants/storageKeys';
 
 // F-3.7 + F-3.13 + F-3.6 消息操作工具栏：hover assistant 气泡时浮窗淡入
 // 当前实现：复制纯文本 / 复制 MD / 朗读 / 重新生成 / 👍 / 👎
@@ -22,13 +23,13 @@ const emit = defineEmits<{
 // F-3.13 反馈状态：'up' | 'down' | null
 // 为什么用 ref + localStorage 同步：本地读取避免每次点击都查 localStorage
 const feedback = ref<'up' | 'down' | null>(null);
-const FEEDBACK_PREFIX = 'msg-feedback-';
 
 // F-3.6 TTS：通过 store 协调多条消息的朗读切换，避免同时多条朗读
 const ttsStore = useTtsStore();
 
 // F-3.6 浏览器是否支持 speechSynthesis：不支持时灰显朗读按钮
-const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+// 使用 globalThis 以满足 S7764，并在 SSR 场景下避免 ReferenceError
+const ttsSupported = typeof globalThis !== 'undefined' && 'speechSynthesis' in globalThis;
 
 // F-3.6 当前消息朗读状态：仅当 currentMsgId === props.msgId 时才有意义
 // 为什么用 computed：store 中 currentMsgId 变化时自动更新按钮图标
@@ -50,10 +51,21 @@ const ttsTitle = computed(() => {
   return '朗读';
 });
 
+// F-3.6 语速浮窗显示状态：仅当本消息正在朗读且用户点击 rate-btn 时展开
+const showRatePanel = ref(false);
+
+// F-3.6 处理语速滑块变化：转为数字后调 store.setRate
+// 为什么 parseFloat 后 clamp：防御滑块原始值越界（极端浏览器行为）
+function handleRateChange(raw: string) {
+  const v = Number.parseFloat(raw);
+  if (Number.isNaN(v)) return;
+  ttsStore.setRate(v);
+}
+
 onMounted(() => {
   // 恢复当前消息已记录的反馈状态
   if (props.msgId) {
-    const saved = localStorage.getItem(FEEDBACK_PREFIX + props.msgId);
+    const saved = localStorage.getItem(msgFeedbackKey(props.msgId));
     if (saved === 'up' || saved === 'down') {
       feedback.value = saved;
     }
@@ -64,7 +76,7 @@ onMounted(() => {
 // 降级到 document.execCommand('copy')（兼容非 HTTPS 场景，如 HTTP 局域网访问）
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
-    if (navigator.clipboard && window.isSecureContext) {
+    if (navigator.clipboard && globalThis.isSecureContext) {
       await navigator.clipboard.writeText(text);
       return true;
     }
@@ -76,7 +88,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
     document.body.appendChild(ta);
     ta.select();
     const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
+    ta.remove();
     return ok;
   } catch {
     return false;
@@ -92,32 +104,32 @@ async function copyToClipboard(text: string): Promise<boolean> {
 function stripMarkdown(md: string): string {
   return md
     // 代码块：替换为占位（保留代码内容，去除 ``` 围栏）
-    .replace(/```[\s\S]*?\n([\s\S]*?)```/g, (_, code) => code.trim())
+    .replaceAll(/```[\s\S]*?\n([\s\S]*?)```/g, (_, code) => code.trim())
     // 行内代码：去反引号
-    .replace(/`([^`]+)`/g, '$1')
+    .replaceAll(/`([^`]+)`/g, '$1')
     // 图片：替换为 alt 文本
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replaceAll(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     // 链接：替换为文本
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replaceAll(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     // 标题井号
-    .replace(/^#{1,6}\s+/gm, '')
+    .replaceAll(/^#{1,6}\s+/gm, '')
     // 引用块 >
-    .replace(/^>\s+/gm, '')
+    .replaceAll(/^>\s+/gm, '')
     // 粗体/斜体
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
+    .replaceAll(/\*\*([^*]+)\*\*/g, '$1')
+    .replaceAll(/\*([^*]+)\*/g, '$1')
+    .replaceAll(/__([^_]+)__/g, '$1')
+    .replaceAll(/_([^_]+)_/g, '$1')
     // 删除线
-    .replace(/~~([^~]+)~~/g, '$1')
+    .replaceAll(/~~([^~]+)~~/g, '$1')
     // 无序列表标记
-    .replace(/^[-*+]\s+/gm, '')
+    .replaceAll(/^[-*+]\s+/gm, '')
     // 有序列表标记
-    .replace(/^\d+\.\s+/gm, '')
+    .replaceAll(/^\d+\.\s+/gm, '')
     // 水平分割线
-    .replace(/^---+$/gm, '')
+    .replaceAll(/^---+$/gm, '')
     // 收敛多余空行
-    .replace(/\n{3,}/g, '\n\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
     .trim();
 }
 
@@ -172,11 +184,11 @@ function handleFeedback(type: 'up' | 'down') {
   if (feedback.value === type) {
     // 取消反馈
     feedback.value = null;
-    localStorage.removeItem(FEEDBACK_PREFIX + props.msgId);
+    localStorage.removeItem(msgFeedbackKey(props.msgId));
     ElMessage.info('已取消反馈');
   } else {
     feedback.value = type;
-    localStorage.setItem(FEEDBACK_PREFIX + props.msgId, type);
+    localStorage.setItem(msgFeedbackKey(props.msgId), type);
     ElMessage.success('感谢反馈');
   }
 }
@@ -209,6 +221,28 @@ function handleFeedback(type: 'up' | 'down') {
     >
       <el-icon><component :is="ttsIcon" /></el-icon>
     </button>
+    <!-- F-3.6 语速调节按钮：点击展开浮窗滑块，仅当本消息正在朗读时显示 -->
+    <button
+      v-if="ttsState !== 'idle'"
+      class="toolbar-btn rate-btn"
+      :class="{ active: showRatePanel }"
+      title="语速"
+      @click.stop="showRatePanel = !showRatePanel"
+    >{{ Math.round(ttsStore.rate * 100) / 100 }}x</button>
+    <!-- F-3.6 语速浮窗：0.5-2.0 滑块，步长 0.1，默认 1.0 -->
+    <div v-if="showRatePanel && ttsState !== 'idle'" class="rate-panel" @click.stop>
+      <span class="rate-label">语速 {{ ttsStore.rate.toFixed(1) }}x</span>
+      <input
+        type="range"
+        min="0.5"
+        max="2.0"
+        step="0.1"
+        :value="ttsStore.rate"
+        class="rate-slider"
+        @input="handleRateChange(($event.target as HTMLInputElement).value)"
+      />
+      <button class="rate-reset" title="恢复默认 1.0x" @click="handleRateChange('1')">1.0x</button>
+    </div>
     <!-- F-3.13 重新生成：复用该消息对应的 user 问题，重新发起问答 -->
     <button
       class="toolbar-btn"
@@ -293,4 +327,61 @@ function handleFeedback(type: 'up' | 'down') {
 
 /* hover 父气泡时显现：触发规则由 Query.vue 控制
    为什么不放这里：scoped 隔离下无法选中父元素，需在父组件作用域定义 */
+
+/* F-3.6 语速按钮：紧凑显示当前语速值 */
+.rate-btn {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  min-width: 32px;
+  padding: 0 6px;
+}
+
+/* F-3.6 语速浮窗：绝对定位在工具栏下方 */
+.rate-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: var(--bg-scene, rgba(20, 20, 30, 0.92));
+  backdrop-filter: var(--blur);
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.rate-label {
+  font-size: 11px;
+  color: var(--text-soft, #888);
+  font-family: var(--font-mono, monospace);
+}
+
+/* F-3.6 语速滑块：原生 input[type=range] 样式适配主题 */
+.rate-slider {
+  width: 120px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--neon-cyan, #00f5ff);
+}
+
+.rate-reset {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  border-radius: 4px;
+  color: var(--text-soft, #888);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.rate-reset:hover {
+  background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15));
+  color: var(--neon-cyan, #00f5ff);
+  border-color: var(--neon-cyan, #00f5ff);
+}
 </style>

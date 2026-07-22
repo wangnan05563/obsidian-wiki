@@ -106,7 +106,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     // 深拷贝：剥离 Vue reactive proxy，转为纯对象供 fetch JSON 序列化与 IndexedDB structured clone
     // 为什么用 JSON 而非 structuredClone：structuredClone 无法克隆 Vue 3 reactive proxy 数组，
     // 会抛出 "[object Array] could not be cloned"；JSON.stringify 会自动遍历 proxy 属性生成纯对象
-    const plainMessages: ChatMessage[] = JSON.parse(JSON.stringify(messages));
+    const plainMessages: ChatMessage[] = JSON.parse(JSON.stringify(messages)); // NOSONAR: S7784 - structuredClone 无法克隆 Vue 3 reactive proxy 数组
 
     const record: ConversationRecord = {
       id,

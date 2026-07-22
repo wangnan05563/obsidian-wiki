@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { VaultService } from '../vault/vault-service.js';
@@ -31,17 +31,22 @@ export function registerStatsRoute(app: FastifyInstance, vault: VaultService) {
       const graph = await vault.buildLinkGraph();
       const vaultPath = vault.getVaultPath();
 
-      // 按目录统计页数
+      // 按目录统计页数：Promise.all 并行 readdir，避免串行 IO 等待
       const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
       const dirCounts: Record<string, number> = {};
-      for (const d of pageDirs) {
-        const dirFull = path.join(vaultPath, d);
-        try {
-          const entries = await fs.readdir(dirFull);
-          dirCounts[d] = entries.filter((f) => f.endsWith('.md')).length;
-        } catch {
-          dirCounts[d] = 0;
-        }
+      const dirResults = await Promise.all(
+        pageDirs.map(async (d) => {
+          const dirFull = path.join(vaultPath, d);
+          try {
+            const entries = await fs.readdir(dirFull);
+            return [d, entries.filter((f) => f.endsWith('.md')).length] as const;
+          } catch {
+            return [d, 0] as const;
+          }
+        }),
+      );
+      for (const [d, count] of dirResults) {
+        dirCounts[d] = count;
       }
 
       // 读取 log.md 末尾若干行作为最近编译记录（简单实现，不解析完整结构）

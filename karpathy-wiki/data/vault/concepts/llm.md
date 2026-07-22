@@ -1,29 +1,23 @@
 ---
-title: 大语言模型（LLM）
+title: LLM
 type: concept
-created: 2024-12-01
-updated: 2024-12-01
-source: raw/input-1783483802520.md
-tags: [llm, large-language-model, ai, nlp]
+created: 2025-04-21
+updated: 2025-04-21
+source: raw/wiki-batch-1784719195367-19-test-20.md
+tags: [ai, language-model, entity-extraction]
 ---
 
-# 大语言模型（LLM）
+# LLM
 
-**大语言模型**（Large Language Model，LLM）是一种基于 Transformer 架构、在大规模文本语料上预训练的深度学习模型，能够理解和生成自然语言文本。
+**LLM** (Large Language Model) refers to a type of artificial intelligence model trained on vast amounts of text data to understand and generate human-like language. In the context of this wiki knowledge base, LLMs are used to extract entities and compile structured content from raw materials.
 
-## 在 RAG 中的作用
+## Role in Compilation
 
-在 [[rag|RAG]]（检索增强生成）系统中，LLM 作为**生成引擎**，负责接收增强后的提示（包含用户查询 + 检索到的外部知识），并生成最终回答。LLM 的语言理解与生成能力直接影响 RAG 系统的输出质量和自然度。
+- Entity extraction from raw documents
+- Content analysis and page type determination
+- Generation of [[双向链接|bidirectional links]] between related pages
 
-## 主流模型
+## Related
 
-- GPT-4 / GPT-4o（OpenAI）
-- Claude 3 / Claude 3.5（Anthropic）
-- Llama 3（Meta）
-- Gemini（Google）
-- Qwen（阿里巴巴）
-
-## 相关概念
-
-- [[rag|RAG（检索增强生成）]]
-- [[embedding|嵌入]]
+- [[Batch Compile Testing]] relies on LLM capabilities
+- [[Test Document 20]] contains text for LLM to process

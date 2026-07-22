@@ -1,18 +1,18 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { LlmPreset } from '../types';
+import { STORAGE_KEYS } from '../constants/storageKeys';
 
 // §3.3 useModelStore — 模型预设管理。
 // 职责：加载预设列表、切换当前模型并持久化"选中预设"到 localStorage、同步到后端即时生效。
 // apiKey 权威源：后端 config.json。前端不再 localStorage 明文存储 apiKey，
 // 避免 localStorage 与 config.json 双轨保存导致状态不一致。
 // 切换预设时从后端读取当前脱敏 apiKey 返显，明文 key 仅用户输入时短暂存在内存。
-const SELECTED_PRESET_KEY = 'selectedModelPreset';
 
 export const useModelStore = defineStore('model', () => {
   // 防止 SSR 或隐私模式下 localStorage 不可用
   const savedPresetKey = (() => {
-    try { return localStorage.getItem(SELECTED_PRESET_KEY); }
+    try { return localStorage.getItem(STORAGE_KEYS.SELECTED_MODEL_PRESET); }
     catch { return null; }
   })();
   const selectedPresetKey = ref<string>(savedPresetKey || '');
@@ -65,7 +65,7 @@ export const useModelStore = defineStore('model', () => {
     if (!preset) return;
     selectedPresetKey.value = preset.key;
     currentModel.value = preset.model;
-    localStorage.setItem(SELECTED_PRESET_KEY, preset.key);
+    localStorage.setItem(STORAGE_KEYS.SELECTED_MODEL_PRESET, preset.key);
     try {
       const res = await fetch('/api/ai/config', {
         method: 'PUT',

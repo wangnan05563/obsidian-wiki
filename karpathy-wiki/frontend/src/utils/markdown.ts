@@ -74,6 +74,43 @@ md.renderer.rules.image = function(tokens, idx, options, env, self) {
   return defaultImage(tokens, idx, options, env, self);
 };
 
+// F-3.8 引用编号锚点：将 assistant 文本中的 [1]/[2] 等纯数字引用转为可点击锚点
+// 跳转目标为 RefsList 卡片的 id="ref-N"，点击后浏览器 scrollIntoView 平滑滚动
+// 为什么用 inline 规则而非 text 后处理：避免破坏 code_block / link 等已渲染 token
+// 为什么要求 [N] 后非 '('：防止与 markdown 链接 [text](url) 冲突，链接形式不会命中此规则
+md.inline.ruler.before('link', 'ref_anchor', (state, silent) => {
+  const src = state.src;
+  const pos = state.pos;
+  // 必须以 '[' 开头
+  if (src.codePointAt(pos) !== 0x5B /* [ */) return false;
+  // 解析数字
+  let i = pos + 1;
+  let num = '';
+  while (i < src.length && src.codePointAt(i)! >= 0x30 && src.codePointAt(i)! <= 0x39) {
+    num += src[i];
+    i++;
+  }
+  // 必须至少 1 位数字
+  if (num.length === 0) return false;
+  // 必须以 ']' 闭合
+  if (src.codePointAt(i) !== 0x5D /* ] */) return false;
+  // 后一字符不能是 '('，否则是 markdown 链接 [N](url)（虽然不常见但防御）
+  if (src.codePointAt(i + 1) === 0x28 /* ( */) return false;
+  // silent 模式仅探测不消费，避免影响其他规则的探测
+  if (silent) return true;
+  // 消费字符并推送 token
+  state.pos = i + 1;
+  const token = state.push('ref_anchor', '', 0);
+  token.meta = { num };
+  return true;
+});
+// 渲染 ref_anchor token 为 <a> 标签
+md.renderer.rules.ref_anchor = (tokens, idx) => {
+  const num = tokens[idx].meta.num;
+  const escaped = md.utils.escapeHtml(num);
+  return `<a href="#ref-${escaped}" class="ref-anchor" data-ref="${escaped}">[${escaped}]</a>`;
+};
+
 // 将 markdown 文本渲染为 HTML
 // 为什么需要：LLM 返回的答案包含 markdown 语法（标题、列表、代码块等），需格式化展示
 export function renderMarkdown(text: string): string {

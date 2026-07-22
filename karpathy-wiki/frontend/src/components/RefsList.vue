@@ -12,7 +12,8 @@ import type { Reference } from '../types';
 //   6. ref 为空 → 整个区块隐藏（v-if）
 const props = defineProps<{ refs: Reference[] }>();
 
-const expanded = ref(true);
+// 默认折叠：减少视觉噪音，用户主动展开查看参考资料
+const expanded = ref(false);
 // F-3.8 默认展开前 3 条，超过的折叠为「展开更多」按钮
 const COLLAPSE_THRESHOLD = 3;
 const showAll = ref(false);
@@ -68,6 +69,7 @@ function handleRefClick(ref: Reference) {
     <!-- 卡片列表：默认前 3 条，超过折叠 -->
     <div class="refs-body" v-if="expanded">
       <div v-for="ref in visibleRefs" :key="ref.url || ref.path || ref.citeIndex"
+        :id="`ref-${ref.citeIndex}`"
         class="ref-item"
         :class="ref.source"
         @click="handleRefClick(ref)">

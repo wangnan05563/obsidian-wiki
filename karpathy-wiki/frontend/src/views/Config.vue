@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
+import { STORAGE_KEYS, presetStorageKey } from '../constants/storageKeys';
 
 const activeTab = ref<'schema' | 'config' | 'ai' | 'theme'>('schema');
 const config = ref<ConfigData | null>(null);
@@ -180,13 +181,20 @@ const aiForm = ref({
 // 当前选中的预设 key（用于按预设持久化配置）
 const selectedPresetKey = ref('');
 
+// 表单 placeholder 从当前选中预设派生，避免硬编码 OpenAI 默认值。
+// 为什么用 computed：切换预设时 aiForm.provider 变化自动重算 placeholder，
+//   无需在 applyPreset/loadAiConfig 中手动同步。
+const matchedPreset = computed(() =>
+  aiPresets.value.find(p => p.provider === aiForm.value.provider)
+);
+const aiBaseUrlPlaceholder = computed(() => matchedPreset.value?.baseUrl ?? '请输入 API Base URL');
+const aiModelPlaceholder = computed(() => matchedPreset.value?.model ?? '请输入模型名称');
+
 // 按预设持久化非敏感 UI 状态（baseUrl/model）到 localStorage。
 // 为什么不存 apiKey：apiKey 明文存 localStorage 与后端 config.json 形成双轨，
 // 两者独立变化会导致状态不一致。apiKey 唯一权威源为后端 config.json。
 // 切换预设时 apiKey 从后端读取脱敏值返显，明文 key 仅用户输入时短暂存在内存。
-function presetStorageKey(presetKey: string): string {
-  return `llmPresetConfig:${presetKey}`;
-}
+// presetStorageKey 函数已从 constants/storageKeys.ts 导入，此处不再重复定义。
 
 interface PresetConfigCache {
   baseUrl: string;
@@ -219,7 +227,7 @@ function clearAllPresetCache(): void {
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
-    if (k && (k.startsWith('llmPresetConfig:') || k.startsWith('apiKey:'))) {
+    if (k && (k.startsWith(STORAGE_KEYS.LLM_PRESET_CONFIG_PREFIX) || k.startsWith('apiKey:'))) {
       keysToRemove.push(k);
     }
   }
@@ -435,10 +443,11 @@ const testResultText = computed(() => {
   return r.ok ? `连接成功（模型: ${r.model || '未知'}）` : r.detail;
 });
 
-// 测试结果图标
+// 测试结果图标：成功/失败返回不同字符，避免 S3923（两分支返回相同值）
 const testResultIcon = computed(() => {
   const r = aiTestResult.value;
-  return r?.ok ? '?' : '?';
+  if (!r) return '';
+  return r.ok ? '✓' : '✗';
 });
 
 // ===== 联网搜索配置 =====
@@ -526,9 +535,208 @@ async function saveWebSearchConfig() {
   }
 }
 
+// ===== 高级配置：运行参数 / 健康检查 / 批量编译 / 日志 =====
+// 这些表单补全 config.json 已有但前端缺失的编辑入口，降低用户配置门槛。
+// 表单初始值从 GET /api/config 派生，保存时调用 PUT /api/config/{子资源} 落盘。
+
+// 运行参数表单（maxSteps / tokenBudget）
+const budgetForm = ref({ maxSteps: 20, tokenBudget: 50000 });
+const savingBudget = ref(false);
+
+// 健康检查表单（staleDays）
+const healthCheckForm = ref({ staleDays: 30 });
+const savingHealthCheck = ref(false);
+
+// 批量编译表单（allowedExtensions 逗号分隔输入 + maxBatchSize + maxFileSizeMb）
+const batchForm = ref({
+  allowedExtensionsText: 'md, txt, pdf, html, json',
+  maxBatchSize: 20,
+  maxFileSizeMb: 10,
+});
+const savingBatch = ref(false);
+
+// 日志表单（level / enableRequestLog）
+const loggingForm = ref({ level: 'info', enableRequestLog: true });
+const savingLogging = ref(false);
+
+// 日志级别可选项（与后端 pino logger 级别对齐）
+const LOG_LEVEL_OPTIONS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
+
+// 从 GET /api/config 返回值派生 4 个表单的初始值
+function syncAdvancedFormsFromConfig(cfg: ConfigData): void {
+  budgetForm.value.maxSteps = cfg.budget.maxSteps;
+  budgetForm.value.tokenBudget = cfg.budget.tokenBudget;
+  healthCheckForm.value.staleDays = cfg.healthCheck.staleDays;
+  batchForm.value.allowedExtensionsText = cfg.batch.allowedExtensions.join(', ');
+  batchForm.value.maxBatchSize = cfg.batch.maxBatchSize;
+  batchForm.value.maxFileSizeMb = cfg.batch.maxFileSizeMb;
+  loggingForm.value.level = cfg.logging.level;
+  loggingForm.value.enableRequestLog = cfg.logging.enableRequestLog;
+}
+
+// 保存运行参数
+async function saveBudget() {
+  if (!Number.isInteger(budgetForm.value.maxSteps) || budgetForm.value.maxSteps < 1) {
+    ElMessage.warning('最大步数必须为正整数');
+    return;
+  }
+  if (!Number.isInteger(budgetForm.value.tokenBudget) || budgetForm.value.tokenBudget < 1) {
+    ElMessage.warning('Token 预算必须为正整数');
+    return;
+  }
+  savingBudget.value = true;
+  try {
+    const res = await fetch('/api/config/budget', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        maxSteps: budgetForm.value.maxSteps,
+        tokenBudget: budgetForm.value.tokenBudget,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      // 同步本地 config 引用，避免只读展示与编辑表单不一致
+      if (config.value) {
+        config.value.budget = data.config;
+      }
+      ElMessage.success('运行参数保存成功');
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存运行参数失败', err));
+  } finally {
+    savingBudget.value = false;
+  }
+}
+
+// 保存健康检查配置
+async function saveHealthCheck() {
+  if (!Number.isInteger(healthCheckForm.value.staleDays) || healthCheckForm.value.staleDays < 1) {
+    ElMessage.warning('过期阈值必须为正整数（天）');
+    return;
+  }
+  savingHealthCheck.value = true;
+  try {
+    const res = await fetch('/api/config/health-check', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ staleDays: healthCheckForm.value.staleDays }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      if (config.value) {
+        config.value.healthCheck = data.config;
+      }
+      ElMessage.success('健康检查配置保存成功');
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存健康检查配置失败', err));
+  } finally {
+    savingHealthCheck.value = false;
+  }
+}
+
+// 保存批量编译配置
+async function saveBatch() {
+  // 解析逗号分隔的扩展名列表
+  const extensions = batchForm.value.allowedExtensionsText
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(e => e.length > 0);
+  if (extensions.length === 0) {
+    ElMessage.warning('请至少填写一个允许的扩展名');
+    return;
+  }
+  if (!Number.isInteger(batchForm.value.maxBatchSize) || batchForm.value.maxBatchSize < 1) {
+    ElMessage.warning('最大批量数必须为正整数');
+    return;
+  }
+  if (!Number.isInteger(batchForm.value.maxFileSizeMb) || batchForm.value.maxFileSizeMb < 1) {
+    ElMessage.warning('单文件大小上限必须为正整数（MB）');
+    return;
+  }
+  savingBatch.value = true;
+  try {
+    const res = await fetch('/api/config/batch', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        allowedExtensions: extensions,
+        maxBatchSize: batchForm.value.maxBatchSize,
+        maxFileSizeMb: batchForm.value.maxFileSizeMb,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      if (config.value) {
+        config.value.batch = data.config;
+      }
+      // 同步表单的 allowedExtensionsText 为标准化后的值
+      batchForm.value.allowedExtensionsText = data.config.allowedExtensions.join(', ');
+      const msg = data.requireRestart?.length
+        ? `批量编译配置保存成功（提示：${data.requireRestart.join(', ')} 需重启服务才完全生效）`
+        : '批量编译配置保存成功';
+      ElMessage.success(msg);
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存批量编译配置失败', err));
+  } finally {
+    savingBatch.value = false;
+  }
+}
+
+// 保存日志配置
+async function saveLogging() {
+  if (!LOG_LEVEL_OPTIONS.includes(loggingForm.value.level)) {
+    ElMessage.warning(`日志级别必须为: ${LOG_LEVEL_OPTIONS.join(', ')}`);
+    return;
+  }
+  savingLogging.value = true;
+  try {
+    const res = await fetch('/api/config/logging', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        level: loggingForm.value.level,
+        enableRequestLog: loggingForm.value.enableRequestLog,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      if (config.value) {
+        config.value.logging = data.config;
+      }
+      const msg = data.requireRestart?.length
+        ? `日志配置保存成功（提示：${data.requireRestart.join(', ')} 需重启服务才完全生效）`
+        : '日志配置保存成功';
+      ElMessage.success(msg);
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存日志配置失败', err));
+  } finally {
+    savingLogging.value = false;
+  }
+}
+
 onMounted(async () => {
   loadSchema();
-  loadConfig();
+  // loadConfig 完成后同步派生 4 个高级表单的初始值
+  await loadConfig();
+  if (config.value) {
+    syncAdvancedFormsFromConfig(config.value);
+  }
   loadHistory();
   // 先加载预设列表，loadAiConfig 依赖 aiPresets 匹配当前 provider
   await loadPresets();
@@ -748,6 +956,139 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+
+            <!-- 高级配置编辑区：补全 budget/healthCheck/batch/logging 的前端编辑入口 -->
+            <div class="advanced-config">
+              <div class="section-header">
+                <span class="section-desc">// 高级配置（编辑后即时生效，无需手动改 config.json）</span>
+              </div>
+
+              <!-- 运行参数编辑 -->
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 运行参数 <span class="block-bracket">]</span></h3>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-max-steps">最大步数</label>
+                  <el-input
+                    id="cfg-max-steps"
+                    v-model.number="budgetForm.maxSteps"
+                    type="number"
+                    :min="1"
+                    :max="100"
+                    class="form-input"
+                  />
+                </div>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-token-budget">Token 预算</label>
+                  <el-input
+                    id="cfg-token-budget"
+                    v-model.number="budgetForm.tokenBudget"
+                    type="number"
+                    :min="1000"
+                    :step="1000"
+                    class="form-input"
+                  />
+                </div>
+                <div class="ai-actions">
+                  <el-button class="neon-btn-primary" :loading="savingBudget" @click="saveBudget">
+                    保存
+                  </el-button>
+                </div>
+              </div>
+
+              <!-- 健康检查编辑 -->
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 健康检查 <span class="block-bracket">]</span></h3>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-stale-days">过期阈值（天）</label>
+                  <el-input
+                    id="cfg-stale-days"
+                    v-model.number="healthCheckForm.staleDays"
+                    type="number"
+                    :min="1"
+                    :max="365"
+                    class="form-input"
+                  />
+                </div>
+                <div class="ai-actions">
+                  <el-button class="neon-btn-primary" :loading="savingHealthCheck" @click="saveHealthCheck">
+                    保存
+                  </el-button>
+                </div>
+              </div>
+
+              <!-- 批量编译编辑 -->
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 批量编译 <span class="block-bracket">]</span></h3>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-allowed-exts">允许的扩展名</label>
+                  <el-input
+                    id="cfg-allowed-exts"
+                    v-model="batchForm.allowedExtensionsText"
+                    placeholder="md, txt, pdf, html, json"
+                    class="form-input"
+                  />
+                </div>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-max-batch">最大批量数</label>
+                  <el-input
+                    id="cfg-max-batch"
+                    v-model.number="batchForm.maxBatchSize"
+                    type="number"
+                    :min="1"
+                    :max="100"
+                    class="form-input"
+                  />
+                </div>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-max-file-size">单文件上限（MB）</label>
+                  <el-input
+                    id="cfg-max-file-size"
+                    v-model.number="batchForm.maxFileSizeMb"
+                    type="number"
+                    :min="1"
+                    :max="100"
+                    class="form-input"
+                  />
+                </div>
+                <div class="ai-actions">
+                  <el-button class="neon-btn-primary" :loading="savingBatch" @click="saveBatch">
+                    保存
+                  </el-button>
+                </div>
+              </div>
+
+              <!-- 日志配置编辑 -->
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 日志 <span class="block-bracket">]</span></h3>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-log-level">日志级别</label>
+                  <el-select
+                    id="cfg-log-level"
+                    v-model="loggingForm.level"
+                    class="form-input"
+                  >
+                    <el-option
+                      v-for="lvl in LOG_LEVEL_OPTIONS"
+                      :key="lvl"
+                      :label="lvl"
+                      :value="lvl"
+                    />
+                  </el-select>
+                </div>
+                <div class="form-row">
+                  <label class="form-label" for="cfg-req-log">记录请求日志</label>
+                  <el-switch
+                    id="cfg-req-log"
+                    v-model="loggingForm.enableRequestLog"
+                  />
+                </div>
+                <div class="ai-actions">
+                  <el-button class="neon-btn-primary" :loading="savingLogging" @click="saveLogging">
+                    保存
+                  </el-button>
+                </div>
+              </div>
+            </div>
           </div>
         </el-tab-pane>
 
@@ -775,16 +1116,18 @@ onMounted(async () => {
               <div class="config-block hover-glow">
                 <h3 class="block-title"><span class="block-bracket">[</span> 模型配置 <span class="block-bracket">]</span></h3>
                 <div class="form-row">
-                  <label class="form-label">API Base URL</label>
+                  <label class="form-label" for="ai-base-url">API Base URL</label>
                   <el-input
+                    id="ai-base-url"
                     v-model="aiForm.baseUrl"
                     placeholder="https://api.openai.com/v1"
                     class="form-input"
                   />
                 </div>
       <div class="form-row">
-                  <label class="form-label">API Key</label>
+                  <label class="form-label" for="ai-api-key">API Key</label>
                   <el-input
+                    id="ai-api-key"
                     v-model="aiForm.apiKey"
                     type="password"
                     show-password
@@ -797,7 +1140,7 @@ onMounted(async () => {
                   <el-input
                     id="ai-model"
                     v-model="aiForm.model"
-                    placeholder="gpt-4o-mini"
+                    :placeholder="aiModelPlaceholder"
                     class="form-input"
                   />
                 </div>
@@ -858,8 +1201,8 @@ onMounted(async () => {
                 <div class="config-block hover-glow">
                   <h3 class="block-title"><span class="block-bracket">[</span> 搜索引擎 <span class="block-bracket">]</span></h3>
                   <div class="form-row">
-                    <label class="form-label">Provider</label>
-                    <div class="preset-tags">
+                    <label class="form-label" for="ws-provider">Provider</label>
+                    <div class="preset-tags" id="ws-provider">
                       <span
                         v-for="p in WEB_SEARCH_PROVIDERS"
                         :key="p.value"
@@ -870,8 +1213,9 @@ onMounted(async () => {
                     </div>
                   </div>
       <div class="form-row">
-                    <label class="form-label">API Key</label>
+                    <label class="form-label" for="ws-api-key">API Key</label>
                     <el-input
+                      id="ws-api-key"
                       v-model="webSearchForm.apiKey"
                       type="password"
                       show-password
@@ -880,8 +1224,9 @@ onMounted(async () => {
                     />
                   </div>
       <div class="form-row">
-                    <label class="form-label">最大结果数</label>
+                    <label class="form-label" for="ws-max-results">最大结果数</label>
                     <el-input
+                      id="ws-max-results"
                       v-model.number="webSearchForm.maxResults"
                       type="number"
                       :min="1"

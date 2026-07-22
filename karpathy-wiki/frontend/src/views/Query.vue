@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Promotion, Loading } from '@element-plus/icons-vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
@@ -16,7 +16,9 @@ import { useAttachmentsStore } from '../stores/attachments';
 import { dbGet, CHAT_STORES } from '../services/chatDb';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
-import type { Attachment, Reference, ThinkingStep } from '../types';
+import { consumeQuerySSE } from '../utils/sse';
+import type { Attachment, Reference } from '../types';
+import { STORAGE_KEYS } from '../constants/storageKeys';
 
 // F-3.2 图片点击放大预览：v-html 内容不经过 Vue 编译，无法绑定 Vue 事件，需事件委托
 // 参考 MarkdownRenderer.vue 同款实现模式：监听根元素 click，target.tagName === 'IMG' 触发预览
@@ -35,7 +37,7 @@ const handleImgClick = (e: MouseEvent) => {
 // 为什么从 DOM 取而非 data 属性：避免长代码 HTML 转义/属性大小限制
 async function copyCodeToClipboard(text: string): Promise<boolean> {
   try {
-    if (navigator.clipboard && window.isSecureContext) {
+    if (navigator.clipboard && globalThis.isSecureContext) {
       await navigator.clipboard.writeText(text);
       return true;
     }
@@ -46,7 +48,7 @@ async function copyCodeToClipboard(text: string): Promise<boolean> {
     document.body.appendChild(ta);
     ta.select();
     const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
+    ta.remove();
     return ok;
   } catch {
     return false;
@@ -67,12 +69,58 @@ const handleCodeCopyClick = async (e: MouseEvent) => {
   ElMessage[ok ? 'success' : 'warning'](ok ? '已复制代码' : '复制失败，请手动选择');
 };
 
+// F-3.8 [1] 引用编号锚点点击：事件委托捕获 .ref-anchor 点击，阻止默认导航，改为平滑滚动到 ref 卡片
+// 为什么阻止默认：默认 #ref-N 会跳到 id=ref-N 元素但无滚动动画，体验突兀
+// 为什么需要展开折叠：ref 卡片可能折叠隐藏，需先展开 RefsList 再滚动
+const handleRefAnchorClick = (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  const anchor = target.closest('.ref-anchor') as HTMLElement | null;
+  if (!anchor) return;
+  e.preventDefault();
+  const refNum = anchor.dataset.ref;
+  if (!refNum) return;
+  // 找到本条 assistant 消息对应的 refs-list（位于同一消息容器内）
+  const msgContainer = anchor.closest('.msg-bubble, .message');
+  if (!msgContainer) return;
+  const refsList = msgContainer.querySelector('.refs-list');
+  if (!refsList) return;
+  // 若 refs-list 已折叠，先展开（点击 toggleExpanded 等价行为）
+  // 为什么用属性检查：Vue 渲染的 .refs-body v-if="expanded" 不在 DOM 时需触发展开
+  let refsBody = refsList.querySelector('.refs-body');
+  if (!refsBody) {
+    // 折叠态：点击 header 触发 toggleExpanded
+    const header = refsList.querySelector('.refs-header') as HTMLElement | null;
+    header?.click();
+  }
+  // 等 Vue 重新渲染 refs-body 后再滚动（nextTick 等价）
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const targetEl = msgContainer.querySelector(`#ref-${refNum}`) as HTMLElement | null;
+      targetEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // 闪烁高亮目标卡片，让用户感知跳转位置
+      if (targetEl) {
+        targetEl.classList.add('ref-flash');
+        setTimeout(() => targetEl.classList.remove('ref-flash'), 1500);
+      }
+    });
+  });
+};
+
 // §2.1 Query.vue 完整重构：集成侧栏/模型选择/附件/工具栏/思考块/引用列表/追问。
 // 设计参考：知识库问答AI对话流详细设计说明书 §2.1.2 / §2.1.3
 const store = useQueryStore();
 const conversationsStore = useConversationsStore();
 const modelStore = useModelStore();
 const attachmentsStore = useAttachmentsStore();
+
+// F-3.10 progress 事件展示文案：后端 step 英文枚举 → 前端中文友好提示
+const searchProgressLabel = computed(() => {
+  const step = store.searchProgress?.step;
+  if (step === 'searching') return '正在联网搜索...';
+  if (step === 'fetching') return '正在抓取网页...';
+  if (step === 'done') return '联网搜索完成';
+  return step || '';
+});
 
 const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
@@ -83,18 +131,23 @@ let abortController: AbortController | null = null;
 // 状态持久化到 localStorage，刷新后保留
 type SidebarState = 'expanded' | 'collapsed' | 'hidden';
 const sidebarState = ref<SidebarState>(
-  (localStorage.getItem('sidebarState') as SidebarState) || 'expanded'
+  (localStorage.getItem(STORAGE_KEYS.SIDEBAR_STATE) as SidebarState) || 'expanded'
 );
 function setSidebarState(state: SidebarState) {
   sidebarState.value = state;
-  localStorage.setItem('sidebarState', state);
+  localStorage.setItem(STORAGE_KEYS.SIDEBAR_STATE, state);
 }
 // 三态循环：expanded → collapsed → hidden → expanded
+// 拆分嵌套三元为 if/else，避免 S3358 警告并提升可读性
 function toggleSidebar() {
-  const next: SidebarState =
-    sidebarState.value === 'expanded' ? 'collapsed'
-    : sidebarState.value === 'collapsed' ? 'hidden'
-    : 'expanded';
+  let next: SidebarState;
+  if (sidebarState.value === 'expanded') {
+    next = 'collapsed';
+  } else if (sidebarState.value === 'collapsed') {
+    next = 'hidden';
+  } else {
+    next = 'expanded';
+  }
   setSidebarState(next);
 }
 // F-3.11 Ctrl+B 快捷键：全局监听，三态循环切换
@@ -207,12 +260,14 @@ async function collectAttachments(): Promise<Array<{ data: string; mimeType: str
 }
 
 // 统一 msg.refs 为 Reference[]，兼容 v1 string[] 与 v2 Reference[]
+// 后端 refs 已解析为文件相对路径（如 concepts/llm-wiki.md），title 取 basename 去 .md 后缀展示
 function normalizeRefs(refs: string[] | Reference[] | undefined): Reference[] {
   if (!refs || refs.length === 0) return [];
   if (typeof refs[0] === 'string') {
     return (refs as string[]).map((path, i) => ({
       path,
-      title: path.split('/').pop() || path,
+      // 路径形式（带 .md）取 basename 去后缀作 title；裸页面名原样使用
+      title: (path.split('/').pop() || path).replace(/\.md$/, ''),
       snippet: '',
       source: 'vault' as const,
       citeIndex: i + 1,
@@ -256,61 +311,9 @@ async function sendQuestion(question: string) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split('\n\n');
-      buffer = events.pop() || '';
-      for (const evt of events) {
-        const lines = evt.split('\n');
-        let eventType = '';
-        let data = '';
-        for (const line of lines) {
-          if (line.startsWith('event: ')) eventType = line.slice(7);
-          if (line.startsWith('data: ')) data = line.slice(6);
-        }
-        if (!eventType || !data) continue;
-        try {
-          const parsed = JSON.parse(data);
-          if (eventType === 'answer') {
-            store.appendAnswer(parsed.text || '');
-          } else if (eventType === 'refs') {
-            // §5.2 refs + webRefs 合并：本地 [[页面名]] 与联网搜索 URL 一起入 store
-            store.setRefs(parsed.refs || [], parsed.webRefs || []);
-          } else if (eventType === 'thinking') {
-            // 后端 ThinkingChunk → 前端 ThinkingStep（补 ts 字段供排序）
-            const step: ThinkingStep = {
-              phase: parsed.phase,
-              message: parsed.message,
-              tool: parsed.tool,
-              args: parsed.args,
-              ts: new Date().toISOString(),
-            };
-            store.appendThinking(step);
-          } else if (eventType === 'progress') {
-            store.setProgress(parsed.step, parsed.count);
-          } else if (eventType === 'followups') {
-            store.setFollowups(parsed.followups || []);
-          } else if (eventType === 'done') {
-            store.finalizeAnswer(parsed.sessionId, parsed.messageIndex);
-          } else if (eventType === 'error') {
-            store.handleError(parsed.message || '问答出错');
-            ElMessage.warning(parsed.message || '问答出错');
-          }
-        } catch {
-          // 非 JSON 数据跳过
-        }
-      }
-    }
-    // 流正常结束但未收到 done 事件时兜底
-    if (store.isLoading && store.streamingAnswer) {
-      store.finalizeAnswer();
-    }
+    // SSE 流消费统一委托给 utils/sse.ts，降低本函数认知复杂度（S3776）
+    // 同时传入 signal 以便主动取消时释放 reader
+    await consumeQuerySSE(response, store, abortController.signal);
     // 持久化对话到 IndexedDB（支持侧栏历史列表）
     await conversationsStore.persistConversation(store.messages);
   } catch (err: unknown) {
@@ -408,23 +411,26 @@ onMounted(async () => {
   chatBodyRef.value?.addEventListener('click', handleImgClick);
   // F-3.7 注册代码块复制事件委托：捕获 .code-copy-btn 点击
   chatBodyRef.value?.addEventListener('click', handleCodeCopyClick);
-  // F-3.11 注册全局 Ctrl+B 快捷键：window 监听，三态循环切换
-  window.addEventListener('keydown', handleGlobalKeydown);
+  // F-3.8 注册引用编号锚点点击事件委托：捕获 .ref-anchor 点击
+  chatBodyRef.value?.addEventListener('click', handleRefAnchorClick);
+  // F-3.11 注册全局 Ctrl+B 快捷键：globalThis 监听，三态循环切换
+  globalThis.addEventListener('keydown', handleGlobalKeydown);
 });
 
 onBeforeUnmount(() => {
   abortController?.abort();
-  // F-3.2 / F-3.7 卸载事件委托，避免内存泄漏
+  // F-3.2 / F-3.7 / F-3.8 卸载事件委托，避免内存泄漏
   chatBodyRef.value?.removeEventListener('click', handleImgClick);
   chatBodyRef.value?.removeEventListener('click', handleCodeCopyClick);
+  chatBodyRef.value?.removeEventListener('click', handleRefAnchorClick);
   // F-3.11 卸载 Ctrl+B 监听
-  window.removeEventListener('keydown', handleGlobalKeydown);
+  globalThis.removeEventListener('keydown', handleGlobalKeydown);
 });
 </script>
 
 <template>
   <div class="query-page">
-    <!-- F-3.11 隐藏态浮动展开按钮：sidebarState='hidden' 时显示在左上角 -->
+    <!-- 隐藏态浮动展开按钮，hidden 状态下显示在左上角 -->
     <button
       v-if="sidebarState === 'hidden'"
       class="sidebar-show-btn"
@@ -443,7 +449,7 @@ onBeforeUnmount(() => {
 
       <div ref="chatBodyRef" class="chat-body">
         <div v-if="store.messages.length === 0 && !store.streamingAnswer" class="chat-empty">
-<p class="empty-tip">// 还没有对话，试试问个问题吧</p>
+<p class="empty-tip">还没有对话，试试问个问题吧</p>
           <div class="empty-suggestions">
             <span class="suggestion-chip" @click="inputQuestion = '什么是 LLM Wiki？'">
               什么是 LLM Wiki？
@@ -507,7 +513,7 @@ onBeforeUnmount(() => {
           <div class="msg-bubble assistant" :class="{ streaming: !!store.streamingAnswer, loading: store.isLoading && !store.streamingAnswer }">
             <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" />
             <div v-if="store.searchProgress" class="search-progress">
-              {{ store.searchProgress.step }}
+              {{ searchProgressLabel }}
               <span v-if="store.searchProgress.count">（{{ store.searchProgress.count }} 条）</span>
             </div>
             <!-- F-3.1 加载态：首字节前显示 3 圆点脉动 + "正在思考…" 文案；首字节后切换为流式答案 -->
@@ -1082,5 +1088,31 @@ onBeforeUnmount(() => {
 /* 有语言徽章时，复制按钮下移避免与徽章重叠 */
 .markdown-body :deep(.code-lang-badge) ~ .code-copy-btn {
   top: 28px;
+}
+
+/* F-3.8 [N] 引用编号锚点：内联显示，点击不跳转 URL 而是滚动到 ref 卡片 */
+.markdown-body :deep(.ref-anchor) {
+  color: var(--neon-cyan, #00f5ff);
+  text-decoration: none;
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+.markdown-body :deep(.ref-anchor:hover) {
+  background: var(--accent-cyan-a18, rgba(0, 245, 255, 0.18));
+  text-decoration: underline;
+}
+
+/* F-3.8 锚点跳转闪烁高亮：ref-flash 类添加 1.5s 渐变背景 */
+:deep(.ref-item.ref-flash) {
+  animation: ref-flash-anim 1.5s ease;
+}
+@keyframes ref-flash-anim {
+  0% { background: var(--accent-cyan-a30, rgba(0, 245, 255, 0.3)); }
+  60% { background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15)); }
+  100% { background: transparent; }
 }
 </style>

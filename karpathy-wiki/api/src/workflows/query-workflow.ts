@@ -76,15 +76,26 @@ export function createQueryTools(
   return tools;
 }
 
-// 从最终答案文本中提取 [[页面名]] 引用，去重后作为 refs 返回。
-function extractRefs(text: string): string[] {
-  const refs = new Set<string>();
+// 从最终答案文本中提取 [[页面名]] 引用，并通过 vault.resolvePageName 解析为实际文件相对路径。
+// 为什么解析为路径：RefsList 点击参考资料跳转 Browse 时，前端直接把 ref 当 path 传给 /api/files，
+// 若传页面名（如 "llm-wiki"）后端 readFile 找不到文件返回 404。解析为路径（如 "concepts/llm-wiki.md"）
+// 后跳转即可正常读取。找不到对应文件时保留原页面名（向后兼容，前端仍可展示）。
+async function extractRefs(text: string, vault: VaultService): Promise<string[]> {
+  const pageNames = new Set<string>();
   const re = /\[\[([^\]]+)\]\]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    refs.add(m[1].trim());
+    pageNames.add(m[1].trim());
   }
-  return Array.from(refs);
+  // 并行解析每个页面名为文件路径，避免串行 fs.access 等待
+  const resolved = await Promise.all(
+    Array.from(pageNames).map(async (name) => {
+      const path = await vault.resolvePageName(name);
+      return path ?? name;
+    }),
+  );
+  // 去重：不同页面名可能解析到同一文件（理论上不会，但防御性去重）
+  return Array.from(new Set(resolved));
 }
 
 // 构造附件提示文本块。
@@ -114,11 +125,21 @@ function buildDeepModeHint(mode?: string): string {
 function generateFollowups(question: string, answer: string, refs: string[]): string[] {
   const followups: string[] = [];
 
+  // refs 现在是文件相对路径（如 concepts/llm-wiki.md），追问展示用页面名更友好
+  // 兼容未解析的页面名（endsWith('.md') 判断区分路径与裸页面名）
+  const refNames = refs.map((r) => {
+    if (r.endsWith('.md')) {
+      const slash = r.lastIndexOf('/');
+      return r.slice(slash + 1, -3);
+    }
+    return r;
+  });
+
   // 策略 1：基于引用页面构造追问
-  if (refs.length > 0) {
-    followups.push(`详细解释一下「${refs[0]}」的概念`);
-    if (refs.length > 1) {
-      followups.push(`「${refs[0]}」和「${refs[1]}」有什么区别？`);
+  if (refNames.length > 0) {
+    followups.push(`详细解释一下「${refNames[0]}」的概念`);
+    if (refNames.length > 1) {
+      followups.push(`「${refNames[0]}」和「${refNames[1]}」有什么区别？`);
     }
   }
 
@@ -164,6 +185,7 @@ async function* queryWithHarness(
   options: { webSearchConfig?: WebSearchConfig },
   collectedThinking: ThinkingChunk[],
   collectedWebRefs: WebRef[],
+  collectedProgress: Array<{ step: 'searching' | 'fetching' | 'done'; count?: number }>,
 ): AsyncGenerator<AnswerChunk, void, unknown> {
   // 1. 构造 prompt：问答指令 + 用户问题 + 历史 + 附件提示 + 模式提示
   const promptTemplate = await loadQueryPrompt();
@@ -196,6 +218,9 @@ ${deepHint}
         phase: 'thinking',
         message: `联网搜索已启用（${options.webSearchConfig.provider}），可获取实时信息...`,
       });
+      // F-3.10 progress 事件：联网搜索启动，推送 searching 状态
+      // 为什么在 thinking 之前 push：collectedProgress 与 collectedThinking 一起在 run 完成后 yield
+      collectedProgress.push({ step: 'searching' });
     } else {
       collectedThinking.push({
         phase: 'thinking',
@@ -255,6 +280,12 @@ ${deepHint}
             });
             webSearchDowngradeNotified = true;
           }
+          // F-3.10 progress 事件：web_search 调用完成，推送 fetching + count
+          // 为什么 step='fetching'：searching 状态在调用前无法推送（harness 不支持 beforeToolCall hook）
+          // 所以在 afterStep 中推送 fetching（结果已抓取）+ done（本次完成）
+          const newCount = toolResult.filter(r => r && r.url).length;
+          collectedProgress.push({ step: 'fetching', count: newCount });
+          collectedProgress.push({ step: 'done', count: newCount });
           for (const r of toolResult) {
             if (r && r.url) {
               collectedWebRefs.push({ title: r.title, url: r.url, snippet: r.snippet });
@@ -278,19 +309,26 @@ ${deepHint}
     throw new Error(result.finalContent || 'harness run failed');
   }
 
-  // 5. yield 收集到的 thinking 步骤（工具调用历史）
+  // 5. yield 收集到的 progress 事件（联网搜索进度）
+  // 为什么 progress 在 thinking 之前 yield：progress 是更高级别的状态提示，
+  // 让前端 searchProgress 立即更新，与 thinking 步骤互补
+  for (const p of collectedProgress) {
+    yield { progress: p };
+  }
+
+  // 6. yield 收集到的 thinking 步骤（工具调用历史）
   for (const t of collectedThinking) {
     yield { thinking: t };
   }
 
-  // 6. 将 finalContent 按句切分，逐块 yield 模拟流式输出
+  // 7. 将 finalContent 按句切分，逐块 yield 模拟流式输出
   const answer = result.finalContent || '知识库未覆盖此问题。';
   for (const chunk of yieldAnswerInSentences(answer)) {
     yield chunk;
   }
 
-  // 7. 提取引用并标记完成
-  const refs = extractRefs(answer);
+  // 8. 提取引用并标记完成
+  const refs = await extractRefs(answer, vault);
   // §5.2 联网搜索引用：collectedWebRefs 已在 afterStep 中累加。
   // 去重（同 url 多次出现时只保留首次），限制最多 8 条避免 UI 过长
   const seenUrls = new Set<string>();
@@ -328,14 +366,16 @@ async function* queryWithSearchFallback(
   }
 
   // 2. 读取命中页面内容（截断到 2000 字符避免 prompt 过长）
+  // 为什么用 h.path 而非 h.title 收集 refs：refs 统一为文件相对路径形式，
+  // 保证前端跳转 Browse 时 /api/files?path=<ref> 能直接命中文件
   const pageContents: string[] = [];
-  const refTitles: string[] = [];
+  const refPaths: string[] = [];
   for (const h of hits) {
     try {
       const content = await vault.readFile(h.path);
       // 单页 2000 字符上限，5 页合计约 10K token，可控
       pageContents.push(`## ${h.title}\n${content.slice(0, 2000)}`);
-      refTitles.push(h.title);
+      refPaths.push(h.path);
     } catch {
       // 跳过读取失败的页面
     }
@@ -384,9 +424,9 @@ ${input.question}
     yield chunk;
   }
 
-  // 6. 提取引用（合并 search hits 与 [[页面名]]）
-  const extractedRefs = new Set<string>(refTitles);
-  for (const r of extractRefs(answer)) {
+  // 6. 提取引用（合并 search hits 路径与 [[页面名]] 解析后的路径）
+  const extractedRefs = new Set<string>(refPaths);
+  for (const r of await extractRefs(answer, vault)) {
     extractedRefs.add(r);
   }
   const refs = Array.from(extractedRefs).slice(0, 8);
@@ -413,6 +453,8 @@ export async function* queryWorkflow(
   const collectedThinking: ThinkingChunk[] = [];
   // webRefs 收集器：仅 harness 阶段（联网搜索）收集
   const collectedWebRefs: WebRef[] = [];
+  // F-3.10 progress 收集器：harness afterStep 中收集 web_search 进度
+  const collectedProgress: Array<{ step: 'searching' | 'fetching' | 'done'; count?: number }> = [];
 
   // 模式提示 thinking：在降级链各分支前 push 一次，harness 阶段 yield 出来
   if (input.mode === 'deep') {
@@ -435,6 +477,7 @@ export async function* queryWorkflow(
       options,
       collectedThinking,
       collectedWebRefs,
+      collectedProgress,
     )) {
       yield chunk;
     }

@@ -6,8 +6,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:3000'
-    }
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        // 批量编译 + SSE 流式响应：禁用超时，避免长耗时请求连接被中断导致 "Failed to fetch"
+        timeout: 0,
+        proxyTimeout: 0,
+      },
+    },
   },
   build: {
     // 输出到后端 public 目录，生产模式由 Fastify @fastify/static 托管

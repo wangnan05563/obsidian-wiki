@@ -110,9 +110,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .theme-switcher {
+  /* 浮动模式：避开右下角 FloatingChat（56px 高 + 36px 间距），
+     放在其正上方避免位置冲突 */
   position: fixed;
   right: 24px;
-  bottom: 24px;
+  bottom: 92px;
   z-index: 1000;
 }
 

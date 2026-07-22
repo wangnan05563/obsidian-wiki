@@ -235,9 +235,12 @@
 }
 
 [data-theme="enterprise"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
-  background: rgba(37, 99, 235, 0.08) !important;
+  /* 用非透明色替代 rgba：SonarQube css:S7924 不合成 alpha 通道，
+     会把 rgba(37,99,235,0.08) 当作 RGB(37,99,235) 计算对比度，
+     导致即使纯黑也无法满足 4.5:1。#eef3fd 是 rgba(37,99,235,0.08) 在白底上的等效色 */
+  background: #eef3fd !important;
   border-color: #2563eb !important;
-  color: #1d4ed8 !important; /* NOSONAR: 企业主题蓝色系设计要求，浅蓝背景上实际对比度达标 */
+  color: #0c1d4a !important;
   box-shadow: 0 4px 16px rgba(37, 99, 235, 0.15) !important;
 }
 

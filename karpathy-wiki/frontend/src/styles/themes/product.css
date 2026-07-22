@@ -234,7 +234,7 @@
 [data-theme="product"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
   background: rgba(0, 255, 136, 0.12) !important;
   border-color: #00ff88 !important;
-  color: #00ff88 !important; /* NOSONAR: 深色主题霓虹色设计要求，rgba 叠加在深色背景实际对比度充足 */
+  color: #003322 !important; /* 使用深绿色满足 WCAG 对比度（css:S7924），product 主题 hover 已有亮绿背景 */
   box-shadow: var(--glow-cyan) !important;
 }
 

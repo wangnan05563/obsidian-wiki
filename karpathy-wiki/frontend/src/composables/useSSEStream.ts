@@ -14,6 +14,23 @@ interface SSEHandlers {
   onFixed?: (data: unknown) => void;
 }
 
+// 事件分发器外置：避免每次调用 useSSEStream 重建闭包，符合 S7721
+function dispatchEvent(event: string, data: unknown, handlers: SSEHandlers) {
+  switch (event) {
+    case 'answer': handlers.onAnswer?.(data as { text: string }); break;
+    case 'thinking': handlers.onThinking?.(data); break;
+    case 'progress': handlers.onProgress?.(data); break;
+    // refs 载荷结构复杂（含 refs 数组与可选 webRefs），用具体类型断言避免冗长的条件类型推导
+    case 'refs': handlers.onRefs?.(data as { refs: string[]; webRefs?: Array<{ title: string; url: string; snippet: string }> }); break;
+    case 'done': handlers.onDone?.(data); break;
+    case 'error': handlers.onError?.(data as { message: string }); break;
+    case 'image': handlers.onImage?.(data); break;
+    case 'followups': handlers.onFollowups?.(data as { followups: string[] }); break;
+    case 'page': handlers.onPage?.(data); break;
+    case 'fixed': handlers.onFixed?.(data); break;
+  }
+}
+
 // 统一 SSE 流消费 composable：消除 4 处重复的 SSE 解析逻辑
 // 为什么需要：FloatingChat/Query/Health/compile 各自实现 SSE 解析，协议变更需同步改 4 处
 export function useSSEStream() {
@@ -71,22 +88,6 @@ export function useSSEStream() {
     } finally {
       isStreaming.value = false;
       controller.value = null;
-    }
-  }
-
-  function dispatchEvent(event: string, data: unknown, handlers: SSEHandlers) {
-    switch (event) {
-      case 'answer': handlers.onAnswer?.(data as { text: string }); break;
-      case 'thinking': handlers.onThinking?.(data); break;
-      case 'progress': handlers.onProgress?.(data); break;
-      // refs 载荷结构复杂（含 refs 数组与可选 webRefs），用具体类型断言避免冗长的条件类型推导
-      case 'refs': handlers.onRefs?.(data as { refs: string[]; webRefs?: Array<{ title: string; url: string; snippet: string }> }); break;
-      case 'done': handlers.onDone?.(data); break;
-      case 'error': handlers.onError?.(data as { message: string }); break;
-      case 'image': handlers.onImage?.(data); break;
-      case 'followups': handlers.onFollowups?.(data as { followups: string[] }); break;
-      case 'page': handlers.onPage?.(data); break;
-      case 'fixed': handlers.onFixed?.(data); break;
     }
   }
 

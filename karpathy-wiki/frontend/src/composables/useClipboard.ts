@@ -32,16 +32,17 @@ function copyPlainText(md: string): string {
     .trim();
 }
 
-export function useClipboard() {
-  async function copy(text: string): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // 非 HTTPS 或权限被拒时降级到 execCommand（已废弃但仍可用）
-      return fallbackCopy(text);
-    }
+// 移到模块顶层避免每次 useClipboard() 调用重新创建函数实例（S7721）
+async function copy(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // 非 HTTPS 或权限被拒时降级到 execCommand（已废弃但仍可用）
+    return fallbackCopy(text);
   }
+}
 
+export function useClipboard() {
   return { copy, copyPlainText };
 }

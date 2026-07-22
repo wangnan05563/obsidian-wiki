@@ -307,6 +307,118 @@ def test_f310_web_search_api(ctx, results):
         results.log("F-3.10-catch-degradation", has_catch, f"try/catch 降级: {has_catch}")
 
 
+def test_v201_fixes(page, ctx, results):
+    """v2.0.1 修复项验证：F-3.6 语速 / F-3.8 锚点 / F-3.10 progress 事件"""
+    print("\n=== v2.0.1 修复项 ===")
+    click_query_tab(page)
+
+    # ---- F-3.6 语速调节 ----
+    # 源码层：useTTS.ts 含 rate ref + setRate 函数；MessageToolbar.vue 含 .rate-panel
+    use_tts_path = "frontend/src/composables/useTTS.ts"
+    if os.path.exists(use_tts_path):
+        with open(use_tts_path, "r", encoding="utf-8") as f:
+            tts_src = f.read()
+        has_rate_ref = "const rate = ref(1.0)" in tts_src
+        has_set_rate = "function setRate" in tts_src
+        has_rate_clamp = "Math.min(2.0, Math.max(0.5," in tts_src
+        results.log("v201-F36-useTTS-rate", has_rate_ref and has_set_rate and has_rate_clamp,
+                    f"rate ref={has_rate_ref}, setRate={has_set_rate}, clamp={has_rate_clamp}")
+
+    toolbar_path = "frontend/src/components/MessageToolbar.vue"
+    if os.path.exists(toolbar_path):
+        with open(toolbar_path, "r", encoding="utf-8") as f:
+            toolbar_src = f.read()
+        has_rate_panel = "rate-panel" in toolbar_src and "rate-slider" in toolbar_src
+        has_range_input = 'type="range"' in toolbar_src and 'min="0.5"' in toolbar_src and 'max="2.0"' in toolbar_src
+        results.log("v201-F36-toolbar-rate-ui", has_rate_panel and has_range_input,
+                    f"rate-panel={has_rate_panel}, range input 0.5-2.0={has_range_input}")
+
+    # store 层：tts.ts 暴露 rate 和 setRate
+    tts_store_path = "frontend/src/stores/tts.ts"
+    if os.path.exists(tts_store_path):
+        with open(tts_store_path, "r", encoding="utf-8") as f:
+            store_src = f.read()
+        store_ok = "rate" in store_src and "setRate" in store_src
+        results.log("v201-F36-store-rate", store_ok, f"tts store 暴露 rate/setRate: {store_ok}")
+
+    # ---- F-3.8 [N] 锚点跳转 ----
+    md_path = "frontend/src/utils/markdown.ts"
+    if os.path.exists(md_path):
+        with open(md_path, "r", encoding="utf-8") as f:
+            md_src = f.read()
+        # 验证 inline 规则注册
+        has_inline_rule = "ref_anchor" in md_src and "inline.ruler.before" in md_src
+        # 验证渲染为 <a href="#ref-N">
+        has_anchor_render = 'href="#ref-"' in md_src or "ref-${escaped}" in md_src
+        results.log("v201-F38-markdown-anchor", has_inline_rule and has_anchor_render,
+                    f"inline 规则={has_inline_rule}, 锚点渲染={has_anchor_render}")
+
+    # RefsList.vue 卡片含 id="ref-N"
+    refs_list_path = "frontend/src/components/RefsList.vue"
+    if os.path.exists(refs_list_path):
+        with open(refs_list_path, "r", encoding="utf-8") as f:
+            refs_src = f.read()
+        has_ref_id = 'id="ref-${ref.citeIndex}"' in refs_src or 'ref-${ref.citeIndex}' in refs_src
+        results.log("v201-F38-refslist-id", has_ref_id, f"RefsList 卡片 id=ref-N: {has_ref_id}")
+
+    # Query.vue 含 .ref-anchor 点击事件委托
+    query_view_path = "frontend/src/views/Query.vue"
+    if os.path.exists(query_view_path):
+        with open(query_view_path, "r", encoding="utf-8") as f:
+            qv_src = f.read()
+        has_click_delegate = "handleRefAnchorClick" in qv_src and ".ref-anchor" in qv_src
+        has_ref_flash = "ref-flash" in qv_src
+        results.log("v201-F38-query-click", has_click_delegate and has_ref_flash,
+                    f"点击委托={has_click_delegate}, 闪烁高亮={has_ref_flash}")
+
+    # ---- F-3.10 progress 事件推送 ----
+    workflow_path = "api/src/workflows/query-workflow.ts"
+    if os.path.exists(workflow_path):
+        with open(workflow_path, "r", encoding="utf-8") as f:
+            wf_src = f.read()
+        # 后端 workflow 推送 progress
+        has_progress_push = "collectedProgress" in wf_src and "yield { progress: p }" in wf_src
+        # 三种 step 状态
+        has_searching = "'searching'" in wf_src or '"searching"' in wf_src
+        has_fetching = "'fetching'" in wf_src or '"fetching"' in wf_src
+        has_done = "'done'" in wf_src or '"done"' in wf_src
+        results.log("v201-F310-workflow-progress", has_progress_push and has_searching and has_fetching and has_done,
+                    f"progress push={has_progress_push}, searching={has_searching}, fetching={has_fetching}, done={has_done}")
+
+    # SSE 路由已转发 progress 事件
+    sse_route_path = "api/src/routes/query.ts"
+    if os.path.exists(sse_route_path):
+        with open(sse_route_path, "r", encoding="utf-8") as f:
+            sse_src = f.read()
+        has_progress_send = "send('progress'" in sse_src
+        results.log("v201-F310-sse-route", has_progress_send, f"SSE 转发 progress: {has_progress_send}")
+
+    # 前端 sse.ts 处理 progress
+    sse_util_path = "frontend/src/utils/sse.ts"
+    if os.path.exists(sse_util_path):
+        with open(sse_util_path, "r", encoding="utf-8") as f:
+            sse_util_src = f.read()
+        has_progress_handler = "progress: (parsed, store) => store.setProgress" in sse_util_src
+        results.log("v201-F310-frontend-sse", has_progress_handler, f"前端 progress handler: {has_progress_handler}")
+
+    # 前端 store 含 searchProgress
+    query_store_path = "frontend/src/stores/query.ts"
+    if os.path.exists(query_store_path):
+        with open(query_store_path, "r", encoding="utf-8") as f:
+            qs_src = f.read()
+        has_search_progress = "searchProgress" in qs_src and "setProgress" in qs_src
+        results.log("v201-F310-frontend-store", has_search_progress, f"store searchProgress: {has_search_progress}")
+
+    # 前端 Query.vue 展示 + 中文 label
+    if os.path.exists(query_view_path):
+        with open(query_view_path, "r", encoding="utf-8") as f:
+            qv_src = f.read()
+        has_progress_display = "store.searchProgress" in qv_src
+        has_label = "searchProgressLabel" in qv_src and "正在联网搜索" in qv_src
+        results.log("v201-F310-frontend-display", has_progress_display and has_label,
+                    f"progress 展示={has_progress_display}, 中文 label={has_label}")
+
+
 def test_sprint34_encoding(page, results):
     """编码检测：Query 页面 DOM 文本无 U+FFFD"""
     print("\n=== 编码检测（Sprint 3/4 新组件）===")
@@ -381,6 +493,9 @@ def main():
 
         # F-3.10 联网搜索（API + 源码层验证）
         test_f310_web_search_api(ctx, results)
+
+        # v2.0.1 修复项验证：F-3.6 语速 / F-3.8 锚点 / F-3.10 progress 事件
+        test_v201_fixes(page, ctx, results)
 
         # 编码检测
         test_sprint34_encoding(page, results)
