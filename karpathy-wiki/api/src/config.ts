@@ -7,6 +7,15 @@ import type { AppConfig } from './types.js';
 // 配置文件名。路径解析见 getConfigPath()
 const CONFIG_FILENAME = 'config.json';
 
+// batch 字段合并兜底：与 defaultConfig().batch 保持一致
+// 为什么需要：AppConfig.batch 是可选字段，TS 推断 defaults.batch 为 T | undefined，
+// 用 ?? 提供兜底避免 ! 断言（BR-028-1）
+const DEFAULT_BATCH_FALLBACK = {
+  allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
+  maxBatchSize: 50,
+  maxFileSizeMb: 10,
+};
+
 // 通过 import.meta.url 获取 api 源码目录，与 CWD 解耦
 // 为什么需要：开发模式 CWD 可能是项目根（pnpm --filter），打包模式 CWD 可能是 exe 同级目录，
 // 两者读取的 config.json 不同，导致配置"丢失"假象。统一以源码定位 api/config.json 作为权威路径
@@ -56,6 +65,13 @@ function defaultConfig(): AppConfig {
       apiKeyRef: 'TAVILY_API_KEY',
       apiKey: '',
       maxResults: 5,
+    },
+    // 批量编译默认配置：文件夹上传场景使用
+    // allowedExtensions 与前端 Ingest.vue accept 保持一致，避免前后端白名单漂移
+    batch: {
+      allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
+      maxBatchSize: 50,
+      maxFileSizeMb: 10,
     },
   };
 }
@@ -153,9 +169,15 @@ export async function loadConfig(): Promise<AppConfig> {
       ? { ...defaults.logging, ...parsed.logging }
       : defaults.logging,
     // §5.2 webSearch 合并：parsed.webSearch 可选，未配置时用默认值（含空 apiKey）
+    // 为什么用 ?? 而非 !：避免可选字段被 undefined 覆盖（BR-028-1）
     webSearch: parsed.webSearch
-      ? { ...defaults.webSearch!, ...parsed.webSearch }
+      ? { ...(defaults.webSearch ?? {}), ...parsed.webSearch }
       : defaults.webSearch,
+    // 批量编译配置合并：parsed.batch 可选，未配置时用默认值
+    // 为什么用 ?? 而非 !：避免可选字段被 undefined 覆盖（BR-028-1）
+    batch: parsed.batch
+      ? { ...(defaults.batch ?? DEFAULT_BATCH_FALLBACK), ...parsed.batch }
+      : defaults.batch,
   };
 
   // 写入缓存
@@ -289,6 +311,117 @@ export async function saveWebSearchConfig(updates: {
     await fs.writeFile(configPath, json, 'utf8');
   }
 
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// ===== 运行参数/健康检查/批量编译/日志 配置保存函数 =====
+// 这些函数为前端 Config.vue 提供编辑入口，落盘后由调用方（路由层）同步 adapter 运行时实例。
+// 为什么独立函数：与 LLM/webSearch 生命周期不同，且字段结构差异大，统一函数会增加类型复杂度。
+
+// 保存运行参数（maxSteps/tokenBudget）到 config.json。
+// 为什么需要：用户需要根据知识库规模调整 token 预算与步数上限，无需手动编辑 config.json。
+export async function saveBudgetConfig(updates: {
+  maxSteps?: number;
+  tokenBudget?: number;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const merged: AppConfig = {
+    ...current,
+    budget: {
+      ...current.budget,
+      ...updates.maxSteps !== undefined ? { maxSteps: updates.maxSteps } : {},
+      ...updates.tokenBudget !== undefined ? { tokenBudget: updates.tokenBudget } : {},
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存健康检查配置（staleDays）到 config.json。
+// 为什么需要：用户需要根据知识库更新频率调整"过期页面"判定阈值。
+export async function saveHealthCheckConfig(updates: {
+  staleDays?: number;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const merged: AppConfig = {
+    ...current,
+    healthCheck: {
+      ...current.healthCheck,
+      ...updates.staleDays !== undefined ? { staleDays: updates.staleDays } : {},
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存批量编译配置（allowedExtensions/maxBatchSize/maxFileSizeMb）到 config.json。
+// 为什么需要：不同业务场景下文件类型与大小限制不同，用户需在前端调整。
+export async function saveBatchConfig(updates: {
+  allowedExtensions?: string[];
+  maxBatchSize?: number;
+  maxFileSizeMb?: number;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const baseBatch = current.batch ?? {
+    allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
+    maxBatchSize: 50,
+    maxFileSizeMb: 10,
+  };
+  const merged: AppConfig = {
+    ...current,
+    batch: {
+      ...baseBatch,
+      ...updates.allowedExtensions ? { allowedExtensions: updates.allowedExtensions } : {},
+      ...updates.maxBatchSize !== undefined ? { maxBatchSize: updates.maxBatchSize } : {},
+      ...updates.maxFileSizeMb !== undefined ? { maxFileSizeMb: updates.maxFileSizeMb } : {},
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存日志配置（level/enableRequestLog）到 config.json。
+// 为什么需要：调试时需要切换 debug 级别或开关请求级日志，重启服务才生效太繁琐。
+// 注意：level 变更需重启 Fastify 实例才能完全生效（pino logger 在启动时创建），
+//   但 enableRequestLog 可热更新（路由钩子运行时读取）。
+export async function saveLoggingConfig(updates: {
+  level?: string;
+  enableRequestLog?: boolean;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const baseLogging = current.logging ?? {
+    level: 'info',
+    enableRequestLog: true,
+  };
+  const merged: AppConfig = {
+    ...current,
+    logging: {
+      ...baseLogging,
+      ...updates.level !== undefined ? { level: updates.level } : {},
+      ...updates.enableRequestLog !== undefined ? { enableRequestLog: updates.enableRequestLog } : {},
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
   refreshConfigCache(merged);
   return merged;
 }

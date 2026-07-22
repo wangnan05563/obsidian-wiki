@@ -1,104 +1,54 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import fs from 'node:fs';
+import fsSync from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey } from '../config.js';
-import type { EngineAdapter } from '../types.js';
+import type { EngineAdapter, LlmPreset } from '../types.js';
+
+// 模块加载时一次性读取 LLM 预设列表，避免每次请求都读盘。
+// 为什么外置到 llm-presets.json：厂商预设（baseUrl/model/apiKeyRef）会随厂商更新迭代，
+//   抽到独立文件后用户/运维可直接编辑 llm-presets.json 增删预设，无需改源码。
+// 路径解析与 config.ts 的 getConfigPath 同模式：
+//   1. 基于 import.meta.url 派生（与 CWD 解耦，开发模式 CWD 可能是项目根或子包目录）
+//   2. pnpm --filter 启动时符号链接可能导致 import.meta.url 指向非预期位置，故提供多候选路径 fallback
+//   3. pkg 打包模式 fallback 到 CWD
+function resolvePresetsPath(): string {
+  const candidates: string[] = [];
+  // 本文件源码位置 api/src/routes/ai.ts，回退两级到 api/llm-presets.json
+  const srcDir = path.dirname(fileURLToPath(import.meta.url));
+  candidates.push(path.resolve(srcDir, '../..', 'llm-presets.json'));
+
+  // 开发模式 CWD fallback：pnpm --filter 启动时 import.meta.url 可能解析到符号链接位置，
+  // 此时尝试从 CWD 出发查找（CWD 可能是 api/ 或项目根）
+  candidates.push(path.resolve(process.cwd(), 'llm-presets.json'));
+  candidates.push(path.resolve(process.cwd(), 'api', 'llm-presets.json'));
+
+  // pkg 打包模式：与 exe 同级
+  const isPackaged = !!(process as NodeJS.Process & { pkg?: unknown }).pkg;
+  if (isPackaged) {
+    candidates.push(path.resolve(process.cwd(), 'llm-presets.json'));
+  }
+
+  for (const p of candidates) {
+    if (fsSync.existsSync(p)) return p;
+  }
+  // 找不到时返回第一候选路径（保留原行为，让读盘错误自然抛出便于诊断）
+  return candidates[0];
+}
+const PRESETS_PATH = resolvePresetsPath();
+const LLM_PRESETS: LlmPreset[] = JSON.parse(fs.readFileSync(PRESETS_PATH, 'utf8'));
 
 // AI 服务路由：提供 LLM 配置的读取、保存与连接测试。
 // 参考 17_xianyu 项目 AI 服务模块设计，适配本项目的 Fastify + config.json 架构。
 //   GET  /api/ai/config           读取 AI 配置（API Key 脱敏）
 //   PUT  /api/ai/config           保存 AI 配置到 config.json + 同步 adapter 运行时
 //   POST /api/ai/reset-config     恢复 LLM 配置到出厂默认值 + 同步 adapter 运行时
-//   GET  /api/ai/presets          返回 LLM 预设列表
+//   GET  /api/ai/presets          返回 LLM 预设列表（从 llm-presets.json 读取）
 //   POST /api/ai/test-connection  测试 LLM 连接（OpenAI 兼容协议）
 //   GET  /api/ai/web-search       读取联网搜索配置
 //   PUT  /api/ai/web-search       保存联网搜索配置 + 同步 adapter 运行时
 export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
-  // LLM 预设列表：统一 OpenAI 兼容协议，前端可一键切换。
-  // 为什么需要：降低用户配置成本，常见厂商预填 baseUrl/model/apiKeyRef。
-  // vision 字段：标识模型是否支持图片输入（F-3.5 多模态能力检测），前端据此决定图片按钮是否灰显
-  const LLM_PRESETS = [
-    {
-      key: 'openai',
-      label: 'OpenAI',
-      provider: 'openai',
-      baseUrl: 'https://api.openai.com/v1',
-      model: 'gpt-4o-mini',
-      apiKeyRef: 'OPENAI_API_KEY',
-      apiKeyUrl: 'https://platform.openai.com/api-keys',
-      vision: true,
-    },
-    {
-      key: 'deepseek',
-      label: 'DeepSeek',
-      provider: 'deepseek',
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-chat',
-      apiKeyRef: 'DEEPSEEK_KEY',
-      apiKeyUrl: 'https://platform.deepseek.com/api_keys',
-      vision: false,
-    },
-    {
-      key: 'glm',
-      label: '智谱 GLM',
-      provider: 'glm',
-      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-      model: 'glm-4-flash',
-      apiKeyRef: 'GLM_KEY',
-      apiKeyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-      vision: true,
-    },
-    {
-      key: 'qwen',
-      label: '通义千问',
-      provider: 'qwen',
-      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      model: 'qwen-plus',
-      apiKeyRef: 'DASHSCOPE_API_KEY',
-      apiKeyUrl: 'https://dashscope.console.aliyun.com/apiKey',
-      vision: true,
-    },
-    {
-      key: 'moonshot',
-      label: 'Moonshot',
-      provider: 'moonshot',
-      baseUrl: 'https://api.moonshot.cn/v1',
-      model: 'moonshot-v1-8k',
-      apiKeyRef: 'MOONSHOT_API_KEY',
-      apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys',
-      vision: false,
-    },
-    {
-      key: 'doubao',
-      label: '豆包',
-      provider: 'doubao',
-      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-      model: 'doubao-pro-32k',
-      apiKeyRef: 'ARK_API_KEY',
-      apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
-      vision: true,
-    },
-    {
-      key: 'ollama',
-      label: 'Ollama 本地',
-      provider: 'ollama',
-      baseUrl: 'http://localhost:11434/v1',
-      model: 'qwen2.5:7b',
-      apiKeyRef: 'OLLAMA_API_KEY',
-      apiKeyUrl: '',
-      vision: false,
-    },
-    {
-      // Agnes AI：全模态免费 API，OpenAI 兼容协议
-      // 官方文档：https://agnes-ai.com/zh-Hans/docs/overview
-      key: 'agnes',
-      label: 'Agnes AI',
-      provider: 'agnes',
-      baseUrl: 'https://apihub.agnes-ai.com/v1',
-      model: 'agnes-2.0-flash',
-      apiKeyRef: 'AGNES_API_KEY',
-      apiKeyUrl: 'https://agnes-ai.com',
-      vision: true,
-    },
-  ];
 
   // GET /api/ai/config：返回当前 AI 配置，API Key 脱敏。
   // 脱敏策略：返回 ****xxxx 格式，前端回传此值视为未修改。

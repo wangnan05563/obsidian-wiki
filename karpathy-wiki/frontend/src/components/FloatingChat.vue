@@ -1,23 +1,58 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed } from 'vue';
-import { Promotion, Loading, Close, Minus } from '@element-plus/icons-vue';
+import { ref, nextTick, watch, computed, onMounted, onBeforeUnmount } from 'vue';
+import { Promotion, Close, Minus, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import RobotAvatar from './RobotAvatar.vue';
+import ThinkingBlock from './ThinkingBlock.vue';
+import MessageToolbar from './MessageToolbar.vue';
+import RefsList from './RefsList.vue';
 import { useQueryStore } from '../stores/query';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
-import type { ThinkingStep } from '../types';
+import { consumeQuerySSE } from '../utils/sse';
+import { FLOATING_CHAT_CONFIG } from '../config/floatingChat';
+import { STORAGE_KEYS } from '../constants/storageKeys';
+import type { ChatMessage, Reference } from '../types';
 
+// §5.2 全局悬浮问答入口：在所有页面右下角提供快速问答能力。
+//   设计取舍：相比 Query.vue 完整功能，FloatingChat 是轻量级浮窗，仅保留核心问答流。
+//   复用 ThinkingBlock / MessageToolbar / RefsList 以保持与主问答页一致的交互体验。
 const store = useQueryStore();
-const isOpen = ref(false);
+const props = defineProps<{ inQueryPage?: boolean }>();
+
+// 面板展开状态持久化：用户刷新页面后保留偏好
+const isOpen = ref(localStorage.getItem(STORAGE_KEYS.FLOATING_CHAT_OPEN) === 'true');
 const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 let abortController: AbortController | null = null;
 
-// §5.2 接收当前是否在 Query 页面的标志：Query 页面时悬浮按钮移到左下角避免遮挡输入区
-const props = defineProps<{ inQueryPage?: boolean }>();
-
 const hasMessages = computed(() => store.messages.length > 0);
+
+// 统一 msg.refs 为 Reference[]，兼容 v1 string[] 与 v2 Reference[]
+// 为什么抽出到 computed：原模板内 (msg.refs as Array<...>) 类型断言违反 vue-tsc 严格模式
+function normalizeRefs(refs: ChatMessage['refs']): Reference[] {
+  if (!refs || refs.length === 0) return [];
+  if (typeof refs[0] === 'string') {
+    return (refs as string[]).map((path, i) => ({
+      path,
+      title: (path.split('/').pop() || path).replace(/\.md$/, ''),
+      snippet: '',
+      source: 'vault' as const,
+      citeIndex: i + 1,
+    }));
+  }
+  return refs as Reference[];
+}
+
+// 时间戳格式化：仅显示 HH:MM，避免占用过多气泡空间
+function formatTime(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -28,64 +63,9 @@ function scrollToBottom() {
 }
 
 watch(
-  () => [store.messages.length, store.streamingAnswer],
+  () => [store.messages.length, store.streamingAnswer, store.currentThinking.length],
   scrollToBottom,
 );
-
-// 解析单个 SSE 事件，提取 eventType 和 data
-function parseSSEEvent(evt: string): { eventType: string; data: string } | null {
-  const lines = evt.split('\n');
-  let eventType = '';
-  let data = '';
-  for (const line of lines) {
-    if (line.startsWith('event: ')) eventType = line.slice(7);
-    if (line.startsWith('data: ')) data = line.slice(6);
-  }
-  if (!eventType || !data) return null;
-  return { eventType, data };
-}
-
-// 根据 eventType 分发到对应的 store 处理函数
-function handleSSEEvent(eventType: string, data: string) {
-  try {
-    const parsed = JSON.parse(data);
-    if (eventType === 'answer') {
-      store.appendAnswer(parsed.text || '');
-    } else if (eventType === 'refs') {
-      store.setRefs(parsed.refs || []);
-    } else if (eventType === 'thinking') {
-      // 补全 thinking 事件处理，与 Query.vue 保持一致
-      const step: ThinkingStep = {
-        phase: parsed.phase,
-        message: parsed.message,
-        tool: parsed.tool,
-        args: parsed.args,
-        ts: new Date().toISOString(),
-      };
-      store.appendThinking(step);
-    } else if (eventType === 'progress') {
-      store.setProgress(parsed.step, parsed.count);
-    } else if (eventType === 'followups') {
-      store.setFollowups(parsed.followups || []);
-    } else if (eventType === 'done') {
-      store.finalizeAnswer(parsed.sessionId, parsed.messageIndex);
-    } else if (eventType === 'error') {
-      store.handleError(parsed.message || '问答出错');
-      ElMessage.warning(parsed.message || '问答出错');
-    }
-  } catch {
-    // 非 JSON 数据跳过
-  }
-}
-
-// 批量处理 SSE 事件，避免 sendQuestion 嵌套过深
-function processSSEEvents(events: string[]) {
-  for (const evt of events) {
-    const parsed = parseSSEEvent(evt);
-    if (!parsed) continue;
-    handleSSEEvent(parsed.eventType, parsed.data);
-  }
-}
 
 async function sendQuestion(question: string) {
   abortController = new AbortController();
@@ -103,21 +83,8 @@ async function sendQuestion(question: string) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split('\n\n');
-      buffer = events.pop() || '';
-      processSSEEvents(events);
-    }
-    if (store.isLoading && store.streamingAnswer) {
-      store.finalizeAnswer();
-    }
+    // SSE 流消费统一委托给 utils/sse.ts，降低本函数认知复杂度（S3776）
+    await consumeQuerySSE(response, store, abortController.signal);
   } catch (err: unknown) {
     if ((err as Error).name === 'AbortError') return;
     const msg = (err as Error).message;
@@ -136,6 +103,15 @@ function handleSubmit() {
   void sendQuestion(q);
 }
 
+// 停止生成：调用 abortController 中断 SSE 流，store 会在 catch 中自然 finalize
+// 为什么不调 store.stop：store 无 stop 方法，abort 触发后 SSE reader 自动抛 AbortError
+function handleStop() {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+}
+
 function handleKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
@@ -148,30 +124,64 @@ function handleNewSession() {
   inputQuestion.value = '';
 }
 
-function toggleOpen() {
-  isOpen.value = !isOpen.value;
-  if (isOpen.value) {
+// 统一展开/关闭入口：同时持久化到 localStorage
+// 为什么合并原 handleClose：避免重复函数 + 状态分散
+function setOpen(open: boolean) {
+  isOpen.value = open;
+  localStorage.setItem(STORAGE_KEYS.FLOATING_CHAT_OPEN, String(open));
+  if (open) {
     nextTick(() => scrollToBottom());
   }
 }
 
-function handleClose() {
-  isOpen.value = false;
+function toggleOpen() {
+  setOpen(!isOpen.value);
 }
+
+// Esc 关闭面板：仅在面板展开时响应，避免全局拦截影响其他组件
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === FLOATING_CHAT_CONFIG.shortcuts.close && isOpen.value) {
+    // 输入框聚焦时 Esc 默认行为是失焦，需 preventDefault 才能触发关闭
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT') {
+      e.preventDefault();
+    }
+    setOpen(false);
+  }
+}
+
+onMounted(() => {
+  globalThis.addEventListener('keydown', handleGlobalKeydown);
+});
+
+onBeforeUnmount(() => {
+  abortController?.abort();
+  globalThis.removeEventListener('keydown', handleGlobalKeydown);
+});
 </script>
 
 <template>
-  <!-- 悬浮按钮：固定在右下角 -->
+  <!-- 悬浮面板：固定在右下角，Query 页面时移到左下角 -->
   <!-- 为什么面板不用 glass-card：glass-card 的 ::before 顶部高光线 + 固定暗色背景
        在 macaron 等浅色主题下会出现"外层透明框"且背景与主题冲突，
        改为使用主题变量驱动的半透明背景，顶部不再绘制高光线 -->
   <transition name="float-fade">
-    <div v-if="isOpen" class="floating-panel">
+    <div
+      v-if="isOpen"
+      class="floating-panel"
+      :style="{
+        '--panel-width': FLOATING_CHAT_CONFIG.panel.width + 'px',
+        '--panel-min-height': FLOATING_CHAT_CONFIG.panel.minHeight + 'px',
+        '--panel-max-height': FLOATING_CHAT_CONFIG.panel.maxHeight + 'px',
+        '--panel-bottom': FLOATING_CHAT_CONFIG.position.bottom + 'px',
+        '--panel-right': FLOATING_CHAT_CONFIG.position.right + 'px',
+      }"
+    >
       <!-- 面板头部 -->
       <div class="panel-header">
         <div class="panel-title">
           <RobotAvatar :size="28" />
-          <span>AI 知识库问答</span>
+          <span>{{ FLOATING_CHAT_CONFIG.panelTitle }}</span>
         </div>
         <div class="panel-actions">
           <el-button
@@ -188,7 +198,7 @@ function handleClose() {
             size="small"
             circle
             text
-            @click="handleClose"
+            @click="setOpen(false)"
             title="关闭"
           />
         </div>
@@ -201,7 +211,7 @@ function handleClose() {
           <p class="empty-hint">向我提问知识库相关内容</p>
           <div class="suggestion-list">
             <span
-              v-for="suggestion in ['什么是 RAG？', 'Embedding 是什么？', 'Vector Database 的作用']"
+              v-for="suggestion in FLOATING_CHAT_CONFIG.suggestionQuestions"
               :key="suggestion"
               class="suggestion-chip"
               @click="inputQuestion = suggestion"
@@ -211,7 +221,7 @@ function handleClose() {
         <div v-else class="messages-list">
           <div
             v-for="(msg, idx) in store.messages"
-            :key="idx"
+            :key="msg.id || idx"
             class="msg-row"
             :class="msg.role"
           >
@@ -220,54 +230,100 @@ function handleClose() {
               <RobotAvatar v-else :size="32" :floating="false" />
             </div>
             <div class="msg-bubble" :class="msg.role">
+              <!-- 思考过程：复用 ThinkingBlock 保持与 Query.vue 一致的可折叠交互 -->
+              <ThinkingBlock
+                v-if="msg.thinking && msg.thinking.length > 0"
+                :steps="msg.thinking"
+              />
               <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
-              <div v-if="msg.refs" class="msg-refs">
-                <span class="refs-label">参考：</span>
-                <span
-                  v-for="(ref, i) in (msg.refs as Array<string | { title: string; url?: string; path?: string; snippet?: string }>)"
-                  :key="i"
-                  class="ref-chip"
-                >{{ typeof ref === 'string' ? ref : (ref.title || ref.path || ref.url) }}</span>
-              </div>
-              <div v-if="msg.followups" class="msg-followups">
+              <!-- 消息操作工具栏：复用 MessageToolbar（含复制/朗读/重新生成/反馈） -->
+              <MessageToolbar
+                v-if="msg.role === 'assistant'"
+                :content="msg.content"
+                :msg-id="msg.id"
+                :can-regenerate="!store.isLoading"
+              />
+              <!-- 联想追问 -->
+              <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
                 <span class="followups-label">猜猜你想问：</span>
-                <span
-                  v-for="(f, i) in msg.followups"
-                  :key="i"
-                  class="followup-chip"
-                  @click="inputQuestion = f"
-                >{{ f }}</span>
+                <div class="followups-track">
+                  <span
+                    v-for="(f, i) in msg.followups"
+                    :key="i"
+                    class="followup-chip"
+                    @click="inputQuestion = f"
+                  >{{ f }}</span>
+                </div>
               </div>
+              <!-- 参考资料列表：复用 RefsList 完整渲染（含来源徽章、点击跳转） -->
+              <RefsList
+                v-if="normalizeRefs(msg.refs).length > 0"
+                :refs="normalizeRefs(msg.refs)"
+              />
+              <!-- 消息时间戳：右下角小字，不抢占主要内容视觉 -->
+              <div v-if="msg.createdAt" class="msg-timestamp">{{ formatTime(msg.createdAt) }}</div>
             </div>
           </div>
           <!-- 流式输出中的 assistant 消息 -->
-          <div v-if="store.isLoading" class="msg-row assistant">
+          <div v-if="store.isLoading || store.streamingAnswer" class="msg-row assistant">
             <div class="msg-avatar">
               <RobotAvatar :size="32" :floating="true" />
             </div>
-            <div class="msg-bubble assistant streaming">
-              <div class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '思考中...')"></div>
+            <div class="msg-bubble assistant" :class="{ streaming: !!store.streamingAnswer }">
+              <!-- 思考过程实时展示 -->
+              <ThinkingBlock
+                v-if="store.currentThinking.length > 0"
+                :steps="store.currentThinking"
+              />
+              <!-- 首字节前 loading dots：让用户感知"正在思考" -->
+              <div
+                v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0"
+                class="loading-dots"
+              >
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="loading-text">正在思考…</span>
+              </div>
+              <div
+                v-else
+                class="msg-content markdown-body streaming-content"
+                v-html="renderMarkdown(store.streamingAnswer || '')"
+              ></div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- 输入区域 -->
+      <!-- 输入区域：el-input + autosize 自动扩展高度，仿 Query.vue 模式 -->
       <div class="panel-input">
-        <textarea
+        <el-input
           v-model="inputQuestion"
-          class="panel-textarea"
+          type="textarea"
+          :rows="FLOATING_CHAT_CONFIG.textarea.minRows"
+          :autosize="{ minRows: FLOATING_CHAT_CONFIG.textarea.minRows, maxRows: FLOATING_CHAT_CONFIG.textarea.maxRows }"
           placeholder="输入你的问题…"
-          rows="1"
+          resize="none"
           :disabled="store.isLoading"
           @keydown="handleKeydown"
         />
+        <!-- 停止生成按钮：isLoading 时切换为 Stop 图标，点击中断 SSE -->
         <el-button
+          v-if="store.isLoading"
+          type="danger"
+          :icon="VideoPause"
+          circle
+          @click="handleStop"
+          title="停止生成"
+        />
+        <el-button
+          v-else
           type="primary"
-          :icon="store.isLoading ? Loading : Promotion"
-          :disabled="!inputQuestion.trim() || store.isLoading"
+          :icon="Promotion"
+          :disabled="!inputQuestion.trim()"
           circle
           @click="handleSubmit"
+          title="发送"
         />
       </div>
     </div>
@@ -281,6 +337,12 @@ function handleClose() {
       v-if="!isOpen"
       class="float-btn"
       :class="{ 'in-query': props.inQueryPage }"
+      :style="{
+        width: FLOATING_CHAT_CONFIG.floatButtonSize + 'px',
+        height: FLOATING_CHAT_CONFIG.floatButtonSize + 'px',
+        '--panel-bottom': FLOATING_CHAT_CONFIG.position.bottom + 'px',
+        '--panel-right': FLOATING_CHAT_CONFIG.position.right + 'px',
+      }"
       @click="toggleOpen"
       title="点击展开问答面板"
     >
@@ -294,13 +356,12 @@ function handleClose() {
 /* 为什么没有 border 和 box-shadow：
    之前用 2px 青边框 + 青色光晕在浅色主题下形成"外层透明框"视觉效果
    （圆形描边 + 模糊光晕），用户希望按钮与背景融为一体，只显示机器人图标本身。
-   这里去掉所有装饰边框，机器人 SVG 自带主题色，背景完全透明。 */
+   这里去掉所有装饰边框，机器人 SVG 自带主题色，背景完全透明。
+   尺寸从内联 style 注入（--float-size），避免硬编码违反配置驱动约束 */
 .float-btn {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
-  width: 56px;
-  height: 56px;
+  bottom: var(--panel-bottom, 24px);
+  right: var(--panel-right, 24px);
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -319,8 +380,8 @@ function handleClose() {
 
 /* §5.2 Query 页面时悬浮按钮移到左下角，避免遮挡右侧发送按钮 */
 .float-btn.in-query {
-  bottom: 24px;
-  left: 24px;
+  bottom: var(--panel-bottom, 24px);
+  left: var(--panel-right, 24px);
   right: auto;
 }
 
@@ -331,15 +392,17 @@ function handleClose() {
    - box-shadow: none → 无投影
    - backdrop-filter: none → 无模糊，不遮挡背景内容
    - background: var(--bg-card) → 半透明主题色，主题切换时自动适配
-   内部面板元素（header、messages、input）有各自背景色形成自然的视觉分区。 */
+   内部面板元素（header、messages、input）有各自背景色形成自然的视觉分区。
+   尺寸/位置从内联 CSS 变量注入（--panel-width 等），符合配置驱动原则 */
 .floating-panel {
   position: fixed;
-  bottom: 92px;
-  right: 24px;
-  width: 420px;
-  /* 自适应视口：在大屏保持 560px 高度，在小屏（< 660px）自动收缩避免标题头被遮挡
-     用 min() 函数比 max-height 更直接：height 直接等于 min(560, 视口-100) */
-  height: min(560px, calc(100vh - 100px));
+  bottom: calc(var(--panel-bottom) + 68px);
+  right: var(--panel-right);
+  width: var(--panel-width);
+  /* 自适应视口：在大屏保持 maxHeight，在小屏自动收缩避免标题头被遮挡
+     用 min() 函数比 max-height 更直接：height 直接等于 min(maxHeight, 视口-100) */
+  height: min(var(--panel-max-height), calc(100vh - 100px));
+  min-height: var(--panel-min-height);
   max-height: calc(100vh - 80px);
   border-radius: 16px;
   border: none;
@@ -517,28 +580,59 @@ function handleClose() {
   white-space: pre-wrap;
 }
 
-.msg-refs {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--accent-purple-a25);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+/* 流式输出末尾的打字机光标：闪烁提示用户"正在生成" */
+.streaming-content::after {
+  content: '▋';
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--neon-cyan);
+  animation: cursor-blink 1s steps(2) infinite;
 }
 
-.refs-label {
+@keyframes cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* loading dots：首字节前的"正在思考"动画 */
+.loading-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+.loading-dots .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--neon-cyan);
+  animation: loading-bounce 1.2s ease-in-out infinite;
+}
+.loading-dots .dot:nth-child(1) { animation-delay: 0s; }
+.loading-dots .dot:nth-child(2) { animation-delay: 0.2s; }
+.loading-dots .dot:nth-child(3) { animation-delay: 0.4s; }
+.loading-dots .loading-text {
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+@keyframes loading-bounce {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* 消息时间戳：右下角小字 */
+.msg-timestamp {
+  margin-top: 6px;
+  text-align: right;
   font-size: 10px;
   color: var(--text-dim);
-  font-family: var(--font-mono);
-}
-
-.ref-chip {
-  padding: 2px 8px;
-  background: var(--accent-purple-a10);
-  border: 1px solid var(--accent-purple-a30);
-  border-radius: 12px;
-  font-size: 10px;
-  color: var(--neon-purple);
   font-family: var(--font-mono);
 }
 
@@ -554,6 +648,12 @@ function handleClose() {
   font-size: 10px;
   color: var(--text-dim);
   font-family: var(--font-mono);
+}
+
+.followups-track {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .followup-chip {
@@ -572,6 +672,12 @@ function handleClose() {
   border-color: var(--neon-cyan);
 }
 
+/* hover 父气泡时显现 MessageToolbar（仿 Query.vue 触发规则） */
+.msg-bubble.assistant:hover :deep(.msg-toolbar) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* 输入区域 */
 .panel-input {
   display: flex;
@@ -582,8 +688,11 @@ function handleClose() {
   flex-shrink: 0;
 }
 
-.panel-textarea {
-  flex: 1;
+/* el-input textarea 样式覆盖：紧凑行高避免空行 */
+.panel-input :deep(.el-textarea) {
+  --el-textarea-min-height: 0;
+}
+.panel-input :deep(.el-textarea__inner) {
   padding: 10px 14px;
   border: none;
   border-radius: 12px;
@@ -591,23 +700,21 @@ function handleClose() {
   color: var(--text-bright);
   font-size: 13px;
   font-family: var(--font-body);
-  resize: none;
-  outline: none;
   line-height: 1.5;
-  min-height: 40px;
-  max-height: 120px;
+  min-height: 0 !important;
+  box-shadow: none;
   transition: box-shadow 0.2s;
 }
 
-.panel-textarea::placeholder {
+.panel-input :deep(.el-textarea__inner)::placeholder {
   color: var(--text-dim);
 }
 
-.panel-textarea:focus {
+.panel-input :deep(.el-textarea__inner):focus {
   box-shadow: 0 0 0 2px var(--accent-cyan-a30) inset;
 }
 
-.panel-textarea:disabled {
+.panel-input :deep(.el-textarea__inner):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -667,16 +774,16 @@ function handleClose() {
 /* 响应式 */
 @media (max-width: 500px) {
   .floating-panel {
-    width: calc(100vw - 16px);
-    height: calc(100vh - 80px);
+    width: calc(100vw - 16px) !important;
+    height: calc(100vh - 80px) !important;
     bottom: 80px;
     right: 8px;
     border-radius: 12px;
   }
 
   .float-btn {
-    bottom: 16px;
-    right: 16px;
+    bottom: 16px !important;
+    right: 16px !important;
   }
 }
 </style>

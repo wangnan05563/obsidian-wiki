@@ -3,6 +3,7 @@ import { onMounted, onBeforeUnmount, computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading, Check, Close } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
+import { consumeSSE } from '../utils/sse';
 import type { IngestPayload, TimelineItem, RunSummary } from '../types';
 
 // 使用函数类型写法替代类型字面量（S6598）
@@ -32,11 +33,21 @@ const robotMood = computed<string>(() => {
 
 const showRunsList = computed(() => !store.isCompiling && !store.isDone && !store.errorMessage);
 
+// 批量编译统计：成功/失败文件数
+const batchSuccessCount = computed(() =>
+  store.batchGroups.filter((g) => g.status === 'done').length,
+);
+const batchErrorCount = computed(() =>
+  store.batchGroups.filter((g) => g.status === 'error').length,
+);
+
 async function startCompile(payload: IngestPayload) {
   const isFormData = payload instanceof FormData;
   abortController = new AbortController();
   try {
-    const response = await fetch('/api/compile', {
+    // 批量模式调用 /api/compile/batch，单文件模式调用 /api/compile
+    const endpoint = store.isBatchMode ? '/api/compile/batch' : '/api/compile';
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: isFormData ? {} : { 'Content-Type': 'application/json' },
       body: isFormData ? payload : JSON.stringify(payload),
@@ -47,9 +58,14 @@ async function startCompile(payload: IngestPayload) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    await consumeSSE(response);
+    await consumeCompileSSE(response);
   } catch (err) {
-    if ((err as Error).name === 'AbortError') return;
+    if ((err as Error).name === 'AbortError') {
+      // 中止时仅复位 isCompiling，不污染 errorMessage：
+      // 用户切走/切回是正常导航操作，不应显示为错误
+      store.abortCompile();
+      return;
+    }
     store.handleEvent('error', { message: (err as Error).message });
     ElMessage.error('编译请求失败：' + (err as Error).message);
   } finally {
@@ -73,9 +89,12 @@ async function startResume(runId: string) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    await consumeSSE(response);
+    await consumeCompileSSE(response);
   } catch (err) {
-    if ((err as Error).name === 'AbortError') return;
+    if ((err as Error).name === 'AbortError') {
+      store.abortCompile();
+      return;
+    }
     store.handleEvent('error', { message: (err as Error).message });
     ElMessage.error('恢复失败：' + (err as Error).message);
   } finally {
@@ -83,38 +102,23 @@ async function startResume(runId: string) {
   }
 }
 
-async function consumeSSE(response: Response) {
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+// SSE 流消费委托给 utils/sse.ts 的通用 consumeSSE，降低本函数认知复杂度（S3776）
+// compile store 使用 handleEvent 统一入口分发事件
+function handleSSE(eventType: string, parsed: any) {
+  store.handleEvent(eventType, parsed);
+}
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split('\n\n');
-    buffer = events.pop() || '';
-    for (const evt of events) {
-      const lines = evt.split('\n');
-      let eventType = '';
-      let data = '';
-      for (const line of lines) {
-        if (line.startsWith('event: ')) eventType = line.slice(7);
-        if (line.startsWith('data: ')) data = line.slice(6);
-      }
-      if (eventType && data) {
-        try {
-          store.handleEvent(eventType, JSON.parse(data));
-        } catch {
-          // 非 JSON 数据跳过
-        }
-      }
-    }
-  }
+async function consumeCompileSSE(response: Response) {
+  await consumeSSE(response, handleSSE);
 }
 
 onMounted(() => {
-  if (store.pendingPayload && !store.isDone) {
+  // 批量模式优先检测 pendingBatchPayload，否则检测单文件 pendingPayload
+  // 加 !store.isCompiling 守卫：避免在编译进行中重复触发 startCompile
+  // （onBeforeUnmount 已调用 store.abortCompile 复位 isCompiling，切回时此守卫允许恢复编译）
+  if (store.isBatchMode && store.pendingBatchPayload && !store.isDone && !store.isCompiling) {
+    startCompile(store.pendingBatchPayload);
+  } else if (store.pendingPayload && !store.isDone && !store.isCompiling) {
     startCompile(store.pendingPayload);
   } else {
     store.loadRuns();
@@ -150,6 +154,9 @@ function runStatusLabel(status: string): string {
 
 onBeforeUnmount(() => {
   abortController?.abort();
+  // 通知 store 编译已中止：让 isCompiling 复位，避免切回时 onMounted 误判为"正在编译"
+  // 而跳过 startCompile 重入，导致进度条卡死
+  store.abortCompile();
 });
 
 function handleRestart() {
@@ -192,7 +199,70 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
         </div>
       </div>
 
-      <el-timeline v-if="store.timeline.length > 0" class="timeline">
+      <!-- 批量编译模式：按文件分组渲染 -->
+      <div v-if="store.isBatchMode" class="batch-view">
+        <!-- 拒绝列表：扫描文件夹时不符白名单的文件 -->
+        <div v-if="store.batchRejected.length > 0" class="batch-rejected">
+          <div class="rejected-title">已跳过 {{ store.batchRejected.length }} 个不符白名单的文件：</div>
+          <ul class="rejected-list">
+            <li v-for="(r, idx) in store.batchRejected" :key="idx" class="rejected-item">
+              <code>{{ r.name }}</code>
+              <span class="rejected-reason">{{ r.reason }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- 分组卡片列表 -->
+        <div v-if="store.batchGroups.length > 0" class="batch-groups">
+          <div
+            v-for="group in store.batchGroups"
+            :key="group.fileIndex"
+            class="batch-group"
+            :class="group.status"
+          >
+            <div class="batch-group-head">
+              <span class="batch-group-idx">#{{ group.fileIndex + 1 }}</span>
+              <span class="batch-group-name">{{ group.fileName || '待处理' }}</span>
+              <span class="batch-group-status" :class="group.status">
+                <el-icon v-if="group.status === 'running'" class="spin-icon"><Loading /></el-icon>
+                <el-icon v-else-if="group.status === 'done'"><Check /></el-icon>
+                <el-icon v-else-if="group.status === 'error'"><Close /></el-icon>
+                <span>{{ group.status }}</span>
+              </span>
+            </div>
+            <!-- 分组内时间线（折叠态：仅显示最近一条；展开态：完整列表） -->
+            <div v-if="group.timeline.length > 0" class="batch-group-timeline">
+              <div
+                v-for="(item, idx) in group.timeline"
+                :key="idx"
+                class="batch-tl-item"
+              >
+                <span class="batch-tl-step">{{ stepLabelOf(item) }}</span>
+                <span class="batch-tl-msg">{{ item.message }}</span>
+                <code v-if="item.page" class="batch-tl-page">{{ item.page.title }}</code>
+              </div>
+            </div>
+            <!-- 错误信息 -->
+            <div v-if="group.errorMessage" class="batch-group-error">
+              {{ group.errorMessage }}
+            </div>
+            <!-- 生成页面列表 -->
+            <div v-if="group.pages.length > 0" class="batch-group-pages">
+              <span class="pages-label">生成页面：</span>
+              <code v-for="p in group.pages" :key="p.path" class="batch-page-code">{{ p.title }}</code>
+            </div>
+          </div>
+        </div>
+
+        <!-- 等待开始 -->
+        <div v-else class="empty-progress">
+          <span class="empty-dots">● ● ●</span>
+          <p>等待批量编译开始…</p>
+        </div>
+      </div>
+
+      <!-- 单文件模式时间线 -->
+      <el-timeline v-else-if="store.timeline.length > 0" class="timeline">
         <el-timeline-item
           v-for="(item, idx) in store.timeline"
           :key="idx"
@@ -245,6 +315,21 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       <div class="restart-bar">
           <el-button type="primary" size="large" @click="handleRestart">
             再投一篇
+          </el-button>
+        </div>
+      </div>
+      <!-- 批量编译完成区块：显示总文件数与失败计数 -->
+      <div v-else-if="store.isBatchMode && store.isDone" class="done-section">
+        <div class="result-card">
+          <div class="result-title">批量编译结果</div>
+          <div v-if="store.doneMessage" class="done-message">{{ store.doneMessage }}</div>
+          <div class="result-meta">
+            成功：<strong>{{ batchSuccessCount }}</strong> · 失败：<strong>{{ batchErrorCount }}</strong>
+          </div>
+        </div>
+        <div class="restart-bar">
+          <el-button type="primary" size="large" @click="handleRestart">
+            再投一批
           </el-button>
         </div>
       </div>
@@ -721,5 +806,203 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   padding: 24px 0;
   text-align: center;
   letter-spacing: 2px;
+}
+
+/* ===== 批量编译模式样式 ===== */
+.batch-view {
+  margin-top: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.batch-rejected {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: rgba(255, 0, 110, 0.06);
+  border: 1px solid rgba(255, 0, 110, 0.25);
+  border-radius: var(--radius-card);
+}
+
+.rejected-title {
+  font-size: 13px;
+  color: var(--neon-magenta);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.rejected-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rejected-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.rejected-item code {
+  padding: 2px 8px;
+  background: rgba(176, 38, 255, 0.12);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--neon-purple);
+}
+
+.rejected-reason {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.batch-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.batch-group {
+  padding: 14px 18px;
+  background: rgba(176, 38, 255, 0.04);
+  border: 1px solid rgba(176, 38, 255, 0.15);
+  border-radius: var(--radius-card);
+  transition: border-color 0.3s ease;
+}
+
+.batch-group.running {
+  border-color: var(--neon-pink);
+}
+
+.batch-group.done {
+  border-color: rgba(0, 245, 255, 0.35);
+}
+
+.batch-group.error {
+  border-color: rgba(255, 0, 110, 0.4);
+  background: rgba(255, 0, 110, 0.05);
+}
+
+.batch-group-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.batch-group-idx {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--neon-cyan);
+  font-size: 12px;
+}
+
+.batch-group-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.batch-group-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.batch-group-status.running {
+  background: rgba(255, 62, 201, 0.15);
+  color: var(--neon-pink);
+}
+
+.batch-group-status.done {
+  background: rgba(0, 245, 255, 0.15);
+  color: var(--neon-cyan);
+}
+
+.batch-group-status.error {
+  background: rgba(255, 0, 110, 0.15);
+  color: var(--neon-magenta);
+}
+
+.batch-group-timeline {
+  margin-top: 6px;
+  padding-left: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 2px solid rgba(176, 38, 255, 0.15);
+  padding-left: 10px;
+}
+
+.batch-tl-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.batch-tl-step {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  color: var(--neon-purple);
+  font-weight: 600;
+}
+
+.batch-tl-msg {
+  flex: 1;
+}
+
+.batch-tl-page {
+  padding: 1px 6px;
+  background: rgba(0, 245, 255, 0.1);
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
+}
+
+.batch-group-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 0, 110, 0.08);
+  border-radius: 6px;
+  color: var(--neon-magenta);
+  font-size: 12px;
+}
+
+.batch-group-pages {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pages-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.batch-page-code {
+  padding: 2px 8px;
+  background: rgba(0, 245, 255, 0.08);
+  border: 1px solid rgba(0, 245, 255, 0.2);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
 }
 </style>

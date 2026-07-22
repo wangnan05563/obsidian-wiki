@@ -43,5 +43,10 @@
     "apiKeyRef": "TAVILY_API_KEY",
     "apiKey": "",
     "maxResults": 5
+  },
+  "batch": {
+    "allowedExtensions": ["md", "txt", "pdf", "html", "json"],
+    "maxBatchSize": 20,
+    "maxFileSizeMb": 10
   }
 }

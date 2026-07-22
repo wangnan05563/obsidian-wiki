@@ -811,11 +811,21 @@ Playwright 自动化测试（webapp-testing Skill），26/26 通过：
 
 | 限制 | 影响范围 | 缓解方案 |
 | --- | --- | --- |
-| F-3.6 TTS 浏览器实测未执行 | 中文 voice 自动选择 / 暂停继续 / 切换消息停止的端到端行为未在浏览器中实测 | Sprint 4 整体验收时用 Playwright + Chrome DevTools 协议执行 TTS 用例（Web Speech API 在 headless 模式需 `--enable-speech-dispatcher` flag） |
-| F-3.10 联网搜索实测需 API Key | Tavily/Bing API Key 未配置时无法实测真实联网搜索流程 | 用户配置 Tavily API Key 后端到端验收；或 mock fetch 验证 5s 超时降级路径 |
-| F-3.6 TTS 语速调节未实施 | SRS F-3.6 描述「默认语速 1.0x，可调 0.5x - 2.0x」，当前固定 1.0x | 后续在 MessageToolbar 浮窗加调速滑块，调用 utterance.rate = value |
-| F-3.8 引用编号 [1] 锚点未实施 | SRS F-3.8 要求「assistant 文本中 [1] 为可点击锚点」，当前仅展示编号 | 后续在 markdown.ts 注入 [N] → <a href="#ref-N"> 转换规则 |
-| F-3.10 联网搜索 progress 事件未推送 | SRS F-3.10 数据结构含 progress 事件，当前仅 thinking 提示 | 后续在 afterStep hook 推送 { step: 'web_search', count: N } |
+| ~~F-3.6 TTS 浏览器实测未执行~~ | ~~中文 voice 自动选择 / 暂停继续 / 切换消息停止的端到端行为未在浏览器中实测~~ | ✅ v2.0.1 已实测：`scripts/sprint5-e2e-real.py` 共 10 项 TTS 用例全部 PASS（TC-TTS-01 speechSynthesis 可用 / TC-TTS-02 中文 voice 3 个 Microsoft Huihui/Kangkang/Yaoyao / TC-TTS-05 speak 调用 zh-CN + voice 选择 / TC-TTS-06 朗读中 title 切换 / TC-TTS-07 暂停 / TC-TTS-08 继续 / TC-TTS-09c setRate(1.5) store 应用 / TC-TTS-09d rate 重启 utterance 验证 rate=1.5 / TC-TTS-10 切换消息 cancel）；headed Chrome + Web Speech API + mock speechSynthesis.speak 捕获 utterance 参数 |
+| ~~F-3.10 联网搜索实测需 API Key~~ | ~~Tavily/Bing API Key 未配置时无法实测真实联网搜索流程~~ | ✅ v2.0.1 已实测：`scripts/sprint5-e2e-real.py` 配置真实 Tavily API Key，5 项联网搜索用例 + 4 项超时降级用例全部 PASS（TC-SEARCH-01 Tavily provider/key 配置 / TC-SEARCH-02 SSE done 事件 / TC-SEARCH-03 progress 事件 searching / TC-SEARCH-04 refs 渲染 / TC-SEARCH-05 thinking 事件 5 条；TC-TIMEOUT-01 5s 超时常量 / TC-TIMEOUT-02 AbortSignal.timeout / TC-TIMEOUT-03 try/catch 降级 / TC-TIMEOUT-04 三层防御完整）；真实触发 Tavily 搜索 + read_page 工具调用 |
+| ~~F-3.6 TTS 语速调节未实施~~ | ~~SRS F-3.6 描述「默认语速 1.0x，可调 0.5x - 2.0x」，当前固定 1.0x~~ | ✅ v2.0.1 已修复：`useTTS.ts` 新增 `rate ref(1.0)` + `setRate()` clamp(0.5-2.0)；`MessageToolbar.vue` 新增 `.rate-panel` 浮窗 + `<input type="range" min="0.5" max="2.0" step="0.1">` 滑块；朗读中调整 rate 自动重启 utterance 应用新值 |
+| ~~F-3.8 引用编号 [1] 锚点未实施~~ | ~~SRS F-3.8 要求「assistant 文本中 [1] 为可点击锚点」，当前仅展示编号~~ | ✅ v2.0.1 已修复：`markdown.ts` 新增 `ref_anchor` inline 规则将 `[N]` 转为 `<a href="#ref-N" class="ref-anchor">`；`RefsList.vue` 卡片新增 `id="ref-${citeIndex}"`；`Query.vue` `handleRefAnchorClick` 事件委托 + `scrollIntoView({behavior:'smooth'})` + `ref-flash` 1.5s 高亮动画 |
+| ~~F-3.10 联网搜索 progress 事件未推送~~ | ~~SRS F-3.10 数据结构含 progress 事件，当前仅 thinking 提示~~ | ✅ v2.0.1 已修复：`query-workflow.ts` 新增 `collectedProgress` 数组 + afterStep hook 在 `web_search` 调用时推送 `{step:'fetching',count}` 与 `{step:'done',count}`，启动时推送 `{step:'searching'}`；SSE 路由 + 前端 sse.ts/store/Query.vue 全链路已就绪；Query.vue 新增 `searchProgressLabel` 计算属性将英文 step 翻译为中文（正在联网搜索/正在抓取网页/联网搜索完成） |
+
+### 16.5.1 v2.0.1 修复项验证证据
+
+- 类型检查：`vue-tsc --noEmit -p frontend` exit 0；`tsc --noEmit -p api` exit 0
+- 编码体检：81 文件全部 UTF-8 无 BOM
+- Playwright E2E：`scripts/sprint3-4-acceptance.py` 共 34 项全部 PASS（其中 v2.0.1 新增 11 项：F-3.6 rate ref/setRate/clamp + 工具栏 UI + store 暴露；F-3.8 markdown 规则 + RefsList id + 点击委托 + 闪烁高亮；F-3.10 workflow 推送 + SSE 路由 + 前端 handler + store + 展示 + 中文 label）
+- 结果文件：`docs/test-evidence/sprint3-4/sprint3-4-result.json`
+- Sprint 5 端到端实测：`scripts/sprint5-e2e-real.py` 共 27 项全部 PASS（F-3.6 TTS 浏览器实测 10 项：speechSynthesis 支持 / 中文 voice / speak 调用 / voice 选择 / title 切换 / 暂停 / 继续 / 语速按钮 / setRate 应用 / rate 重启 utterance / 切换消息 cancel；F-3.10 联网搜索实测 9 项：Tavily 配置 / SSE done / progress 事件 / refs 渲染 / thinking 事件 / 5s 超时常量 / AbortSignal / try-catch 降级 / 三层防御完整；Console 错误检查 1 项）
+- Sprint 5 结果文件：`docs/test-evidence/sprint5/sprint5-result.json`
+- Sprint 5 运行日志：`docs/test-evidence/sprint5/sprint5-run.log`
 
 ### 16.6 v2.0.0 全量发布声明
 
@@ -836,4 +846,4 @@ Playwright 自动化测试（webapp-testing Skill），26/26 通过：
 - 下一阶段：v2.0.0 维护期（bug 修复 + 性能优化 + 用户反馈迭代）
 - 下一阶段智能体：无（v2.0.0 已全量发布）
 - 下一阶段技能：webapp-testing（Playwright 端到端验收补完 TTS/联网搜索用例）
-- 交接上下文：Sprint 4 已交付 3 项功能（F-3.6 / F-3.8 / F-3.10），所有修改通过前后端 tsc 类型检查。F-3.6 TTS 代码层完整（useTTS + useTtsStore + MessageToolbar 6 按钮），浏览器端实测待 Playwright 补完。F-3.10 联网搜索后端完整（web-search.ts 5s 超时降级 + afterStep hook 降级提示），实测需用户配置 Tavily/Bing API Key。v2.0.0 13 项功能全部交付，进入维护期。
+- 交接上下文：Sprint 4 已交付 3 项功能（F-3.6 / F-3.8 / F-3.10），所有修改通过前后端 tsc 类型检查。Sprint 5 端到端实测已完成（27/27 PASS）：F-3.6 TTS 浏览器实测 10 项（headed Chrome + Microsoft Huihui 中文 voice + mock speechSynthesis 捕获 utterance 参数，覆盖中文 voice 选择 / 暂停继续 / 切换消息停止 / 语速调节 rate 重启 utterance）；F-3.10 联网搜索真实 Tavily API Key 触发实测 9 项（真实搜索 + read_page 工具调用 + SSE progress 事件 + 5s 超时降级三层防御完整）。v2.0.0 13 项功能全部交付并完成端到端实测，DELIVERY.md §16.5 已知限制全部关闭，进入维护期。

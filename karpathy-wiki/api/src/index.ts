@@ -193,16 +193,37 @@ async function main(): Promise<void> {
     });
   }
 
+  // 内网穿透：TunnelService 单例提前创建，供 CORS 白名单查询当前 tunnel 公网域名
+  // 为什么提前：CORS origin 回调需要同步查询 tunnel.publicUrl 判断是否放行
+  const tunnel = new TunnelService();
+
   // CORS：限制 origin 为本地开发 + tunnel 域名白名单
   // 为什么需要：默认跨域全放开会暴露内部 API，白名单收敛到本地与已配置 tunnel
   await app.register(cors, {
     origin: (origin, cb) => {
-      // 允许本地开发前端、同源请求（无 origin）和 tunnel 域名
+      // 允许本地开发前端、同源请求（无 origin）
       if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
         cb(null, true);
         return;
       }
-      // tunnel 公网域名需要配置允许
+      // 允许 tunnel 运行时的公网域名（quick tunnel 动态域名 + tailscale/cpolar）
+      const tunnelUrl = tunnel.publicUrl;
+      if (tunnelUrl) {
+        try {
+          const u = new URL(tunnelUrl);
+          if (origin === `${u.protocol}//${u.host}`) {
+            cb(null, true);
+            return;
+          }
+        } catch {
+          // publicUrl 格式异常，跳过
+        }
+      }
+      // 允许配置的 named tunnel 固定 hostname
+      if (config.tunnel.hostname && origin === `https://${config.tunnel.hostname}`) {
+        cb(null, true);
+        return;
+      }
       cb(new Error('Not allowed by CORS'), false);
     },
     credentials: true,
@@ -224,7 +245,7 @@ async function main(): Promise<void> {
     limits: { fileSize: 1024 * 1024 * 10 }, // 10MB 上限，防止超大文件耗尽内存
   });
 
-  registerCompileRoute(app, adapter);
+  registerCompileRoute(app, adapter, config.batch);
   registerQueryRoute(app, adapter);
   registerQueryArchiveRoute(app, vault);
   registerHealthCheckRoute(app, adapter);
@@ -252,8 +273,7 @@ async function main(): Promise<void> {
   // 关于页面 + 检查更新：参考 17_xianyu 项目 about 模块
   registerAboutRoute(app);
 
-  // 内网穿透：TunnelService 单例注入路由，路由内部按需 start/stop
-  const tunnel = new TunnelService();
+  // 内网穿透：TunnelService 单例已提前创建（CORS 白名单依赖），此处注入路由
   registerTunnelRoute(app, tunnel);
   // autoStart 开启时服务启动即建立隧道，失败不阻断主服务
   if (config.tunnel.autoStart) {

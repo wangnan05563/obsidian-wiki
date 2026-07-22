@@ -3,7 +3,8 @@ import { ref, computed } from 'vue';
 import type { ThinkingStep } from '../types';
 
 const props = defineProps<{ steps: ThinkingStep[] }>();
-const expanded = ref(true);
+// 默认折叠：减少视觉噪音，用户主动展开查看思考细节
+const expanded = ref(false);
 
 // 折叠态摘要：已思考 N 步 · 搜索 N 次 · 阅读 N 页
 const summary = computed(() => {

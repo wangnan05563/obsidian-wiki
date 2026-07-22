@@ -1,0 +1,82 @@
+[
+  {
+    "key": "openai",
+    "label": "OpenAI",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "model": "gpt-4o-mini",
+    "apiKeyRef": "OPENAI_API_KEY",
+    "apiKeyUrl": "https://platform.openai.com/api-keys",
+    "vision": true
+  },
+  {
+    "key": "deepseek",
+    "label": "DeepSeek",
+    "provider": "deepseek",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-chat",
+    "apiKeyRef": "DEEPSEEK_KEY",
+    "apiKeyUrl": "https://platform.deepseek.com/api_keys",
+    "vision": false
+  },
+  {
+    "key": "glm",
+    "label": "智谱 GLM",
+    "provider": "glm",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "model": "glm-4-flash",
+    "apiKeyRef": "GLM_KEY",
+    "apiKeyUrl": "https://open.bigmodel.cn/usercenter/apikeys",
+    "vision": true
+  },
+  {
+    "key": "qwen",
+    "label": "通义千问",
+    "provider": "qwen",
+    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen-plus",
+    "apiKeyRef": "DASHSCOPE_API_KEY",
+    "apiKeyUrl": "https://dashscope.console.aliyun.com/apiKey",
+    "vision": true
+  },
+  {
+    "key": "moonshot",
+    "label": "Moonshot",
+    "provider": "moonshot",
+    "baseUrl": "https://api.moonshot.cn/v1",
+    "model": "moonshot-v1-8k",
+    "apiKeyRef": "MOONSHOT_API_KEY",
+    "apiKeyUrl": "https://platform.moonshot.cn/console/api-keys",
+    "vision": false
+  },
+  {
+    "key": "doubao",
+    "label": "豆包",
+    "provider": "doubao",
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "model": "doubao-pro-32k",
+    "apiKeyRef": "ARK_API_KEY",
+    "apiKeyUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+    "vision": true
+  },
+  {
+    "key": "ollama",
+    "label": "Ollama 本地",
+    "provider": "ollama",
+    "baseUrl": "http://localhost:11434/v1",
+    "model": "qwen2.5:7b",
+    "apiKeyRef": "OLLAMA_API_KEY",
+    "apiKeyUrl": "",
+    "vision": false
+  },
+  {
+    "key": "agnes",
+    "label": "Agnes AI",
+    "provider": "agnes",
+    "baseUrl": "https://apihub.agnes-ai.com/v1",
+    "model": "agnes-2.0-flash",
+    "apiKeyRef": "AGNES_API_KEY",
+    "apiKeyUrl": "https://agnes-ai.com",
+    "vision": true
+  }
+]

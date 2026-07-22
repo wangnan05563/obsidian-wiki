@@ -474,7 +474,6 @@ function scrollToSection(id: string) {
 function handleScroll() {
   const scrollContainer = document.querySelector('.help-content-area');
   if (!scrollContainer) return;
-  const scrollTop = scrollContainer.scrollTop;
   // 找到离顶部最近的章节
   for (const section of DOC_SECTIONS) {
     const el = document.getElementById(section.id);

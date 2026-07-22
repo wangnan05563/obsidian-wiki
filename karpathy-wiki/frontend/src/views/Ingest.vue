@@ -9,13 +9,22 @@ const emit = defineEmits<(e: 'start') => void>();
 
 const store = useCompileStore();
 
-const activeTab = ref<'file' | 'url' | 'text'>('file');
+const activeTab = ref<'file' | 'folder' | 'url' | 'text'>('file');
 const urlInput = ref('');
 const textInput = ref('');
 const selectedFile = ref<File | null>(null);
+// 文件夹模式：扫描得到的有效文件列表
+const folderFiles = ref<Array<{ name: string; file: File }>>([]);
+
+// 与后端 config.batch.allowedExtensions 保持一致的白名单
+// 为什么前端也要校验：用户在确认弹窗里能看到哪些文件被跳过，避免上传空 FormData
+const ALLOWED_EXTS = ['md', 'txt', 'pdf', 'html', 'json'];
+const MAX_BATCH_SIZE = 20;
+const MAX_FILE_SIZE_MB = 10;
 
 const canSubmit = computed(() => {
   if (activeTab.value === 'file') return !!selectedFile.value;
+  if (activeTab.value === 'folder') return folderFiles.value.length > 0;
   if (activeTab.value === 'url') return urlInput.value.trim().length > 0;
   return textInput.value.trim().length > 0;
 });
@@ -32,11 +41,76 @@ function disableAutoUpload(): boolean {
   return false;
 }
 
+// 文件夹选取：通过隐藏 input[type=file][webkitdirectory] 触发
+// 浏览器把文件夹下所有文件（含子目录）平铺返回，前端按白名单过滤
+const folderInputRef = ref<HTMLInputElement | null>(null);
+
+function triggerFolderPick() {
+  folderInputRef.value?.click();
+}
+
+function handleFolderChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  if (!input.files || input.files.length === 0) return;
+  const valid: Array<{ name: string; file: File }> = [];
+  let rejectedCount = 0;
+  let oversizedCount = 0;
+  for (let i = 0; i < input.files.length; i++) {
+    const f = input.files[i];
+    // webkitRelativePath 含文件夹前缀，这里仅取 basename 作为显示与上传名
+    const baseName = (f.webkitRelativePath || f.name).split('/').pop() ?? f.name;
+    const ext = baseName.split('.').pop()?.toLowerCase() ?? '';
+    if (!ALLOWED_EXTS.includes(ext)) {
+      rejectedCount++;
+      continue;
+    }
+    if (f.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      oversizedCount++;
+      continue;
+    }
+    valid.push({ name: baseName, file: f });
+  }
+  // 超过批量上限时截断并提示
+  if (valid.length > MAX_BATCH_SIZE) {
+    ElMessage.warning(`文件数超过 ${MAX_BATCH_SIZE} 上限，仅保留前 ${MAX_BATCH_SIZE} 个文件`);
+    folderFiles.value = valid.slice(0, MAX_BATCH_SIZE);
+  } else {
+    folderFiles.value = valid;
+  }
+  if (valid.length === 0) {
+    ElMessage.warning('所选文件夹中没有符合白名单（md/txt/pdf/html/json）的文件');
+  } else if (rejectedCount > 0 || oversizedCount > 0) {
+    const parts: string[] = [];
+    if (rejectedCount > 0) parts.push(`${rejectedCount} 个不符白名单`);
+    if (oversizedCount > 0) parts.push(`${oversizedCount} 个超过 ${MAX_FILE_SIZE_MB}MB`);
+    ElMessage.info(`已跳过 ${parts.join('、')}`);
+  }
+  // 清空 input value 以便再次选取同一文件夹能触发 change
+  input.value = '';
+}
+
+function removeFolderFile(idx: number) {
+  folderFiles.value.splice(idx, 1);
+}
+
+function clearFolderFiles() {
+  folderFiles.value = [];
+}
+
 function buildPayload(): FormData | { type: 'url' | 'text'; content: string } | null {
   if (activeTab.value === 'file') {
     if (!selectedFile.value) return null;
     const fd = new FormData();
     fd.append('file', selectedFile.value);
+    return fd;
+  }
+  if (activeTab.value === 'folder') {
+    if (folderFiles.value.length === 0) return null;
+    const fd = new FormData();
+    // 字段名统一为 files（复数），后端按此名收集
+    for (const item of folderFiles.value) {
+      fd.append('files', item.file, item.name);
+    }
     return fd;
   }
   if (activeTab.value === 'url') {
@@ -55,12 +129,18 @@ function handleSubmit() {
     ElMessage.warning('请先准备好要投递的资料');
     return;
   }
-  store.prepareCompile(payload);
+  // 文件夹模式走批量编译 store action，其他模式走单文件
+  if (activeTab.value === 'folder' && payload instanceof FormData) {
+    store.prepareBatchCompile(payload);
+  } else {
+    store.prepareCompile(payload);
+  }
   emit('start');
 }
 
 function resetInputs() {
   selectedFile.value = null;
+  folderFiles.value = [];
   urlInput.value = '';
   textInput.value = '';
 }
@@ -98,6 +178,48 @@ function resetInputs() {
       <div class="upload-hint">SUPPORT: md / txt / pdf / html / json</div>
             </div>
           </el-upload>
+        </el-tab-pane>
+
+        <el-tab-pane label="文件夹上传" name="folder">
+          <!-- 隐藏 input：webkitdirectory 让浏览器调起文件夹选择器 -->
+          <input
+            ref="folderInputRef"
+            type="file"
+            webkitdirectory
+            directory
+            multiple
+            style="display: none"
+            @change="handleFolderChange"
+          />
+          <div class="folder-dropzone" @click="triggerFolderPick">
+            <div class="upload-icon">📁</div>
+            <div class="upload-text">点击选取文件夹</div>
+            <div class="upload-hint">
+              将扫描子目录下所有 md / txt / pdf / html / json 文件（上限 {{ MAX_BATCH_SIZE }} 个，单文件 ≤ {{ MAX_FILE_SIZE_MB }}MB）
+            </div>
+          </div>
+          <!-- 已选文件列表 -->
+          <div v-if="folderFiles.length > 0" class="folder-files">
+            <div class="folder-files-head">
+              <span class="folder-files-title">
+                已选 {{ folderFiles.length }} 个文件
+              </span>
+              <el-button size="small" text @click="clearFolderFiles">清空</el-button>
+            </div>
+            <ul class="folder-files-list">
+              <li v-for="(item, idx) in folderFiles" :key="idx" class="folder-file-item">
+                <code class="folder-file-name">{{ item.name }}</code>
+                <el-button
+                  size="small"
+                  text
+                  type="danger"
+                  @click="removeFolderFile(idx)"
+                >
+                  ×
+                </el-button>
+              </li>
+            </ul>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane label="URL 粘贴" name="url">
@@ -273,5 +395,71 @@ function resetInputs() {
   gap: 14px;
   position: relative;
   z-index: 1;
+}
+
+/* ===== 文件夹上传模式样式 ===== */
+.folder-dropzone {
+  padding: 32px 0;
+  text-align: center;
+  cursor: pointer;
+  border: 2px dashed rgba(176, 38, 255, 0.3);
+  border-radius: var(--radius-card);
+  transition: border-color 0.3s ease, background-color 0.3s ease;
+}
+
+.folder-dropzone:hover {
+  border-color: var(--neon-purple);
+  background: rgba(176, 38, 255, 0.05);
+}
+
+.folder-files {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: rgba(0, 245, 255, 0.04);
+  border: 1px solid rgba(0, 245, 255, 0.15);
+  border-radius: var(--radius-card);
+}
+
+.folder-files-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.folder-files-title {
+  font-size: 13px;
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.folder-files-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.folder-file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.folder-file-name {
+  font-family: var(--font-mono);
+  color: var(--text-bright);
+  word-break: break-all;
+  flex: 1;
+  margin-right: 8px;
 }
 </style>

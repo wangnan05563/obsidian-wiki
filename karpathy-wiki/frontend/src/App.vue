@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue';
 import RobotAvatar from './components/RobotAvatar.vue';
 import NavIcons from './components/NavIcons.vue';
 import FloatingChat from './components/FloatingChat.vue';
+import ThemeSwitcher from './components/ThemeSwitcher.vue';
 import Dashboard from './views/Dashboard.vue';
 import Ingest from './views/Ingest.vue';
 import Progress from './views/Progress.vue';
@@ -16,6 +17,7 @@ import Cleanup from './views/Cleanup.vue';
 import About from './views/About.vue';
 import Help from './views/Help.vue';
 import { useCompileStore } from './stores/compile';
+import { STORAGE_KEYS } from './constants/storageKeys';
 
 type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help';
 
@@ -41,10 +43,10 @@ const menuItems = [
 
 // 导航栏折叠状态：折叠后隐藏 tabs，释放垂直空间放大问答框
 // 持久化到 localStorage，刷新页面后保留用户偏好
-const navCollapsed = ref(localStorage.getItem('navCollapsed') === 'true');
+const navCollapsed = ref(localStorage.getItem(STORAGE_KEYS.NAV_COLLAPSED) === 'true');
 function toggleNav() {
   navCollapsed.value = !navCollapsed.value;
-  localStorage.setItem('navCollapsed', String(navCollapsed.value));
+  localStorage.setItem(STORAGE_KEYS.NAV_COLLAPSED, String(navCollapsed.value));
 }
 
 // 监听滚动事件，更新 scrollY 变量驱动 CSS 视差效果
@@ -111,7 +113,7 @@ onBeforeUnmount(() => {
             <span class="subtitle">KARPATHY WIKI</span>
           </div>
         </div>
-        <nav class="nav-tabs">
+        <nav class="nav-tabs" aria-label="主导航">
           <button
             v-for="tab in menuItems"
             :key="tab.key"
@@ -138,7 +140,7 @@ onBeforeUnmount(() => {
         <div class="nav-collapsed-left" @click="go('dashboard')" title="返回首页">
           <RobotAvatar :size="32" />
         </div>
-        <nav class="nav-icons-bar">
+        <nav class="nav-icons-bar" aria-label="折叠态主导航">
           <button
             v-for="tab in menuItems"
             :key="tab.key"
@@ -187,6 +189,8 @@ onBeforeUnmount(() => {
 
   <!-- 全局悬浮问答入口：在所有页面都显示，Query 页面时位置调整到左下角避免遮挡输入区 -->
   <FloatingChat :in-query-page="currentView === 'query'" />
+  <!-- 全局悬浮主题切换器：所有页面右下角可用，降低用户寻找配置入口的门槛 -->
+  <ThemeSwitcher />
   </div>
 
 </template>

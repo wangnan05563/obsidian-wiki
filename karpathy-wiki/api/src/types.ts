@@ -23,12 +23,26 @@ export interface CompileInput {
   rawPath?: string;
 }
 
+// 批量编译配置：所有参数从 config.json 读取，禁止硬编码
+// allowedExtensions: 文件夹扫描时允许的扩展名白名单（小写、不含点）
+// maxBatchSize: 单次批量编译的文件数上限，防滥用与内存峰值
+// maxFileSizeMb: 单文件大小上限，与 multipart fileSize 联动
+export interface BatchCompileConfig {
+  allowedExtensions: string[];
+  maxBatchSize: number;
+  maxFileSizeMb: number;
+}
+
 export interface ProgressEvent {
   // read_schema / extract / generate_page / update_index / done 等
   step: string;
   status: 'running' | 'done' | 'error';
   message: string;
-  data?: { path?: string; title?: string; cached?: boolean };
+  // 批量编译场景下扩展 fileIndex/fileCount/fileName，单文件编译时保持 undefined
+  // 为什么放 data：避免新增顶层字段破坏现有 SSE 消费端，前端按需读取
+  // path/title 保持可选：archive 步骤仅含 path，done 步骤含 path+cached，
+  // page 事件才同时含 path+title（后端用 if (ev.data?.path && ev.data?.title) 守卫区分）
+  data?: { path?: string; title?: string; cached?: boolean; fileIndex?: number; fileCount?: number; fileName?: string };
 }
 
 export interface QueryInput {
@@ -107,6 +121,25 @@ export interface FixProgressEvent {
   data?: { path?: string };
 }
 
+// 批量修复请求体：items 为单个修复任务的有序列表，后端按顺序串行执行。
+// 为什么串行而非并发：fix 可能写入 vault 文件，并发会导致同一文件交错写入；
+// 复用 withCompileLock 队列与 compile 互斥，避免 index.md/log.md 追加竞态。
+export interface BatchFixRequest {
+  items: FixInput[];
+}
+
+// 批量修复 SSE 事件：包装单个 FixProgressEvent 并附带定位信息。
+// - issueIndex：当前修复在 items 数组中的下标（0-based）
+// - totalIssues：items 总数，前端据此显示 "3/10" 进度
+// - issueKey：前端生成的稳定 key（如 "orphan:foo.md"），便于日志与按钮状态联动
+// - issueDone：当前问题是否已完成（fixed/done/error 都算结束），前端据此启用下一个按钮
+export interface BatchFixProgressEvent extends FixProgressEvent {
+  issueIndex: number;
+  totalIssues: number;
+  issueKey: string;
+  issueDone: boolean;
+}
+
 // 内网穿透配置（参考 17_xianyu 项目，适配本架构）。
 // localPort=0 表示从 server.port 继承；cpolarAuthtoken 仅 cpolar provider 需要。
 // tunnelMode/hostname 等 named tunnel 字段仅 cloudflare provider + named 模式生效。
@@ -157,6 +190,23 @@ export interface AppConfig {
   tunnel: TunnelConfig;
   webSearch?: WebSearchConfig;
   logging?: LoggingConfig;
+  // 批量编译配置：可选，缺失时由 defaultConfig 提供默认值
+  batch?: BatchCompileConfig;
+}
+
+// LLM 预设项（GET /api/ai/presets）。
+// 数据源：api/llm-presets.json（外置 JSON，运维可编辑增删厂商预设）。
+// vision 字段（F-3.5）：标识模型是否支持图片输入，前端据此决定图片按钮是否灰显。
+// 与前端 types.ts 的 LlmPreset 接口对齐（type-sync-rule）。
+export interface LlmPreset {
+  key: string;
+  label: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeyRef: string;
+  apiKeyUrl: string;
+  vision?: boolean;
 }
 
 // ===== 系统清理模块类型 =====

@@ -15,10 +15,17 @@ export interface ProgressData {
   status: StepStatus;
   message: string;
   // generate_page 步骤会附带生成的页面信息；done 事件可能带 cached 标识
+  // 批量编译场景下扩展 fileIndex/fileCount/fileName，单文件编译时为 undefined
+  // path/title 保持可选：与后端 ProgressEvent.data 对齐（BR-026）
+  // archive 步骤仅含 path，done 步骤含 path+cached，page 事件才同时含 path+title
   data?: {
-    path: string;
-    title: string;
+    path?: string;
+    title?: string;
     cached?: boolean;
+    fileIndex?: number;
+    fileCount?: number;
+    fileName?: string;
+    rejected?: Array<{ name: string; reason: string }>;
   };
 }
 
@@ -74,6 +81,24 @@ export interface TimelineItem {
 // 投递载荷：文件用 FormData，URL/文本走 JSON
 export type IngestPayload = FormData | { type: 'url' | 'text'; content: string };
 
+// 批量编译相关类型
+
+// 批量编译开始事件 (batch_start) 数据
+export interface BatchStartData {
+  fileCount: number;
+  rejected: Array<{ name: string; reason: string }>;
+}
+
+// 单个文件的批量编译分组：包含该文件的所有时间线项与状态
+export interface BatchFileGroup {
+  fileIndex: number;
+  fileName: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  timeline: TimelineItem[];
+  pages: Array<{ path: string; title: string }>;
+  errorMessage?: string;
+}
+
 // Element Plus UploadFile 兼容类型（避免直接引入复杂类型）
 export interface UploadFileLike {
   raw: File | null;
@@ -110,6 +135,8 @@ export interface Reference {
 }
 
 export interface ThinkingStep {
+  // 字面量联合类型，后端 SSE thinking 事件的 phase 取值
+  // NOSONAR: S6571 误报，无 string 类型覆盖字面量
   phase: 'thinking' | 'tool_call' | 'composing';
   message: string;
   tool?: string;
@@ -195,6 +222,7 @@ export interface SchemaContent {
 }
 
 // 配置响应（GET /api/config，API Key 脱敏）
+// batch/logging 字段与后端 AppConfig.batch/logging 对齐（type-sync-rule BR-026）
 export interface ConfigData {
   vaultPath: string;
   adapter: string;
@@ -209,6 +237,15 @@ export interface ConfigData {
   server: { host: string; port: number };
   localOnly: boolean;
   healthCheck: { staleDays: number };
+  batch: {
+    allowedExtensions: string[];
+    maxBatchSize: number;
+    maxFileSizeMb: number;
+  };
+  logging: {
+    level: string;
+    enableRequestLog: boolean;
+  };
 }
 
 // ===== 体检修复相关类型 =====
@@ -226,6 +263,31 @@ export interface FixProgressEvent {
   message: string;
   tool?: string;
   data?: { path?: string };
+}
+
+// 批量修复请求体：items 为单个修复任务的有序列表，后端串行执行。
+// issueKeys 可选，与 items 一一对应，用于日志与按钮状态联动。
+export interface BatchFixRequest {
+  items: FixRequest[];
+  issueKeys?: string[];
+}
+
+// 批量修复 SSE 事件：在 FixProgressEvent 基础上附带定位信息。
+// - issueIndex/totalIssues：当前问题在批次中的位置，前端显示 "3/10"
+// - issueKey：稳定 key（如 "orphan:foo.md"），与列表项 key 对应
+// - issueDone：当前问题是否已结束（done/error），前端据此更新单项状态
+export interface BatchFixProgressEvent extends FixProgressEvent {
+  issueIndex: number;
+  totalIssues: number;
+  issueKey: string;
+  issueDone: boolean;
+}
+
+// 批量修复 batch_done 事件载荷：附统计信息
+export interface BatchDoneEvent extends FixProgressEvent {
+  totalIssues: number;
+  successCount: number;
+  failCount: number;
 }
 
 // ===== 全文检索相关类型 =====

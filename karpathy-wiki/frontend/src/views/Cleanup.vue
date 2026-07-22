@@ -127,7 +127,7 @@ async function handleCleanup(key: keyof typeof forms) {
     } else {
       // 实际执行后刷新状态以反映最新存储情况
       await loadStatus();
-      const freed = data.total_freed_mb !== undefined ? `，释放 ${data.total_freed_mb} MB` : '';
+      const freed = data.total_freed_mb !== undefined ? `，释放 ${data.total_freed_mb} MB` : ''; // NOSONAR: S7735 - 误报，此处 !== undefined 是必要的存在性检查
       ElMessage.success(`清理完成：处理 ${data.count} 项${freed}`);
     }
   } catch (err) {

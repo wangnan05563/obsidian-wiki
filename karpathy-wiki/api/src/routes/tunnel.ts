@@ -172,7 +172,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
     }
     const svc = getLoginService();
     try {
-      const result = svc.createTunnel(body.tunnelName.trim(), certFile, config.tunnel.binaryPath);
+      const result = await svc.createTunnel(body.tunnelName.trim(), certFile, config.tunnel.binaryPath);
       // 持久化 tunnel_id + credentials_file + tunnel_name（增量写入，保留其他字段）
       await saveTunnelField('tunnelId', result.tunnelId);
       await saveTunnelField('credentialsFile', result.credentialsFile);
@@ -209,7 +209,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
       return reply.code(400).send({ detail: '请先执行创建隧道步骤' });
     }
     try {
-      const publicUrl = svc.routeDns(tunnelNameOrId, body.hostname.trim(), certFile, config.tunnel.binaryPath);
+      const publicUrl = await svc.routeDns(tunnelNameOrId, body.hostname.trim(), certFile, config.tunnel.binaryPath);
       // 持久化 hostname + 自动切换到 named 模式
       await saveTunnelField('hostname', body.hostname.trim());
       await saveTunnelField('tunnelMode', 'named');

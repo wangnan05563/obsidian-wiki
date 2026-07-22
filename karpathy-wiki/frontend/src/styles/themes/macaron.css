@@ -221,7 +221,7 @@
 [data-theme="macaron"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
   background: rgba(255, 179, 209, 0.2) !important;
   border-color: #ffb3d1 !important;
-  color: #b3467d !important; /* NOSONAR: 马卡龙主题粉色系设计要求，浅粉背景上实际对比度达标 */
+  color: #831d52 !important; /* 使用更深的洋红满足 WCAG 对比度（css:S7924） */
   box-shadow: var(--glow-magenta) !important;
 }
 

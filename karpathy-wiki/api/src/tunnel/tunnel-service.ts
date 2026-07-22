@@ -1,15 +1,17 @@
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import https from 'node:https';
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { exec as execCb } from 'node:child_process';
+import { exec as execCb, execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { TunnelConfig } from '../types.js';
 
 const execAsync = promisify(execCb);
+// execFileAsync 不走 shell，参数数组传递避免路径转义问题，适合带路径参数的 CLI 调用
+const execFileAsync = promisify(execFileCb);
 
 // 二进制下载失败时抛出，附带手动放置指引供前端渲染下载链接。
 // 这样前端可以引导用户手动下载并放到指定路径，而不是只能报错。
@@ -104,12 +106,13 @@ abstract class TunnelProvider {
   }
 
   // 子类钩子：启动前准备（如 cpolar 配置 authtoken）
-  protected beforeStart(): void {}
+  // 为什么改异步：cpolar authtoken 配置用 execFileSync 会阻塞事件循环，改 async 后子类可用非阻塞调用
+  protected async beforeStart(): Promise<void> {}
 
   // 启动隧道子进程，等待成功标志出现（超时抛含诊断信息的异常）
   async start(): Promise<void> {
     await this.ensureBinary();
-    this.beforeStart();
+    await this.beforeStart();
     this.recentLines = [];
 
     const args = this.startCommand();
@@ -256,10 +259,12 @@ class CloudflareProvider extends TunnelProvider {
     return 'cloudflare';
   }
   downloadUrls(): string[] {
-    // 主源 GitHub latest + jsDelivr CDN 备源（大陆访问更稳定）+ 固定版本兜底
+    // 主源 GitHub latest + ghfast 镜像（大陆访问更稳定）+ 固定版本兜底
+    // 为什么弃用 jsDelivr：jsDelivr /gh/ 路径只能访问仓库源码，无法访问 release assets，
+    // 旧 URL `cdn.jsdelivr.net/gh/cloudflare/cloudflared@latest/cloudflared-windows-amd64.exe` 必然 404
     return [
       'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
-      'https://cdn.jsdelivr.net/gh/cloudflare/cloudflared@latest/cloudflared-windows-amd64.exe',
+      'https://ghfast.top/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
       'https://github.com/cloudflare/cloudflared/releases/download/2024.12.2/cloudflared-windows-amd64.exe',
     ];
   }
@@ -358,8 +363,8 @@ class CpolarProvider extends TunnelProvider {
     await downloadFile(url, tmpZip);
     try {
       const dir = path.dirname(target);
-      // execFileSync 不走 shell，参数数组传递避免路径转义问题
-      execFileSync('tar', ['-xf', tmpZip, '-C', dir], { windowsHide: true, timeout: 30000 });
+      // execFileAsync 不走 shell，参数数组传递避免路径转义问题
+      await execFileAsync('tar', ['-xf', tmpZip, '-C', dir], { windowsHide: true, timeout: 30000 });
       // zip 内可能嵌套目录，递归查找 cpolar.exe
       const extracted = findFile(dir, 'cpolar.exe');
       if (!extracted) {
@@ -378,12 +383,13 @@ class CpolarProvider extends TunnelProvider {
   }
 
   // 启动前配置 authtoken（幂等：重复配置会报错，忽略即可）
-  protected beforeStart(): void {
+  // 为什么改异步：避免 execFileSync 阻塞事件循环 10s
+  protected async beforeStart(): Promise<void> {
     if (!this.authtoken) {
       throw new Error('cpolar 需要 authtoken，请到 https://dashboard.cpolar.com/signup 注册获取');
     }
     try {
-      execFileSync(this.binary, ['authtoken', this.authtoken], {
+      await execFileAsync(this.binary, ['authtoken', this.authtoken], {
         windowsHide: true,
         timeout: 10000,
       });
@@ -398,6 +404,9 @@ class CpolarProvider extends TunnelProvider {
 // 因此 status 必须主动查询 funnel status --json，而非靠子进程存活判断。
 class TailscaleProvider extends TunnelProvider {
   private detectedBinary: string | null = null;
+  // status 缓存：getter 同步返回，后台异步刷新避免 execFileSync 阻塞事件循环
+  private cachedStatus: 'running' | 'stopped' = 'stopped';
+  private statusTimer: NodeJS.Timeout | null = null;
 
   constructor(localPort: number, binaryPath: string) {
     super(localPort, binaryPath);
@@ -462,7 +471,8 @@ class TailscaleProvider extends TunnelProvider {
     this.recentLines = [];
 
     // 前置检查：Tailscale 必须已登录 + 启用 MagicDNS
-    const statusResult = this.runCli(['status', '--json']);
+    // 为什么改异步：避免 execFileSync 阻塞事件循环导致其他 API 无响应
+    const statusResult = await this.runCliAsync(['status', '--json']);
     const statusData = JSON.parse(statusResult) as Record<string, unknown>;
     if (statusData.BackendState !== 'Running') {
       throw new Error('请先打开并登录 Tailscale，然后重新启动隧道');
@@ -483,6 +493,11 @@ class TailscaleProvider extends TunnelProvider {
     this.exited = false;
 
     await this.waitForTailscaleFunnel(dnsName);
+
+    // 启动成功后初始化缓存并定期异步刷新，避免 status getter 阻塞事件循环
+    this.cachedStatus = 'running';
+    this.refreshStatus();
+    this.statusTimer = setInterval(() => this.refreshStatus(), 5000);
   }
 
   // Tailscale 专用等待逻辑：检测成功标志或一次性授权链接
@@ -578,67 +593,94 @@ class TailscaleProvider extends TunnelProvider {
     return [];
   }
 
-  // 覆写 stop：执行 tailscale funnel off 关闭系统服务
+  // 覆写 stop：异步执行 tailscale funnel off，不等待结果避免阻塞事件循环
+  // 为什么用 spawn fire-and-forget：stop 在 SIGINT 钩子中调用，阻塞会导致退出延迟
   stop(): void {
     if (this.detectedBinary) {
-      try {
-        execFileSync(this.detectedBinary, ['funnel', 'off'], {
-          windowsHide: true,
-          timeout: 10000,
-        });
-      } catch {
-        // stop 失败不阻塞调用方（配置保存/服务关闭）
-      }
+      // unref() 让子进程不阻止 Node.js 退出
+      spawn(this.detectedBinary, ['funnel', 'off'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      }).unref();
     }
+    // 清除状态刷新定时器
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer);
+      this.statusTimer = null;
+    }
+    this.cachedStatus = 'stopped';
     this.detectedBinary = null;
     this.publicUrl = null;
     this.exited = true;
   }
 
-  // 覆写 status：主动查询 funnel status --json，而非靠子进程存活判断
+  // 覆写 status：返回缓存值，后台定时器异步刷新（避免 execFileSync 阻塞事件循环）
   get status(): 'running' | 'stopped' {
-    if (!this.detectedBinary) return 'stopped';
+    return this.cachedStatus;
+  }
+
+  // 异步刷新 status 缓存：用 execAsync 非阻塞查询 funnel status --json
+  private async refreshStatus(): Promise<void> {
+    if (!this.detectedBinary) {
+      this.cachedStatus = 'stopped';
+      return;
+    }
     try {
-      const result = this.runCli(['funnel', 'status', '--json']);
+      const result = await this.runCliAsync(['funnel', 'status', '--json']);
       const data = JSON.parse(result) as Record<string, unknown>;
       const allowFunnel = data.AllowFunnel as Record<string, boolean> | undefined;
-      if (!allowFunnel) return 'stopped';
+      if (!allowFunnel) {
+        this.cachedStatus = 'stopped';
+        return;
+      }
       for (const [endpoint, enabled] of Object.entries(allowFunnel)) {
         if (!enabled) continue;
         const host = endpoint.split(':')[0].replace(/\.$/, '');
         if (host.toLowerCase().endsWith('.ts.net')) {
           this.publicUrl = `https://${host}`;
-          return 'running';
+          this.cachedStatus = 'running';
+          return;
         }
       }
-      return 'stopped';
+      this.cachedStatus = 'stopped';
     } catch {
       this.publicUrl = null;
-      return 'stopped';
+      this.cachedStatus = 'stopped';
     }
   }
 
-  private runCli(args: string[]): string {
+  // 异步 CLI 调用：替代 execFileSync，避免阻塞 Node.js 事件循环
+  private async runCliAsync(args: string[]): Promise<string> {
     if (!this.detectedBinary) {
       throw new Error('Tailscale 二进制未检测到');
     }
-    return execFileSync(this.detectedBinary, args, {
+    const { stdout } = await execAsync(`"${this.detectedBinary}" ${args.join(' ')}`, {
       windowsHide: true,
-      timeout: 20000,
-      encoding: 'utf8',
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
     });
+    return stdout;
   }
 }
 
-// 通用文件下载：支持 https/http + 301/302 重定向（GitHub releases 会重定向到 CDN）
-function downloadFile(url: string, target: string): Promise<void> {
+// 通用文件下载：支持 https/http + 301/302/303/307/308 重定向（GitHub releases 会重定向到 CDN）
+// 为什么加 303/307/308：部分 CDN 和镜像服务使用这些状态码，仅支持 301/302 会导致下载失败
+// 为什么加重定向深度限制：恶意或异常服务器可能构造重定向环导致无限递归栈溢出
+const MAX_REDIRECTS = 5;
+function downloadFile(url: string, target: string, redirectDepth = 0): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    if (redirectDepth >= MAX_REDIRECTS) {
+      reject(new Error(`重定向次数超过上限 (${MAX_REDIRECTS})`));
+      return;
+    }
     const client = url.startsWith('https') ? https : http;
     const req = client.get(url, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode ?? 0)) {
         const location = res.headers.location;
         if (location) {
-          downloadFile(location, target).then(resolve).catch(reject);
+          // 消费响应体避免 socket 泄漏，再递归跟随重定向
+          res.resume();
+          downloadFile(location, target, redirectDepth + 1).then(resolve).catch(reject);
           return;
         }
       }
@@ -915,17 +957,18 @@ export class CloudflareLoginService {
   }
 
   // 创建命名隧道：cloudflared tunnel --origincert <cert> create <name>
-  createTunnel(tunnelName: string, certFile: string, binaryPath: string): {
+  // 为什么改异步：execFileSync 30s 超时会阻塞事件循环，用户点击向导按钮时其他 API 无响应
+  async createTunnel(tunnelName: string, certFile: string, binaryPath: string): Promise<{
     tunnelId: string;
     credentialsFile: string;
     tunnelName: string;
-  } {
+  }> {
     const binary = binaryPath || path.resolve(process.cwd(), 'data', 'cloudflared.exe');
     const args = ['--no-autoupdate', 'tunnel', '--origincert', certFile, 'create', tunnelName];
-    const output = execFileSync(binary, args, {
+    const { stdout: output } = await execFileAsync(binary, args, {
       windowsHide: true,
       timeout: 30000,
-      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
     });
 
     // 解析 tunnel_id（UUID 格式）
@@ -946,21 +989,22 @@ export class CloudflareLoginService {
   }
 
   // 配置 DNS CNAME：cloudflared tunnel --origincert <cert> route dns <name> <hostname>
-  routeDns(
+  // 为什么改异步：同 createTunnel，避免 30s 阻塞
+  async routeDns(
     tunnelNameOrId: string,
     hostname: string,
     certFile: string,
     binaryPath: string,
-  ): string {
+  ): Promise<string> {
     const binary = binaryPath || path.resolve(process.cwd(), 'data', 'cloudflared.exe');
     const args = [
       '--no-autoupdate', 'tunnel', '--origincert', certFile,
       'route', 'dns', tunnelNameOrId, hostname,
     ];
-    execFileSync(binary, args, {
+    await execFileAsync(binary, args, {
       windowsHide: true,
       timeout: 30000,
-      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
     });
     return `https://${hostname}`;
   }
