@@ -15,6 +15,36 @@ const DEFAULT_BATCH_CONFIG: BatchCompileConfig = {
   maxFileSizeMb: 10,
 };
 
+// 批量文件校验：剥离目录前缀 + 白名单 + 大小校验，独立为纯函数降低 batch 端点认知复杂度
+function validateBatchFiles(
+  uploaded: Array<{ name: string; buffer: Buffer }>,
+  batch: BatchCompileConfig,
+): { validFiles: Array<{ name: string; buffer: Buffer }>; rejected: Array<{ name: string; reason: string }> } {
+  const allowedSet = new Set(batch.allowedExtensions.map((e) => e.toLowerCase()));
+  const validFiles: Array<{ name: string; buffer: Buffer }> = [];
+  const rejected: Array<{ name: string; reason: string }> = [];
+  const maxBytes = batch.maxFileSizeMb * 1024 * 1024;
+  for (const f of uploaded) {
+    // basename 剥离目录前缀防路径穿越，正则替换非法字符沿用单文件模式
+    const safeName = path.basename(f.name).replaceAll(/[^\w.-]/g, '_');
+    const ext = path.extname(safeName).slice(1).toLowerCase();
+    if (!ext) {
+      rejected.push({ name: f.name, reason: '缺少扩展名' });
+      continue;
+    }
+    if (!allowedSet.has(ext)) {
+      rejected.push({ name: f.name, reason: `不支持的扩展名: ${ext}` });
+      continue;
+    }
+    if (f.buffer.length > maxBytes) {
+      rejected.push({ name: f.name, reason: `超过 ${batch.maxFileSizeMb}MB 上限` });
+      continue;
+    }
+    validFiles.push({ name: safeName, buffer: f.buffer });
+  }
+  return { validFiles, rejected };
+}
+
 // 注册 POST /api/compile 与 POST /api/compile/batch 路由。
 // 单文件端点接受两种 Content-Type：
 //   - multipart/form-data：file 字段上传单文件
@@ -43,7 +73,7 @@ export function registerCompileRoute(
       }
       const buffer = await file.toBuffer();
       // sanitize filename：防路径穿越，剥离目录前缀并替换非法字符
-      const safeName = path.basename(file.filename).replace(/[^\w.\-]/g, '_');
+      const safeName = path.basename(file.filename).replaceAll(/[^\w.-]/g, '_');
       // 落盘到临时目录，compile-workflow 会读取后存档到 raw/
       const tmp = path.join(os.tmpdir(), `wiki-compile-${Date.now()}-${safeName}`);
       await fs.writeFile(tmp, buffer);
@@ -186,31 +216,8 @@ export function registerCompileRoute(
       return reply.code(400).send({ error: '缺少 files 字段或文件为空' });
     }
 
-    // 扩展名白名单校验：剥离路径前缀取纯扩展名，转小写比对
-    // 为什么用白名单而非黑名单：黑名单无法覆盖所有危险类型（如 .exe/.js），白名单更安全
-    const allowedSet = new Set(batch.allowedExtensions.map((e) => e.toLowerCase()));
-    const validFiles: typeof uploaded = [];
-    const rejected: Array<{ name: string; reason: string }> = [];
-    for (const f of uploaded) {
-      // basename 剥离目录前缀防路径穿越，正则替换非法字符沿用单文件模式
-      const safeName = path.basename(f.name).replace(/[^\w.\-]/g, '_');
-      const ext = path.extname(safeName).slice(1).toLowerCase();
-      if (!ext) {
-        rejected.push({ name: f.name, reason: '缺少扩展名' });
-        continue;
-      }
-      if (!allowedSet.has(ext)) {
-        rejected.push({ name: f.name, reason: `不支持的扩展名: ${ext}` });
-        continue;
-      }
-      // 单文件大小校验：与 multipart fileSize 联动，但此处独立校验以提供友好错误信息
-      const maxBytes = batch.maxFileSizeMb * 1024 * 1024;
-      if (f.buffer.length > maxBytes) {
-        rejected.push({ name: f.name, reason: `超过 ${batch.maxFileSizeMb}MB 上限` });
-        continue;
-      }
-      validFiles.push({ name: safeName, buffer: f.buffer });
-    }
+    // 扩展名白名单校验：为什么用白名单而非黑名单：黑名单无法覆盖所有危险类型（如 .exe/.js），白名单更安全
+    const { validFiles, rejected } = validateBatchFiles(uploaded, batch);
 
     if (validFiles.length === 0) {
       return reply.code(400).send({
@@ -252,6 +259,53 @@ export function registerCompileRoute(
     const tmpPaths: string[] = [];
     const fileCount = validFiles.length;
 
+    // 单文件编译流式推送：提取为局部函数降低 withCompileLock 回调认知复杂度
+    // 返回值表示该文件是否成功（用于决定是否发送 file_complete 事件）
+    const streamFileCompile = async (
+      input: CompileInput,
+      fileIndex: number,
+      fileName: string,
+    ): Promise<boolean> => {
+      let fileFailed = false;
+      try {
+        for await (const ev of adapter.compile(input)) {
+          // 客户端已断开：提前退出迭代，停止当前文件的剩余步骤
+          if (isAborted()) break;
+          // 把 fileIndex/fileCount/fileName 注入到每个事件的 data，前端按 fileIndex 路由到对应分组
+          const evWithData = {
+            ...ev,
+            data: {
+              ...ev.data,
+              fileIndex,
+              fileCount,
+              fileName,
+            },
+          };
+          if (ev.step === 'done') {
+            send('file_done', evWithData);
+          } else if (ev.data?.path && ev.data?.title) {
+            send('page', evWithData);
+          } else {
+            send('progress', evWithData);
+          }
+        }
+      } catch (err: unknown) {
+        fileFailed = true;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        request.log.error(
+          { err, fileName, fileIndex },
+          'batch compile file error',
+        );
+        send('file_error', {
+          step: 'finalize',
+          status: 'error',
+          message: `文件 ${fileName} 编译失败: ${errMsg}`,
+          data: { fileIndex, fileCount, fileName },
+        });
+      }
+      return !fileFailed;
+    };
+
     try {
       // batch 整体作为 withCompileLock 的一个任务，保证与其他 compile/resume 请求串行
       await withCompileLock(async () => {
@@ -274,46 +328,9 @@ export function registerCompileRoute(
             data: { fileIndex: i, fileCount, fileName: f.name },
           });
 
-          let fileFailed = false;
-          try {
-            for await (const ev of adapter.compile(input)) {
-              // 客户端已断开：提前退出迭代，停止当前文件的剩余步骤
-              if (isAborted()) break;
-              // 把 fileIndex/fileCount/fileName 注入到每个事件的 data，前端按 fileIndex 路由到对应分组
-              const evWithData = {
-                ...ev,
-                data: {
-                  ...ev.data,
-                  fileIndex: i,
-                  fileCount,
-                  fileName: f.name,
-                },
-              };
-              if (ev.step === 'done') {
-                send('file_done', evWithData);
-              } else if (ev.data?.path && ev.data?.title) {
-                send('page', evWithData);
-              } else {
-                send('progress', evWithData);
-              }
-            }
-          } catch (err: unknown) {
-            fileFailed = true;
-            const errMsg = err instanceof Error ? err.message : String(err);
-            request.log.error(
-              { err, fileName: f.name, fileIndex: i },
-              'batch compile file error',
-            );
-            send('file_error', {
-              step: 'finalize',
-              status: 'error',
-              message: `文件 ${f.name} 编译失败: ${errMsg}`,
-              data: { fileIndex: i, fileCount, fileName: f.name },
-            });
-          }
-
-          // 文件结束事件：标记该分组完成（无论成功失败），前端据此切换 UI 状态
-          if (!fileFailed) {
+          const success = await streamFileCompile(input, i, f.name);
+          // 文件结束事件：标记该分组完成（仅成功时），前端据此切换 UI 状态
+          if (success) {
             send('file_complete', {
               step: 'finalize',
               status: 'done',

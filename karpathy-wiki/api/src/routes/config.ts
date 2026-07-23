@@ -216,7 +216,7 @@ export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapte
       return reply.send({
         ok: true,
         config: merged.logging,
-        requireRestart: body.level !== undefined ? ['pino.level'] : [],
+        requireRestart: body.level === undefined ? [] : ['pino.level'],
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';

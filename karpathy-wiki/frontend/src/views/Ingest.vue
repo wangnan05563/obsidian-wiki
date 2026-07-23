@@ -18,7 +18,8 @@ const folderFiles = ref<Array<{ name: string; file: File }>>([]);
 
 // 与后端 config.batch.allowedExtensions 保持一致的白名单
 // 为什么前端也要校验：用户在确认弹窗里能看到哪些文件被跳过，避免上传空 FormData
-const ALLOWED_EXTS = ['md', 'txt', 'pdf', 'html', 'json'];
+// 为什么用 Set：成员判断 O(1)，且语义上白名单是唯一集合（S7776）
+const ALLOWED_EXTS = new Set(['md', 'txt', 'pdf', 'html', 'json']);
 const MAX_BATCH_SIZE = 20;
 const MAX_FILE_SIZE_MB = 10;
 
@@ -55,12 +56,12 @@ function handleFolderChange(e: Event) {
   const valid: Array<{ name: string; file: File }> = [];
   let rejectedCount = 0;
   let oversizedCount = 0;
-  for (let i = 0; i < input.files.length; i++) {
-    const f = input.files[i];
+  // FileList 可迭代，for-of 比 index 循环更简洁（S4138）
+  for (const f of input.files) {
     // webkitRelativePath 含文件夹前缀，这里仅取 basename 作为显示与上传名
     const baseName = (f.webkitRelativePath || f.name).split('/').pop() ?? f.name;
     const ext = baseName.split('.').pop()?.toLowerCase() ?? '';
-    if (!ALLOWED_EXTS.includes(ext)) {
+    if (!ALLOWED_EXTS.has(ext)) {
       rejectedCount++;
       continue;
     }

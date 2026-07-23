@@ -25,9 +25,7 @@ import type { TunnelConfig } from '../types.js';
 // 因为 loginProcess / loginOutput / loginAuthUrl 状态保存在实例上。
 let loginService: CloudflareLoginService | null = null;
 function getLoginService(): CloudflareLoginService {
-  if (!loginService) {
-    loginService = new CloudflareLoginService();
-  }
+  loginService ??= new CloudflareLoginService();
   return loginService;
 }
 

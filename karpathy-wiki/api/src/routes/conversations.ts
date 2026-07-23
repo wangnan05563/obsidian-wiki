@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';

@@ -1,27 +1,31 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
+import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Warning, CircleCheck, Tools, MagicStick } from '@element-plus/icons-vue';
 import type { HealthReport, FixRequest, FixProgressEvent, BatchFixRequest, BatchFixProgressEvent, BatchDoneEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
+import { useHealthStore } from '../stores/health';
 
+// 批量修复范围类型（S4323：提取联合类型为别名，collectBatchItems/scopeLabel/batchFix 共用）
+type FixScope = 'all' | 'orphan' | 'broken';
+
+const healthStore = useHealthStore();
+// 修复状态从 store 获取：组件卸载后 store 保留状态，切回页面可恢复进度条与日志
+const {
+  fixingKey,
+  fixLogs,
+  batchFixing,
+  batchTotal,
+  batchCurrent,
+  batchDoneKeys,
+  batchProgress,
+  anyFixing,
+} = storeToRefs(healthStore);
+
+// report 与 loading 为组件本地状态：体检报告每次进入页面需刷新，无需跨视图保留
 const report = ref<HealthReport | null>(null);
 const loading = ref(false);
-
-// 修复状态：fixingKey 标记当前正在修复的问题 key（格式：orphan:path 或 broken:idx）
-const fixingKey = ref<string>('');
-// 修复进度日志（时间线展示）
-const fixLogs = ref<FixProgressEvent[]>([]);
-
-// 批量修复状态
-// - batchFixing：是否正在执行批量修复（执行中禁用所有单个修复按钮）
-// - batchTotal：本次批量修复总问题数
-// - batchCurrent：当前正在处理第几个（1-based，0 表示尚未开始）
-// - batchDoneKeys：已完成的 issueKey 集合，前端据此高亮已完成项
-const batchFixing = ref(false);
-const batchTotal = ref(0);
-const batchCurrent = ref(0);
-const batchDoneKeys = ref<Set<string>>(new Set());
 
 // 三类问题的计数
 const orphanCount = computed(() => report.value?.orphans.length ?? 0);
@@ -33,15 +37,6 @@ const totalIssues = computed(() => orphanCount.value + brokenCount.value + stale
 const healthStatus = computed<'healthy' | 'warning'>(() =>
   totalIssues.value === 0 ? 'healthy' : 'warning',
 );
-
-// 是否禁用所有修复按钮：单个修复进行中 或 批量修复进行中
-const anyFixing = computed(() => fixingKey.value !== '' || batchFixing.value);
-
-// 批量修复进度百分比（0-100），用于 el-progress
-const batchProgress = computed(() => {
-  if (batchTotal.value === 0) return 0;
-  return Math.round((batchDoneKeys.value.size / batchTotal.value) * 100);
-});
 
 // 执行体检
 async function runCheck() {
@@ -79,11 +74,11 @@ async function handleFixEvent(eventType: string, data: string): Promise<void> {
     return;
   }
   if (eventType === 'progress' || eventType === 'fixed') {
-    fixLogs.value.push(parsed);
+    healthStore.pushFixLog(parsed);
     return;
   }
   if (eventType === 'done') {
-    fixLogs.value.push(parsed);
+    healthStore.pushFixLog(parsed);
     if (parsed.status === 'done') {
       ElMessage.success('修复完成');
       // 修复后重新体检刷新报告
@@ -101,8 +96,7 @@ async function handleFixEvent(eventType: string, data: string): Promise<void> {
 // 一键修复单个问题。SSE 流式接收修复进度。
 // issueType 区分断链/孤立，target 为 {from,to} 或字符串路径。
 async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: string; to: string } | string, key: string) {
-  fixingKey.value = key;
-  fixLogs.value = [];
+  healthStore.startSingleFix(key);
   const payload: FixRequest = { issueType, target };
 
   try {
@@ -132,7 +126,7 @@ async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: str
   } catch (err) {
     ElMessage.error(apiErrorMessage('修复请求失败', err));
   } finally {
-    fixingKey.value = '';
+    healthStore.endSingleFix();
   }
 }
 
@@ -157,99 +151,78 @@ function buildBatchItems(
   return { items, issueKeys };
 }
 
-// 处理批量修复 SSE 事件
-function handleBatchEvent(eventType: string, parsed: BatchFixProgressEvent | BatchDoneEvent | { totalIssues: number }): void {
-  if (eventType === 'batch_start') {
-    const payload = parsed as { totalIssues: number };
-    batchTotal.value = payload.totalIssues;
-    batchCurrent.value = 0;
-    batchDoneKeys.value = new Set();
-    fixLogs.value = [];
-    return;
+// 按范围收集待修复问题，返回 { items, issueKeys } 或 null（无可修复项）
+// 为什么独立函数：降低 batchFix 主函数认知复杂度（S3776）
+function collectBatchItems(
+  scope: 'all' | 'orphan' | 'broken',
+  report: HealthReport,
+): { items: FixRequest[]; issueKeys: string[] } | null {
+  const allItems: FixRequest[] = [];
+  const allKeys: string[] = [];
+  if (scope === 'all' || scope === 'orphan') {
+    const { items, issueKeys } = buildBatchItems('orphan', report.orphans);
+    allItems.push(...items);
+    allKeys.push(...issueKeys);
   }
-  if (eventType === 'issue_start') {
-    const ev = parsed as BatchFixProgressEvent;
-    batchCurrent.value = ev.issueIndex + 1;
-    fixLogs.value.push({
-      step: ev.step,
-      status: ev.status,
-      message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
-      tool: ev.tool,
-      data: ev.data,
-    });
-    return;
+  if (scope === 'all' || scope === 'broken') {
+    const { items, issueKeys } = buildBatchItems('broken_link', report.brokenLinks);
+    allItems.push(...items);
+    allKeys.push(...issueKeys);
   }
-  if (eventType === 'progress' || eventType === 'fixed') {
-    const ev = parsed as BatchFixProgressEvent;
-    fixLogs.value.push({
-      step: ev.step,
-      status: ev.status,
-      message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
-      tool: ev.tool,
-      data: ev.data,
-    });
-    return;
-  }
-  if (eventType === 'issue_done' || eventType === 'issue_error') {
-    const ev = parsed as BatchFixProgressEvent;
-    batchDoneKeys.value.add(ev.issueKey);
-    fixLogs.value.push({
-      step: ev.step,
-      status: ev.status,
-      message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
-      tool: ev.tool,
-      data: ev.data,
-    });
-    return;
-  }
-  if (eventType === 'batch_done') {
-    const ev = parsed as BatchDoneEvent;
-    fixLogs.value.push({
-      step: ev.step,
-      status: ev.status,
-      message: ev.message,
-    });
-    return;
-  }
-  if (eventType === 'error') {
-    const ev = parsed as FixProgressEvent;
-    fixLogs.value.push({
-      step: ev.step,
-      status: 'error',
-      message: ev.message || '批量修复出错',
-    });
+  if (allItems.length === 0) return null;
+  return { items: allItems, issueKeys: allKeys };
+}
+
+// 范围文案映射：S3358 避免嵌套三元，独立函数返回
+function scopeLabel(scope: FixScope): string {
+  if (scope === 'all') return '全部';
+  if (scope === 'orphan') return '孤立页面';
+  return '断开链接';
+}
+
+// 消费批量修复 SSE 流，解析事件并委托 store action 处理
+// 为什么独立函数：降低 batchFix 主函数认知复杂度（S3776）
+async function streamBatchFixEvents(body: ReadableStream<Uint8Array>): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop() || '';
+    for (const evt of events) {
+      const parsed = parseSSEEvent(evt);
+      if (!parsed) continue;
+      let data: unknown = null;
+      try {
+        data = JSON.parse(parsed.data);
+      } catch {
+        continue;
+      }
+      // 事件状态更新委托给 store action，组件不直接操作 store 状态
+      healthStore.handleBatchEvent(parsed.eventType, data as BatchFixProgressEvent | BatchDoneEvent);
+    }
   }
 }
 
 // 批量修复入口：支持 'all'（全部）/ 'orphan'（仅孤立）/ 'broken'（仅断链）
 // 为什么需要二次确认：批量修复会调用 LLM 多次，耗时较长且消耗 token，需用户明确确认
-async function batchFix(scope: 'all' | 'orphan' | 'broken') {
+async function batchFix(scope: FixScope) {
   if (!report.value || anyFixing.value) return;
 
-  // 按范围收集待修复问题
-  const allItems: FixRequest[] = [];
-  const allKeys: string[] = [];
-  if (scope === 'all' || scope === 'orphan') {
-    const { items, issueKeys } = buildBatchItems('orphan', report.value.orphans);
-    allItems.push(...items);
-    allKeys.push(...issueKeys);
-  }
-  if (scope === 'all' || scope === 'broken') {
-    const { items, issueKeys } = buildBatchItems('broken_link', report.value.brokenLinks);
-    allItems.push(...items);
-    allKeys.push(...issueKeys);
-  }
-
-  if (allItems.length === 0) {
+  const collected = collectBatchItems(scope, report.value);
+  if (!collected) {
     ElMessage.info('当前范围无可修复的问题');
     return;
   }
 
   // 二次确认
-  const scopeText = scope === 'all' ? '全部' : scope === 'orphan' ? '孤立页面' : '断开链接';
+  const scopeText = scopeLabel(scope);
   try {
     await ElMessageBox.confirm(
-      `将串行修复 ${allItems.length} 个${scopeText}问题，可能耗时较长（每个问题调用一次 LLM）。是否继续？`,
+      `将串行修复 ${collected.items.length} 个${scopeText}问题，可能耗时较长（每个问题调用一次 LLM）。是否继续？`,
       '批量修复确认',
       { confirmButtonText: '开始修复', cancelButtonText: '取消', type: 'warning' },
     );
@@ -258,13 +231,10 @@ async function batchFix(scope: 'all' | 'orphan' | 'broken') {
     return;
   }
 
-  batchFixing.value = true;
-  batchTotal.value = allItems.length;
-  batchCurrent.value = 0;
-  batchDoneKeys.value = new Set();
-  fixLogs.value = [];
+  // 初始化批量修复状态到 store：切走页面后 store 保留状态，切回可恢复进度条
+  healthStore.startBatchFix(collected.items.length);
 
-  const payload: BatchFixRequest = { items: allItems, issueKeys: allKeys };
+  const payload: BatchFixRequest = { items: collected.items, issueKeys: collected.issueKeys };
 
   try {
     const res = await fetch('/api/health-check/fix/batch', {
@@ -274,41 +244,22 @@ async function batchFix(scope: 'all' | 'orphan' | 'broken') {
     });
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split('\n\n');
-      buffer = events.pop() || '';
-      for (const evt of events) {
-        const parsed = parseSSEEvent(evt);
-        if (!parsed) continue;
-        let data: unknown = null;
-        try {
-          data = JSON.parse(parsed.data);
-        } catch {
-          continue;
-        }
-        handleBatchEvent(parsed.eventType, data as BatchFixProgressEvent | BatchDoneEvent);
-      }
-    }
+    await streamBatchFixEvents(res.body);
 
     ElMessage.success(`批量修复完成：${batchDoneKeys.value.size}/${batchTotal.value} 个问题已处理`);
-    // 批量修复后重新体检刷新报告
+    // 批量修复后重新体检刷新报告（后端缓存已在 healthCheckFix finally 中失效）
     await runCheck();
   } catch (err) {
     ElMessage.error(apiErrorMessage('批量修复失败', err));
   } finally {
-    batchFixing.value = false;
-    batchCurrent.value = 0;
+    healthStore.endBatchFix();
   }
 }
 
 onMounted(() => {
+  // 批量修复进行中时不重新体检：避免 loading 状态干扰进度条显示
+  // SSE fetch 在组件卸载后仍后台执行并更新 store，切回时进度条从 store 恢复
+  if (healthStore.batchFixing) return;
   runCheck();
 });
 </script>

@@ -1,7 +1,7 @@
-﻿import type { HarnessConfig } from '@wiki/harness';
+import type { HarnessConfig } from '@wiki/harness';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent, WebSearchConfig } from '../types.js';
+import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent, WebSearchConfig, ToolsConfig } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { compileWorkflow, resumeCompileWorkflow } from '../workflows/compile-workflow.js';
 import { queryWorkflow } from '../workflows/query-workflow.js';
@@ -15,17 +15,20 @@ export class HarnessAdapter implements EngineAdapter {
   private staleDays: number;
   // §5.2 联网搜索配置：Query workflow 注入 web_search 工具时需要
   private webSearchConfig?: WebSearchConfig;
+  // 需求 4 扩展工具配置：Query workflow 注入 MCP/CLI 工具时需要
+  private toolsConfig?: ToolsConfig;
 
   // 健康检查缓存
   private healthReportCache: HealthReport | null = null;
   private healthReportCachedAt = 0;
   private readonly HEALTH_CHECK_CACHE_TTL_MS = 60 * 1000; // 60秒缓存
 
-  constructor(config: HarnessConfig, vault: VaultService, staleDays = 30, webSearchConfig?: WebSearchConfig) {
+  constructor(config: HarnessConfig, vault: VaultService, staleDays = 30, webSearchConfig?: WebSearchConfig, toolsConfig?: ToolsConfig) {
     this.harnessConfig = config;
     this.vault = vault;
     this.staleDays = staleDays;
     this.webSearchConfig = webSearchConfig;
+    this.toolsConfig = toolsConfig;
   }
 
   // §12.3-7 配置热加载：更新运行时可变参数。
@@ -33,7 +36,7 @@ export class HarnessAdapter implements EngineAdapter {
   // 下次 harness.run 时 OpenAICompatibleAdapter 会读新值构造请求。
   // 为什么不需要重建 LLM 实例：OpenAICompatibleAdapter 持有 config 引用，构造请求时即时读取。
   // §5.2 webSearchConfig 变更同步内存实例，支持 Config 页面保存后即时生效
-  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig }): void {
+  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig }): void {
     if (updates.provider) {
       this.harnessConfig.llm.provider = updates.provider;
     }
@@ -60,6 +63,10 @@ export class HarnessAdapter implements EngineAdapter {
     if (updates.webSearchConfig) {
       this.webSearchConfig = updates.webSearchConfig;
     }
+    // 需求 4 toolsConfig 热加载：Config 页面保存工具配置后即时生效
+    if (updates.toolsConfig) {
+      this.toolsConfig = updates.toolsConfig;
+    }
   }
 
   async *compile(input: CompileInput): AsyncIterable<ProgressEvent> {
@@ -73,15 +80,25 @@ export class HarnessAdapter implements EngineAdapter {
   }
 
   // §5.2 query 改造：传入 webSearchConfig 给 workflow，支持联网搜索工具注入
+  // 需求 4：传入 toolsConfig 给 workflow，支持 MCP/CLI 扩展工具动态注入
   async *query(input: QueryInput): AsyncIterable<AnswerChunk> {
     yield* queryWorkflow(this.harnessConfig, this.vault, input, {
       webSearchConfig: this.webSearchConfig,
+      toolsConfig: this.toolsConfig,
     });
   }
 
   // §4.6 一键修复：通过 LLM 修复断链/孤立页面，SSE 流式返回修复进度
+  // C-1 写后即刷：修复可能已写入 vault，结束后必须失效体检缓存，
+  //   否则前端 runCheck() 命中旧缓存导致已修复项仍显示在列表中
+  // 为什么用 finally：generator 可能被调用方 break 中断（客户端断开），
+  //   只要有 vault 写入的可能，都应失效缓存让下次体检反映真实状态
   async *healthCheckFix(input: FixInput): AsyncIterable<FixProgressEvent> {
-    yield* healthCheckFixWorkflow(this.harnessConfig, this.vault, input);
+    try {
+      yield* healthCheckFixWorkflow(this.harnessConfig, this.vault, input);
+    } finally {
+      this.invalidateHealthCheckCache();
+    }
   }
 
   // 纯确定性逻辑，不调 LLM。检测孤立页/断链/过期页（4.6 health-check 工作流）。

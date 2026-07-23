@@ -34,7 +34,7 @@ export function registerSearchRoute(app: FastifyInstance, vault: VaultService) {
 export function registerWebSearchRoute(app: FastifyInstance, config?: WebSearchConfig) {
   app.post('/api/search/web', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { query?: string; limit?: number };
-    if (!body || !body.query || typeof body.query !== 'string') {
+    if (typeof body?.query !== 'string') {
       return reply.code(400).send({ error: '请求体须含 query 字段' });
     }
     if (!config) {

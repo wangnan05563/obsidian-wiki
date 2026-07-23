@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AppConfig } from './types.js';
+import type { AppConfig, ToolsConfig, QqConfig } from './types.js';
 
 // 配置文件名。路径解析见 getConfigPath()
 const CONFIG_FILENAME = 'config.json';
@@ -72,6 +72,53 @@ function defaultConfig(): AppConfig {
       allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
       maxBatchSize: 50,
       maxFileSizeMb: 10,
+    },
+    // RBAC 权限管理默认配置
+    // 为什么 enabled 默认 true：生产环境必须启用权限控制
+    // sessionTtlHours 默认 24：与常见 Web 应用一致
+    // permissionCacheTtlSec 默认 300：5 分钟缓存，角色变更后最长 5 分钟生效
+    // sessionSecretRef 默认 WIKI_SESSION_SECRET：与 llm.apiKeyRef 一致的引用模式
+    auth: {
+      enabled: true,
+      sessionTtlHours: 24,
+      permissionCacheTtlSec: 300,
+      auditLogPath: '../data/audit.log',
+      usersFilePath: '../data/users.json',
+      pbkdf2Iterations: 100000,
+      sessionSecretRef: 'WIKI_SESSION_SECRET',
+    },
+    // QQ 聊天记录导入子系统默认配置（SRS §6.2）
+    // 为什么需要默认值：避免 config.json 缺失 qq 字段时 qq-ingest 路由走"未配置"分支
+    // noise_rules 默认全开：NR-1~NR-6 覆盖常见噪声（表情包/单字/纯图/系统消息/红包/打卡）
+    // privacy_patterns 默认覆盖 5 类 PII：phone/id_card/email/card/qq，遵循 Presidio 双向脱敏范式
+    // max_batch_size 默认 20：与 batch.maxBatchSize 50 解耦，抽取任务更重，单批更小
+    // chunk_threshold 默认 200：单块消息数上限，超过则按时间窗口切分（SRS §5.2.1a）
+    // extract_model 默认 glm-4-plus：与主 llm.model 一致，可按需切换为更强模型
+    // extract_token_budget 默认 50000：与 budget.tokenBudget 解耦，独立成本核算
+    qq: {
+      noise_rules: {
+        'NR-1': true,
+        'NR-2': true,
+        'NR-3': true,
+        'NR-4': true,
+        'NR-5': true,
+        'NR-6': true,
+      },
+      privacy_patterns: {
+        phone: String.raw`1[3-9]\d{9}`,
+        id_card: String.raw`\d{17}[\dXx]`,
+        email: String.raw`[\w.-]+@[\w.-]+\.\w+`,
+        card: String.raw`\d{16,19}`,
+        qq: String.raw`(?<=QQ|扣扣|qq号|企鹅)\s*[0-9]{5,11}`,
+      },
+      max_batch_size: 20,
+      chunk_threshold: 200,
+      extract_model: 'glm-4-plus',
+      // extract_base_url 默认空串：未配置时由 extract 路由回退至 llm.baseUrl（SRS §6.2）
+      // 为什么不直接复制 llm.baseUrl：defaultConfig 在模块加载时执行，此时 llm.baseUrl 可能被用户覆盖，
+      // 用空串作为"未配置"哨兵，运行时显式回退逻辑更清晰
+      extract_base_url: '',
+      extract_token_budget: 50000,
     },
   };
 }
@@ -171,13 +218,29 @@ export async function loadConfig(): Promise<AppConfig> {
     // §5.2 webSearch 合并：parsed.webSearch 可选，未配置时用默认值（含空 apiKey）
     // 为什么用 ?? 而非 !：避免可选字段被 undefined 覆盖（BR-028-1）
     webSearch: parsed.webSearch
-      ? { ...(defaults.webSearch ?? {}), ...parsed.webSearch }
+      ? { ...defaults.webSearch, ...parsed.webSearch }
       : defaults.webSearch,
     // 批量编译配置合并：parsed.batch 可选，未配置时用默认值
     // 为什么用 ?? 而非 !：避免可选字段被 undefined 覆盖（BR-028-1）
     batch: parsed.batch
       ? { ...(defaults.batch ?? DEFAULT_BATCH_FALLBACK), ...parsed.batch }
       : defaults.batch,
+    // RBAC auth 配置合并：parsed.auth 可选，未配置时用默认值
+    // 为什么独立合并：auth 是嵌套对象，浅合并会丢失下层字段
+    auth: parsed.auth
+      ? { ...defaults.auth, ...parsed.auth }
+      : defaults.auth,
+    // QQ 导入子系统配置合并：parsed.qq 可选，未配置时用默认值
+    // 为什么独立合并：qq 是嵌套对象（noise_rules/privacy_patterns），浅合并会丢失下层字段
+    // 为什么用条件合并而非展开：parsed.qq.noise_rules 可能部分启用，需保留默认全开基础上覆盖
+    qq: parsed.qq
+      ? {
+          ...defaults.qq,
+          ...parsed.qq,
+          noise_rules: { ...defaults.qq?.noise_rules, ...parsed.qq.noise_rules },
+          privacy_patterns: { ...defaults.qq?.privacy_patterns, ...parsed.qq.privacy_patterns },
+        }
+      : defaults.qq,
   };
 
   // 写入缓存
@@ -222,7 +285,7 @@ export async function saveAiConfig(updates: {
       ...updates.baseUrl ? { baseUrl: updates.baseUrl } : {},
       ...updates.model ? { model: updates.model } : {},
       // apiKey 空串表示清除，undefined 表示不修改
-      ...(updates.apiKey !== undefined) ? { apiKey: updates.apiKey } : {},
+      ...(updates.apiKey === undefined) ? {} : { apiKey: updates.apiKey },
     },
   };
 
@@ -330,8 +393,8 @@ export async function saveBudgetConfig(updates: {
     ...current,
     budget: {
       ...current.budget,
-      ...updates.maxSteps !== undefined ? { maxSteps: updates.maxSteps } : {},
-      ...updates.tokenBudget !== undefined ? { tokenBudget: updates.tokenBudget } : {},
+      ...updates.maxSteps === undefined ? {} : { maxSteps: updates.maxSteps },
+      ...updates.tokenBudget === undefined ? {} : { tokenBudget: updates.tokenBudget },
     },
   };
 
@@ -353,7 +416,7 @@ export async function saveHealthCheckConfig(updates: {
     ...current,
     healthCheck: {
       ...current.healthCheck,
-      ...updates.staleDays !== undefined ? { staleDays: updates.staleDays } : {},
+      ...updates.staleDays === undefined ? {} : { staleDays: updates.staleDays },
     },
   };
 
@@ -383,8 +446,8 @@ export async function saveBatchConfig(updates: {
     batch: {
       ...baseBatch,
       ...updates.allowedExtensions ? { allowedExtensions: updates.allowedExtensions } : {},
-      ...updates.maxBatchSize !== undefined ? { maxBatchSize: updates.maxBatchSize } : {},
-      ...updates.maxFileSizeMb !== undefined ? { maxFileSizeMb: updates.maxFileSizeMb } : {},
+      ...updates.maxBatchSize === undefined ? {} : { maxBatchSize: updates.maxBatchSize },
+      ...updates.maxFileSizeMb === undefined ? {} : { maxFileSizeMb: updates.maxFileSizeMb },
     },
   };
 
@@ -413,8 +476,107 @@ export async function saveLoggingConfig(updates: {
     ...current,
     logging: {
       ...baseLogging,
-      ...updates.level !== undefined ? { level: updates.level } : {},
-      ...updates.enableRequestLog !== undefined ? { enableRequestLog: updates.enableRequestLog } : {},
+      ...updates.level === undefined ? {} : { level: updates.level },
+      ...updates.enableRequestLog === undefined ? {} : { enableRequestLog: updates.enableRequestLog },
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存工具配置（MCP/CLI/场景路由）到 config.json。
+// 为什么需要：前端工具配置页面需持久化用户配置的 MCP 服务器、CLI 工具、场景规则。
+// 安全考量：CLI 工具的 command 在执行时由 cli-executor 白名单校验，此处仅持久化原始配置。
+export async function saveToolsConfig(updates: {
+  mcpServers?: ToolsConfig['mcpServers'];
+  cliTools?: ToolsConfig['cliTools'];
+  scenes?: ToolsConfig['scenes'];
+  routerMode?: ToolsConfig['routerMode'];
+  mcpTimeoutMs?: ToolsConfig['mcpTimeoutMs'];
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const baseTools = current.tools ?? {
+    mcpServers: [],
+    cliTools: [],
+    scenes: [],
+    routerMode: 'auto' as const,
+    mcpTimeoutMs: 30000,
+  };
+  const merged: AppConfig = {
+    ...current,
+    tools: {
+      ...baseTools,
+      ...updates.mcpServers === undefined ? {} : { mcpServers: updates.mcpServers },
+      ...updates.cliTools === undefined ? {} : { cliTools: updates.cliTools },
+      ...updates.scenes === undefined ? {} : { scenes: updates.scenes },
+      ...updates.routerMode === undefined ? {} : { routerMode: updates.routerMode },
+      ...updates.mcpTimeoutMs === undefined ? {} : { mcpTimeoutMs: updates.mcpTimeoutMs },
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存 QQ 导入子系统配置（noise_rules/privacy_patterns/max_batch_size/chunk_threshold/extract_model/extract_base_url/extract_token_budget）到 config.json。
+// 为什么需要：前端配置页面需持久化用户调整的噪声规则开关、脱敏正则、批量上限等参数。
+// 安全考量：privacy_patterns 是用户自定义正则，运行时由 qq-preprocess 编译，需在编译前做 try/catch 防止正则错误阻塞流水线。
+// 注意：extract_token_budget 为 0 时视为"未设置"，由抽取路由回退至 budget.tokenBudget（SRS §6.2）。
+// 注意：extract_base_url 为空串时视为"未配置"，由抽取路由回退至 llm.baseUrl（SRS §6.2 extract_model 独立调用决策）。
+export async function saveQqConfig(updates: {
+  noise_rules?: Record<string, boolean>;
+  privacy_patterns?: Record<string, string>;
+  max_batch_size?: number;
+  chunk_threshold?: number;
+  extract_model?: string;
+  extract_base_url?: string;
+  extract_token_budget?: number;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const baseQq: QqConfig = current.qq ?? {
+    noise_rules: {
+      'NR-1': true,
+      'NR-2': true,
+      'NR-3': true,
+      'NR-4': true,
+      'NR-5': true,
+      'NR-6': true,
+    },
+    privacy_patterns: {
+      phone: String.raw`1[3-9]\d{9}`,
+      id_card: String.raw`\d{17}[\dXx]`,
+      email: String.raw`[\w.-]+@[\w.-]+\.\w+`,
+      card: String.raw`\d{16,19}`,
+      qq: String.raw`(?<=QQ|扣扣|qq号|企鹅)\s*[0-9]{5,11}`,
+    },
+    max_batch_size: 20,
+    chunk_threshold: 200,
+    extract_model: 'glm-4-plus',
+    extract_base_url: '',
+    extract_token_budget: 50000,
+  };
+  // 条件合并：仅更新显式提供的字段，未提供的字段保留原值
+  // 为什么不用展开合并：noise_rules/privacy_patterns 是 Map 结构，展开会整体覆盖而非按键合并
+  const merged: AppConfig = {
+    ...current,
+    qq: {
+      ...baseQq,
+      ...updates.noise_rules === undefined ? {} : { noise_rules: updates.noise_rules },
+      ...updates.privacy_patterns === undefined ? {} : { privacy_patterns: updates.privacy_patterns },
+      ...updates.max_batch_size === undefined ? {} : { max_batch_size: updates.max_batch_size },
+      ...updates.chunk_threshold === undefined ? {} : { chunk_threshold: updates.chunk_threshold },
+      ...updates.extract_model === undefined ? {} : { extract_model: updates.extract_model },
+      ...updates.extract_base_url === undefined ? {} : { extract_base_url: updates.extract_base_url },
+      ...updates.extract_token_budget === undefined ? {} : { extract_token_budget: updates.extract_token_budget },
     },
   };
 

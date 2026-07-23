@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import RobotAvatar from './components/RobotAvatar.vue';
 import NavIcons from './components/NavIcons.vue';
 import FloatingChat from './components/FloatingChat.vue';
@@ -16,30 +16,45 @@ import Tunnel from './views/Tunnel.vue';
 import Cleanup from './views/Cleanup.vue';
 import About from './views/About.vue';
 import Help from './views/Help.vue';
+import Login from './views/Login.vue';
+import Users from './views/Users.vue';
 import { useCompileStore } from './stores/compile';
+import { useAuthStore } from './stores/auth';
+import { usePermission } from './composables/usePermission';
 import { STORAGE_KEYS } from './constants/storageKeys';
+import type { AuthPermission } from './types';
 
-type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help';
+type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help' | 'users';
 
 const store = useCompileStore();
+const authStore = useAuthStore();
+const { isLoggedIn, isAdmin, canView, filterVisibleMenus } = usePermission();
 const currentView = ref<ViewName>('dashboard');
 
 // 菜单项配置：key 对应 ViewName，icon 对应 NavIcons 组件 name，label 为显示文字
 // 抽取为常量避免 template 中两处（展开/折叠）重复硬编码
-const menuItems = [
-  { key: 'dashboard' as ViewName, icon: 'dashboard', label: '仪表盘' },
-  { key: 'ingest' as ViewName, icon: 'ingest', label: '投递资料' },
-  { key: 'progress' as ViewName, icon: 'progress', label: '编译进度' },
-  { key: 'browse' as ViewName, icon: 'browse', label: '知识浏览' },
-  { key: 'query' as ViewName, icon: 'query', label: '知识问答' },
-  { key: 'graph' as ViewName, icon: 'graph', label: '图谱' },
-  { key: 'health' as ViewName, icon: 'health', label: '体检' },
-  { key: 'config' as ViewName, icon: 'config', label: '配置' },
-  { key: 'tunnel' as ViewName, icon: 'tunnel', label: '内网穿透' },
-  { key: 'cleanup' as ViewName, icon: 'cleanup', label: '系统清理' },
-  { key: 'help' as ViewName, icon: 'help', label: '帮助文档' },
-  { key: 'about' as ViewName, icon: 'about', label: '关于' },
+// 新增 users 菜单：仅管理员可见（通过 filterVisibleMenus 过滤）
+const menuItems: Array<{ key: ViewName; icon: string; label: string; permission: AuthPermission }> = [
+  { key: 'dashboard', icon: 'dashboard', label: '仪表盘', permission: 'dashboard' },
+  { key: 'ingest', icon: 'ingest', label: '投递资料', permission: 'ingest' },
+  { key: 'progress', icon: 'progress', label: '编译进度', permission: 'progress' },
+  { key: 'browse', icon: 'browse', label: '知识浏览', permission: 'browse' },
+  { key: 'query', icon: 'query', label: '知识问答', permission: 'query' },
+  { key: 'graph', icon: 'graph', label: '图谱', permission: 'graph' },
+  { key: 'health', icon: 'health', label: '体检', permission: 'health' },
+  { key: 'config', icon: 'config', label: '配置', permission: 'config' },
+  { key: 'tunnel', icon: 'tunnel', label: '内网穿透', permission: 'tunnel' },
+  { key: 'cleanup', icon: 'cleanup', label: '系统清理', permission: 'cleanup' },
+  { key: 'users', icon: 'about', label: '用户管理', permission: 'users' },
+  { key: 'help', icon: 'help', label: '帮助文档', permission: 'help' },
+  { key: 'about', icon: 'about', label: '关于', permission: 'about' },
 ];
+
+// 基于权限过滤后的可见菜单（响应式）
+// 为什么 computed：权限变更（登录/登出/角色切换）时自动更新
+const visibleMenuItems = computed(() => {
+  return filterVisibleMenus(menuItems);
+});
 
 // 导航栏折叠状态：折叠后隐藏 tabs，释放垂直空间放大问答框
 // 持久化到 localStorage，刷新页面后保留用户偏好
@@ -56,33 +71,68 @@ function handleScroll() {
   scrollY.value = window.scrollY;
 }
 
+// 视图切换守卫：检查当前用户是否有权限访问目标视图
+// 为什么需要：直接修改 currentView 不经过权限校验，会被绕过
 function go(view: ViewName) {
+  // 未登录时不可切换视图（应停留在登录页）
+  if (!isLoggedIn.value) return;
+  // 查找菜单项获取对应权限点
+  const menuItem = menuItems.find((m) => m.key === view);
+  if (!menuItem) {
+    // 未在菜单中的视图（如 dashboard 默认视图），允许访问
+    currentView.value = view;
+    return;
+  }
+  // 权限校验：无权限时不切换
+  if (!canView(menuItem.permission)) {
+    console.warn(`[auth] 无权限访问视图: ${view}`);
+    return;
+  }
   currentView.value = view;
 }
 
 function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health') {
-  currentView.value = view;
+  go(view);
 }
 
 // 监听 RefsList 派发的 karpathy:jump-vault 事件，切换到 browse 视图
 // 由 Browse.vue 自行读取 sessionStorage.karpathy:jumpPath 完成文件定位
 function handleJumpVault() {
-  currentView.value = 'browse';
+  go('browse');
 }
 
 // 监听 About.vue 派发的 karpathy:navigate 事件，切换到指定视图
 // 为什么用自定义事件而非 props：About 是路由终端组件，避免层层传递
 function handleNavigateEvent(e: Event) {
   const detail = (e as CustomEvent<string>).detail;
-  if (detail === 'help' || detail === 'about') {
-    currentView.value = detail;
+  if (detail === 'help' || detail === 'about' || detail === 'users') {
+    go(detail as ViewName);
   }
+}
+
+// 登出
+async function handleLogout() {
+  await authStore.logout();
+  currentView.value = 'dashboard';
 }
 
 onMounted(() => {
   window.addEventListener('scroll', handleScroll, { passive: true });
   globalThis.addEventListener('karpathy:jump-vault', handleJumpVault);
   globalThis.addEventListener('karpathy:navigate', handleNavigateEvent as EventListener);
+  // 启动时恢复会话：从 localStorage 读取 token，向后端验证
+  // 为什么 fire-and-forget：恢复过程不阻断 UI 渲染，恢复完成后响应式更新
+  authStore.restoreSession().then((ok) => {
+    if (ok) {
+      // 恢复成功后，根据权限选择默认视图
+      // 为什么默认 dashboard：管理员有 dashboard 权限；普通用户/游客无 dashboard 权限会跳转到首个可见视图
+      if (canView('dashboard')) {
+        currentView.value = 'dashboard';
+      } else if (visibleMenuItems.value.length > 0) {
+        currentView.value = visibleMenuItems.value[0].key;
+      }
+    }
+  });
 });
 
 onBeforeUnmount(() => {
@@ -100,7 +150,12 @@ onBeforeUnmount(() => {
   <div class="bg-layer noise"></div>
   <div class="bg-layer orbs parallax" :style="{ transform: `translateY(${scrollY * 0.25}px)` }"></div>
 
-  <div class="app-shell">
+  <!-- 未登录守卫：仅显示登录页，隐藏主导航与内容区
+       为什么 v-if 而非 router：本项目为单视图 SPA，用 v-if 守卫更简洁且避免引入 vue-router -->
+  <Login v-if="!isLoggedIn" />
+
+  <!-- 已登录后才渲染主应用壳 -->
+  <div v-else class="app-shell">
     <!-- 导航栏：左侧 Logo + 标题，右侧标签页切换 -->
     <!-- 折叠模式：nav 不再隐藏，改为细条状显示一行图标 + CSS tooltip -->
     <Transition name="nav-collapse" mode="out-in">
@@ -115,7 +170,7 @@ onBeforeUnmount(() => {
         </div>
         <nav class="nav-tabs" aria-label="主导航">
           <button
-            v-for="tab in menuItems"
+            v-for="tab in visibleMenuItems"
             :key="tab.key"
             class="tab-btn hover-glow"
             :class="{
@@ -129,6 +184,15 @@ onBeforeUnmount(() => {
             <span class="tab-label">{{ tab.label }}</span>
           </button>
         </nav>
+        <div class="nav-user">
+          <span class="nav-user-name" :title="authStore.user?.username">{{ authStore.user?.username }}</span>
+          <span class="nav-user-role" :class="`role-${authStore.user?.role}`">{{ authStore.user?.role }}</span>
+          <button class="nav-logout" title="登出" @click="handleLogout">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
         <button class="nav-toggle" @click="toggleNav" title="收起菜单">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -142,7 +206,7 @@ onBeforeUnmount(() => {
         </div>
         <nav class="nav-icons-bar" aria-label="折叠态主导航">
           <button
-            v-for="tab in menuItems"
+            v-for="tab in visibleMenuItems"
             :key="tab.key"
             class="icon-btn"
             :class="{
@@ -157,6 +221,11 @@ onBeforeUnmount(() => {
             <span class="icon-tooltip">{{ tab.label }}</span>
           </button>
         </nav>
+        <button class="nav-logout-collapsed" title="登出" @click="handleLogout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <button class="nav-toggle" @click="toggleNav" title="展开菜单">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -176,6 +245,7 @@ onBeforeUnmount(() => {
       <Config v-else-if="currentView === 'config'" />
       <Tunnel v-else-if="currentView === 'tunnel'" />
       <Cleanup v-else-if="currentView === 'cleanup'" />
+      <Users v-else-if="currentView === 'users'" />
       <Help v-else-if="currentView === 'help'" />
       <About v-else-if="currentView === 'about'" />
     </main>
@@ -187,8 +257,8 @@ onBeforeUnmount(() => {
     </footer>
   </div>
 
-  <!-- 全局悬浮问答入口：在所有页面都显示，Query 页面时位置调整到左下角避免遮挡输入区 -->
-  <FloatingChat :in-query-page="currentView === 'query'" />
+  <!-- 全局悬浮问答入口：仅在已登录后显示，避免游客在登录页就看到悬浮按钮 -->
+  <FloatingChat v-if="isLoggedIn" :in-query-page="currentView === 'query'" />
   <!-- 全局悬浮主题切换器：所有页面右下角可用，降低用户寻找配置入口的门槛 -->
   <ThemeSwitcher />
   </div>
@@ -238,6 +308,89 @@ onBeforeUnmount(() => {
   transition: all 0.3s ease;
   flex-shrink: 0;
   z-index: 1;
+}
+
+/* ============================================================
+ * 用户信息区：用户名 + 角色徽章 + 登出按钮
+ * 为什么独立区块：登出是高频操作，与导航 tab 分离避免误点
+ * ============================================================ */
+.nav-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-left: 1px solid var(--accent-purple-a30);
+  margin-left: 8px;
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.nav-user-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 角色徽章：三种角色用语义色区分（管理员红、用户青、游客灰） */
+.nav-user-role {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.nav-user-role.role-admin {
+  background: var(--accent-magenta-a20);
+  color: var(--neon-magenta);
+  border: 1px solid var(--accent-magenta-a30);
+}
+
+.nav-user-role.role-user {
+  background: var(--accent-cyan-a08);
+  color: var(--neon-cyan);
+  border: 1px solid var(--accent-cyan-a30);
+}
+
+.nav-user-role.role-guest {
+  background: var(--accent-purple-a10);
+  color: var(--text-soft);
+  border: 1px solid var(--accent-purple-a30);
+}
+
+.nav-logout,
+.nav-logout-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--accent-purple-a30);
+  background: var(--bg-glass);
+  color: var(--text-soft);
+  border-radius: var(--radius-btn);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  flex-shrink: 0;
+}
+
+.nav-logout:hover,
+.nav-logout-collapsed:hover {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+  box-shadow: 0 0 12px rgba(255, 0, 110, 0.3);
+}
+
+.nav-logout-collapsed {
+  width: 32px;
+  height: 32px;
 }
 
 .nav-toggle:hover {

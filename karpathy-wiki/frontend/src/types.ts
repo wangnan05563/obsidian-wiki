@@ -248,6 +248,45 @@ export interface ConfigData {
   };
 }
 
+// ===== 工具配置类型（与后端 types.ts 对齐，type-sync-rule）=====
+
+export interface McpServerEntry {
+  name: string;
+  transport: 'stdio' | 'sse' | 'http';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  // RPC 超时（ms），per-server 覆盖 tools.mcpTimeoutMs
+  timeoutMs?: number;
+  enabled: boolean;
+}
+
+export interface CliToolEntry {
+  name: string;
+  command: string;
+  argsTemplate?: string;
+  description: string;
+  timeoutMs?: number;
+  enabled: boolean;
+}
+
+export interface SceneRule {
+  name: string;
+  keywords: string[];
+  tools: string[];
+  enabled: boolean;
+}
+
+export interface ToolsConfig {
+  mcpServers: McpServerEntry[];
+  cliTools: CliToolEntry[];
+  scenes: SceneRule[];
+  routerMode: 'keyword' | 'auto';
+  // MCP JSON-RPC 请求全局默认超时（ms），per-server 可用 McpServerEntry.timeoutMs 覆盖
+  mcpTimeoutMs?: number;
+}
+
 // ===== 体检修复相关类型 =====
 
 // §4.6 一键修复请求体
@@ -535,3 +574,89 @@ export interface CleanupStorageStatus {
     oldest: string | null;
   };
 }
+
+// ===== RBAC 权限管理相关类型（与后端 auth/types.ts 对齐，type-sync-rule）=====
+
+// 系统角色：管理员 / 普通用户 / 游客
+export type AuthRole = 'admin' | 'user' | 'guest';
+
+// 权限点：与 App.vue 的 ViewName 对齐，'users' 为独立权限点不对应菜单
+export type AuthPermission =
+  | 'dashboard'
+  | 'ingest'
+  | 'progress'
+  | 'browse'
+  | 'query'
+  | 'graph'
+  | 'health'
+  | 'config'
+  | 'tunnel'
+  | 'cleanup'
+  | 'help'
+  | 'about'
+  | 'users';
+
+// 登录请求体
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+// 登录响应
+export interface LoginResponse {
+  ok: boolean;
+  token?: string;
+  user?: UserInfo;
+  message?: string;
+}
+
+// 用户信息（脱敏后，不含 passwordHash/salt）
+export interface UserInfo {
+  id: string;
+  username: string;
+  role: AuthRole;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt?: string;
+  // 当前用户权限列表（GET /api/auth/me 直接附带）
+  permissions: AuthPermission[];
+}
+
+// 创建/更新用户请求体（管理员操作）
+export interface CreateUserRequest {
+  username: string;
+  password: string;
+  role: AuthRole;
+}
+
+export interface UpdateUserRequest {
+  username?: string;
+  password?: string;
+  role?: AuthRole;
+  enabled?: boolean;
+}
+
+// 审计日志条目
+export interface AuditLogEntry {
+  ts: string;
+  userId: string | null;
+  username: string | null;
+  action: string;
+  resource: string;
+  ip: string;
+  result: 'success' | 'fail';
+  message?: string;
+}
+
+// 用户列表响应
+export interface UserListResponse {
+  users: UserInfo[];
+}
+
+// 审计日志响应
+export interface AuditLogResponse {
+  entries: AuditLogEntry[];
+  count: number;
+}
+

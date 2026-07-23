@@ -1,6 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs';
-import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey } from '../config.js';
@@ -14,30 +13,45 @@ import type { EngineAdapter, LlmPreset } from '../types.js';
 //   2. pnpm --filter 启动时符号链接可能导致 import.meta.url 指向非预期位置，故提供多候选路径 fallback
 //   3. pkg 打包模式 fallback 到 CWD
 function resolvePresetsPath(): string {
-  const candidates: string[] = [];
   // 本文件源码位置 api/src/routes/ai.ts，回退两级到 api/llm-presets.json
   const srcDir = path.dirname(fileURLToPath(import.meta.url));
-  candidates.push(path.resolve(srcDir, '../..', 'llm-presets.json'));
-
-  // 开发模式 CWD fallback：pnpm --filter 启动时 import.meta.url 可能解析到符号链接位置，
-  // 此时尝试从 CWD 出发查找（CWD 可能是 api/ 或项目根）
-  candidates.push(path.resolve(process.cwd(), 'llm-presets.json'));
-  candidates.push(path.resolve(process.cwd(), 'api', 'llm-presets.json'));
-
   // pkg 打包模式：与 exe 同级
   const isPackaged = !!(process as NodeJS.Process & { pkg?: unknown }).pkg;
-  if (isPackaged) {
-    candidates.push(path.resolve(process.cwd(), 'llm-presets.json'));
-  }
+
+  // 候选路径列表（按优先级），单次初始化避免多次 push（S7778）：
+  // 1. 源码位置回退两级
+  // 2. 开发模式 CWD fallback：pnpm --filter 启动时 import.meta.url 可能解析到符号链接，
+  //    此时尝试从 CWD 出发查找（CWD 可能是 api/ 或项目根）
+  // 3. pkg 打包模式：与 exe 同级（条件包含）
+  const candidates: string[] = [
+    path.resolve(srcDir, '../..', 'llm-presets.json'),
+    path.resolve(process.cwd(), 'llm-presets.json'),
+    path.resolve(process.cwd(), 'api', 'llm-presets.json'),
+    ...(isPackaged ? [path.resolve(process.cwd(), 'llm-presets.json')] : []),
+  ];
 
   for (const p of candidates) {
-    if (fsSync.existsSync(p)) return p;
+    if (fs.existsSync(p)) return p;
   }
   // 找不到时返回第一候选路径（保留原行为，让读盘错误自然抛出便于诊断）
   return candidates[0];
 }
 const PRESETS_PATH = resolvePresetsPath();
 const LLM_PRESETS: LlmPreset[] = JSON.parse(fs.readFileSync(PRESETS_PATH, 'utf8'));
+
+// 格式化 HTTP 错误响应详情：解析 OpenAI 兼容协议的错误格式，独立为纯函数降低 test-connection 路由认知复杂度
+function formatHttpError(status: number, errText: string): string {
+  let detail = `API 返回 ${status}`;
+  try {
+    const errJson = JSON.parse(errText);
+    if (errJson.error?.message) {
+      detail += ': ' + errJson.error.message;
+    }
+  } catch {
+    if (errText) detail += ': ' + errText.slice(0, 200);
+  }
+  return detail;
+}
 
 // AI 服务路由：提供 LLM 配置的读取、保存与连接测试。
 // 参考 17_xianyu 项目 AI 服务模块设计，适配本项目的 Fastify + config.json 架构。
@@ -225,17 +239,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        let detail = `API 返回 ${res.status}`;
-        // 提取错误信息中的 message 字段（OpenAI 兼容协议的错误格式）
-        try {
-          const errJson = JSON.parse(errText);
-          if (errJson.error?.message) {
-            detail += ': ' + errJson.error.message;
-          }
-        } catch {
-          if (errText) detail += ': ' + errText.slice(0, 200);
-        }
-        return reply.send({ ok: false, detail });
+        return reply.send({ ok: false, detail: formatHttpError(res.status, errText) });
       }
 
       const data = await res.json();

@@ -3,10 +3,10 @@ import path from 'node:path';
 import type { ToolDefinition, HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
-import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef } from '../types.js';
-import type { WebSearchConfig } from '../types.js';
+import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef, WebSearchConfig, ToolsConfig } from '../types.js';
 import { searchPages } from '../search-util.js';
 import { createWebSearchTool } from '../tools/web-search.js';
+import { loadExtendedTools } from '../tools/registry.js';
 
 // 加载 query prompt 单点存储。与 compile 共用 prompts/ 目录，保证两阶段等价（M-3）。
 // esbuild 打包时通过 --define 替换 import.meta.url 为 CJS 等价表达式
@@ -147,7 +147,7 @@ function generateFollowups(question: string, answer: string, refs: string[]): st
   // 提取问题中的核心词（去掉疑问词后的前 10 个字符）
   const coreQuestion = question
     .replace(/^(什么是|什么是|如何|为什么|怎么|请|能不能|可以|能否)/, '')
-    .replace(/[？?]/g, '')
+    .replaceAll(/[？?]/g, '')
     .slice(0, 15);
   if (coreQuestion) {
     followups.push(`${coreQuestion}有哪些实际应用场景？`);
@@ -174,6 +174,136 @@ function* yieldAnswerInSentences(answer: string): Iterable<AnswerChunk> {
   }
 }
 
+// query 进度步骤与进度事件类型（S4323：提取联合类型为别名，多处复用）
+type QueryProgressStep = 'searching' | 'fetching' | 'done';
+type QueryProgress = { step: QueryProgressStep; count?: number };
+
+// afterStep hook 收集的可变状态。
+// 提取为独立接口便于在辅助函数间传递，降低 queryWithHarness 与 afterStep hook 认知复杂度（S3776）。
+interface AfterStepState {
+  thinking: ThinkingChunk[];
+  webRefs: WebRef[];
+  progress: QueryProgress[];
+  webSearchDowngradeNotified: boolean;
+}
+
+// harness afterStep 回调的 result 参数结构（按需取字段，避免引入 harness 内部类型）。
+interface StepResult {
+  toolCalls: Array<{ function: { name: string; arguments: string } }>;
+  toolResults: unknown[];
+}
+
+// 处理单个 toolCall：解析参数并收集 thinking。
+// 提取为独立函数降低 afterStep hook 认知复杂度（S3776）。
+function appendToolCallThinking(
+  tc: StepResult['toolCalls'][number],
+  thinking: ThinkingChunk[],
+): void {
+  let args: Record<string, unknown> | undefined;
+  try {
+    args = JSON.parse(tc.function.arguments || '{}');
+  } catch {
+    args = undefined;
+  }
+  thinking.push({
+    phase: 'tool_call',
+    message: `正在调用：${tc.function.name}`,
+    tool: tc.function.name,
+    args,
+  });
+}
+
+// 处理 web_search 工具调用结果：收集 webRefs 与 progress，记录超时降级提示。
+// 提取为独立函数降低 afterStep hook 认知复杂度（S3776）。
+// toolResults 与 toolCalls 一一对应，按位置匹配找到 web_search 调用的结果。
+function collectWebSearchResults(result: StepResult, state: AfterStepState): void {
+  for (let i = 0; i < result.toolCalls.length; i++) {
+    const tc = result.toolCalls[i];
+    if (tc.function.name !== 'web_search') continue;
+    const toolResult = result.toolResults[i] as
+      | Array<{ title: string; url: string; snippet: string }>
+      | { error: string }
+      | undefined;
+    if (!toolResult || !Array.isArray(toolResult)) continue;
+    // F-3.10 超时降级提示：web_search 被调用但返回空数组，说明搜索超时或失败
+    // 为什么放这里：web-search.ts 的 handler 签名只返回数组，无法直接推送 thinking
+    // 用 webSearchDowngradeNotified 布尔避免多次 web_search 调用重复提示
+    if (toolResult.length === 0 && !state.webSearchDowngradeNotified) {
+      state.thinking.push({
+        phase: 'thinking',
+        message: '联网搜索超时或未返回结果，已降级为仅本地知识库。',
+      });
+      state.webSearchDowngradeNotified = true;
+    }
+    // F-3.10 progress 事件：web_search 调用完成，推送 fetching + done
+    // 为什么 step='fetching'：searching 状态在调用前无法推送（harness 不支持 beforeToolCall hook）
+    const newCount = toolResult.filter((r) => r?.url).length;
+    // 单次 push 多个参数保持顺序（S7778）：fetching 与 done 是独立状态事件，按序消费
+    state.progress.push({ step: 'fetching', count: newCount }, { step: 'done', count: newCount });
+    for (const r of toolResult) {
+      if (r?.url) {
+        state.webRefs.push({ title: r.title, url: r.url, snippet: r.snippet });
+      }
+    }
+  }
+}
+
+// 初始化联网搜索状态：返回是否可用，并推送相应 thinking/progress 到收集器
+// 提取为独立函数降低 queryWithHarness 认知复杂度（S3776）
+function initWebSearchState(
+  input: QueryInput,
+  options: { webSearchConfig?: WebSearchConfig },
+  collectedThinking: ThinkingChunk[],
+  collectedProgress: QueryProgress[],
+): boolean {
+  if (!input.webSearch) return false;
+  if (!options.webSearchConfig) {
+    collectedThinking.push({
+      phase: 'thinking',
+      message: '联网搜索未配置，仅使用本地知识库。',
+    });
+    return false;
+  }
+  const wsApiKey = options.webSearchConfig.apiKey || process.env[options.webSearchConfig.apiKeyRef];
+  if (!wsApiKey) {
+    collectedThinking.push({
+      phase: 'thinking',
+      message: '联网搜索未配置 API Key，仅使用本地知识库。请在 config.json 中配置 webSearch.apiKey。',
+    });
+    return false;
+  }
+  collectedThinking.push({
+    phase: 'thinking',
+    message: `联网搜索已启用（${options.webSearchConfig.provider}），可获取实时信息...`,
+  });
+  // F-3.10 progress 事件：联网搜索启动，推送 searching 状态
+  // 为什么在 thinking 之前 push：collectedProgress 与 collectedThinking 一起在 run 完成后 yield
+  collectedProgress.push({ step: 'searching' });
+  return true;
+}
+
+// 加载扩展工具并推送加载失败错误到 thinking 收集器
+// 提取为独立函数降低 queryWithHarness 认知复杂度（S3776）
+async function loadExtendedToolsWithFeedback(
+  question: string,
+  toolsConfig: ToolsConfig | undefined,
+  tools: ToolDefinition[],
+  collectedThinking: ThinkingChunk[],
+): Promise<void> {
+  if (!toolsConfig) return;
+  // 需求 4：加载扩展工具（MCP/CLI），根据场景路由动态注入
+  // 为什么在 createQueryTools 之后：内置工具优先，扩展工具追加，避免名称冲突时覆盖内置工具
+  const extended = await loadExtendedTools(question, toolsConfig);
+  tools.push(...extended.tools);
+  // 加载失败的错误推送为 thinking，让用户感知哪些工具不可用
+  for (const err of extended.errors) {
+    collectedThinking.push({
+      phase: 'thinking',
+      message: `扩展工具加载失败 [${err.source}]: ${err.message}`,
+    });
+  }
+}
+
 // 降级链第 1 级：queryWithHarness
 // 走 @wiki/harness ReAct 循环，注入 search_pages/read_page/web_search 工具，由 LLM 自主调用。
 // 通过 afterStep hook 收集 thinking 步骤，run 完成后一次性 yield（harness.run 是阻塞 Promise，运行中无法 yield）。
@@ -182,10 +312,10 @@ async function* queryWithHarness(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   input: QueryInput,
-  options: { webSearchConfig?: WebSearchConfig },
+  options: { webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig },
   collectedThinking: ThinkingChunk[],
   collectedWebRefs: WebRef[],
-  collectedProgress: Array<{ step: 'searching' | 'fetching' | 'done'; count?: number }>,
+  collectedProgress: QueryProgress[],
 ): AsyncGenerator<AnswerChunk, void, unknown> {
   // 1. 构造 prompt：问答指令 + 用户问题 + 历史 + 附件提示 + 模式提示
   const promptTemplate = await loadQueryPrompt();
@@ -206,33 +336,17 @@ ${attachmentHint}
 ${deepHint}
 `;
 
-  // 2. 联网搜索可用性检查：用户点联网搜索但未配置 API Key 时提示
-  let webSearchAvailable = false;
-  // F-3.10 超时降级去重标记：harness 多步可能多次调用 web_search，仅推送一次降级提示
-  let webSearchDowngradeNotified = false;
-  if (input.webSearch && options.webSearchConfig) {
-    const wsApiKey = options.webSearchConfig.apiKey || process.env[options.webSearchConfig.apiKeyRef];
-    if (wsApiKey) {
-      webSearchAvailable = true;
-      collectedThinking.push({
-        phase: 'thinking',
-        message: `联网搜索已启用（${options.webSearchConfig.provider}），可获取实时信息...`,
-      });
-      // F-3.10 progress 事件：联网搜索启动，推送 searching 状态
-      // 为什么在 thinking 之前 push：collectedProgress 与 collectedThinking 一起在 run 完成后 yield
-      collectedProgress.push({ step: 'searching' });
-    } else {
-      collectedThinking.push({
-        phase: 'thinking',
-        message: '联网搜索未配置 API Key，仅使用本地知识库。请在 config.json 中配置 webSearch.apiKey。',
-      });
-    }
-  } else if (input.webSearch) {
-    collectedThinking.push({
-      phase: 'thinking',
-      message: '联网搜索未配置，仅使用本地知识库。',
-    });
-  }
+  // 2. 联网搜索可用性检查（委托给 initWebSearchState 降低复杂度 S3776）
+  const webSearchAvailable = initWebSearchState(input, options, collectedThinking, collectedProgress);
+
+  // afterStep hook 收集状态：thinking/webRefs/progress 复用入参数组（写后即刷），
+  // webSearchDowngradeNotified 为 hook 内部去重标记（harness 多步可能多次调用 web_search）
+  const afterStepState: AfterStepState = {
+    thinking: collectedThinking,
+    webRefs: collectedWebRefs,
+    progress: collectedProgress,
+    webSearchDowngradeNotified: false,
+  };
 
   // 3. 构造 harness，注入工具与 afterStep hook
   const tools = createQueryTools(vault, {
@@ -240,70 +354,29 @@ ${deepHint}
     webSearchConfig: options.webSearchConfig,
   });
 
+  // 加载扩展工具（委托给 loadExtendedToolsWithFeedback 降低复杂度 S3776）
+  await loadExtendedToolsWithFeedback(input.question, options.toolsConfig, tools, collectedThinking);
+
   const harness = new Harness({
     ...harnessConfig,
     tools,
     hooks: {
+      // afterStep hook 委托给模块级辅助函数，降低本函数认知复杂度（S3776）
       afterStep: async (_ctx, _step, result) => {
+        const stepResult = result as unknown as StepResult;
         // 每个工具调用转换为 ThinkingChunk
-        for (const tc of result.toolCalls) {
-          let args: Record<string, unknown> | undefined;
-          try {
-            args = JSON.parse(tc.function.arguments || '{}');
-          } catch {
-            args = undefined;
-          }
-          collectedThinking.push({
-            phase: 'tool_call',
-            message: `正在调用：${tc.function.name}`,
-            tool: tc.function.name,
-            args,
-          });
+        for (const tc of stepResult.toolCalls) {
+          appendToolCallThinking(tc, afterStepState.thinking);
         }
         // §5.2 收集 web_search 工具结果：toolResults 与 toolCalls 一一对应，
         // 按位置匹配找到 web_search 调用的结果（WebSearchResult[]），转换为 WebRef 累加
-        for (let i = 0; i < result.toolCalls.length; i++) {
-          const tc = result.toolCalls[i];
-          if (tc.function.name !== 'web_search') continue;
-          const toolResult = result.toolResults[i] as
-            | Array<{ title: string; url: string; snippet: string }>
-            | { error: string }
-            | undefined;
-          if (!toolResult || !Array.isArray(toolResult)) continue;
-          // F-3.10 超时降级提示：web_search 被调用但返回空数组，说明搜索超时或失败
-          // 为什么放这里：web-search.ts 的 handler 签名只返回数组，无法直接推送 thinking
-          // 用 webSearchDowngradeNotified 布尔避免多次 web_search 调用重复提示
-          if (toolResult.length === 0 && !webSearchDowngradeNotified) {
-            collectedThinking.push({
-              phase: 'thinking',
-              message: '联网搜索超时或未返回结果，已降级为仅本地知识库。',
-            });
-            webSearchDowngradeNotified = true;
-          }
-          // F-3.10 progress 事件：web_search 调用完成，推送 fetching + count
-          // 为什么 step='fetching'：searching 状态在调用前无法推送（harness 不支持 beforeToolCall hook）
-          // 所以在 afterStep 中推送 fetching（结果已抓取）+ done（本次完成）
-          const newCount = toolResult.filter(r => r && r.url).length;
-          collectedProgress.push({ step: 'fetching', count: newCount });
-          collectedProgress.push({ step: 'done', count: newCount });
-          for (const r of toolResult) {
-            if (r && r.url) {
-              collectedWebRefs.push({ title: r.title, url: r.url, snippet: r.snippet });
-            }
-          }
-        }
+        collectWebSearchResults(stepResult, afterStepState);
       },
     },
   });
 
-  // 4. 执行问答。harness.run 抛异常或返回 failed status 时让上层降级链接管。
-  let result;
-  try {
-    result = await harness.run({ task, context: { question: input.question } });
-  } catch (err) {
-    // 让上层 queryWorkflow catch 触发降级链
-    throw err;
-  }
+  // 4. 执行问答。harness.run 抛异常时由上层 queryWorkflow catch 触发降级链，此处无需包裹 try/catch
+  const result = await harness.run({ task, context: { question: input.question } });
 
   if (result.status === 'failed') {
     throw new Error(result.finalContent || 'harness run failed');
@@ -330,13 +403,13 @@ ${deepHint}
   // 8. 提取引用并标记完成
   const refs = await extractRefs(answer, vault);
   // §5.2 联网搜索引用：collectedWebRefs 已在 afterStep 中累加。
-  // 去重（同 url 多次出现时只保留首次），限制最多 8 条避免 UI 过长
+  // 去重（同 url 多次出现时只保留首次），无数量限制，展示全部参考资料
   const seenUrls = new Set<string>();
   const webRefs = collectedWebRefs.filter((r) => {
     if (seenUrls.has(r.url)) return false;
     seenUrls.add(r.url);
     return true;
-  }).slice(0, 8);
+  });
   // §5.2 生成追问建议：基于问题和答案提取关键概念，构造 3 个延伸问题
   const followups = generateFollowups(input.question, answer, refs);
   if (followups.length > 0) {
@@ -365,7 +438,7 @@ async function* queryWithSearchFallback(
     throw new Error('search fallback: no hits');
   }
 
-  // 2. 读取命中页面内容（截断到 2000 字符避免 prompt 过长）
+  // 2. 读取命中页面完整内容（需求2：去掉单页截断限制，确保回答详尽完整）
   // 为什么用 h.path 而非 h.title 收集 refs：refs 统一为文件相对路径形式，
   // 保证前端跳转 Browse 时 /api/files?path=<ref> 能直接命中文件
   const pageContents: string[] = [];
@@ -373,8 +446,7 @@ async function* queryWithSearchFallback(
   for (const h of hits) {
     try {
       const content = await vault.readFile(h.path);
-      // 单页 2000 字符上限，5 页合计约 10K token，可控
-      pageContents.push(`## ${h.title}\n${content.slice(0, 2000)}`);
+      pageContents.push(`## ${h.title}\n${content}`);
       refPaths.push(h.path);
     } catch {
       // 跳过读取失败的页面
@@ -406,13 +478,8 @@ ${input.question}
   };
   const harness = new Harness(fallbackConfig);
 
-  let result;
-  try {
-    result = await harness.run({ task: fallbackPrompt });
-  } catch (err) {
-    // LLM 调用也失败：让上层降级链落到兜底
-    throw err;
-  }
+  // harness.run 抛异常时由上层 queryWorkflow catch 触发降级链落到兜底，无需此处包裹 try/catch
+  const result = await harness.run({ task: fallbackPrompt });
 
   if (result.status === 'failed') {
     throw new Error(result.finalContent || 'fallback harness run failed');
@@ -425,11 +492,12 @@ ${input.question}
   }
 
   // 6. 提取引用（合并 search hits 路径与 [[页面名]] 解析后的路径）
+  // 需求2：去掉 refs 数量限制，返回所有相关引用
   const extractedRefs = new Set<string>(refPaths);
   for (const r of await extractRefs(answer, vault)) {
     extractedRefs.add(r);
   }
-  const refs = Array.from(extractedRefs).slice(0, 8);
+  const refs = Array.from(extractedRefs);
   yield { refs, done: true };
 }
 
@@ -447,6 +515,7 @@ export async function* queryWorkflow(
   input: QueryInput,
   options: {
     webSearchConfig?: WebSearchConfig;
+    toolsConfig?: ToolsConfig;
   } = {},
 ): AsyncIterable<AnswerChunk> {
   // thinking 收集器：harness 阶段收集，fallback 阶段不再追加
@@ -454,7 +523,7 @@ export async function* queryWorkflow(
   // webRefs 收集器：仅 harness 阶段（联网搜索）收集
   const collectedWebRefs: WebRef[] = [];
   // F-3.10 progress 收集器：harness afterStep 中收集 web_search 进度
-  const collectedProgress: Array<{ step: 'searching' | 'fetching' | 'done'; count?: number }> = [];
+  const collectedProgress: QueryProgress[] = [];
 
   // 模式提示 thinking：在降级链各分支前 push 一次，harness 阶段 yield 出来
   if (input.mode === 'deep') {

@@ -1,4 +1,4 @@
-﻿# ---------- 环境与依赖 ----------
+# ---------- 环境与依赖 ----------
 .env
 node_modules/
 # config.json 含敏感字段（apiKey 等），仅本地保留；example 文件作为模板提交
@@ -62,3 +62,13 @@ scripts/verify_ui.py
 
 # ---------- 测试证据与截图 ----------
 docs/test-evidence/
+
+# ---------- 清理技能自动生成规则（防复发） ----------
+# 根目录运行时日志（sprint 阶段输出）
+sprint*-stdout.log
+# 历史验收脚本（一次性使用，不应入库）
+scripts/sprint*-acceptance.py
+# UI 验证脚本（调试用）
+scripts/ui-verify-*.py
+# 测试脚本连字符命名变体（补充 test_*.ps1 规则）
+scripts/test-*.ps1

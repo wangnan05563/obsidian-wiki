@@ -23,9 +23,13 @@ import { registerSearchRoute, registerWebSearchRoute } from './routes/search.js'
 import { registerVaultRoute } from './routes/vault.js';
 import { registerAiRoute } from './routes/ai.js';
 import { registerCleanupRoute } from './routes/cleanup.js';
+import { registerQqIngestRoute } from './routes/qq-ingest.js';
 import { registerConversationsRoute } from './routes/conversations.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
 import { registerAboutRoute } from './routes/about.js';
+import { registerToolsRoute } from './routes/tools.js';
+import { initAuthModule, registerAuthRoute } from './routes/auth.js';
+import { shutdownToolRegistry } from './tools/registry.js';
 import { TunnelService } from './tunnel/tunnel-service.js';
 
 // ESM 原生方式获取目录。esbuild 打包时通过 --define 替换 import.meta.url 为 CJS 等价表达式
@@ -148,6 +152,7 @@ async function main(): Promise<void> {
     vault,
     config.healthCheck.staleDays,
     config.webSearch,
+    config.tools,
   );
 
   // 配置驱动的 Fastify logger：level 从 config.json 读取，默认 info
@@ -270,8 +275,24 @@ async function main(): Promise<void> {
   // AI 配置管理 + 系统清理：参考 17_xianyu 项目新增模块
   registerAiRoute(app, adapter);
   registerCleanupRoute(app, vault);
+  // QQ 聊天记录导入子系统（SRS §6.1 路由族）
+  // 为什么需要 config 完整对象：路由内用 config.qq ?? defaultQqConfig 兜底
+  registerQqIngestRoute(app, adapter, vault, config);
   // 关于页面 + 检查更新：参考 17_xianyu 项目 about 模块
   registerAboutRoute(app);
+  // 工具配置管理：MCP/CLI/场景路由的可配置化调用（需求 4）
+  registerToolsRoute(app, adapter);
+
+  // RBAC 权限管理模块：必须在其他路由注册前初始化中间件（全局 preHandler）
+  // 为什么提前初始化：setupAuthMiddleware 通过 addHook 注册全局 preHandler，
+  // 必须在路由注册前调用，否则已注册的路由不会经过认证中间件
+  if (config.auth) {
+    await initAuthModule(config.auth, config.vaultPath);
+    registerAuthRoute(app);
+    console.log(`[auth] 权限控制已${config.auth.enabled ? '启用' : '禁用'}`);
+  } else {
+    console.warn('[auth] 未配置 auth 字段，权限控制未启用');
+  }
 
   // 内网穿透：TunnelService 单例已提前创建（CORS 白名单依赖），此处注入路由
   registerTunnelRoute(app, tunnel);
@@ -331,13 +352,16 @@ async function main(): Promise<void> {
 
   // shutdown 优雅停止：优先停隧道，避免调度器停止后隧道仍转发流量到已关闭服务
   // 为什么用 process 信号而非 Fastify 钩子：pkg 打包模式下 Ctrl+C 走 SIGINT，需在进程级捕获
-  const shutdown = (signal: string): void => {
-    console.log(`[关闭] 收到 ${signal}，正在停止隧道...`);
+  // 为什么 async：需等待 MCP 子进程清理完成再 exit，避免孤儿进程
+  const shutdown = async (signal: string): Promise<void> => {
+    console.log(`[关闭] 收到 ${signal}，正在停止隧道与工具连接...`);
     tunnel.stop();
+    // 清理 MCP 子进程连接，按 graceful-shutdown-rule 顺序：子进程 → 连接 → exit
+    await shutdownToolRegistry();
     process.exit(0);
   };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
 
 main().catch((err) => { // NOSONAR: ESM 入口标准模式，main() 是异步入口函数调用非 top-level await

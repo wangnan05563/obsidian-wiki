@@ -20,6 +20,8 @@ export const STORAGE_KEYS = {
   MSG_FEEDBACK_PREFIX: 'msg-feedback-',
   /** FloatingChat 面板展开状态持久化（FloatingChat.vue） */
   FLOATING_CHAT_OPEN: 'floatingChatOpen',
+  /** 认证 token（auth store），仅存非敏感会话 token，用户信息存内存 */
+  AUTH_TOKEN: 'authToken',
 } as const;
 
 /** 按预设派生 localStorage 完整键名（如 llmPresetConfig:openai） */
