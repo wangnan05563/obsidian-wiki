@@ -147,3 +147,7 @@ frontend/
 - [[h-ui-component-library]] — H-UI 组件库
 - [[lodop-print]] — Lodop 打印控件
 - [[hundsun-bill-trade-v5-backend]] — 票据交易平台后端
+- [[消息通道]] — HUNDSUN 平台中 TCP/HTTP/IBM MQ 三种通讯方式的抽象层，支持多通道并行与 SSL 安全配置
+- [[消息转换]] — HUNDSUN 平台中内部 JSON 与外部报文的双向转换机制
+- [[hundsun-frontend-coding-standards|恒生电子前端编码规范]] — 恒生电子前端编码规范
+- [[恒生票据交易管理平台V5.0前端组件]] — 平台Vue前端组件体系，涵盖文本框、下拉框、金额框、利率框、日期框等10大类业务组件

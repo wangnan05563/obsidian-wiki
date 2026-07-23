@@ -24,5 +24,6 @@ tags: [规范, frontmatter, 元数据]
 
 ## 相关页面
 
+- [[frontmatter]] — Frontmatter 概念概述，YAML 元数据块的基本定义与字段说明
 - [[知识库编译]] — 编译流程规范
 - [[批量编译测试]] — 编译测试用例

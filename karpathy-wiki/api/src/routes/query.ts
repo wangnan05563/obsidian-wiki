@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import matter from 'gray-matter';
-import type { EngineAdapter, QueryInput } from '../types.js';
+import type { EngineAdapter, QueryInput, AnswerChunk } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { withCompileLock } from '../compile-queue.js';
 // §6.0.2 per-session Lock：按 question 前 32 字符做 key 串行化
@@ -27,7 +27,7 @@ function trimSessions(): void {
   if (sessions.size <= MAX_SESSIONS) return;
   const now = Date.now();
   for (const [key, records] of sessions) {
-    const lastTs = records[records.length - 1]?.ts;
+    const lastTs = records.at(-1)?.ts;
     if (lastTs && now - new Date(lastTs).getTime() > SESSION_TTL_MS) {
       sessions.delete(key);
     }
@@ -59,7 +59,8 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
       // 当前请求使用的模型（即时切换）
       model?: string;
     };
-    if (!body || !body.question || typeof body.question !== 'string') {
+    // 可选链合并 body nullish 守卫与字段访问（S6582）
+    if (!body?.question || typeof body.question !== 'string') {
       return reply.code(400).send({ error: '请求体须含 question 字段' });
     }
 
@@ -99,48 +100,58 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
       //   1. 同问题重复请求必须等前一次完成才允许第二次开始，否则 LLM 调用并发会浪费 token
       //   2. 第二次请求开始时复用前一次的 SSE 流式输出已无意义（用户已看到第一次答案）
       // 代价：用户同问题重复点击会卡住等前一次完成，这是 SRS 设计意图
+      // 进度类事件分发：提取为函数降低主循环认知复杂度
+      const dispatchProgressEvents = (chunk: AnswerChunk): void => {
+        // §5.2 thinking 事件：前端 ThinkingBlock 渲染
+        if (chunk.thinking) {
+          send('thinking', chunk.thinking);
+        }
+        // §5.2 progress 事件：联网搜索进度
+        if (chunk.progress) {
+          send('progress', chunk.progress);
+        }
+        // §5.2 image 事件：多模态图片推送
+        if (chunk.image) {
+          send('image', chunk.image);
+        }
+        // §5.2 followups 事件：追问建议
+        if (chunk.followups) {
+          send('followups', { followups: chunk.followups });
+        }
+        // §5.2 联网搜索引用：缓存最新 webRefs，与 refs 一起在 done 时发送
+        if (chunk.webRefs && chunk.webRefs.length > 0) {
+          webRefs = chunk.webRefs;
+        }
+      };
+
+      // done 事件处理：发送 refs + 持久化会话记录 + 发送 done 事件
+      const handleDoneChunk = (chunk: AnswerChunk): void => {
+        if ((chunk.refs?.length ?? 0) > 0) {
+          refs = chunk.refs ?? [];
+        }
+        // refs 与 webRefs 一起发送：前端 RefsList 合并渲染"参考来源"
+        send('refs', { refs, webRefs });
+        // 存入会话存储，供 archive 防篡改取用
+        const records = sessions.get(sessionId) ?? [];
+        const messageIndex = records.length;
+        records.push({
+          question: input.question,
+          answer: answerBuffer.join(''),
+          refs,
+          ts: new Date().toISOString(),
+        });
+        sessions.set(sessionId, records);
+        trimSessions();
+        // done 事件附带 sessionId + messageIndex，客户端保存供归档用
+        send('done', { sessionId, messageIndex });
+      };
+
       await withSessionLock(input.question, async () => {
         for await (const chunk of adapter.query(input)) {
-          // §5.2 thinking 事件：前端 ThinkingBlock 渲染
-          if (chunk.thinking) {
-            send('thinking', chunk.thinking);
-          }
-          // §5.2 progress 事件：联网搜索进度
-          if (chunk.progress) {
-            send('progress', chunk.progress);
-          }
-          // §5.2 image 事件：多模态图片推送
-          if (chunk.image) {
-            send('image', chunk.image);
-          }
-          // §5.2 followups 事件：追问建议
-          if (chunk.followups) {
-            send('followups', { followups: chunk.followups });
-          }
-          // §5.2 联网搜索引用：缓存最新 webRefs，与 refs 一起在 done 时发送
-          if (chunk.webRefs && chunk.webRefs.length > 0) {
-            webRefs = chunk.webRefs;
-          }
+          dispatchProgressEvents(chunk);
 
           if (chunk.done) {
-            if ((chunk.refs?.length ?? 0) > 0) {
-              refs = chunk.refs ?? [];
-            }
-            // refs 与 webRefs 一起发送：前端 RefsList 合并渲染"参考来源"
-            send('refs', { refs, webRefs });
-            // 存入会话存储，供 archive 防篡改取用
-            const records = sessions.get(sessionId) ?? [];
-            const messageIndex = records.length;
-            records.push({
-              question: input.question,
-              answer: answerBuffer.join(''),
-              refs,
-              ts: new Date().toISOString(),
-            });
-            sessions.set(sessionId, records);
-            trimSessions();
-            // done 事件附带 sessionId + messageIndex，客户端保存供归档用
-            send('done', { sessionId, messageIndex });
+            handleDoneChunk(chunk);
           } else if ((chunk.refs?.length ?? 0) > 0) {
             // 兜底：非 done 时收到 refs 也下发（兼容 v1 行为）
             send('refs', { refs: chunk.refs, webRefs });
@@ -170,7 +181,7 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
 export function registerQueryArchiveRoute(app: FastifyInstance, vault: VaultService) {
   app.post('/api/query/archive', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { sessionId?: string; messageIndex?: number };
-    if (!body || !body.sessionId || typeof body.messageIndex !== 'number') {
+    if (!body?.sessionId || typeof body?.messageIndex !== 'number') {
       return reply.code(400).send({ error: '请求体须含 sessionId 与 messageIndex' });
     }
 

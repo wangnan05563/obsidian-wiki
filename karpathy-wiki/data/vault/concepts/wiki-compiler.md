@@ -15,7 +15,7 @@ tags: [compiler, tool, knowledge-base]
 
 - 读取 `raw/` 目录下的原始资料文件
 - 判定页面类型（entity/concept/comparison/query）
-- 生成带有 frontmatter 的标准 Wiki 页面
+- 生成带有 [[frontmatter]] 的标准 Wiki 页面
 - 建立双向链接 [[batch-compile-testing]]
 - 更新 `index.md` 和 `log.md`
 

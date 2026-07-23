@@ -1,6 +1,25 @@
 // 业务层类型定义。
 // EngineAdapter 是阶段切换抽象点（V1.3 仅 HarnessAdapter，但接口保留为后续替换预留）。
 
+// RBAC 权限模块类型 re-export 便于外部统一从 types.ts 导入
+// AuthConfig 本文件内 AppConfig 引用需 import type，其余类型仅 re-export 不在文件内使用
+import type { AuthConfig } from './auth/types.js';
+
+export type {
+  AuthRole,
+  AuthPermission,
+  UserRecord,
+  SessionRecord,
+  AuditLogEntry,
+  AuditAction,
+  AuthConfig,
+  LoginRequest,
+  LoginResponse,
+  UserInfo,
+  CreateUserRequest,
+  UpdateUserRequest,
+} from './auth/types.js';
+
 export interface EngineAdapter {
   compile(input: CompileInput): AsyncIterable<ProgressEvent>;
   // §11.2 断点续传：从中断点恢复编译
@@ -12,7 +31,8 @@ export interface EngineAdapter {
   // §5.2 模型即时切换：前端 ModelSelector 切换时调用，无需重启
   // provider/baseUrl/apiKey 变更需同步 LLM 实例，支持预设切换时完整更新
   // §5.2 webSearchConfig 变更需同步内存实例，避免重启服务才生效
-  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig }): void;
+  // 需求 4 toolsConfig 变更需同步内存实例，支持 Config 页面保存后即时生效
+  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig }): void;
 }
 
 export interface CompileInput {
@@ -192,6 +212,65 @@ export interface AppConfig {
   logging?: LoggingConfig;
   // 批量编译配置：可选，缺失时由 defaultConfig 提供默认值
   batch?: BatchCompileConfig;
+  // 可扩展工具配置：MCP 服务器 / CLI 工具 / 场景路由，缺失时无扩展工具
+  tools?: ToolsConfig;
+  // RBAC 权限管理配置：缺失时使用默认值（启用权限控制 + 默认参数）
+  // 为什么可选：保留向后兼容，老配置文件无此字段时不阻断启动
+  auth?: AuthConfig;
+  // QQ 聊天记录导入子系统配置（qq-ingest/）：缺失时使用 defaultConfig 提供的默认值
+  // 为什么可选：保留向后兼容，老配置文件无此字段时不阻断启动；不使用 QQ 导入功能的项目可忽略
+  qq?: QqConfig;
+}
+
+// MCP 服务器配置项。
+// transport 三种模式：stdio（本地子进程）/ sse（HTTP+SSE）/ http（Streamable HTTP）。
+// stdio 模式需要 command+args；sse/http 模式需要 url。
+// env 注入子进程环境变量（如 API Key），避免命令行参数泄露。
+//   注意：env 仅 stdio 模式生效，http/sse 模式不传递 env（避免 header 泄露 API Key）。
+// timeoutMs：JSON-RPC 请求超时（ms），缺失时用 tools.mcpTimeoutMs 或内置默认值。
+export interface McpServerEntry {
+  name: string;
+  transport: 'stdio' | 'sse' | 'http';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  // RPC 超时（ms），per-server 覆盖 tools.mcpTimeoutMs
+  timeoutMs?: number;
+  enabled: boolean;
+}
+
+// CLI 工具配置项。
+// command 必须在 CLI_EXECUTOR_WHITELIST 白名单内（防注入）。
+// argsTemplate 支持 {input} 占位符，由 LLM 工具参数填充。
+// timeoutMs 缺省由配置决定，防止恶意长时占用。
+export interface CliToolEntry {
+  name: string;
+  command: string;
+  argsTemplate?: string;
+  description: string;
+  timeoutMs?: number;
+  enabled: boolean;
+}
+
+// 场景路由规则：关键词命中时启用指定工具。
+// tools 字段为工具名列表（MCP 工具名格式：mcp__{server}__{tool}；CLI 工具名即 name）。
+export interface SceneRule {
+  name: string;
+  keywords: string[];
+  tools: string[];
+  enabled: boolean;
+}
+
+// 工具配置总入口。
+// routerMode: 'keyword' 关键词匹配场景工具 | 'auto' 注入所有启用工具让 LLM 自主决策。
+// mcpTimeoutMs: MCP JSON-RPC 请求全局默认超时（ms），per-server 可用 McpServerEntry.timeoutMs 覆盖。
+export interface ToolsConfig {
+  mcpServers: McpServerEntry[];
+  cliTools: CliToolEntry[];
+  scenes: SceneRule[];
+  routerMode: 'keyword' | 'auto';
+  mcpTimeoutMs?: number;
 }
 
 // LLM 预设项（GET /api/ai/presets）。
@@ -265,4 +344,92 @@ export interface CleanupStorageStatus {
     sizeMb: number;
     oldest: string | null;
   };
+}
+
+// ============================================================================
+// QQ 聊天记录导入子系统（qq-ingest/）类型定义
+// 对应 SRS §6.3，由 qq-preprocess.ts / qq-ingest routes / qq-extract.md 共享
+// ============================================================================
+
+// QQ 导入子系统配置：所有参数集中管理，遵循"配置化无硬编码"硬约束
+// - noise_rules: 噪声过滤规则开关表（key=规则名，value=是否启用）
+// - privacy_patterns: PII 脱敏正则表（key=规则名，value=正则字符串）
+//   为什么用字符串而非 RegExp：JSON 不支持正则字面量，运行时由 qq-preprocess 编译
+// - max_batch_size: 单次批量抽取的对话块上限，防 LLM 上下文溢出
+// - chunk_threshold: 长群聊分块阈值（消息条数），超过则按时间窗口切分
+// - extract_model: 价值抽取专用模型（可与主 llm.model 不同，支持按任务选型）
+// - extract_base_url: 抽取专用模型 baseUrl（OpenAI 兼容协议）
+//   为什么独立：extract_model 可能用不同 provider（如 glm-4-plus vs 主 model agnes-2.0-flash），
+//   需独立 baseUrl 避免请求发错端点
+// - extract_token_budget: 抽取阶段 token 预算上限，独立于 budget.tokenBudget
+//   为什么独立：抽取任务长文本场景多，避免与编译任务争用预算
+export interface QqConfig {
+  noise_rules: Record<string, boolean>;
+  privacy_patterns: Record<string, string>;
+  max_batch_size: number;
+  chunk_threshold: number;
+  extract_model: string;
+  extract_base_url: string;
+  extract_token_budget: number;
+}
+
+// 预清洗阶段输出结构（POST /api/qq-ingest/preview 与 extract 内部共用）
+// - rawId: UUID v4，作为整条流水线的唯一标识，用于 draft/compile 阶段溯源
+// - meta: 统计元数据，前端进度条与 Browse 视图审核页消费
+//   - chatName: 群名/好友昵称（从导出文件头部解析）
+//   - dateRange: "YYYY-MM-DD ~ YYYY-MM-DD" 时间跨度
+//   - originalCount: 原始消息条数（含噪声）
+//   - filteredCount: 噪声过滤后保留条数
+//   - redactedCount: 触发 PII 脱敏替换的消息条数
+// - rawPath: 落盘到 vault/raw/ 的相对路径（如 "raw/qq-xxx-20260722.json"）
+//   为什么落盘：raw/ 不可变是 Karpathy 三层架构硬约束，draft/compile 需基于存档而非内存
+export interface QqPreprocessResult {
+  rawId: string;
+  meta: {
+    chatName: string;
+    dateRange: string;
+    originalCount: number;
+    filteredCount: number;
+    redactedCount: number;
+  };
+  rawPath: string;
+}
+
+// 价值抽取阶段输出结构（POST /api/qq-ingest/extract 的 SSE done 事件 payload）
+// qaPairs 与 solutions 均为候选 draft，需人工审核后才能触发 compile
+export interface QqExtractResult {
+  qaPairs: QaPair[];
+  solutions: QqSolution[];
+}
+
+// 业务 Q&A 配对（抽取自群聊中的问答对话）
+// - answerer: 答复者昵称（脱敏后保留，用于 frontmatter author 字段）
+// - ts: ISO8601 时间戳，对应原文消息时间
+// - context: 问答上下文（前后 N 条消息摘要），帮助审核者理解场景
+// - original_refs: 原文片段引用数组（RAG 证据约束：LLM 必须基于原文，禁止编造）
+//   为什么是数组：一条 Q&A 可能由多条原始消息综合而成
+// - tags: LLM 自动标注的标签（如 ["部署","报错"]），用于 compile 阶段归类
+export interface QaPair {
+  question: string;
+  answer: string;
+  answerer: string;
+  ts: string;
+  context: string;
+  original_refs: string[];
+  tags: string[];
+}
+
+// 问题解决方案沉淀（抽取自群聊中"问题描述→排查→解决"的完整片段）
+// - background: 问题背景描述（业务场景、触发条件）
+// - steps: 解决步骤数组（有序列表，每项为一个操作步骤）
+// - caveats: 注意事项/坑点（LLM 从对话中提取的避坑提示）
+// - original_refs: 原文片段引用（RAG 证据约束）
+// - ts: 首条相关消息的 ISO8601 时间戳
+export interface QqSolution {
+  title: string;
+  background: string;
+  steps: string[];
+  caveats: string;
+  original_refs: string[];
+  ts: string;
 }

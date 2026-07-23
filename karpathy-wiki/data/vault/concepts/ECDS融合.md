@@ -2,7 +2,7 @@
 title: ECDS融合
 type: concept
 created: 2024-01-01
-updated: 2024-01-01
+updated: 2026-06-01
 source: raw/wiki-batch-1784703260588-0-ECDS__-________V2.X_.md
 tags: [票据, 恒生电子, ECDS, 系统融合, 项目实施]
 ---
@@ -33,6 +33,8 @@ tags: [票据, 恒生电子, ECDS, 系统融合, 项目实施]
 | **第一阶段** | 新系统功能建设 |
 | **第二阶段** | ECDS 新签发电票业务切换至新系统 |
 | **第三阶段** | ECDS 存量数据迁移 |
+
+> 第三阶段（ECDS存量数据迁移）的直连接口报文规范由 [[ecds-migration-interface-spec|中国票据业务系统直连接口规范（ECDS迁移票据业务分册）]] 定义，涵盖MCP报文体系。
 
 ## 政策解读的四大方向
 
@@ -78,3 +80,4 @@ ECDS 融合项目按如下阶段推进实施：
 
 - [[等分化票据]]
 - [[新一代票据业务系统]]
+- [[ecds-migration-interface-spec]] — ECDS存量数据迁移的直连接口报文规范

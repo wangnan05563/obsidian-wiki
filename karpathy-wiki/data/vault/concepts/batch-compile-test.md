@@ -2,7 +2,7 @@
 title: 批量编译测试
 type: concept
 created: 2025-01-27
-updated: 2025-01-27
+updated: 2025-04-17
 source: raw/wiki-batch-1784718922306-2-test-3.md
 tags: [test, batch-compile, automated-pipeline]
 ---
@@ -21,3 +21,10 @@ tags: [test, batch-compile, automated-pipeline]
 
 - [[frontmatter]] — 页面元数据规范
 - [[Wiki 页面]] — 知识库基本单元
+- [[Batch Compile Test 19]] — 批次编译测试中的第19个测试文档
+- [[llm-entity-extraction]] — 利用 LLM 从文本中自动识别与提取命名实体的技术
+- [[entities/batch-compile-test|Batch Compile Test]] — 具体的批量编译测试用例实体
+
+## 测试文档
+
+- [[Batch Compile Test 19]] — 用于验证简短内容的编译与实体提取能力

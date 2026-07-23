@@ -2,11 +2,11 @@
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
-import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult } from '../types';
+import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 import { STORAGE_KEYS, presetStorageKey } from '../constants/storageKeys';
 
-const activeTab = ref<'schema' | 'config' | 'ai' | 'theme'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai' | 'theme' | 'tools'>('schema');
 const config = ref<ConfigData | null>(null);
 const schemaContent = ref<string>('');
 const schemaBuffer = ref<string>('');
@@ -540,7 +540,8 @@ async function saveWebSearchConfig() {
 // 表单初始值从 GET /api/config 派生，保存时调用 PUT /api/config/{子资源} 落盘。
 
 // 运行参数表单（maxSteps / tokenBudget）
-const budgetForm = ref({ maxSteps: 20, tokenBudget: 50000 });
+// tokenBudget 默认值与后端 config.json 保持一致（200000），避免回显前显示旧值
+const budgetForm = ref({ maxSteps: 20, tokenBudget: 200000 });
 const savingBudget = ref(false);
 
 // 健康检查表单（staleDays）
@@ -730,6 +731,198 @@ async function saveLogging() {
   }
 }
 
+// ===== 工具配置：MCP / CLI / 场景路由 =====
+// 需求 4：AI 问答支持技能、MCP、CLI 等可配置化调用，根据场景自动调用。
+// 表单与后端 GET/PUT /api/tools/config 对齐，保存时调用 PUT 落盘 + adapter 热加载。
+
+// 工具配置表单：深拷贝后端 ToolsConfig，避免编辑过程直接污染原对象
+const toolsForm = ref<ToolsConfig>({
+  mcpServers: [],
+  cliTools: [],
+  scenes: [],
+  routerMode: 'auto',
+});
+const loadingTools = ref(false);
+const savingTools = ref(false);
+const testingCli = ref(false);
+const cliTestResult = ref<{ ok: boolean; output?: string; error?: string } | null>(null);
+
+// 路由模式可选项
+const ROUTER_MODE_OPTIONS: Array<{ value: 'keyword' | 'auto'; label: string; desc: string }> = [
+  { value: 'auto', label: '自动', desc: 'LLM 自主决策调用所有启用工具（推荐）' },
+  { value: 'keyword', label: '关键词', desc: '根据问题关键词匹配场景规则启用对应工具' },
+];
+
+// MCP transport 可选项
+const MCP_TRANSPORT_OPTIONS: Array<{ value: 'stdio' | 'sse' | 'http'; label: string }> = [
+  { value: 'stdio', label: 'stdio（子进程）' },
+  { value: 'sse', label: 'sse（流式）' },
+  { value: 'http', label: 'http（请求）' },
+];
+
+// 新增空白 MCP 服务器条目
+function addMcpServer(): void {
+  toolsForm.value.mcpServers.push({
+    name: `mcp-server-${toolsForm.value.mcpServers.length + 1}`,
+    transport: 'stdio',
+    command: '',
+    args: [],
+    url: '',
+    env: {},
+    enabled: true,
+  });
+}
+
+// 删除指定 MCP 服务器条目
+function removeMcpServer(idx: number): void {
+  toolsForm.value.mcpServers.splice(idx, 1);
+}
+
+// 新增空白 CLI 工具条目
+function addCliTool(): void {
+  toolsForm.value.cliTools.push({
+    name: `cli-tool-${toolsForm.value.cliTools.length + 1}`,
+    command: '',
+    argsTemplate: '',
+    description: '',
+    timeoutMs: 30000,
+    enabled: true,
+  });
+}
+
+// 删除指定 CLI 工具条目
+function removeCliTool(idx: number): void {
+  toolsForm.value.cliTools.splice(idx, 1);
+}
+
+// 新增空白场景规则条目
+function addScene(): void {
+  toolsForm.value.scenes.push({
+    name: `scene-${toolsForm.value.scenes.length + 1}`,
+    keywords: [],
+    tools: [],
+    enabled: true,
+  });
+}
+
+// 删除指定场景规则条目
+function removeScene(idx: number): void {
+  toolsForm.value.scenes.splice(idx, 1);
+}
+
+// 加载工具配置
+async function loadToolsConfig(): Promise<void> {
+  loadingTools.value = true;
+  try {
+    const res = await fetch('/api/tools/config');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: ToolsConfig = await res.json();
+    // 深拷贝避免编辑过程污染原对象
+    toolsForm.value = {
+      mcpServers: (data.mcpServers ?? []).map(s => ({ ...s, args: [...(s.args ?? [])], env: s.env ? { ...s.env } : undefined })),
+      cliTools: (data.cliTools ?? []).map(t => ({ ...t })),
+      scenes: (data.scenes ?? []).map(sc => ({ ...sc, keywords: [...sc.keywords], tools: [...sc.tools] })),
+      routerMode: data.routerMode ?? 'auto',
+    };
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('加载工具配置失败', err));
+  } finally {
+    loadingTools.value = false;
+  }
+}
+
+// 保存工具配置
+async function saveToolsConfig(): Promise<void> {
+  // 校验 MCP 服务器条目名称唯一且非空
+  const mcpNames = toolsForm.value.mcpServers.map(s => s.name.trim());
+  if (mcpNames.some(n => !n)) {
+    ElMessage.warning('MCP 服务器名称不能为空');
+    return;
+  }
+  if (new Set(mcpNames).size !== mcpNames.length) {
+    ElMessage.warning('MCP 服务器名称不能重复');
+    return;
+  }
+  // 校验 CLI 工具名称唯一且非空
+  const cliNames = toolsForm.value.cliTools.map(t => t.name.trim());
+  if (cliNames.some(n => !n)) {
+    ElMessage.warning('CLI 工具名称不能为空');
+    return;
+  }
+  if (new Set(cliNames).size !== cliNames.length) {
+    ElMessage.warning('CLI 工具名称不能重复');
+    return;
+  }
+  // 校验 stdio MCP 必须填 command
+  const stdioMissingCmd = toolsForm.value.mcpServers.find(s => s.enabled && s.transport === 'stdio' && !s.command?.trim());
+  if (stdioMissingCmd) {
+    ElMessage.warning(`MCP 服务器 "${stdioMissingCmd.name}" 为 stdio 模式但未填写 command`);
+    return;
+  }
+  // 校验 sse/http MCP 必须填 url
+  const remoteMissingUrl = toolsForm.value.mcpServers.find(s => s.enabled && (s.transport === 'sse' || s.transport === 'http') && !s.url?.trim());
+  if (remoteMissingUrl) {
+    ElMessage.warning(`MCP 服务器 "${remoteMissingUrl.name}" 为 ${remoteMissingUrl.transport} 模式但未填写 url`);
+    return;
+  }
+
+  savingTools.value = true;
+  try {
+    const res = await fetch('/api/tools/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toolsForm.value),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      ElMessage.success('工具配置保存成功，下次问答将使用新配置');
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存工具配置失败', err));
+  } finally {
+    savingTools.value = false;
+  }
+}
+
+// 测试 CLI 工具执行（用第一条启用的 CLI 工具的 command 作为冒烟测试）
+async function testCliTool(idx: number): Promise<void> {
+  const entry = toolsForm.value.cliTools[idx];
+  if (!entry) return;
+  testingCli.value = true;
+  cliTestResult.value = null;
+  try {
+    const res = await fetch('/api/tools/test-cli', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        command: entry.command,
+        argsTemplate: entry.argsTemplate ?? '',
+        timeoutMs: entry.timeoutMs ?? 30000,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    cliTestResult.value = {
+      ok: data.ok === true,
+      output: data.output,
+      error: data.error,
+    };
+    if (data.ok) {
+      ElMessage.success(`CLI 工具 "${entry.name}" 执行成功`);
+    } else {
+      ElMessage.warning(`CLI 工具 "${entry.name}" 执行失败：${data.error ?? '未知错误'}`);
+    }
+  } catch (err) {
+    cliTestResult.value = { ok: false, error: (err as Error).message };
+    ElMessage.error(apiErrorMessage('CLI 测试失败', err));
+  } finally {
+    testingCli.value = false;
+  }
+}
+
 onMounted(async () => {
   loadSchema();
   // loadConfig 完成后同步派生 4 个高级表单的初始值
@@ -742,6 +935,7 @@ onMounted(async () => {
   await loadPresets();
   loadAiConfig();
   loadWebSearchConfig();
+  loadToolsConfig();
 });
 </script>
 
@@ -1244,6 +1438,202 @@ onMounted(async () => {
                   <span class="hint-icon">?</span>
                   <span>未配置 API Key 时，知识库问答点击"联网搜索"将仅使用本地知识库。请配置 <code>{{ webSearchStatus.apiKeyRef }}</code></span>
                 </div>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- 工具配置：MCP / CLI / 场景路由 -->
+        <el-tab-pane label="工具配置" name="tools">
+          <div class="tools-section">
+            <div class="section-header">
+              <span class="section-desc">// 扩展工具（MCP / CLI / 场景路由）</span>
+              <span class="section-hint">配置 AI 问答可调用的外部工具，根据场景自动启用</span>
+            </div>
+
+            <div v-if="loadingTools" class="section-loading">// 加载中…</div>
+            <div v-else class="tools-form">
+              <!-- 路由模式 -->
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 路由模式 <span class="block-bracket">]</span></h3>
+                <div class="form-row">
+                  <span class="form-label">模式</span>
+                  <div class="preset-tags" role="radiogroup" aria-label="路由模式">
+                    <span
+                      v-for="m in ROUTER_MODE_OPTIONS"
+                      :key="m.value"
+                      class="preset-tag"
+                      :class="{ active: toolsForm.routerMode === m.value }"
+                      @click="toolsForm.routerMode = m.value"
+                    >{{ m.label }}</span>
+                  </div>
+                </div>
+                <div class="router-desc">
+                  {{ ROUTER_MODE_OPTIONS.find(m => m.value === toolsForm.routerMode)?.desc }}
+                </div>
+              </div>
+
+              <!-- MCP 服务器配置 -->
+              <div class="config-block hover-glow">
+                <div class="block-header">
+                  <h3 class="block-title"><span class="block-bracket">[</span> MCP 服务器 <span class="block-bracket">]</span></h3>
+                  <el-button size="small" class="neon-btn" @click="addMcpServer">+ 新增</el-button>
+                </div>
+                <div v-if="toolsForm.mcpServers.length === 0" class="empty-hint">
+                  暂无 MCP 服务器配置。点击 "新增" 添加。
+                </div>
+                <div v-else class="entry-list">
+                  <div v-for="(server, idx) in toolsForm.mcpServers" :key="idx" class="entry-item">
+                    <div class="entry-row">
+                      <el-input
+                        v-model="server.name"
+                        placeholder="服务器名称（唯一）"
+                        class="form-input entry-name"
+                      />
+                      <el-select v-model="server.transport" class="form-input entry-transport" placeholder="传输方式">
+                        <el-option
+                          v-for="t in MCP_TRANSPORT_OPTIONS"
+                          :key="t.value"
+                          :label="t.label"
+                          :value="t.value"
+                        />
+                      </el-select>
+                      <el-switch v-model="server.enabled" />
+                      <el-button size="small" class="neon-btn-danger" @click="removeMcpServer(idx)">删除</el-button>
+                    </div>
+                    <div v-if="server.transport === 'stdio'" class="entry-row">
+                      <el-input
+                        v-model="server.command"
+                        placeholder="command（如 npx）"
+                        class="form-input"
+                      />
+                      <el-input
+                        :model-value="server.args?.join(' ') ?? ''"
+                        placeholder="args（空格分隔）"
+                        class="form-input"
+                        @update:model-value="(val: string) => server.args = val.split(/\s+/).filter(Boolean)"
+                      />
+                    </div>
+                    <div v-else class="entry-row">
+                      <el-input
+                        v-model="server.url"
+                        placeholder="url（如 https://example.com/mcp）"
+                        class="form-input"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- CLI 工具配置 -->
+              <div class="config-block hover-glow">
+                <div class="block-header">
+                  <h3 class="block-title"><span class="block-bracket">[</span> CLI 工具 <span class="block-bracket">]</span></h3>
+                  <el-button size="small" class="neon-btn" @click="addCliTool">+ 新增</el-button>
+                </div>
+                <div v-if="toolsForm.cliTools.length === 0" class="empty-hint">
+                  暂无 CLI 工具配置。仅白名单命令可执行（如 ping/nslookup/whoami 等）。
+                </div>
+                <div v-else class="entry-list">
+                  <div v-for="(tool, idx) in toolsForm.cliTools" :key="idx" class="entry-item">
+                    <div class="entry-row">
+                      <el-input
+                        v-model="tool.name"
+                        placeholder="工具名称（唯一）"
+                        class="form-input entry-name"
+                      />
+                      <el-input
+                        v-model="tool.command"
+                        placeholder="command（如 ping）"
+                        class="form-input"
+                      />
+                      <el-switch v-model="tool.enabled" />
+                      <el-button size="small" class="neon-btn-danger" @click="removeCliTool(idx)">删除</el-button>
+                    </div>
+                    <div class="entry-row">
+                      <el-input
+                        v-model="tool.argsTemplate"
+                        placeholder='argsTemplate（如 "{host} -n 4"，{host} 为占位符）'
+                        class="form-input"
+                      />
+                      <el-input
+                        v-model.number="tool.timeoutMs"
+                        type="number"
+                        :min="1000"
+                        :step="1000"
+                        placeholder="超时（ms）"
+                        class="form-input entry-timeout"
+                      />
+                    </div>
+                    <div class="entry-row">
+                      <el-input
+                        v-model="tool.description"
+                        placeholder="工具描述（供 LLM 决策使用）"
+                        class="form-input"
+                      />
+                      <el-button
+                        size="small"
+                        class="neon-btn"
+                        :loading="testingCli"
+                        @click="testCliTool(idx)"
+                      >测试</el-button>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="cliTestResult" class="cli-test-result" :class="{ ok: cliTestResult.ok, fail: !cliTestResult.ok }">
+                  <pre v-if="cliTestResult.output">{{ cliTestResult.output }}</pre>
+                  <pre v-if="cliTestResult.error" class="error-output">{{ cliTestResult.error }}</pre>
+                </div>
+              </div>
+
+              <!-- 场景规则配置（仅在 keyword 模式下生效） -->
+              <div class="config-block hover-glow" :class="{ disabled: toolsForm.routerMode !== 'keyword' }">
+                <div class="block-header">
+                  <h3 class="block-title"><span class="block-bracket">[</span> 场景规则 <span class="block-bracket">]</span></h3>
+                  <el-button size="small" class="neon-btn" :disabled="toolsForm.routerMode !== 'keyword'" @click="addScene">+ 新增</el-button>
+                </div>
+                <div v-if="toolsForm.routerMode !== 'keyword'" class="empty-hint">
+                  场景规则仅在「关键词」路由模式下生效。切换到关键词模式后可配置规则。
+                </div>
+                <div v-else-if="toolsForm.scenes.length === 0" class="empty-hint">
+                  暂无场景规则。点击 "新增" 添加（关键词命中时启用对应工具）。
+                </div>
+                <div v-else class="entry-list">
+                  <div v-for="(scene, idx) in toolsForm.scenes" :key="idx" class="entry-item">
+                    <div class="entry-row">
+                      <el-input
+                        v-model="scene.name"
+                        placeholder="场景名称（如 network_diag）"
+                        class="form-input entry-name"
+                      />
+                      <el-switch v-model="scene.enabled" />
+                      <el-button size="small" class="neon-btn-danger" @click="removeScene(idx)">删除</el-button>
+                    </div>
+                    <div class="entry-row">
+                      <el-input
+                        :model-value="scene.keywords.join(', ')"
+                        placeholder='关键词（逗号分隔，如 "ping, 网络, 延迟"）'
+                        class="form-input"
+                        @update:model-value="(val: string) => scene.keywords = val.split(',').map(k => k.trim()).filter(Boolean)"
+                      />
+                    </div>
+                    <div class="entry-row">
+                      <el-input
+                        :model-value="scene.tools.join(', ')"
+                        placeholder='工具名（逗号分隔，如 "ping, nslookup"）'
+                        class="form-input"
+                        @update:model-value="(val: string) => scene.tools = val.split(',').map(t => t.trim()).filter(Boolean)"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 保存按钮 -->
+              <div class="ai-actions">
+                <el-button class="neon-btn-primary" :loading="savingTools" @click="saveToolsConfig">
+                  保存工具配置
+                </el-button>
               </div>
             </div>
           </div>
@@ -2041,5 +2431,134 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   padding: 10px 0;
+}
+
+/* 工具配置区块标题：与现有 config-block 分隔，含描述与提示 */
+.section-hint {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin-left: auto;
+}
+
+/* 危险按钮：删除条目使用 */
+.neon-btn-danger {
+  background: var(--bg-glass) !important;
+  border: 1px solid var(--accent-magenta-a40) !important;
+  color: var(--text-bright) !important;
+  font-family: var(--font-mono) !important;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease !important;
+}
+
+.neon-btn-danger:hover:not(.is-disabled) {
+  border-color: var(--neon-magenta) !important;
+  color: var(--neon-magenta) !important;
+}
+
+/* 区块标题栏：标题 + 操作按钮横向排列 */
+.block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+/* 条目列表：多个 MCP/CLI/Scene 配置项垂直堆叠 */
+.entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.entry-item {
+  padding: 12px;
+  border: 1px dashed var(--accent-cyan-a25);
+  border-radius: 10px;
+  background: var(--bg-scene);
+}
+
+/* 条目内一行：多个输入框 + 开关 + 按钮横向排列，自动换行 */
+.entry-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.entry-row:last-child {
+  margin-bottom: 0;
+}
+
+.entry-name {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.entry-transport {
+  flex: 0 0 160px;
+}
+
+.entry-timeout {
+  flex: 0 0 140px;
+}
+
+/* 空状态提示 */
+.empty-hint {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 16px;
+  text-align: center;
+  border: 1px dashed var(--accent-cyan-a20);
+  border-radius: 8px;
+}
+
+/* 路由模式说明文本 */
+.router-desc {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+  padding-left: 4px;
+}
+
+/* CLI 测试结果输出 */
+.cli-test-result {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-cyan-a25);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.cli-test-result pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.cli-test-result.ok {
+  border-color: var(--accent-cyan-a40);
+}
+
+.cli-test-result.fail {
+  border-color: var(--accent-magenta-a40);
+}
+
+.cli-test-result .error-output {
+  color: var(--neon-magenta);
+}
+
+/* 禁用态：场景规则在非 keyword 模式下灰显 */
+.config-block.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.config-block.disabled .block-header {
+  pointer-events: none;
 }
 </style>

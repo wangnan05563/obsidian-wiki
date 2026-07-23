@@ -23,7 +23,7 @@ tags: [编码规范, HTML, 前端]
 在 `<html>` 标签上正确设置 `lang` 属性。
 
 ### 字符编码
-使用 UTF-8 字符编码，通过 `<meta charset="UTF-8">` 声明。
+使用 UTF-8 字符编码，通过 `<meta charset=\"UTF-8\">` 声明。
 
 ### 引入 CSS 和 JavaScript 文件
 - CSS 文件在 `<head>` 中引入
@@ -46,5 +46,6 @@ tags: [编码规范, HTML, 前端]
 
 ## 相关页面
 
-- [[恒生电子前端编码规范]]
-- [[CSS/LESS/SASS 开发规范]]
+- [[hundsun-frontend-coding-standards|恒生电子前端编码规范]]
+- [[css-less-sass-dev-standards|CSS/LESS/SASS 开发规范]]
+- [[frontend-request-standards|前端请求调用规范]]

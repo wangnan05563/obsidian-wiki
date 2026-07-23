@@ -9,7 +9,7 @@ tags: [embedding, vector, nlp, representation-learning]
 
 # 嵌入（Embedding）
 
-**嵌入**（Embedding）是将文本、图像等非结构化数据映射为稠密向量（dense vector）的技术。在 [[rag|RAG]] 系统中，嵌入用于将文档块和用户查询统一表示为向量，以便在向量空间中进行相似度检索。
+**嵌入**（Embedding）是将文本、图像等非结构化数据映射为[[dense-model|稠密]]向量（dense vector）的技术。在 [[rag|RAG]] 系统中，嵌入用于将文档块和用户查询统一表示为向量，以便在向量空间中进行相似度检索。
 
 ## 在 RAG 中的作用
 
@@ -30,3 +30,4 @@ tags: [embedding, vector, nlp, representation-learning]
 - [[rag|RAG（检索增强生成）]]
 - [[llm|大语言模型]]
 - [[vector-database|向量数据库]]
+- [[dense-model|稠密模型]] — 稠密向量表示的底层架构基础

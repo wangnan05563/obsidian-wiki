@@ -27,6 +27,11 @@ import type { VaultService } from '../vault/vault-service.js';
 const DEFAULT_DAYS = 30;
 const BYTES_PER_MB = 1024 * 1024;
 
+// 移到模块顶层：纯函数无外部依赖，避免每次路由注册重建闭包
+function bytesToMb(bytes: number): number {
+  return Math.round((bytes / BYTES_PER_MB) * 100) / 100;
+}
+
 export function registerCleanupRoute(app: FastifyInstance, vault: VaultService): void {
   const vaultPath = vault.getVaultPath();
   // .harness 与 vault 同级（与 index.ts stateDir 计算一致）
@@ -39,10 +44,6 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService):
   const auditLog = path.join(harnessDir, 'cleanup-audit.log');
 
   // ===== 工具函数 =====
-
-  function bytesToMb(bytes: number): number {
-    return Math.round((bytes / BYTES_PER_MB) * 100) / 100;
-  }
 
   // 列目录下匹配 pattern 的文件（仅文件，不含子目录）
   async function listFiles(dir: string, pattern: RegExp): Promise<string[]> {

@@ -86,7 +86,11 @@ md.inline.ruler.before('link', 'ref_anchor', (state, silent) => {
   // 解析数字
   let i = pos + 1;
   let num = '';
-  while (i < src.length && src.codePointAt(i)! >= 0x30 && src.codePointAt(i)! <= 0x39) {
+  // 为什么用显式守卫而非 codePointAt(i)!：codePointAt 越界返回 undefined，
+  //   非空断言会掩盖类型不安全，用 if 守卫显式处理 undefined 分支（BR-028-1）
+  while (i < src.length) {
+    const cp = src.codePointAt(i);
+    if (cp === undefined || cp < 0x30 || cp > 0x39) break;
     num += src[i];
     i++;
   }
@@ -109,6 +113,115 @@ md.renderer.rules.ref_anchor = (tokens, idx) => {
   const num = tokens[idx].meta.num;
   const escaped = md.utils.escapeHtml(num);
   return `<a href="#ref-${escaped}" class="ref-anchor" data-ref="${escaped}">[${escaped}]</a>`;
+};
+
+// 多媒体嵌入：@[type](arg) 语法
+// 为什么用 @[type] 而非 ![]()：图片语法已被 markdown-it 占用，需独立前缀避免冲突
+// 支持类型：video / audio / bilibili / youtube / douyin
+// 安全：URL 转义 + 视频 ID 白名单校验（字母数字 - _），iframe 加 sandbox 防注入
+const MEDIA_EMBED_TYPES = ['video', 'audio', 'bilibili', 'youtube', 'douyin'] as const;
+type MediaType = typeof MEDIA_EMBED_TYPES[number];
+
+// 各平台 iframe 嵌入 URL 模板：{id} 占位符由校验后的视频 ID 替换
+// 集中管理便于后续平台 URL 变更时单点修改
+const MEDIA_IFRAME_TEMPLATES: Record<string, string> = {
+  bilibili: 'https://player.bilibili.com/player.html?bvid={id}&high_quality=1&autoplay=0',
+  youtube: 'https://www.youtube-nocookie.com/embed/{id}',
+  douyin: 'https://open.douyin.com/platform/resource/embed?vid={id}',
+};
+
+// 视频 ID 白名单：字母数字 + 短横线 + 下划线（覆盖 BV号、YouTube ID、抖音 vid）
+// 为什么不用更宽松的正则：防止 URL 参数注入（如 &autoplay=1 被拼到 ID 里）
+const MEDIA_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+// URL 白名单：http/https 协议头 + 常见媒体扩展名或任意路径
+// 为什么校验协议：防止 javascript:/data: 等危险协议
+const MEDIA_URL_PATTERN = /^https?:\/\/[^\s"<>]+$/i;
+
+function buildMediaHtml(type: MediaType, arg: string): string {
+  // 为什么 video/audio 用 encodeURI 而非 escapeHtml：URL 中的 & 会被 escapeHtml 转义为 &amp;，
+  //   导致带查询参数的 URL（如 https://example.com/video.mp4?token=abc&sig=def）被破坏。
+  //   encodeURI 仅转义 URL 中不安全的字符（如空格、中文），保留 & = ? 等合法 URL 字符。
+  // iframe 嵌入类 arg 为视频 ID（已用 MEDIA_ID_PATTERN 白名单校验），无需 encodeURI。
+  if (type === 'video') {
+    if (!MEDIA_URL_PATTERN.test(arg)) return '';
+    const safeUrl = encodeURI(arg.trim());
+    if (!safeUrl) return '';
+    return `<div class="media-embed media-video"><video controls preload="metadata" src="${safeUrl}"></video></div>`;
+  }
+  if (type === 'audio') {
+    if (!MEDIA_URL_PATTERN.test(arg)) return '';
+    const safeUrl = encodeURI(arg.trim());
+    if (!safeUrl) return '';
+    return `<div class="media-embed media-audio"><audio controls preload="metadata" src="${safeUrl}"></audio></div>`;
+  }
+
+  // iframe 嵌入类（bilibili/youtube/douyin）：arg 为视频 ID
+  if (!MEDIA_ID_PATTERN.test(arg)) return '';
+  const template = MEDIA_IFRAME_TEMPLATES[type];
+  if (!template) return '';
+  const embedUrl = template.replace('{id}', encodeURIComponent(arg));
+  // sandbox 限制：允许脚本 + 同源 + 弹窗 + 指针，禁用顶层导航
+  // allowfullscreen 兼容旧浏览器，全屏观看视频必备
+  return `<div class="media-embed media-iframe media-${type}"><iframe src="${embedUrl}" sandbox="allow-scripts allow-same-origin allow-presentation allow-popups" allowfullscreen frameborder="0" loading="lazy"></iframe></div>`;
+}
+
+// 解析 @[type](arg) 中的类型名：从 pos+2 开始，仅允许小写字母
+// 返回 { type, end } 或 null（end 为类型名后的索引位置）
+// 为什么独立函数：降低主规则函数认知复杂度（S3776），便于单元测试
+function parseMediaType(src: string, start: number): { type: string; end: number } | null {
+  let i = start;
+  let typeStr = '';
+  // 为什么用显式守卫而非 codePointAt(i)!：同 ref_anchor 规则，避免非空断言（BR-028-1）
+  while (i < src.length) {
+    const cp = src.codePointAt(i);
+    if (cp === undefined) break;
+    // 类型名仅允许小写字母
+    if (cp >= 0x61 && cp <= 0x7A) {
+      typeStr += src[i];
+      i++;
+    } else {
+      break;
+    }
+  }
+  if (typeStr.length === 0) return null;
+  if (!MEDIA_EMBED_TYPES.includes(typeStr as MediaType)) return null;
+  return { type: typeStr, end: i };
+}
+
+// inline 规则：在 ref_anchor 之后、link 之前解析 @[type](arg)
+// 为什么放在 link 之前：避免 link 规则把 @[video](url) 误解为文本链接
+md.inline.ruler.after('ref_anchor', 'media_embed', (state, silent) => {
+  const src = state.src;
+  const pos = state.pos;
+  // 必须以 '@[' 开头
+  if (src.codePointAt(pos) !== 0x40 /* @ */) return false;
+  if (src.codePointAt(pos + 1) !== 0x5B /* [ */) return false;
+
+  const parsed = parseMediaType(src, pos + 2);
+  if (!parsed) return false;
+
+  // 必须以 ']' 闭合
+  if (src.codePointAt(parsed.end) !== 0x5D /* ] */) return false;
+  // 必须紧跟 '('
+  if (src.codePointAt(parsed.end + 1) !== 0x28 /* ( */) return false;
+
+  // 解析参数直到 ')'
+  const closeParen = src.indexOf(')', parsed.end + 2);
+  if (closeParen < 0) return false;
+  const arg = src.slice(parsed.end + 2, closeParen);
+  if (arg.length === 0) return false;
+
+  if (silent) return true;
+  state.pos = closeParen + 1;
+  const token = state.push('media_embed', '', 0);
+  token.meta = { type: parsed.type, arg };
+  return true;
+});
+
+md.renderer.rules.media_embed = (tokens, idx) => {
+  const { type, arg } = tokens[idx].meta as { type: MediaType; arg: string };
+  return buildMediaHtml(type, arg);
 };
 
 // 将 markdown 文本渲染为 HTML

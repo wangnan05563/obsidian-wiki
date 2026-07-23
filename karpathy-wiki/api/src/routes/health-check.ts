@@ -90,7 +90,7 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
 
     const { send, isAborted, safeEnd } = createSSESender(reply, request);
 
-    const items = body.items as FixInput[];
+    const items = body.items;
     const totalIssues = items.length;
     // 前端传入的 issueKey 数组（与 items 一一对应），用于日志与按钮状态联动。
     // 为什么从前端传入：前端已生成稳定 key（如 "orphan:foo.md"），后端复用避免双源不一致。
@@ -103,6 +103,55 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
     let successCount = 0;
     let failCount = 0;
 
+    // 单问题修复流式推送：提取为局部函数降低 withCompileLock 回调认知复杂度
+    // 返回值表示该问题是否失败（用于 failCount 累计）；成功计数通过闭包修改 successCount
+    const streamIssueFix = async (
+      item: FixInput,
+      issueIndex: number,
+      issueKey: string,
+    ): Promise<boolean> => {
+      let issueFailed = false;
+      try {
+        for await (const ev of adapter.healthCheckFix(item)) {
+          if (isAborted()) break;
+          // 包装为 BatchFixProgressEvent 推送
+          const wrapped: BatchFixProgressEvent = {
+            ...ev,
+            issueIndex,
+            totalIssues,
+            issueKey,
+            issueDone: ev.step === 'done',
+          };
+          if (ev.step === 'done') {
+            if (ev.status === 'done') successCount++;
+            else issueFailed = true;
+            send('issue_done', wrapped);
+          } else if (ev.step === 'fixed') {
+            send('fixed', wrapped);
+          } else {
+            send('progress', wrapped);
+          }
+        }
+      } catch (err: unknown) {
+        issueFailed = true;
+        request.log.error(
+          { err, issueIndex, issueType: item.issueType },
+          'health-check batch fix item error',
+        );
+        const errEv: BatchFixProgressEvent = {
+          step: 'done',
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+          issueIndex,
+          totalIssues,
+          issueKey,
+          issueDone: true,
+        };
+        send('issue_error', errEv);
+      }
+      return issueFailed;
+    };
+
     try {
       await withCompileLock(async () => {
         for (let i = 0; i < items.length; i++) {
@@ -111,7 +160,6 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
 
           const item = items[i];
           const issueKey = issueKeys[i] ?? `${item.issueType}:${i}`;
-          let issueFailed = false;
 
           // issue_start：通知前端开始处理第 i 个问题
           send('issue_start', {
@@ -124,46 +172,8 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
             issueDone: false,
           } satisfies BatchFixProgressEvent);
 
-          try {
-            for await (const ev of adapter.healthCheckFix(item)) {
-              if (isAborted()) break;
-              // 包装为 BatchFixProgressEvent 推送
-              const wrapped: BatchFixProgressEvent = {
-                ...ev,
-                issueIndex: i,
-                totalIssues,
-                issueKey,
-                issueDone: ev.step === 'done',
-              };
-              if (ev.step === 'done') {
-                if (ev.status === 'done') successCount++;
-                else issueFailed = true;
-                send('issue_done', wrapped);
-              } else if (ev.step === 'fixed') {
-                send('fixed', wrapped);
-              } else {
-                send('progress', wrapped);
-              }
-            }
-          } catch (err: unknown) {
-            issueFailed = true;
-            request.log.error(
-              { err, issueIndex: i, issueType: item.issueType },
-              'health-check batch fix item error',
-            );
-            const errEv: BatchFixProgressEvent = {
-              step: 'done',
-              status: 'error',
-              message: err instanceof Error ? err.message : String(err),
-              issueIndex: i,
-              totalIssues,
-              issueKey,
-              issueDone: true,
-            };
-            send('issue_error', errEv);
-          }
-
-          if (issueFailed) failCount++;
+          const failed = await streamIssueFix(item, i, issueKey);
+          if (failed) failCount++;
         }
       });
 

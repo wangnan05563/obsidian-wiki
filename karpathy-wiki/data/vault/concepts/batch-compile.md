@@ -2,7 +2,7 @@
 title: Batch Compile
 type: concept
 created: 2025-01-14
-updated: 2025-01-14
+updated: 2025-04-17
 source: raw/wiki-batch-1784719112886-14-test-15.md
 tags: [compilation, pipeline, testing]
 ---
@@ -22,7 +22,7 @@ tags: [compilation, pipeline, testing]
 
 ## Batch Testing
 
-The batch compile process is validated using test documents such as [[test-document-15]], which exercise the pipeline with varying content lengths and structures to ensure robust parsing and extraction functionality.
+The batch compile process is validated using test document collections such as [[Batch Compile Test]] and individual test documents like [[test-document-15]], which exercise the pipeline with varying content lengths and structures to ensure robust parsing and extraction functionality.
 
 ## Related Techniques
 

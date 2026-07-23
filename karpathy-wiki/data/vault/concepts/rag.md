@@ -2,7 +2,7 @@
 title: RAG（检索增强生成）
 type: concept
 created: 2024-12-01
-updated: 2024-12-01
+updated: 2025-04-21
 source: raw/input-1783483802520.md
 tags: [rag, retrieval-augmented-generation, llm, information-retrieval]
 ---
@@ -25,9 +25,9 @@ RAG 系统通常包含以下四个步骤：
 | 组件 | 说明 |
 |------|------|
 | 向量数据库 | 存储文档嵌入，支持高效相似度检索 |
-| 嵌入模型 | 将文本转化为稠密向量（如 text-embedding-3-small） |
+| 嵌入模型 | 将文本转化为[[dense-model|稠密]]向量（如 text-embedding-3-small） |
 | 检索策略 | 包括 Top-K、MMR（最大边际相关性）等 |
-| 大语言模型 | 基于增强提示生成回答（如 GPT-4、Claude） |
+| 大语言模型 | 基于增强提示生成回答（如 GPT-4、Claude、[[mixture-of-experts|MoE]] 架构的 Mixtral 8x7B） |
 
 ## 优势
 
@@ -41,3 +41,5 @@ RAG 系统通常包含以下四个步骤：
 - [[embedding|嵌入]] — 将文本映射为向量的技术
 - [[llm|大语言模型]] — RAG 中的生成引擎
 - [[vector-database|向量数据库]] — RAG 的核心存储基础设施
+- [[dense-model|稠密模型]] — 嵌入模型所依赖的稠密参数架构
+- [[mixture-of-experts|混合专家模型（MoE）]] — 现代 LLM 广泛采用的稀疏激活架构

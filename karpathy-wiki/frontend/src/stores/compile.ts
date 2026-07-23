@@ -154,28 +154,57 @@ export const useCompileStore = defineStore('compile', () => {
     }
   }
 
-  // 批量模式事件分发：按 fileIndex 路由到对应分组
-  function handleBatchEvent(eventType: string, data: unknown) {
-    const d = data as ProgressData & {
-      data?: {
-        fileIndex?: number;
-        fileCount?: number;
-        fileName?: string;
-        rejected?: Array<{ name: string; reason: string }>;
-      };
+  // 批量模式事件载荷类型
+  type BatchEventData = ProgressData & {
+    data?: {
+      fileIndex?: number;
+      fileCount?: number;
+      fileName?: string;
+      rejected?: Array<{ name: string; reason: string }>;
     };
+  };
 
+  // 处理 batch_start 事件：初始化分组容器
+  function handleBatchStart(d: BatchEventData): void {
+    const count = d.data?.fileCount ?? 0;
+    batchRejected.value = d.data?.rejected ?? [];
+    batchGroups.value = Array.from({ length: count }, (_, i) => ({
+      fileIndex: i,
+      fileName: '',
+      status: 'pending' as const,
+      timeline: [],
+      pages: [],
+    }));
+  }
+
+  // 处理 page 事件：同时推送到分组 timeline 与 pages 列表
+  function handleBatchPage(group: BatchFileGroup, d: BatchEventData): void {
+    group.timeline.push({
+      step: d.step,
+      status: d.status,
+      message: d.message,
+      page: extractPage(d.data),
+      timestamp: Date.now(),
+    });
+    if (d.data?.path && d.data?.title) {
+      group.pages.push({ path: d.data.path, title: d.data.title });
+    }
+  }
+
+  // 处理 file_complete 事件：仅在 file_error 未触发时标记为完成
+  function handleFileComplete(group: BatchFileGroup): void {
+    if (group.status !== 'error') {
+      group.status = 'done';
+    }
+  }
+
+  // 批量模式事件分发：先处理整体事件，再按 fileIndex 路由到分组
+  function handleBatchEvent(eventType: string, data: unknown) {
+    const d = data as BatchEventData;
+
+    // 整体事件：无需 fileIndex 定位分组
     if (eventType === 'batch_start') {
-      // 初始化分组容器：fileCount 决定数组长度
-      const count = d.data?.fileCount ?? 0;
-      batchRejected.value = d.data?.rejected ?? [];
-      batchGroups.value = Array.from({ length: count }, (_, i) => ({
-        fileIndex: i,
-        fileName: '',
-        status: 'pending' as const,
-        timeline: [],
-        pages: [],
-      }));
+      handleBatchStart(d);
       return;
     }
 
@@ -194,7 +223,7 @@ export const useCompileStore = defineStore('compile', () => {
       return;
     }
 
-    // 后续事件均需 fileIndex 定位分组
+    // 分组事件：需 fileIndex 定位分组
     const idx = d.data?.fileIndex;
     if (idx === undefined) return;
     const group = batchGroups.value[idx];
@@ -220,16 +249,7 @@ export const useCompileStore = defineStore('compile', () => {
 
     if (eventType === 'page') {
       // page 事件同时推送到全局 timeline 与分组，便于在统一视图查看
-      group.timeline.push({
-        step: d.step,
-        status: d.status,
-        message: d.message,
-        page: extractPage(d.data),
-        timestamp: Date.now(),
-      });
-      if (d.data?.path && d.data?.title) {
-        group.pages.push({ path: d.data.path, title: d.data.title });
-      }
+      handleBatchPage(group, d);
       return;
     }
 
@@ -247,9 +267,7 @@ export const useCompileStore = defineStore('compile', () => {
 
     if (eventType === 'file_complete') {
       // file_complete 是成功路径的终结事件，仅在 file_error 未触发时后端推送
-      if (group.status !== 'error') {
-        group.status = 'done';
-      }
+      handleFileComplete(group);
     }
   }
 

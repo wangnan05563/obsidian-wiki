@@ -2,14 +2,14 @@
 title: LLM 实体抽取
 type: concept
 created: 2025-04-11
-updated: 2025-04-11
+updated: 2025-04-21
 source: raw/wiki-batch-1784719037733-9-test-10.md
 tags: [LLM, 实体抽取, NLP]
 ---
 
 # LLM 实体抽取
 
-**LLM 实体抽取**（LLM Entity Extraction）是指利用大语言模型从非结构化文本中自动识别并提取出命名实体（如人物、组织、概念等）的技术。
+**LLM 实体抽取**（LLM Entity Extraction）是指利用[[llm|大语言模型]]从非结构化文本中自动识别并提取出命名实体（如人物、组织、概念等）的技术。
 
 ## 应用场景
 

@@ -50,5 +50,6 @@ tags: [编码规范, JavaScript, ES6, 前端]
 
 ## 相关页面
 
-- [[恒生电子前端编码规范]]
-- [[Vue 开发规范]]
+- [[hundsun-frontend-coding-standards|恒生电子前端编码规范]]
+- [[vue-dev-standards|Vue 开发规范]]
+- [[frontend-request-standards|前端请求调用规范]]

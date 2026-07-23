@@ -26,3 +26,4 @@ tags: [metadata, yaml, specification]
 
 - [[SCHEMA]] — 知识库页面规范
 - [[batch-compile-testing]] — 批量编译测试
+- [[batch-compile-test]] — 批量编译测试，验证 frontmatter 规范完整性的自动化测试

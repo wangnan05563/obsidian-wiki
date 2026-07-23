@@ -62,5 +62,6 @@ tags: [编码规范, CSS, LESS, SASS, 前端]
 
 ## 相关页面
 
-- [[恒生电子前端编码规范]]
-- [[HTML/TEMPLATE 开发规范]]
+- [[hundsun-frontend-coding-standards|恒生电子前端编码规范]]
+- [[html-template-dev-standards|HTML/TEMPLATE 开发规范]]
+- [[frontend-request-standards|前端请求调用规范]]

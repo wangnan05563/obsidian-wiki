@@ -35,15 +35,15 @@ tags: [编码规范, 前端, HTML, CSS, JavaScript, Vue]
 
 ## 规范分类
 
-### 1. HTML/TEMPLATE 开发规范
+### 1. [[html-template-dev-standards|HTML/TEMPLATE 开发规范]]
 
 涵盖通用语法、HTML5 Doctype、语言属性、字符编码、CSS/JS 文件引入、标签精简、属性顺序、语义化、注释、多媒体回溯等。
 
-### 2. CSS/LESS/SASS 开发规范
+### 2. [[css-less-sass-dev-standards|CSS/LESS/SASS 开发规范]]
 
 涵盖命名规范、语法规则、代码风格、样式兼容性、选择器权重、声明简写、CSS 动画、声明顺序、字体规则、Hack 规范等。
 
-### 3. JS/ES6 开发规范
+### 3. [[js-es6-dev-standards|JS/ES6 开发规范]]
 
 涵盖命名规则、语法规范、代码风格、数组/对象操作、null 使用、文档注释等。
 
@@ -51,7 +51,7 @@ tags: [编码规范, 前端, HTML, CSS, JavaScript, Vue]
 
 涵盖 Vue 命名规范、文件夹命名规范、语法规范、组件/实例选项顺序、元素特性顺序、单文件组件顶级元素顺序等。
 
-### 5. 前端请求调用规范
+### 5. [[frontend-request-standards|前端请求调用规范]]
 
 涵盖前端与后端接口请求调用的规范约定。
 
@@ -59,8 +59,12 @@ tags: [编码规范, 前端, HTML, CSS, JavaScript, Vue]
 
 参见以下子页面：
 
-- [[HTML/TEMPLATE 开发规范]]
-- [[CSS/LESS/SASS 开发规范]]
-- [[JS/ES6 开发规范]]
-- [[Vue 开发规范]]
-- [[前端请求调用规范]]
+- [[html-template-dev-standards|HTML/TEMPLATE 开发规范]]
+- [[css-less-sass-dev-standards|CSS/LESS/SASS 开发规范]]
+- [[js-es6-dev-standards|JS/ES6 开发规范]]
+- [[vue-dev-standards|Vue 开发规范]]
+- [[frontend-request-standards|前端请求调用规范]]
+
+## 相关项目
+
+- [[hundsun-bill-trade-v5-frontend]] — 恒生电子 HUNDSUN 票据交易管理平台 V5.0 前端开发指导，基于 Vue.js + H-UI 技术栈的实际项目开发指南

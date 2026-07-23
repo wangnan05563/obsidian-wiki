@@ -1,4 +1,4 @@
-﻿# 依赖
+# 依赖
 node_modules/
 .pnpm-store/
 
@@ -83,3 +83,7 @@ Desktop.ini
 
 # Lock files (保留 package-lock.json / pnpm-lock.yaml 需提交以保证可复现安装)
 # npm lock files are kept
+
+# ---------- 清理技能自动生成规则 ----------
+# 调试截图（verify-help-*.png 调试用，不应入库）
+verify-help-*.png

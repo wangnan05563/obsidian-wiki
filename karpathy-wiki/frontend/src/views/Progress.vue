@@ -937,7 +937,6 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .batch-group-timeline {
   margin-top: 6px;
-  padding-left: 4px;
   display: flex;
   flex-direction: column;
   gap: 4px;

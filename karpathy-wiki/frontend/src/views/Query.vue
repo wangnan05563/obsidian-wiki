@@ -1115,4 +1115,44 @@ onBeforeUnmount(() => {
   60% { background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15)); }
   100% { background: transparent; }
 }
+
+/* 多媒体嵌入容器：video / audio / iframe 统一外边距 + 圆角 + 边框 */
+.markdown-body :deep(.media-embed) {
+  margin: 0.75em 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 245, 255, 0.2);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* 原生 video / audio：宽度自适应，避免超大尺寸撑破气泡 */
+.markdown-body :deep(.media-embed video),
+.markdown-body :deep(.media-embed audio) {
+  width: 100%;
+  max-width: 100%;
+  display: block;
+}
+
+/* audio 无视觉内容，仅保留控件高度，避免大块黑色背景 */
+.markdown-body :deep(.media-audio) {
+  background: transparent;
+  border-width: 1px;
+  padding: 6px 8px;
+}
+
+/* iframe 嵌入：16:9 响应式比例，适配 B站/YouTube/抖音 */
+.markdown-body :deep(.media-iframe) {
+  position: relative;
+  padding-bottom: 56.25%; /* 9/16，保持 16:9 宽高比 */
+  height: 0;
+}
+
+.markdown-body :deep(.media-iframe iframe) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
 </style>

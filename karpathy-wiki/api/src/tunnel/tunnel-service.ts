@@ -107,7 +107,9 @@ abstract class TunnelProvider {
 
   // 子类钩子：启动前准备（如 cpolar 配置 authtoken）
   // 为什么改异步：cpolar authtoken 配置用 execFileSync 会阻塞事件循环，改 async 后子类可用非阻塞调用
-  protected async beforeStart(): Promise<void> {}
+  protected async beforeStart(): Promise<void> {
+    // 基类默认空实现：子类（如 CpolarProvider）按需覆写为 authtoken 配置等前置步骤
+  }
 
   // 启动隧道子进程，等待成功标志出现（超时抛含诊断信息的异常）
   async start(): Promise<void> {
@@ -149,9 +151,9 @@ abstract class TunnelProvider {
         cleanup();
         this.stop();
         // 诊断信息：进程状态 + 最近输出，帮助定位网络/凭证/端口等问题
-        const processStatus = proc.exitCode !== null
-          ? `已退出（exit code=${proc.exitCode}）`
-          : '仍在运行（可能卡住等待输入或网络连接）';
+        const processStatus = proc.exitCode === null
+          ? '仍在运行（可能卡住等待输入或网络连接）'
+          : `已退出（exit code=${proc.exitCode}）`;
         const recentOutput = this.recentLines.length > 0
           ? this.recentLines.join('\n')
           : '（无输出）';
@@ -169,7 +171,7 @@ abstract class TunnelProvider {
             this.appendRecentLine(stripped);
           }
         }
-        const match = text.match(pattern);
+        const match = pattern.exec(text);
         if (match) {
           this.publicUrl = this.resolvePublicUrl(match[0]);
           cleanup();
@@ -184,13 +186,7 @@ abstract class TunnelProvider {
         cleanup();
         reject(new Error(`子进程异常退出，code=${code}`));
       };
-      const cleanup = (): void => {
-        clearTimeout(timer);
-        proc.stdout?.removeListener('data', handleData);
-        proc.stderr?.removeListener('data', handleData);
-        proc.removeListener('error', onError);
-        proc.removeListener('exit', onExit);
-      };
+      const cleanup = createProcCleanup(proc, timer, { onData: handleData, onError, onExit });
 
       proc.stdout?.on('data', handleData);
       proc.stderr?.on('data', handleData);
@@ -408,10 +404,6 @@ class TailscaleProvider extends TunnelProvider {
   private cachedStatus: 'running' | 'stopped' = 'stopped';
   private statusTimer: NodeJS.Timeout | null = null;
 
-  constructor(localPort: number, binaryPath: string) {
-    super(localPort, binaryPath);
-  }
-
   binaryName(): string {
     return 'tailscale.exe';
   }
@@ -453,7 +445,7 @@ class TailscaleProvider extends TunnelProvider {
       // where 找不到，继续尝试标准路径
     }
     if (!discovered) {
-      const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+      const programFiles = process.env.ProgramFiles || String.raw`C:\Program Files`;
       const standardPath = path.join(programFiles, 'Tailscale', 'tailscale.exe');
       if (fs.existsSync(standardPath)) {
         discovered = standardPath;
@@ -478,7 +470,10 @@ class TailscaleProvider extends TunnelProvider {
       throw new Error('请先打开并登录 Tailscale，然后重新启动隧道');
     }
     const selfInfo = statusData.Self as Record<string, unknown> | undefined;
-    const dnsName = String(selfInfo?.DNSName ?? '').trim().replace(/\.$/, '');
+    // 用 typeof 收窄替代 String() 显式转换：未知类型直接 String() 会被 S6551 标记，
+    // 显式类型守卫更安全且意图明确
+    const rawDnsName = typeof selfInfo?.DNSName === 'string' ? selfInfo.DNSName : '';
+    const dnsName = rawDnsName.trim().replace(/\.$/, '');
     if (!dnsName.toLowerCase().endsWith('.ts.net')) {
       throw new Error('Tailscale 尚未启用 MagicDNS，无法生成固定 ts.net 地址');
     }
@@ -514,16 +509,16 @@ class TailscaleProvider extends TunnelProvider {
         // 优先抛 TailscaleFunnelAuthError（已收集到授权链接）
         const authLine = this.recentLines.find((l) => authUrlPattern.test(l));
         if (authLine) {
-          const match = authLine.match(authUrlPattern);
+          const match = authUrlPattern.exec(authLine);
           reject(new TailscaleFunnelAuthError(
             '首次启用 Funnel 需要在浏览器完成授权，请点击下方链接完成授权后重新启动隧道',
             match?.[0],
           ));
           return;
         }
-        const processStatus = proc.exitCode !== null
-          ? `已退出（exit code=${proc.exitCode}）`
-          : '仍在运行';
+        const processStatus = proc.exitCode === null
+          ? '仍在运行'
+          : `已退出（exit code=${proc.exitCode}）`;
         const recentOutput = this.recentLines.length > 0
           ? this.recentLines.join('\n')
           : '（无输出）';
@@ -549,7 +544,7 @@ class TailscaleProvider extends TunnelProvider {
           return;
         }
         // 检测授权链接：立即抛异常让前端渲染向导
-        const authMatch = text.match(authUrlPattern);
+        const authMatch = authUrlPattern.exec(text);
         if (authMatch) {
           cleanup();
           this.stop();
@@ -573,13 +568,7 @@ class TailscaleProvider extends TunnelProvider {
         cleanup();
         reject(err);
       };
-      const cleanup = (): void => {
-        clearTimeout(timer);
-        proc.stdout?.removeListener('data', handleData);
-        proc.stderr?.removeListener('data', handleData);
-        proc.removeListener('error', onError);
-        proc.removeListener('exit', onExit);
-      };
+      const cleanup = createProcCleanup(proc, timer, { onData: handleData, onError, onExit });
 
       proc.stdout?.on('data', handleData);
       proc.stderr?.on('data', handleData);
@@ -719,6 +708,27 @@ function findFile(dir: string, name: string): string | null {
   return null;
 }
 
+// 共享的子进程清理闭包工厂：waitForSuccess 与 waitForTailscaleFunnel 的 cleanup 逻辑完全相同（S4144）
+// 为什么不提取为类方法：cleanup 需捕获各 Promise 内的局部变量（timer/handleData 等），
+// 闭包工厂是最小改动且保持类型安全的方式
+function createProcCleanup(
+  proc: ChildProcess,
+  timer: NodeJS.Timeout,
+  handlers: {
+    onData: (chunk: Buffer) => void;
+    onError: (err: Error) => void;
+    onExit: (code: number | null) => void;
+  },
+): () => void {
+  return () => {
+    clearTimeout(timer);
+    proc.stdout?.removeListener('data', handlers.onData);
+    proc.stderr?.removeListener('data', handlers.onData);
+    proc.removeListener('error', handlers.onError);
+    proc.removeListener('exit', handlers.onExit);
+  };
+}
+
 // TunnelService：管理 provider 生命周期，薄封装委托给 provider。
 // 由 index.ts 创建单例并注入到 tunnel 路由，符合项目依赖注入模式。
 export class TunnelService {
@@ -730,7 +740,7 @@ export class TunnelService {
   static resolvePort(tunnel: TunnelConfig, serverPort: number): number {
     const envPort = process.env.TUNNEL_PORT;
     if (envPort) {
-      const p = parseInt(envPort, 10);
+      const p = Number.parseInt(envPort, 10);
       if (p > 0 && p <= 65535) return p;
     }
     return tunnel.localPort > 0 ? tunnel.localPort : serverPort;
@@ -827,7 +837,7 @@ export class CloudflareLoginService {
     output?: string;
   }> {
     // 已有 login 进行中：直接返回当前状态
-    if (this.loginProcess && this.loginProcess.exitCode === null) {
+    if (this.loginProcess?.exitCode === null) {
       return {
         status: 'waiting',
         authUrl: this.loginAuthUrl,
@@ -853,8 +863,8 @@ export class CloudflareLoginService {
         if (trimmed) {
           this.loginOutput.push(trimmed);
           if (this.loginAuthUrl === null) {
-            const match = trimmed.match(urlPattern);
-            if (match && match[0].includes('cloudflare')) {
+            const match = urlPattern.exec(trimmed);
+            if (match?.[0].includes('cloudflare')) {
               this.loginAuthUrl = match[0];
             }
           }
@@ -972,12 +982,12 @@ export class CloudflareLoginService {
     });
 
     // 解析 tunnel_id（UUID 格式）
-    const idMatch = output.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    const idMatch = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(output);
     if (!idMatch) {
       throw new Error(`无法从输出解析 tunnel_id: ${output}`);
     }
     // 兼容新旧 cloudflared 输出格式，路径可能被引号包裹
-    const credMatch = output.match(/(?:credentials file|tunnel credentials written to)\s+"?(.+?\.json)"?/i);
+    const credMatch = /(?:credentials file|tunnel credentials written to)\s+"?(.+?\.json)"?/i.exec(output);
     if (!credMatch) {
       throw new Error(`无法从输出解析 credentials_file: ${output}`);
     }
@@ -1024,7 +1034,8 @@ export class CloudflareLoginService {
     }
     // 从 login 输出正则提取路径（cloudflared 可能输出 cert.pem 的绝对路径）
     const output = this.loginOutput.join('\n');
-    const m = output.match(/[A-Za-z]:[\\\/][^\s]*cert\.pem|\/[^\s]*cert\.pem/);
+    // 字符类内的 / 无需转义（S6535）；用 regex.exec 替代 str.match 语义更明确（S6594）
+    const m = /[A-Za-z]:[\\/][^\s]*cert\.pem|\/[^\s]*cert\.pem/.exec(output);
     if (m) {
       paths.push(m[0]);
     }

@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -56,6 +56,32 @@ async function runGit(vaultPath: string, args: string[]): Promise<string> {
 export function invalidateSchemaHistoryCache(): void {
   cache.clear();
 }
+
+// 解析 git diff 输出为 DiffLine 数组，独立为纯函数降低 diff 路由认知复杂度
+function parseDiffLines(diff: string): DiffLine[] {
+  const lines: DiffLine[] = [];
+  let oldLine = 0;
+  let newLine = 0;
+
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('@@')) {
+      const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/); // NOSONAR: 单次匹配取 @@ 行号，match 返回数组更适合此场景
+      if (match) {
+        oldLine = Number.parseInt(match[1], 10);
+        newLine = Number.parseInt(match[2], 10);
+      }
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
+      lines.push({ type: 'add', content: line.slice(1), newLine: newLine++ });
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      lines.push({ type: 'del', content: line.slice(1), oldLine: oldLine++ });
+    } else if (line.startsWith(' ')) {
+      lines.push({ type: 'context', content: line.slice(1), oldLine: oldLine++, newLine: newLine++ });
+    }
+  }
+
+  return lines;
+}
+
 export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) {
   app.get('/api/schema', async (_request, reply) => {
     try {
@@ -101,7 +127,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
     ]);
 
     let result: { commits: SchemaCommit[]; gitEnabled: boolean };
-    if (!log.trim()) {
+    if (log.trim() === '') {
       result = { commits: [], gitEnabled: false };
     } else {
       const commits: SchemaCommit[] = log
@@ -142,26 +168,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
       return reply.send({ lines: [], hasChanges: false });
     }
 
-    const lines: DiffLine[] = [];
-    let oldLine = 0;
-    let newLine = 0;
-
-    for (const line of diff.split('\n')) {
-      if (line.startsWith('@@')) {
-        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/); // NOSONAR: 单次匹配取 @@ 行号，match 返回数组更适合此场景
-        if (match) {
-          oldLine = Number.parseInt(match[1], 10);
-          newLine = Number.parseInt(match[2], 10);
-        }
-      } else if (line.startsWith('+') && !line.startsWith('+++')) {
-        lines.push({ type: 'add', content: line.slice(1), newLine: newLine++ });
-      } else if (line.startsWith('-') && !line.startsWith('---')) {
-        lines.push({ type: 'del', content: line.slice(1), oldLine: oldLine++ });
-      } else if (line.startsWith(' ')) {
-        lines.push({ type: 'context', content: line.slice(1), oldLine: oldLine++, newLine: newLine++ });
-      }
-    }
-
+    const lines = parseDiffLines(diff);
     return reply.send({ lines, hasChanges: lines.length > 0 });
   });
 }
