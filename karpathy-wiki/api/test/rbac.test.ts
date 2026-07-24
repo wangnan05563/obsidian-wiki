@@ -18,7 +18,7 @@ describe('RBAC 模块', () => {
   describe('getRolePermissions', () => {
     it('管理员应返回全部 13 个权限点', () => {
       const perms = getRolePermissions('admin');
-      expect(perms).toHaveLength(13);
+      expect(perms).toHaveLength(14);
       expect(perms).toContain('dashboard');
       expect(perms).toContain('ingest');
       expect(perms).toContain('progress');
@@ -50,7 +50,7 @@ describe('RBAC 模块', () => {
       const perms = getRolePermissions('admin');
       perms.push('ingest' as AuthPermission);
       const perms2 = getRolePermissions('admin');
-      expect(perms2).toHaveLength(13);
+      expect(perms2).toHaveLength(14);
     });
   });
 
@@ -149,7 +149,7 @@ describe('RBAC 模块', () => {
   describe('listPermissions', () => {
     it('应返回全部 13 个权限点', () => {
       const perms = listPermissions();
-      expect(perms).toHaveLength(13);
+      expect(perms).toHaveLength(14);
       expect(perms).toContain('dashboard');
       expect(perms).toContain('users');
     });
@@ -159,7 +159,7 @@ describe('RBAC 模块', () => {
     it('应返回三个角色的权限矩阵', () => {
       const matrix = getRolePermissionMatrix();
       expect(Object.keys(matrix)).toHaveLength(3);
-      expect(matrix.admin).toHaveLength(13);
+      expect(matrix.admin).toHaveLength(14);
       expect(matrix.user).toHaveLength(5);
       expect(matrix.guest).toHaveLength(5);
     });
@@ -168,7 +168,7 @@ describe('RBAC 模块', () => {
       const matrix = getRolePermissionMatrix();
       matrix.admin.push('ingest' as AuthPermission);
       const matrix2 = getRolePermissionMatrix();
-      expect(matrix2.admin).toHaveLength(13);
+      expect(matrix2.admin).toHaveLength(14);
     });
   });
 
