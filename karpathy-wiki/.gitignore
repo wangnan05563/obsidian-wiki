@@ -47,6 +47,8 @@ data/vault/index.md
 data/vault/.harness/
 # 历史会话运行时数据（后端持久化，含用户问答内容，敏感不提交）
 data/conversations/
+# 技能导入运行时数据（用户上传的 .skill/.md 解压后存储，含外部资源不提交）
+data/skills/
 
 # ---------- 运行时日志与 PID 文件 ----------
 logs/*.pid
@@ -62,6 +64,8 @@ scripts/verify_ui.py
 
 # ---------- 测试证据与截图 ----------
 docs/test-evidence/
+# 测试运行时截图与结果（可重建，不入库）
+test_screenshots/
 
 # ---------- 清理技能自动生成规则（防复发） ----------
 # 根目录运行时日志（sprint 阶段输出）
