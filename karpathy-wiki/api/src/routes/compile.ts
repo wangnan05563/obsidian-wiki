@@ -10,7 +10,7 @@ import { createSSESender } from '../utils/sse.js';
 // 为什么需要默认值：避免 config.json 缺失 batch 字段时路由崩溃
 // 同步要求：修改时需同步更新 config.ts 的 defaultConfig().batch 与 DEFAULT_BATCH_FALLBACK
 const DEFAULT_BATCH_CONFIG: BatchCompileConfig = {
-  allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
+  allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json', 'docx', 'xlsx', 'pptx', 'doc', 'xls'],
   maxBatchSize: 50,
   maxFileSizeMb: 10,
 };

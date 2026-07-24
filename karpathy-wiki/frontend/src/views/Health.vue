@@ -25,6 +25,9 @@ const {
 
 // report 与 loading 为组件本地状态：体检报告每次进入页面需刷新，无需跨视图保留
 const report = ref<HealthReport | null>(null);
+// 批量修复结果汇总：修复完成后持久展示，重新体检时自动清除
+// 为什么用组件本地 ref 而非 store：汇总仅 UI 展示用，无需跨视图持久化
+const batchSummary = ref<{ ok: number; fail: number; total: number } | null>(null);
 const loading = ref(false);
 
 // 三类问题的计数
@@ -42,6 +45,7 @@ const healthStatus = computed<'healthy' | 'warning'>(() =>
 async function runCheck() {
   loading.value = true;
   report.value = null;
+  batchSummary.value = null; // 重新体检时清除旧汇总
   try {
     const res = await fetch('/api/health-check', { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -247,6 +251,10 @@ async function batchFix(scope: FixScope) {
     await streamBatchFixEvents(res.body);
 
     ElMessage.success(`批量修复完成：${batchDoneKeys.value.size}/${batchTotal.value} 个问题已处理`);
+    // 记录修复汇总：在重新体检前保存，避免 report 刷新后丢失统计
+    const ok = batchDoneKeys.value.size;
+    const fail = batchTotal.value - ok;
+    batchSummary.value = { ok, fail, total: batchTotal.value };
     // 批量修复后重新体检刷新报告（后端缓存已在 healthCheckFix finally 中失效）
     await runCheck();
   } catch (err) {
@@ -254,6 +262,11 @@ async function batchFix(scope: FixScope) {
   } finally {
     healthStore.endBatchFix();
   }
+}
+
+// 清除修复日志：两次修复会话之间可能需要清理旧日志
+function clearLogs() {
+  healthStore.clearLogs();
 }
 
 onMounted(() => {
@@ -318,9 +331,37 @@ onMounted(() => {
         />
       </div>
 
-      <!-- 加载中 -->
+      <!-- 加载中：骨架屏模拟体检报告的布局结构 -->
       <div v-if="loading" class="health-loading">
-<p class="loading-text">// 扫描中…</p>
+        <p class="loading-text">// 扫描中…</p>
+        <el-skeleton :rows="1" animated class="health-skeleton-summary" />
+        <div class="health-skeleton-body">
+          <el-skeleton :rows="2" animated class="health-skeleton-section" />
+          <el-skeleton :rows="2" animated class="health-skeleton-section" />
+          <el-skeleton :rows="2" animated class="health-skeleton-section" />
+        </div>
+      </div>
+
+      <!-- 批量修复结果汇总：修复完成后持久展示，重新体检时清除 -->
+      <div v-if="batchSummary" class="batch-summary">
+        <div class="batch-summary-head">
+          <span class="batch-summary-icon">✓</span>
+          <span class="batch-summary-title">上次修复汇总</span>
+        </div>
+        <div class="batch-summary-body">
+          <div class="summary-stat">
+            <span class="stat-num ok">{{ batchSummary.ok }}</span>
+            <span class="stat-label">成功</span>
+          </div>
+          <div class="summary-stat">
+            <span class="stat-num fail">{{ batchSummary.fail }}</span>
+            <span class="stat-label">失败</span>
+          </div>
+          <div class="summary-stat">
+            <span class="stat-num total">{{ batchSummary.total }}</span>
+            <span class="stat-label">总计</span>
+          </div>
+        </div>
       </div>
 
       <!-- 体检详情 -->
@@ -438,6 +479,7 @@ onMounted(() => {
           <div class="section-head">
             <span class="section-icon icon-fix">⚡</span>
             <span class="section-title">修复进度</span>
+            <el-button size="small" text class="clear-logs-btn" @click="clearLogs">清除日志</el-button>
           </div>
       <div class="fix-log-list">
             <div
@@ -779,7 +821,7 @@ onMounted(() => {
 .fix-log-section {
   padding: 18px 22px;
   background: var(--bg-scene);
-  border: 1px solid rgba(193, 255, 62, 0.25);
+  border: 1px solid var(--accent-lime-a25, rgba(193, 255, 62, 0.25));
   border-radius: var(--radius-card);
 }
 
@@ -794,8 +836,8 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 7px 14px;
-  background: rgba(193, 255, 62, 0.08);
-  border: 1px solid rgba(193, 255, 62, 0.2);
+  background: var(--accent-lime-a08, rgba(193, 255, 62, 0.08));
+  border: 1px solid var(--accent-lime-a20, rgba(193, 255, 62, 0.2));
   border-radius: 8px;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -836,3 +878,94 @@ onMounted(() => {
   flex-shrink: 0;
 }
 </style>
+
+/* 骨架屏：体检加载中 */
+.health-skeleton-summary {
+  width: 60%;
+  margin: 0 auto 20px;
+}
+
+.health-skeleton-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.health-skeleton-section {
+  padding: 14px 18px;
+  border-radius: var(--radius-card);
+}
+/* 批量修复结果汇总卡片 */
+.batch-summary {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, var(--accent-cyan-a10), var(--accent-purple-a08));
+  border: 1px solid var(--accent-cyan-a30);
+  border-radius: var(--radius-card);
+}
+
+.batch-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.batch-summary-icon {
+  color: var(--neon-cyan);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.batch-summary-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--neon-cyan);
+  letter-spacing: 0.05em;
+}
+
+.batch-summary-body {
+  display: flex;
+  gap: 20px;
+}
+
+.summary-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.stat-num {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.stat-num.ok {
+  color: var(--neon-cyan);
+}
+
+.stat-num.fail {
+  color: var(--neon-magenta);
+}
+
+.stat-num.total {
+  color: var(--text-bright);
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-soft);
+}
+/* 清除日志按钮：极小文本按钮，避免喧宾夺主 */
+.clear-logs-btn {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim) !important;
+}
+.clear-logs-btn:hover {
+  color: var(--neon-magenta) !important;
+}

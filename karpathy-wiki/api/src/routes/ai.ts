@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey } from '../config.js';
+import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey, getProviderKeyStatus } from '../config.js';
 import type { EngineAdapter, LlmPreset } from '../types.js';
 
 // 模块加载时一次性读取 LLM 预设列表，避免每次请求都读盘。
@@ -66,6 +66,8 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
 
   // GET /api/ai/config：返回当前 AI 配置，API Key 脱敏。
   // 脱敏策略：返回 ****xxxx 格式，前端回传此值视为未修改。
+  // providerKeyStatus：按 provider 索引的 key 配置状态表，前端切换预设时展示各 provider 是否已配置 key。
+  //   为什么需要：用户切换预设时需感知目标 provider 是否已配置过 key，避免重复输入。
   app.get('/api/ai/config', async (_request, reply) => {
     const config = await loadConfig();
     const apiKey = getEffectiveApiKey(config);
@@ -78,6 +80,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       apiKeyRef: config.llm.apiKeyRef,
       apiKeyMasked: maskedKey,
       apiKeySet: Boolean(apiKey),
+      providerKeyStatus: getProviderKeyStatus(config),
     });
   });
 
@@ -91,12 +94,17 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   //   - 以 **** 开头的值视为未修改（脱敏回传），跳过更新
   //   - 空字符串表示清除 Key
   //   - 其他值视为新 Key，写入 config.json
+  // 多 key 持久化（预设切换场景）：
+  //   - 请求体可携带 apiKeyRef（新 provider 对应的环境变量名）
+  //   - saveAiConfig 内部检测 provider 变化时自动迁移 apiKey 到 apiKeys[旧provider] 并恢复 apiKeys[新provider]
+  //   - 响应附带 providerKeyStatus 让前端即时展示各 provider 配置状态
   app.put('/api/ai/config', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       provider?: string;
       baseUrl?: string;
       model?: string;
       apiKey?: string;
+      apiKeyRef?: string;
     };
 
     if (!body) {
@@ -118,11 +126,13 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       baseUrl?: string;
       model?: string;
       apiKey?: string;
+      apiKeyRef?: string;
     } = {};
     if (body.provider !== undefined) updates.provider = body.provider;
     if (body.baseUrl !== undefined) updates.baseUrl = body.baseUrl;
     if (body.model !== undefined) updates.model = body.model;
     if (apiKey !== undefined) updates.apiKey = apiKey;
+    if (body.apiKeyRef !== undefined) updates.apiKeyRef = body.apiKeyRef;
 
     try {
       const merged = await saveAiConfig(updates);
@@ -146,6 +156,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
           apiKeyRef: merged.llm.apiKeyRef,
           apiKeyMasked: maskApiKey(effectiveKey),
           apiKeySet: Boolean(effectiveKey),
+          providerKeyStatus: getProviderKeyStatus(merged),
         },
       });
     } catch (err) {
@@ -179,6 +190,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
           apiKeyRef: merged.llm.apiKeyRef,
           apiKeyMasked: maskApiKey(effectiveKey),
           apiKeySet: Boolean(effectiveKey),
+          providerKeyStatus: getProviderKeyStatus(merged),
         },
       });
     } catch (err) {

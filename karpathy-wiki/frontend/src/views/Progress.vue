@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { Loading, Check, Close } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
 import { consumeSSE } from '../utils/sse';
+import BatchProgressBar from '../components/BatchProgressBar.vue';
 import type { IngestPayload, TimelineItem, RunSummary } from '../types';
 
 // 使用函数类型写法替代类型字面量（S6598）
@@ -31,15 +32,7 @@ const robotMood = computed<string>(() => {
   return 'thinking';
 });
 
-const showRunsList = computed(() => !store.isCompiling && !store.isDone && !store.errorMessage);
-
-// 批量编译统计：成功/失败文件数
-const batchSuccessCount = computed(() =>
-  store.batchGroups.filter((g) => g.status === 'done').length,
-);
-const batchErrorCount = computed(() =>
-  store.batchGroups.filter((g) => g.status === 'error').length,
-);
+const showRunsList = computed(() => !store.isCompiling && !store.isDone && !store.errorMessage && !store.isCancelled);
 
 async function startCompile(payload: IngestPayload) {
   const isFormData = payload instanceof FormData;
@@ -112,13 +105,28 @@ async function consumeCompileSSE(response: Response) {
   await consumeSSE(response, handleSSE);
 }
 
+// 用户主动取消编译：触发 abortController 中止 SSE 流，并通过 store.cancelCompile 标记取消态
+// 为什么不在 BatchProgressBar 内部直接 abort：abortController 是 Progress.vue 的局部变量，
+//   子组件无法访问；通过 emit 事件委托父组件处理是 Vue 单向数据流的惯用模式
+function handleBatchCancel() {
+  abortController?.abort();
+  store.cancelCompile();
+  ElMessage.info('已取消批量编译');
+}
+
 onMounted(() => {
   // 批量模式优先检测 pendingBatchPayload，否则检测单文件 pendingPayload
-  // 加 !store.isCompiling 守卫：避免在编译进行中重复触发 startCompile
-  // （onBeforeUnmount 已调用 store.abortCompile 复位 isCompiling，切回时此守卫允许恢复编译）
-  if (store.isBatchMode && store.pendingBatchPayload && !store.isDone && !store.isCompiling) {
+  // 守卫逻辑（注意是 isCompiling 而非 !isCompiling）：
+  //   - 首次从 Ingest 切入：prepareBatchCompile/prepareCompile 已设置 isCompiling=true 表示"应该开始编译"，
+  //     此时 isCompiling=true → 触发 startCompile 发起 SSE 请求
+  //   - 编译进行中切走再切回：onBeforeUnmount 已调用 abortCompile 复位 isCompiling=false，
+  //     此时 isCompiling=false → 跳过 startCompile，避免重复触发导致 SSE 流重置（批量编译会从头开始重复编译）
+  //   - 编译完成/出错/取消后切回：isDone/errorMessage/isCancelled 任一为真 → 跳过
+  // 之前用 !isCompiling 是逻辑反向 bug：首次进入时 isCompiling=true 导致 !isCompiling=false，
+  //   startCompile 永远不会被调用，页面卡在"正在编译… 0/0 0%"
+  if (store.isBatchMode && store.pendingBatchPayload && !store.isDone && store.isCompiling && !store.isCancelled) {
     startCompile(store.pendingBatchPayload);
-  } else if (store.pendingPayload && !store.isDone && !store.isCompiling) {
+  } else if (store.pendingPayload && !store.isDone && store.isCompiling && !store.isCancelled) {
     startCompile(store.pendingPayload);
   } else {
     store.loadRuns();
@@ -201,6 +209,9 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
       <!-- 批量编译模式：按文件分组渲染 -->
       <div v-if="store.isBatchMode" class="batch-view">
+        <!-- 实时进度条组件：显示已完成/总数/百分比，支持取消与状态持久化 -->
+        <BatchProgressBar @cancel="handleBatchCancel" />
+
         <!-- 拒绝列表：扫描文件夹时不符白名单的文件 -->
         <div v-if="store.batchRejected.length > 0" class="batch-rejected">
           <div class="rejected-title">已跳过 {{ store.batchRejected.length }} 个不符白名单的文件：</div>
@@ -252,12 +263,6 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
               <code v-for="p in group.pages" :key="p.path" class="batch-page-code">{{ p.title }}</code>
             </div>
           </div>
-        </div>
-
-        <!-- 等待开始 -->
-        <div v-else class="empty-progress">
-          <span class="empty-dots">● ● ●</span>
-          <p>等待批量编译开始…</p>
         </div>
       </div>
 
@@ -318,15 +323,17 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           </el-button>
         </div>
       </div>
-      <!-- 批量编译完成区块：显示总文件数与失败计数 -->
+      <!-- 批量编译完成区块：进度条组件已显示统计，这里仅保留操作按钮 -->
       <div v-else-if="store.isBatchMode && store.isDone" class="done-section">
-        <div class="result-card">
-          <div class="result-title">批量编译结果</div>
-          <div v-if="store.doneMessage" class="done-message">{{ store.doneMessage }}</div>
-          <div class="result-meta">
-            成功：<strong>{{ batchSuccessCount }}</strong> · 失败：<strong>{{ batchErrorCount }}</strong>
-          </div>
+        <div v-if="store.doneMessage" class="done-message">{{ store.doneMessage }}</div>
+        <div class="restart-bar">
+          <el-button type="primary" size="large" @click="handleRestart">
+            再投一批
+          </el-button>
         </div>
+      </div>
+      <!-- 批量编译取消态：提供"再投一批"按钮让用户重新开始 -->
+      <div v-else-if="store.isBatchMode && store.isCancelled" class="done-section">
         <div class="restart-bar">
           <el-button type="primary" size="large" @click="handleRestart">
             再投一批
@@ -490,21 +497,21 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 }
 
 .tl-status.done {
-  background: rgba(0, 245, 255, 0.15);
+  background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15));
   color: var(--neon-cyan);
-  border: 1px solid rgba(0, 245, 255, 0.4);
+  border: 1px solid var(--accent-cyan-a40, rgba(0, 245, 255, 0.4));
 }
 
 .tl-status.error {
-  background: rgba(255, 0, 110, 0.15);
+  background: var(--accent-pink-a15, rgba(255, 0, 110, 0.15));
   color: var(--neon-magenta);
-  border: 1px solid rgba(255, 0, 110, 0.4);
+  border: 1px solid var(--accent-pink-a40, rgba(255, 0, 110, 0.4));
 }
 
 .tl-status.running {
-  background: rgba(255, 62, 201, 0.15);
+  background: var(--accent-pink-a15, rgba(255, 62, 201, 0.15));
   color: var(--neon-pink);
-  border: 1px solid rgba(255, 62, 201, 0.4);
+  border: 1px solid var(--accent-pink-a40, rgba(255, 62, 201, 0.4));
 }
 
 .tl-message {
@@ -529,8 +536,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .tl-page code {
   padding: 3px 10px;
-  background: rgba(176, 38, 255, 0.15);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  background: var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
+  border: 1px solid var(--accent-purple-a30, rgba(176, 38, 255, 0.3));
   border-radius: 6px;
   font-size: 12px;
   font-family: var(--font-mono);
@@ -559,8 +566,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .result-card {
   padding: 20px 24px;
-  background: rgba(0, 245, 255, 0.05);
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  background: var(--accent-cyan-a05, rgba(0, 245, 255, 0.05));
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-radius: var(--radius-card);
   position: relative;
   overflow: hidden;
@@ -596,8 +603,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .result-list code {
   padding: 4px 12px;
-  background: rgba(176, 38, 255, 0.15);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  background: var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
+  border: 1px solid var(--accent-purple-a30, rgba(176, 38, 255, 0.3));
   border-radius: 6px;
   font-size: 12px;
   font-family: var(--font-mono);
@@ -626,8 +633,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   gap: 12px;
   margin-top: 20px;
   padding: 14px 22px;
-  background: rgba(0, 245, 255, 0.08);
-  border: 1px solid rgba(0, 245, 255, 0.3);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
   border-radius: var(--radius-card);
   font-size: 14px;
   color: var(--neon-cyan);
@@ -642,7 +649,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 .runs-section {
   margin-top: 32px;
   padding-top: 24px;
-  border-top: 1px solid rgba(176, 38, 255, 0.15);
+  border-top: 1px solid var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
   position: relative;
   z-index: 1;
 }
@@ -687,15 +694,15 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   justify-content: space-between;
   align-items: center;
   padding: 12px 18px;
-  background: rgba(176, 38, 255, 0.05);
-  border: 1px solid rgba(176, 38, 255, 0.15);
+  background: var(--accent-purple-a05, rgba(176, 38, 255, 0.05));
+  border: 1px solid var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
   border-radius: var(--radius-card);
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .run-item:hover {
-  background: rgba(176, 38, 255, 0.12);
+  background: var(--accent-purple-a12, rgba(176, 38, 255, 0.12));
   border-color: var(--neon-purple);
 }
 
@@ -745,7 +752,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   align-items: baseline;
   gap: 8px;
   padding: 6px 0;
-  border-bottom: 1px solid rgba(176, 38, 255, 0.08);
+  border-bottom: 1px solid var(--accent-purple-a08, rgba(176, 38, 255, 0.08));
 }
 
 .log-line.error {
@@ -769,7 +776,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .log-tool {
   padding: 1px 8px;
-  background: rgba(176, 38, 255, 0.15);
+  background: var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
   border-radius: 4px;
   flex-shrink: 0;
   color: var(--neon-purple);
@@ -818,8 +825,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 .batch-rejected {
   margin-bottom: 16px;
   padding: 12px 16px;
-  background: rgba(255, 0, 110, 0.06);
-  border: 1px solid rgba(255, 0, 110, 0.25);
+  background: var(--accent-pink-a06, rgba(255, 0, 110, 0.06));
+  border: 1px solid var(--accent-pink-a25, rgba(255, 0, 110, 0.25));
   border-radius: var(--radius-card);
 }
 
@@ -848,7 +855,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .rejected-item code {
   padding: 2px 8px;
-  background: rgba(176, 38, 255, 0.12);
+  background: var(--accent-purple-a12, rgba(176, 38, 255, 0.12));
   border-radius: 4px;
   font-size: 11px;
   font-family: var(--font-mono);
@@ -868,8 +875,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .batch-group {
   padding: 14px 18px;
-  background: rgba(176, 38, 255, 0.04);
-  border: 1px solid rgba(176, 38, 255, 0.15);
+  background: var(--accent-purple-a04, rgba(176, 38, 255, 0.04));
+  border: 1px solid var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
   border-radius: var(--radius-card);
   transition: border-color 0.3s ease;
 }
@@ -879,12 +886,12 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 }
 
 .batch-group.done {
-  border-color: rgba(0, 245, 255, 0.35);
+  border-color: var(--accent-cyan-a35, rgba(0, 245, 255, 0.35));
 }
 
 .batch-group.error {
-  border-color: rgba(255, 0, 110, 0.4);
-  background: rgba(255, 0, 110, 0.05);
+  border-color: var(--accent-pink-a40, rgba(255, 0, 110, 0.4));
+  background: var(--accent-pink-a05, rgba(255, 0, 110, 0.05));
 }
 
 .batch-group-head {
@@ -921,17 +928,17 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 }
 
 .batch-group-status.running {
-  background: rgba(255, 62, 201, 0.15);
+  background: var(--accent-pink-a15, rgba(255, 62, 201, 0.15));
   color: var(--neon-pink);
 }
 
 .batch-group-status.done {
-  background: rgba(0, 245, 255, 0.15);
+  background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15));
   color: var(--neon-cyan);
 }
 
 .batch-group-status.error {
-  background: rgba(255, 0, 110, 0.15);
+  background: var(--accent-pink-a15, rgba(255, 0, 110, 0.15));
   color: var(--neon-magenta);
 }
 
@@ -940,7 +947,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-left: 2px solid rgba(176, 38, 255, 0.15);
+  border-left: 2px solid var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
   padding-left: 10px;
 }
 
@@ -965,7 +972,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .batch-tl-page {
   padding: 1px 6px;
-  background: rgba(0, 245, 255, 0.1);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
   border-radius: 3px;
   font-size: 11px;
   font-family: var(--font-mono);
@@ -975,7 +982,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 .batch-group-error {
   margin-top: 8px;
   padding: 8px 12px;
-  background: rgba(255, 0, 110, 0.08);
+  background: var(--accent-pink-a08, rgba(255, 0, 110, 0.08));
   border-radius: 6px;
   color: var(--neon-magenta);
   font-size: 12px;
@@ -997,8 +1004,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
 .batch-page-code {
   padding: 2px 8px;
-  background: rgba(0, 245, 255, 0.08);
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-radius: 4px;
   font-size: 11px;
   font-family: var(--font-mono);

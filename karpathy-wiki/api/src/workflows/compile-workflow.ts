@@ -7,6 +7,7 @@ import type { VaultService } from '../vault/vault-service.js';
 import type { CompileInput, ProgressEvent } from '../types.js';
 import { RunLogger } from '../run-logger.js';
 import { CompileCache } from '../compile-cache.js';
+import { convertOfficeFile } from '../utils/office-convert.js';
 
 // §12.3-6：compile 中途失败时，给已生成的页面标记 status: draft。
 // 决策不回滚——LLM 编译成本高（token 已消耗），半成品保留供用户决策。
@@ -136,8 +137,18 @@ export async function* compileWorkflow(
   let rawContent: string;
   let rawFilename: string;
   if (input.type === 'file') {
-    rawContent = await fs.readFile(input.content, 'utf8');
-    rawFilename = path.basename(input.content);
+    const buf = await fs.readFile(input.content);
+    const baseName = path.basename(input.content);
+    const ext = path.extname(baseName).toLowerCase().slice(1);
+    // 如果是 Office 文件，先通过 ZIP+XML 解析提取文本为 Markdown
+    if (['docx', 'xlsx', 'pptx', 'doc', 'xls'].includes(ext)) {
+      const convResult = await convertOfficeFile(baseName, buf);
+      rawContent = convResult.markdown;
+      rawFilename = baseName.replace(/\.[^.]+$/, '') + '.md';
+    } else {
+      rawContent = buf.toString('utf8');
+      rawFilename = baseName;
+    }
   } else {
     rawContent = input.content;
     rawFilename = input.rawPath ? path.basename(input.rawPath) : `input-${Date.now()}.md`;

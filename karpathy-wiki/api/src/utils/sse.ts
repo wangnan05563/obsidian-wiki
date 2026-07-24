@@ -24,11 +24,13 @@ export function sendSSE(reply: FastifyReply, event: string, data: unknown): void
 // SSE 安全写入工厂：返回 send 函数与 aborted 检查器
 // 为什么需要：客户端 abort 后 reply.raw 被销毁，继续 write/end 会抛 ERR_STREAM_DESTROYED，
 // 被 Fastify 作为未捕获异常处理为 HTTP 500，污染日志并误导排障。
-// 监听 request.raw 'close' 事件设置 aborted 标志，调用方可据此提前退出循环。
+// 为什么监听 reply.raw 而非 request.raw：request.raw（请求可读流）在有 body 的请求
+// （如 multipart upload）中，body 读取完毕即触发 close，并不代表客户端断开；
+// reply.raw（响应可写流）的 close 才是客户端断开连接的真实信号。
 export function createSSESender(reply: FastifyReply, request: FastifyRequest) {
   let aborted = false;
   // 客户端断开（前端 abort / 网络中断 / 切换菜单触发 onBeforeUnmount）时触发
-  request.raw.on('close', () => {
+  reply.raw.on('close', () => {
     aborted = true;
   });
   const send = (event: string, data: unknown): boolean => {

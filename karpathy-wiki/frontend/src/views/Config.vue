@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, reactive, onMounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
-import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig } from '../types';
+import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 import { STORAGE_KEYS, presetStorageKey } from '../constants/storageKeys';
 
-const activeTab = ref<'schema' | 'config' | 'ai' | 'theme' | 'tools'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai' | 'theme' | 'tools' | 'qq'>('schema');
 const config = ref<ConfigData | null>(null);
 const schemaContent = ref<string>('');
 const schemaBuffer = ref<string>('');
@@ -276,6 +276,8 @@ async function loadPresets() {
 // 为什么切换时同步后端：后端 config.json 只有一份全局配置，
 //   切换预设后需同步到后端，确保 Query 页面等使用当前预设的配置。
 //   不传 apiKey：后端收到 undefined 表示保留现有 key，避免切换预设清空 key。
+//   携带 apiKeyRef：预设切换时同步环境变量名，后端据此更新 apiKeyRef 字段。
+//   后端检测 provider 变化时自动迁移当前 apiKey 到 apiKeys[旧provider]，并从 apiKeys[新provider] 恢复 key。
 async function applyPreset(preset: LlmPreset) {
   selectedPresetKey.value = preset.key;
   const cache = loadPresetCache(preset.key);
@@ -284,7 +286,7 @@ async function applyPreset(preset: LlmPreset) {
   aiForm.value.baseUrl = cache?.baseUrl || preset.baseUrl;
   aiForm.value.model = cache?.model || preset.model;
 
-  // 后台同步到后端 config.json（不传 apiKey，保留现有 key）
+  // 后台同步到后端 config.json（不传 apiKey，保留现有 key；携带 apiKeyRef 同步环境变量名）
   try {
     const res = await fetch('/api/ai/config', {
       method: 'PUT',
@@ -293,14 +295,15 @@ async function applyPreset(preset: LlmPreset) {
         provider: preset.provider,
         baseUrl: aiForm.value.baseUrl,
         model: aiForm.value.model,
-        // 不传 apiKey：后端收到 undefined 表示不修改现有 key
+        apiKeyRef: preset.apiKeyRef,
+        // 不传 apiKey：后端收到 undefined + provider 变更时自动从 apiKeys 表恢复对应 key
       }),
     });
     if (res.ok) {
       const data = await res.json();
       if (data.ok) {
         aiConfig.value = data.config;
-        // 从后端返回的脱敏值回填表单 apiKey
+        // 从后端返回的脱敏值回填表单 apiKey（可能是旧 provider 保存的 key，或新 provider 恢复的 key）
         aiForm.value.apiKey = data.config.apiKeyMasked || '';
       }
     }
@@ -833,6 +836,14 @@ async function loadToolsConfig(): Promise<void> {
 
 // 保存工具配置
 async function saveToolsConfig(): Promise<void> {
+  // JSON 模式下保存前先应用 JSON 到表单，避免用户编辑的 JSON 未 parse 就保存
+  // 为什么需要：用户可能编辑 JSON 后直接点保存，未点"应用 JSON"按钮，此时 JSON 文本与表单状态不一致
+  if (mcpEditMode.value === 'json') {
+    if (!applyMcpJsonToForm()) {
+      ElMessage.warning(mcpJsonError.value || 'JSON 解析失败，请修正后再保存');
+      return;
+    }
+  }
   // 校验 MCP 服务器条目名称唯一且非空
   const mcpNames = toolsForm.value.mcpServers.map(s => s.name.trim());
   if (mcpNames.some(n => !n)) {
@@ -923,6 +934,251 @@ async function testCliTool(idx: number): Promise<void> {
   }
 }
 
+// ===== MCP JSON 编辑模式 =====
+// 需求 2：双模式 UI——保留表单模式 + 新增 JSON 编辑模式（Claude Desktop 格式兼容）。
+// 为什么需要：JSON 模式便于批量导入/导出 MCP 配置，支持复杂场景（多 server、env 注入），
+//   且与 Claude Desktop 配置格式兼容，用户可直接复用现有配置文件。
+// JSON 格式（Claude Desktop 兼容）：
+//   { "mcpServers": { "name": { "command": "npx", "args": ["-y", "xxx"], "env": { "KEY": "val" } } } }
+// 表单格式（项目内部）：McpServerEntry[]（含 transport/enabled/timeoutMs 等扩展字段）
+// 转换策略：JSON 模式仅编辑 stdio 类型 MCP（Claude Desktop 格式不支持 sse/http），
+//   表单模式保留全部字段编辑能力；切换模式时双向同步 stdio server 配置。
+
+// MCP 配置编辑模式：'form' 表单模式 | 'json' JSON 编辑模式
+const mcpEditMode = ref<'form' | 'json'>('form');
+// JSON 编辑器内容（字符串，保存时 parse 为对象）
+const mcpJsonText = ref('');
+// JSON 解析错误提示（空串表示无错误）
+const mcpJsonError = ref('');
+
+// 将表单中的 MCP 服务器列表序列化为 Claude Desktop 格式 JSON 字符串
+// 为什么仅序列化 stdio：Claude Desktop 格式不支持 sse/http，非 stdio 配置在 JSON 模式下不可见
+// 为什么过滤 enabled=false：Claude Desktop 格式无 enabled 字段，禁用的 server 不写入 JSON
+function serializeMcpToJson(servers: McpServerEntry[]): string {
+  const mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {};
+  for (const s of servers) {
+    // 仅序列化 stdio 类型且 enabled 的 server，保持 JSON 与 Claude Desktop 格式一致
+    if (s.transport === 'stdio' && s.enabled && s.command?.trim()) {
+      mcpServers[s.name] = {
+        command: s.command,
+        ...(s.args && s.args.length > 0 ? { args: s.args } : {}),
+        ...(s.env && Object.keys(s.env).length > 0 ? { env: s.env } : {}),
+      };
+    }
+  }
+  return JSON.stringify({ mcpServers }, null, 2);
+}
+
+// 切换到 JSON 模式时从表单状态生成 JSON 文本
+function switchToMcpJsonMode(): void {
+  mcpJsonText.value = serializeMcpToJson(toolsForm.value.mcpServers);
+  mcpJsonError.value = '';
+  mcpEditMode.value = 'json';
+}
+
+// 切换回表单模式时尝试 parse JSON 并合并到表单
+// 为什么用 try/catch 包裹 JSON.parse：用户可能正在编辑 JSON（语法不完整），parse 失败时给出友好提示而非阻断
+function switchToMcpFormMode(): void {
+  applyMcpJsonToForm();
+  mcpEditMode.value = 'form';
+}
+
+// 解析 JSON 文本并合并到表单的 mcpServers 数组
+// 合并策略：
+//   1. JSON 中的 server 按 name 合并到表单（覆盖同名 stdio server 的 command/args/env）
+//   2. 表单中已有的 sse/http server 保持不变（JSON 模式不编辑这些类型）
+//   3. JSON 中新增的 server 追加到表单末尾，transport 默认 stdio，enabled 默认 true
+function applyMcpJsonToForm(): boolean {
+  mcpJsonError.value = '';
+  const text = mcpJsonText.value.trim();
+  if (!text) {
+    // 空文本视为清空所有 stdio server
+    toolsForm.value.mcpServers = toolsForm.value.mcpServers.filter(s => s.transport !== 'stdio');
+    return true;
+  }
+  let parsed: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }> };
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    mcpJsonError.value = `JSON 解析失败：${(err as Error).message}`;
+    return false;
+  }
+  if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
+    mcpJsonError.value = 'JSON 格式错误：缺少 mcpServers 字段或不是对象';
+    return false;
+  }
+  // 保留非 stdio server，清空 stdio server 后从 JSON 重建
+  // 为什么重建而非合并：JSON 是权威源，表单中 stdio server 的增删应以 JSON 为准
+  const nonStdioServers = toolsForm.value.mcpServers.filter(s => s.transport !== 'stdio');
+  const newStdioServers: McpServerEntry[] = [];
+  for (const [name, cfg] of Object.entries(parsed.mcpServers)) {
+    if (!cfg?.command) {
+      mcpJsonError.value = `服务器 "${name}" 缺少 command 字段`;
+      return false;
+    }
+    newStdioServers.push({
+      name,
+      transport: 'stdio',
+      command: cfg.command,
+      args: Array.isArray(cfg.args) ? cfg.args : [],
+      env: cfg.env && typeof cfg.env === 'object' ? cfg.env : {},
+      enabled: true,
+    });
+  }
+  toolsForm.value.mcpServers = [...nonStdioServers, ...newStdioServers];
+  return true;
+}
+
+// JSON 模式下点击"应用 JSON"按钮：解析 JSON 并校验，成功后提示用户可切换回表单模式或直接保存
+function applyMcpJson(): void {
+  if (applyMcpJsonToForm()) {
+    ElMessage.success('JSON 已解析并应用到表单，切换到表单模式可查看详情');
+  } else {
+    ElMessage.warning(mcpJsonError.value || 'JSON 解析失败');
+  }
+}
+
+// ============================================================
+// QQ 导入子系统配置（noise_rules/privacy_patterns/extract_model 等）
+// ============================================================
+
+// 噪声规则元信息：NR-1~NR-6 的中文描述，便于前端表单展示
+// 为什么独立常量而非后端返回：规则 ID 是稳定契约，描述文案属于 UI 层关注点
+const NOISE_RULE_META: Array<{ key: string; label: string }> = [
+  { key: 'NR-1', label: '过滤系统通知（入群/退群/红包等）' },
+  { key: 'NR-2', label: '过滤纯表情/图片消息' },
+  { key: 'NR-3', label: '过滤连续短消息（≤3 字）' },
+  { key: 'NR-4', label: '合并同一人连续发言' },
+  { key: 'NR-5', label: '过滤 URL 占比过高的消息' },
+  { key: 'NR-6', label: '过滤@全体/@机器人触发消息' },
+];
+
+// 脱敏规则元信息：key 与后端 privacy_patterns 对齐
+const PRIVACY_PATTERN_META: Array<{ key: string; label: string; placeholder: string }> = [
+  { key: 'phone', label: '手机号', placeholder: '1[3-9]\\d{9}' },
+  { key: 'id_card', label: '身份证号', placeholder: '\\d{17}[\\dXx]' },
+  { key: 'email', label: '邮箱', placeholder: '[\\w.-]+@[\\w.-]+\\.\\w+' },
+  { key: 'card', label: '银行卡号', placeholder: '\\d{16,19}' },
+  { key: 'qq', label: 'QQ 号', placeholder: '(?<=QQ|扣扣|qq号|企鹅)\\s*[0-9]{5,11}' },
+];
+
+const qqConfig = reactive<QqConfigData>({
+  noise_rules: {},
+  privacy_patterns: {},
+  max_batch_size: 20,
+  chunk_threshold: 200,
+  extract_model: '',
+  extract_base_url: '',
+  extract_token_budget: 50000,
+});
+const loadingQqConfig = ref(false);
+const savingQqConfig = ref(false);
+const patternValidation = computed(() => {
+  const result: Record<string, boolean | null> = {};
+  for (const p of PRIVACY_PATTERN_META) {
+    const input = qqConfig.privacy_patterns[p.key];
+    if (!input || !input.trim()) { result[p.key] = null; }
+    else { try { new RegExp(input); result[p.key] = true; } catch { result[p.key] = false; } }
+  }
+  return result;
+});
+const qqConfigDirty = ref(false);
+let _qqConfigInitial = '';
+
+// 深度监听 qqConfig 变化，与初始快照对比判断是否脏
+watch(() => qqConfig, () => {
+  if (!_qqConfigInitial) return;
+  qqConfigDirty.value = JSON.stringify(qqConfig) !== _qqConfigInitial;
+}, { deep: true });
+
+async function loadQqConfig() {
+  loadingQqConfig.value = true;
+  try {
+    const res = await fetch('/api/qq-ingest/config');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const qq = data.qq as QqConfigData;
+    // 逐字段赋值而非 Object.assign：reactive 需保留引用才能触发响应式更新
+    qqConfig.noise_rules = { ...qq.noise_rules };
+    qqConfig.privacy_patterns = { ...qq.privacy_patterns };
+    qqConfig.max_batch_size = qq.max_batch_size;
+    qqConfig.chunk_threshold = qq.chunk_threshold;
+    qqConfig.extract_model = qq.extract_model;
+    qqConfig.extract_base_url = qq.extract_base_url;
+    qqConfig.extract_token_budget = qq.extract_token_budget;
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('加载 QQ 配置失败', err));
+  } finally {
+    loadingQqConfig.value = false;
+    _qqConfigInitial = JSON.stringify(qqConfig);
+  }
+}
+
+async function saveQqConfigForm() {
+  // 前端预校验：privacy_patterns 是用户自定义正则，提交前 try/catch 编译防止后端运行时崩溃
+  for (const [key, pattern] of Object.entries(qqConfig.privacy_patterns)) {
+    if (!pattern) continue;
+    try {
+      // eslint-disable-next-line no-new
+      new RegExp(pattern);
+    } catch (err) {
+      ElMessage.error(`脱敏正则「${key}」无效：${(err as Error).message}`);
+      return;
+    }
+  }
+  // 数值字段范围校验
+  if (qqConfig.max_batch_size < 1 || qqConfig.max_batch_size > 200) {
+    ElMessage.warning('批量上限应在 1~200 之间');
+    return;
+  }
+  if (qqConfig.chunk_threshold < 50 || qqConfig.chunk_threshold > 2000) {
+    ElMessage.warning('分块阈值应在 50~2000 之间');
+    return;
+  }
+  if (qqConfig.extract_token_budget < 0 || qqConfig.extract_token_budget > 1000000) {
+    ElMessage.warning('Token 预算应在 0~1000000 之间（0 表示回退全局）');
+    return;
+  }
+
+  savingQqConfig.value = true;
+  try {
+    const res = await fetch('/api/qq-ingest/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qq: qqConfig }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    ElMessage.success('QQ 配置保存成功');
+    _qqConfigInitial = JSON.stringify(qqConfig);
+    qqConfigDirty.value = false;
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存 QQ 配置失败', err));
+  } finally {
+    savingQqConfig.value = false;
+  }
+}
+
+function resetQqConfig() {
+  ElMessageBox.confirm('确认重置 QQ 配置为默认值？', '重置确认', { type: 'warning' })
+    .then(() => {
+      // 重置为 SRS §6.2 默认值
+      qqConfig.noise_rules = Object.fromEntries(NOISE_RULE_META.map((r) => [r.key, true]));
+      qqConfig.privacy_patterns = Object.fromEntries(
+        PRIVACY_PATTERN_META.map((p) => [p.key, p.placeholder.replace(/\\\\/g, '\\')]),
+      );
+      qqConfig.max_batch_size = 20;
+      qqConfig.chunk_threshold = 200;
+      qqConfig.extract_model = 'glm-4-plus';
+      qqConfig.extract_base_url = '';
+      qqConfig.extract_token_budget = 50000;
+      ElMessage.info('已重置为默认值（需点击保存才生效）');
+    })
+    .catch(() => { /* 用户取消 */ });
+}
+
 onMounted(async () => {
   loadSchema();
   // loadConfig 完成后同步派生 4 个高级表单的初始值
@@ -936,6 +1192,7 @@ onMounted(async () => {
   loadAiConfig();
   loadWebSearchConfig();
   loadToolsConfig();
+  loadQqConfig();
 });
 </script>
 
@@ -1229,7 +1486,7 @@ onMounted(async () => {
                     v-model.number="batchForm.maxBatchSize"
                     type="number"
                     :min="1"
-                    :max="100"
+                    :max="1000"
                     class="form-input"
                   />
                 </div>
@@ -1240,7 +1497,7 @@ onMounted(async () => {
                     v-model.number="batchForm.maxFileSizeMb"
                     type="number"
                     :min="1"
-                    :max="100"
+                    :max="1024"
                     class="form-input"
                   />
                 </div>
@@ -1477,52 +1734,103 @@ onMounted(async () => {
               <div class="config-block hover-glow">
                 <div class="block-header">
                   <h3 class="block-title"><span class="block-bracket">[</span> MCP 服务器 <span class="block-bracket">]</span></h3>
-                  <el-button size="small" class="neon-btn" @click="addMcpServer">+ 新增</el-button>
-                </div>
-                <div v-if="toolsForm.mcpServers.length === 0" class="empty-hint">
-                  暂无 MCP 服务器配置。点击 "新增" 添加。
-                </div>
-                <div v-else class="entry-list">
-                  <div v-for="(server, idx) in toolsForm.mcpServers" :key="idx" class="entry-item">
-                    <div class="entry-row">
-                      <el-input
-                        v-model="server.name"
-                        placeholder="服务器名称（唯一）"
-                        class="form-input entry-name"
-                      />
-                      <el-select v-model="server.transport" class="form-input entry-transport" placeholder="传输方式">
-                        <el-option
-                          v-for="t in MCP_TRANSPORT_OPTIONS"
-                          :key="t.value"
-                          :label="t.label"
-                          :value="t.value"
-                        />
-                      </el-select>
-                      <el-switch v-model="server.enabled" />
-                      <el-button size="small" class="neon-btn-danger" @click="removeMcpServer(idx)">删除</el-button>
-                    </div>
-                    <div v-if="server.transport === 'stdio'" class="entry-row">
-                      <el-input
-                        v-model="server.command"
-                        placeholder="command（如 npx）"
-                        class="form-input"
-                      />
-                      <el-input
-                        :model-value="server.args?.join(' ') ?? ''"
-                        placeholder="args（空格分隔）"
-                        class="form-input"
-                        @update:model-value="(val: string) => server.args = val.split(/\s+/).filter(Boolean)"
-                      />
-                    </div>
-                    <div v-else class="entry-row">
-                      <el-input
-                        v-model="server.url"
-                        placeholder="url（如 https://example.com/mcp）"
-                        class="form-input"
-                      />
-                    </div>
+                  <!-- 模式切换：表单模式 / JSON 编辑模式 -->
+                  <div class="mcp-mode-switch">
+                    <span
+                      class="preset-tag"
+                      :class="{ active: mcpEditMode === 'form' }"
+                      @click="mcpEditMode === 'json' && switchToMcpFormMode()"
+                    >表单模式</span>
+                    <span
+                      class="preset-tag"
+                      :class="{ active: mcpEditMode === 'json' }"
+                      @click="mcpEditMode === 'form' && switchToMcpJsonMode()"
+                    >JSON 模式</span>
                   </div>
                 </div>
+
+                <!-- 表单模式：逐条编辑 MCP 服务器 -->
+                <template v-if="mcpEditMode === 'form'">
+                  <div class="block-header sub-header">
+                    <el-button size="small" class="neon-btn" @click="addMcpServer">+ 新增</el-button>
+                  </div>
+                  <div v-if="toolsForm.mcpServers.length === 0" class="empty-hint">
+                    暂无 MCP 服务器配置。点击 "新增" 添加，或切换到 JSON 模式批量导入。
+                  </div>
+                  <div v-else class="entry-list">
+                    <div v-for="(server, idx) in toolsForm.mcpServers" :key="idx" class="entry-item">
+                      <div class="entry-row">
+                        <el-input
+                          v-model="server.name"
+                          placeholder="服务器名称（唯一）"
+                          class="form-input entry-name"
+                        />
+                        <el-select v-model="server.transport" class="form-input entry-transport" placeholder="传输方式">
+                          <el-option
+                            v-for="t in MCP_TRANSPORT_OPTIONS"
+                            :key="t.value"
+                            :label="t.label"
+                            :value="t.value"
+                          />
+                        </el-select>
+                        <el-switch v-model="server.enabled" />
+                        <el-button size="small" class="neon-btn-danger" @click="removeMcpServer(idx)">删除</el-button>
+                      </div>
+                      <div v-if="server.transport === 'stdio'" class="entry-row">
+                        <el-input
+                          v-model="server.command"
+                          placeholder="command（如 npx）"
+                          class="form-input"
+                        />
+                        <el-input
+                          :model-value="server.args?.join(' ') ?? ''"
+                          placeholder="args（空格分隔）"
+                          class="form-input"
+                          @update:model-value="(val: string) => server.args = val.split(/\s+/).filter(Boolean)"
+                        />
+                      </div>
+                      <div v-else class="entry-row">
+                        <el-input
+                          v-model="server.url"
+                          placeholder="url（如 https://example.com/mcp）"
+                          class="form-input"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- JSON 模式：Claude Desktop 兼容格式批量编辑 -->
+                <template v-else>
+                  <div class="mcp-json-hint">
+                    Claude Desktop 兼容格式，仅编辑 stdio 类型服务器。格式示例：
+                    <pre class="mcp-json-example">{
+  "mcpServers": {
+    "firecrawl-mcp": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": { "FIRECRAWL_API_KEY": "fc-xxx" }
+    }
+  }
+}</pre>
+                  </div>
+                  <el-input
+                    v-model="mcpJsonText"
+                    type="textarea"
+                    :rows="14"
+                    resize="none"
+                    class="mcp-json-editor"
+                    placeholder='{"mcpServers": {}}'
+                  />
+                  <div v-if="mcpJsonError" class="mcp-json-error">
+                    <span class="hint-icon">!</span>
+                    <span>{{ mcpJsonError }}</span>
+                  </div>
+                  <div class="mcp-json-actions">
+                    <el-button size="small" class="neon-btn-primary" @click="applyMcpJson">应用 JSON</el-button>
+                    <el-button size="small" class="neon-btn" @click="switchToMcpFormMode">切换到表单模式</el-button>
+                  </div>
+                </template>
               </div>
 
               <!-- CLI 工具配置 -->
@@ -1647,6 +1955,139 @@ onMounted(async () => {
               <p>主题会立即应用并自动保存，下次打开仍保持当前选择。</p>
             </div>
             <ThemeSwitcher embedded />
+          </section>
+        </el-tab-pane>
+
+        <el-tab-pane label="QQ 导入" name="qq">
+          <section v-loading="loadingQqConfig" class="qq-section">
+            <div class="section-header">
+              <div>
+                <span class="section-tag">// QQ INGEST</span>
+                <h3>QQ 聊天记录导入配置</h3>
+                <p>配置噪声过滤规则、PII 脱敏正则与抽取模型参数。</p>
+              </div>
+              <el-button size="small" @click="resetQqConfig">重置默认</el-button>
+            </div>
+
+            <!-- 噪声过滤规则：NR-1~NR-6 开关 -->
+            <div class="qq-block">
+              <h4 class="block-title">噪声过滤规则</h4>
+              <div class="noise-rules">
+                <div
+                  v-for="rule in NOISE_RULE_META"
+                  :key="rule.key"
+                  class="noise-rule-item"
+                >
+                  <el-switch
+                    v-model="qqConfig.noise_rules[rule.key]"
+                  />
+                  <span class="rule-label">
+                    <code>{{ rule.key }}</code> {{ rule.label }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- PII 脱敏正则 -->
+            <div class="qq-block">
+              <h4 class="block-title">
+                PII 脱敏正则
+                <span class="block-hint">（留空禁用该类脱敏，正则错误将阻塞流水线）</span>
+              </h4>
+              <div class="privacy-patterns">
+                <div
+                  v-for="p in PRIVACY_PATTERN_META"
+                  :key="p.key"
+                  class="pattern-row"
+                >
+                  <label class="pattern-label">{{ p.label }}</label>
+                  <el-input
+                    v-model="qqConfig.privacy_patterns[p.key]"
+                    :placeholder="p.placeholder"
+                    size="small"
+                    class="pattern-input"
+                    :class="{
+                      'pattern-valid': patternValidation[p.key] === true,
+                      'pattern-invalid': patternValidation[p.key] === false
+                    }"
+                  />
+                  <span v-if="patternValidation[p.key] === true" class="pattern-status valid" title="regex valid">OK</span>
+                  <span v-else-if="patternValidation[p.key] === false" class="pattern-status invalid" title="regex syntax error">ERR</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 抽取模型参数 -->
+            <div class="qq-block">
+              <h4 class="block-title">抽取模型参数</h4>
+              <div class="extract-grid">
+                <div class="form-row">
+                  <label>抽取模型</label>
+                  <el-input
+                    v-model="qqConfig.extract_model"
+                    placeholder="glm-4-plus"
+                    size="small"
+                  />
+                </div>
+                <div class="form-row">
+                  <label>抽取 baseUrl</label>
+                  <el-input
+                    v-model="qqConfig.extract_base_url"
+                    placeholder="留空则回退到全局 llm.baseUrl"
+                    size="small"
+                  />
+                </div>
+                <div class="form-row">
+                  <label>Token 预算</label>
+                  <el-input-number
+                    v-model="qqConfig.extract_token_budget"
+                    :min="0"
+                    :max="1000000"
+                    :step="10000"
+                    size="small"
+                  />
+                  <span class="form-hint">0 表示回退全局 budget.tokenBudget</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 批量与分块参数 -->
+            <div class="qq-block">
+              <h4 class="block-title">批量与分块参数</h4>
+              <div class="extract-grid">
+                <div class="form-row">
+                  <label>批量上限</label>
+                  <el-input-number
+                    v-model="qqConfig.max_batch_size"
+                    :min="1"
+                    :max="200"
+                    size="small"
+                  />
+                  <span class="form-hint">单次批量编译的最大文件数</span>
+                </div>
+                <div class="form-row">
+                  <label>分块阈值</label>
+                  <el-input-number
+                    v-model="qqConfig.chunk_threshold"
+                    :min="50"
+                    :max="2000"
+                    :step="50"
+                    size="small"
+                  />
+                  <span class="form-hint">长文本按消息条数分块</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="qq-actions">
+              <span v-if="qqConfigDirty" class="dirty-indicator">CHANGED</span>
+              <el-button
+                type="primary"
+                :loading="savingQqConfig"
+                :disabled="!qqConfigDirty"
+                @click="saveQqConfigForm"
+              >保存 QQ 配置</el-button>
+            </div>
           </section>
         </el-tab-pane>
       </el-tabs>
@@ -2463,6 +2904,61 @@ onMounted(async () => {
   margin-bottom: 14px;
 }
 
+/* 子标题栏：仅含操作按钮的次级标题栏（如 MCP 表单模式下的"新增"按钮行） */
+.sub-header {
+  margin-bottom: 10px;
+}
+
+/* MCP 模式切换标签组 */
+.mcp-mode-switch {
+  display: flex;
+  gap: 6px;
+}
+
+/* MCP JSON 编辑器提示文本 */
+.mcp-json-hint {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+
+.mcp-json-example {
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-x: auto;
+}
+
+.mcp-json-editor {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-json-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--accent-magenta-a10);
+  border: 1px solid var(--accent-magenta-a30);
+  border-radius: 6px;
+  color: var(--neon-magenta);
+  font-size: 12px;
+}
+
+.mcp-json-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 /* 条目列表：多个 MCP/CLI/Scene 配置项垂直堆叠 */
 .entry-list {
   display: flex;
@@ -2560,5 +3056,205 @@ onMounted(async () => {
 
 .config-block.disabled .block-header {
   pointer-events: none;
+}
+
+/* ============================================================
+ * QQ 导入配置 Tab 样式
+ * 复用现有 CSS 变量保持视觉一致
+ * ============================================================ */
+
+.qq-section {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 8px 4px;
+}
+
+.qq-section .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--accent-purple-a20);
+}
+
+.qq-section .section-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--neon-cyan);
+  letter-spacing: 2px;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.qq-section h3 {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--text-bright);
+}
+
+.qq-section p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.qq-block {
+  padding: 16px 18px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a15);
+  border-radius: var(--radius-card);
+}
+
+.block-title {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-bright);
+  font-family: var(--font-display);
+}
+
+.block-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+  font-family: var(--font-mono);
+}
+
+/* 噪声规则列表 */
+.noise-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.noise-rule-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--accent-purple-a05);
+  border: 1px solid var(--accent-purple-a15);
+  border-radius: 8px;
+}
+
+.rule-label {
+  font-size: 12px;
+  color: var(--text-base);
+}
+
+.rule-label code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a10);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+
+/* 脱敏正则表单 */
+.privacy-patterns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pattern-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pattern-label {
+  width: 80px;
+  font-size: 12px;
+  color: var(--text-base);
+  flex-shrink: 0;
+}
+
+.pattern-input {
+  flex: 1;
+}
+
+.pattern-input :deep(.el-input__inner) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* 抽取模型参数表单 */
+.extract-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.form-row label {
+  width: 110px;
+  font-size: 12px;
+  color: var(--text-base);
+  flex-shrink: 0;
+}
+
+.form-row .el-input,
+.form-row .el-input-number {
+  width: 240px;
+  flex-shrink: 0;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.qq-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px dashed var(--accent-purple-a20);
+  gap: 10px;
+  align-items: center;
+}
+
+/* 脏表单指示器 */
+.dirty-indicator {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-magenta);
+  padding: 4px 10px;
+  background: var(--accent-pink-a10);
+  border: 1px solid var(--accent-pink-a30);
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.03em;
+}
+
+/* 正则校验状态指示器 */
+.pattern-status {
+  flex-shrink: 0;
+  width: 24px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+.pattern-status.valid { color: var(--neon-cyan); }
+.pattern-status.invalid { color: var(--neon-pink); }
+
+.pattern-input.pattern-valid :deep(.el-input__inner) {
+  border-color: var(--accent-cyan-a50) !important;
+  box-shadow: 0 0 4px var(--accent-cyan-a20) !important;
+}
+.pattern-input.pattern-invalid :deep(.el-input__inner) {
+  border-color: var(--accent-pink-a50) !important;
+  box-shadow: 0 0 4px var(--accent-pink-a30) !important;
 }
 </style>

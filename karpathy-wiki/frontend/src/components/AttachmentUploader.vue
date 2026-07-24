@@ -195,8 +195,8 @@ function handleRemove(id: string) {
   align-items: center;
   justify-content: center;
   padding: 6px;
-  border: 1px solid rgba(0, 245, 255, 0.2);
-  background: rgba(0, 245, 255, 0.05);
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+  background: var(--accent-cyan-a05, rgba(0, 245, 255, 0.05));
   border-radius: 8px;
   cursor: pointer;
   color: var(--text-soft, #888);
@@ -208,10 +208,10 @@ function handleRemove(id: string) {
   border-radius: 10px;
 }
 .upload-btn:hover {
-  background: rgba(0, 245, 255, 0.12);
+  background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
   border-color: var(--neon-cyan, #00f5ff);
   color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 0 8px rgba(0, 245, 255, 0.2);
+  box-shadow: 0 0 8px var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
 }
 /* F-3.5 vision 能力缺失时灰显：dashed border + opacity + cursor not-allowed */
 .upload-btn.disabled {
@@ -220,8 +220,8 @@ function handleRemove(id: string) {
   border-style: dashed;
 }
 .upload-btn.disabled:hover {
-  background: rgba(0, 245, 255, 0.05);
-  border-color: rgba(0, 245, 255, 0.2);
+  background: var(--accent-cyan-a05, rgba(0, 245, 255, 0.05));
+  border-color: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   /* 禁用态 hover 使用更深的 text-dim 以满足 WCAG 对比度（css:S7924） */
   color: var(--text-dim, #5a5a5a);
   box-shadow: none;
@@ -234,7 +234,7 @@ function handleRemove(id: string) {
   transition: background 0.2s;
 }
 .attachment-list.drag-over {
-  background: rgba(0, 245, 255, 0.1);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
   border: 1px dashed var(--neon-cyan, #00f5ff);
 }
 .attachment-item {

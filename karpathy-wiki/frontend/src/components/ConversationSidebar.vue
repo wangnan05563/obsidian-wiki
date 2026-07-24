@@ -220,7 +220,7 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
   background: rgba(255, 255, 255, 0.05);
 }
 .conversation-item.active {
-  background: rgba(0, 245, 255, 0.1);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
   border-left: 2px solid var(--neon-cyan, #00f5ff);
 }
 
@@ -247,7 +247,7 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
   height: 22px;
   padding: 0;
   border: none;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--bg-scene, rgba(0, 0, 0, 0.4));
   color: var(--text-soft, #888);
   cursor: pointer;
   border-radius: 4px;
@@ -258,7 +258,7 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
   transition: all 0.2s ease;
 }
 .conv-action-btn:hover {
-  background: rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a25, rgba(0, 245, 255, 0.25));
   color: var(--neon-cyan, #00f5ff);
 }
 .delete-btn:hover {
@@ -307,7 +307,7 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
   height: 36px;
   border-radius: 50%;
   border: 1px solid var(--neon-cyan, #00f5ff);
-  background: rgba(0, 245, 255, 0.15);
+  background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15));
   color: var(--neon-cyan, #00f5ff);
   cursor: pointer;
   font-size: 20px;
@@ -318,9 +318,9 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
   transition: all 0.2s ease;
 }
 .collapsed-new-btn:hover {
-  background: rgba(0, 245, 255, 0.3);
+  background: var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
   transform: scale(1.05);
-  box-shadow: 0 0 12px rgba(0, 245, 255, 0.4);
+  box-shadow: 0 0 12px var(--accent-cyan-a40, rgba(0, 245, 255, 0.4));
 }
 
 .collapse-btn {
@@ -339,6 +339,6 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
   z-index: 10;
 }
 .collapse-btn:hover {
-  background: rgba(0, 245, 255, 0.1);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
 }
 </style>

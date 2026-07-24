@@ -28,6 +28,7 @@ import { registerConversationsRoute } from './routes/conversations.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
 import { registerAboutRoute } from './routes/about.js';
 import { registerToolsRoute } from './routes/tools.js';
+import { registerSkillRoute } from './routes/skill.js';
 import { initAuthModule, registerAuthRoute } from './routes/auth.js';
 import { shutdownToolRegistry } from './tools/registry.js';
 import { TunnelService } from './tunnel/tunnel-service.js';
@@ -282,6 +283,9 @@ async function main(): Promise<void> {
   registerAboutRoute(app);
   // 工具配置管理：MCP/CLI/场景路由的可配置化调用（需求 4）
   registerToolsRoute(app, adapter);
+  // 技能导入模块：支持上传 ZIP/.md 技能包，统一存储到 data/skills/
+  // 为什么放在 tools 之后：技能与工具配置同属扩展能力管理，但职责独立
+  registerSkillRoute(app);
 
   // RBAC 权限管理模块：必须在其他路由注册前初始化中间件（全局 preHandler）
   // 为什么提前初始化：setupAuthMiddleware 通过 addHook 注册全局 preHandler，

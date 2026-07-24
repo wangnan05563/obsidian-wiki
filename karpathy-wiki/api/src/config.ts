@@ -11,7 +11,7 @@ const CONFIG_FILENAME = 'config.json';
 // 为什么需要：AppConfig.batch 是可选字段，TS 推断 defaults.batch 为 T | undefined，
 // 用 ?? 提供兜底避免 ! 断言（BR-028-1）
 const DEFAULT_BATCH_FALLBACK = {
-  allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
+  allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json', 'docx', 'xlsx', 'pptx', 'doc', 'xls'],
   maxBatchSize: 50,
   maxFileSizeMb: 10,
 };
@@ -69,7 +69,7 @@ function defaultConfig(): AppConfig {
     // 批量编译默认配置：文件夹上传场景使用
     // allowedExtensions 与前端 Ingest.vue accept 保持一致，避免前后端白名单漂移
     batch: {
-      allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
+      allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json', 'docx', 'xlsx', 'pptx', 'doc', 'xls'],
       maxBatchSize: 50,
       maxFileSizeMb: 10,
     },
@@ -270,22 +270,70 @@ function refreshConfigCache(data: AppConfig): void {
 // 保存 AI 配置到 config.json（部分更新，仅合并 llm 字段）。
 // 为什么需要：前端 AI 服务配置页面需要持久化用户输入的 provider/baseUrl/model/apiKey。
 // 安全考量：apiKey 以明文写入 config.json，需确保 .gitignore 排除了 config.json（M-7）。
+// 多 key 持久化：provider 变更时自动迁移当前 apiKey 到 apiKeys[旧provider]，并从 apiKeys[新provider] 恢复 key。
+//   为什么需要：单 apiKey 字段在预设切换时无法区分 provider 来源，导致 APIKEY 未跟随模型切换错误显示。
+//   迁移策略：
+//     1. 检测 provider 是否变化，未变化走原路径
+//     2. provider 变化时：把 current.llm.apiKey 回写到 apiKeys[currentProvider]
+//     3. 从 apiKeys[newProvider] 读取并赋给 llm.apiKey（无记录则空串）
+//     4. 若请求体显式提供 apiKey（非 undefined），覆盖回写的值
+//   apiKeyRef 同步：若请求体提供新 apiKeyRef，更新为新 provider 的环境变量名
 export async function saveAiConfig(updates: {
   provider?: string;
   baseUrl?: string;
   model?: string;
   apiKey?: string;
+  apiKeyRef?: string;
 }): Promise<AppConfig> {
   const current = await loadConfig();
+  const oldProvider = current.llm.provider;
+  const newProvider = updates.provider ?? oldProvider;
+  const providerChanged = newProvider !== oldProvider;
+
+  // 多 key 持久化表：保留已有记录，按需追加/覆盖
+  // 为什么用 ?? {}：老配置文件可能无 apiKeys 字段，首次切换时初始化空表
+  const apiKeys: Record<string, string> = { ...(current.llm.apiKeys ?? {}) };
+
+  // provider 变更时执行 key 迁移：保存当前 apiKey 到 apiKeys[旧provider]
+  // 为什么条件判断：provider 未变时迁移会污染表（同 provider 覆盖自身无意义）
+  if (providerChanged && current.llm.apiKey) {
+    apiKeys[oldProvider] = current.llm.apiKey;
+  }
+
+  // 计算生效的 apiKey：
+  // - 优先用请求体显式提供的新值（含空串清除）
+  // - provider 变更时从 apiKeys[newProvider] 恢复
+  // - 否则保留 current.llm.apiKey
+  let effectiveApiKey: string | undefined;
+  if (updates.apiKey !== undefined) {
+    // 请求体显式提供 apiKey：**** 开头视为脱敏回传（不修改），空串表示清除，其他为新值
+    // 为什么需要脱敏检测：前端 GET 拿到 ****xxxx 回传时不能当新值写入
+    effectiveApiKey = updates.apiKey.startsWith('****') ? current.llm.apiKey : updates.apiKey;
+  } else if (providerChanged) {
+    // provider 变更但未显式提供 apiKey：从 apiKeys 表恢复目标 provider 的 key
+    // 为什么用空串兜底：apiKeys[newProvider] 可能不存在（用户首次切换到该 provider），空串表示未设置
+    effectiveApiKey = apiKeys[newProvider] ?? '';
+  } else {
+    effectiveApiKey = current.llm.apiKey;
+  }
+
+  // 若 effectiveApiKey 非空，同步写入 apiKeys[newProvider] 保持表一致
+  // 为什么需要：下次切回该 provider 时能从 apiKeys 表恢复
+  if (effectiveApiKey) {
+    apiKeys[newProvider] = effectiveApiKey;
+  }
+
   const merged: AppConfig = {
     ...current,
     llm: {
       ...current.llm,
-      ...updates.provider ? { provider: updates.provider } : {},
+      provider: newProvider,
       ...updates.baseUrl ? { baseUrl: updates.baseUrl } : {},
       ...updates.model ? { model: updates.model } : {},
-      // apiKey 空串表示清除，undefined 表示不修改
-      ...(updates.apiKey === undefined) ? {} : { apiKey: updates.apiKey },
+      // apiKeyRef 同步更新为新 provider 的环境变量名（预设切换场景）
+      ...updates.apiKeyRef ? { apiKeyRef: updates.apiKeyRef } : {},
+      apiKey: effectiveApiKey,
+      apiKeys,
     },
   };
 
@@ -298,6 +346,21 @@ export async function saveAiConfig(updates: {
   // 写盘后立即刷新缓存，避免后续 GET 命中旧缓存
   refreshConfigCache(merged);
   return merged;
+}
+
+// 读取所有 provider 的 key 配置状态（脱敏后仅返回是否已配置，不暴露 key 本身）。
+// 为什么需要：前端切换预设时需展示各 provider 的 key 状态，让用户感知哪些 provider 已配置。
+export function getProviderKeyStatus(config: AppConfig): Record<string, boolean> {
+  const status: Record<string, boolean> = {};
+  const apiKeys = config.llm.apiKeys ?? {};
+  // 当前 provider 的 apiKey 也算已配置
+  if (config.llm.apiKey) {
+    status[config.llm.provider] = true;
+  }
+  for (const [provider, key] of Object.entries(apiKeys)) {
+    status[provider] = Boolean(key);
+  }
+  return status;
 }
 
 // 读取生效的 API Key：优先 config.json 中的 apiKey，其次环境变量 apiKeyRef。
@@ -437,7 +500,7 @@ export async function saveBatchConfig(updates: {
 }): Promise<AppConfig> {
   const current = await loadConfig();
   const baseBatch = current.batch ?? {
-    allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json'],
+    allowedExtensions: ['md', 'txt', 'pdf', 'html', 'json', 'docx', 'xlsx', 'pptx', 'doc', 'xls'],
     maxBatchSize: 50,
     maxFileSizeMb: 10,
   };

@@ -61,11 +61,14 @@ export function registerAuthRoute(app: FastifyInstance): void {
   }
 
   // 注册认证中间件（全局 preHandler）
+  // 为什么 /api/auth/me 不在 publicPaths：放公开列表会导致全局 preHandler 跳过 token 解析，
+  // currentUser 永远为 null，authGuard 必然返回 401，已登录用户也无法获取自身信息。
+  // 正确行为：/api/auth/me 走正常 token 解析流程，未登录时 authGuard 返回 401，前端据此跳转登录页。
   setupAuthMiddleware(app, {
     enabled: authConfig.enabled,
     sessionSecret,
     permissionCacheTtlMs,
-    publicPaths: ['/api/auth/login', '/api/auth/me', '/health'],
+    publicPaths: ['/api/auth/login', '/health'],
   });
 
   // preHandler 守卫包装：requireAuth/requireAdmin 返回 async 函数，直接传引用触发 SonarQube S6544

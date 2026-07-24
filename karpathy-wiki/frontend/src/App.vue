@@ -18,13 +18,14 @@ import About from './views/About.vue';
 import Help from './views/Help.vue';
 import Login from './views/Login.vue';
 import Users from './views/Users.vue';
+import Skill from './views/Skill.vue';
 import { useCompileStore } from './stores/compile';
 import { useAuthStore } from './stores/auth';
 import { usePermission } from './composables/usePermission';
 import { STORAGE_KEYS } from './constants/storageKeys';
 import type { AuthPermission } from './types';
 
-type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help' | 'users';
+type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help' | 'users' | 'skill';
 
 const store = useCompileStore();
 const authStore = useAuthStore();
@@ -46,6 +47,7 @@ const menuItems: Array<{ key: ViewName; icon: string; label: string; permission:
   { key: 'tunnel', icon: 'tunnel', label: '内网穿透', permission: 'tunnel' },
   { key: 'cleanup', icon: 'cleanup', label: '系统清理', permission: 'cleanup' },
   { key: 'users', icon: 'about', label: '用户管理', permission: 'users' },
+  { key: 'skill', icon: 'config', label: '技能管理', permission: 'skill' },
   { key: 'help', icon: 'help', label: '帮助文档', permission: 'help' },
   { key: 'about', icon: 'about', label: '关于', permission: 'about' },
 ];
@@ -101,11 +103,12 @@ function handleJumpVault() {
   go('browse');
 }
 
-// 监听 About.vue 派发的 karpathy:navigate 事件，切换到指定视图
-// 为什么用自定义事件而非 props：About 是路由终端组件，避免层层传递
+// 监听 About.vue / Ingest.vue 派发的 karpathy:navigate 事件，切换到指定视图
+// 为什么用自定义事件而非 props：About 是路由终端组件，避免层层传递；
+// Ingest.vue 抽取完成后跳转 Browse 草稿审核也复用此通道
 function handleNavigateEvent(e: Event) {
   const detail = (e as CustomEvent<string>).detail;
-  if (detail === 'help' || detail === 'about' || detail === 'users') {
+  if (detail === 'help' || detail === 'about' || detail === 'users' || detail === 'browse') {
     go(detail as ViewName);
   }
 }
@@ -246,6 +249,7 @@ onBeforeUnmount(() => {
       <Tunnel v-else-if="currentView === 'tunnel'" />
       <Cleanup v-else-if="currentView === 'cleanup'" />
       <Users v-else-if="currentView === 'users'" />
+      <Skill v-else-if="currentView === 'skill'" />
       <Help v-else-if="currentView === 'help'" />
       <About v-else-if="currentView === 'about'" />
     </main>

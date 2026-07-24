@@ -152,8 +152,8 @@ function handleSelect(tool: Tool) {
   gap: 6px;
   padding: 5px 12px;
   border-radius: 16px;
-  border: 1px solid rgba(0, 245, 255, 0.2);
-  background: rgba(0, 245, 255, 0.05);
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+  background: var(--accent-cyan-a05, rgba(0, 245, 255, 0.05));
   color: var(--text-soft, #888);
   font-size: 13px;
   cursor: pointer;
@@ -162,9 +162,9 @@ function handleSelect(tool: Tool) {
   position: relative;
 }
 .tool-chip:hover:not(.disabled) {
-  background: rgba(0, 245, 255, 0.12);
+  background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
   border-color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 0 8px rgba(0, 245, 255, 0.2);
+  box-shadow: 0 0 8px var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   /* F-3.4 验收：hover 有动效（玻璃光泽滑动） */
   transform: translateY(-1px);
 }
@@ -174,10 +174,10 @@ function handleSelect(tool: Tool) {
   outline-offset: 2px;
 }
 .tool-chip.active {
-  background: rgba(0, 245, 255, 0.18);
+  background: var(--accent-cyan-a18, rgba(0, 245, 255, 0.18));
   border-color: var(--neon-cyan, #00f5ff);
   color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 0 12px rgba(0, 245, 255, 0.3);
+  box-shadow: 0 0 12px var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
 }
 .tool-chip.disabled {
   opacity: 0.4;
@@ -211,9 +211,9 @@ function handleSelect(tool: Tool) {
   gap: 8px;
   padding: 8px;
   background: var(--bg-card-solid, rgba(20, 20, 35, 0.95));
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 24px var(--accent-purple-a20, rgba(0, 0, 0, 0.4));
   z-index: 10;
   backdrop-filter: var(--blur, blur(12px));
 }

@@ -23,6 +23,7 @@ const ROLE_PERMISSIONS: Readonly<Record<AuthRole, Readonly<AuthPermission[]>>> =
     'help',
     'about',
     'users',
+    'skill',
   ],
   // 普通用户：知识浏览、知识图谱查看、知识库问答 + 公共辅助页
   user: ['browse', 'query', 'graph', 'help', 'about'],
@@ -78,6 +79,7 @@ export function listPermissions(): AuthPermission[] {
     'help',
     'about',
     'users',
+    'skill',
   ];
 }
 

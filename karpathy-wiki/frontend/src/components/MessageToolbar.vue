@@ -276,9 +276,9 @@ function handleFeedback(type: 'up' | 'down') {
   display: flex;
   gap: 2px;
   padding: 2px 4px;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--bg-scene, rgba(0, 0, 0, 0.45));
   backdrop-filter: var(--blur);
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-radius: 6px;
   /* 默认隐藏：hover 父气泡才显现，避免常态视觉噪音 */
   opacity: 0;
@@ -304,15 +304,15 @@ function handleFeedback(type: 'up' | 'down') {
 }
 
 .toolbar-btn:hover {
-  background: rgba(0, 245, 255, 0.18);
+  background: var(--accent-cyan-a18, rgba(0, 245, 255, 0.18));
   color: var(--neon-cyan, #00f5ff);
 }
 
 /* F-3.6 / F-3.13 激活态：高亮显示当前朗读/反馈状态 */
 .toolbar-btn.active {
-  background: rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a25, rgba(0, 245, 255, 0.25));
   color: var(--neon-cyan, #00f5ff);
-  box-shadow: inset 0 0 0 1px rgba(0, 245, 255, 0.5);
+  box-shadow: inset 0 0 0 1px var(--accent-cyan-a50, rgba(0, 245, 255, 0.5));
 }
 
 /* F-3.6 / F-3.13 禁用态：降低不透明度 + 阻止 hover 反馈 */
@@ -352,7 +352,7 @@ function handleFeedback(type: 'up' | 'down') {
   gap: 10px;
   z-index: 10;
   white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 12px var(--accent-purple-a20, rgba(0, 0, 0, 0.4));
 }
 
 .rate-label {

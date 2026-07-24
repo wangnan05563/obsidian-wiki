@@ -270,7 +270,7 @@ onBeforeUnmount(() => {
   height: 32px;
   border-radius: var(--radius-input);
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 8px var(--accent-purple-a20, rgba(0, 0, 0, 0.2));
   transition: transform 0.3s ease;
 }
 

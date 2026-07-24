@@ -16,10 +16,12 @@
     "@fastify/rate-limit": "^9.0.0",
     "@fastify/static": "^7.0.0",
     "@wiki/harness": "file:../../wiki-harness",
+    "adm-zip": "^0.6.0",
     "fastify": "^4.26.0",
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.11.0",
     "@vitest/coverage-v8": "^1.6.1",
     "tsx": "^4.7.0",
