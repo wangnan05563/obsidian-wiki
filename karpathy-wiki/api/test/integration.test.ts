@@ -81,9 +81,9 @@ describe('集成测试：RBAC 权限边界', () => {
   describe('需求 1：管理员拥有全部功能', () => {
     it('管理员角色应拥有全部 13 个权限点', () => {
       const perms = getRolePermissions('admin');
-      expect(perms).toHaveLength(13);
+      expect(perms).toHaveLength(14);
       const matrix = getRolePermissionMatrix();
-      expect(matrix.admin).toHaveLength(13);
+      expect(matrix.admin).toHaveLength(14);
     });
 
     it('管理员对所有受保护菜单有访问权', () => {
