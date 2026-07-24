@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import matter from 'gray-matter';
 import type { VaultService } from './vault/vault-service.js';
 
 // 全文检索命中结果
@@ -11,17 +12,28 @@ export interface SearchHit {
   hits: number;
 }
 
+export interface SearchFilter {
+  // 按 frontmatter.source 过滤（如 "qq-chat", "web", "manual"）
+  source?: string;
+  // 按 frontmatter.status 过滤（如 "draft", "published"）
+  status?: string;
+}
+
 // 简单全文搜索：扫描所有页面目录，按关键词匹配标题与正文。
 // 垂直切片阶段用最朴素的 includes 匹配，后续可替换为倒排索引或向量化检索。
 // query-workflow.ts 的 searchPages 工具与 /api/search 路由共用此实现（DRY）。
+// filter 参数支持按 frontmatter source/status 字段过滤（AC-10）。
 export async function searchPages(
   vault: VaultService,
   keywords: string,
   limit = 20,
+  filter?: SearchFilter,
 ): Promise<SearchHit[]> {
   const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
   const terms = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return [];
+  // 是否有前端过滤器活跃（source/status），允许空关键词场景
+  const hasFilter = filter?.source || filter?.status;
+  if (terms.length === 0 && !hasFilter) return [];
 
   const results: SearchHit[] = [];
 
@@ -42,6 +54,24 @@ export async function searchPages(
       } catch {
         continue;
       }
+
+      // 当 source/status 过滤活跃时，解析 frontmatter 进行匹配
+      if (hasFilter) {
+        const parsed = matter(content);
+        const fm = parsed.data;
+        if (filter?.source && fm.source !== filter.source) continue;
+        if (filter?.status && fm.status !== filter.status) continue;
+        // 纯过滤模式（无关键词）：frontmatter 匹配即收录
+        if (terms.length === 0) {
+          const title = f.slice(0, -3);
+          const snippet = (parsed.content || content).slice(0, 120).replaceAll('\n', ' ');
+          results.push({ path: rel, title, snippet, hits: 1 });
+          continue;
+        }
+        // 有关键词 + 过滤器：继续用过滤后的内容做全文匹配
+        content = parsed.content;
+      }
+
       const lower = content.toLowerCase();
       // 任一关键词命中即收录，命中数越多排序越靠前
       const hitCount = terms.filter((t) => lower.includes(t)).length;

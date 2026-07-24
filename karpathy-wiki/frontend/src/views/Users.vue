@@ -323,7 +323,7 @@ onMounted(loadUsers);
 .btn-primary {
   color: #fff;
   background: var(--grad-fire);
-  box-shadow: 0 2px 8px rgba(255, 0, 110, 0.3);
+  box-shadow: 0 2px 8px var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
 }
 
 .btn-primary:hover { transform: translateY(-1px); }
@@ -383,7 +383,7 @@ onMounted(loadUsers);
 }
 
 .users-table tr:hover td {
-  background: rgba(0, 245, 255, 0.03);
+  background: var(--accent-cyan-a03, rgba(0, 245, 255, 0.03));
 }
 
 .role-badge {
@@ -395,7 +395,7 @@ onMounted(loadUsers);
 }
 
 .role-admin { color: var(--text-bright); background: var(--neon-magenta); }
-.role-user { color: var(--neon-cyan); background: rgba(0, 245, 255, 0.1); }
+.role-user { color: var(--neon-cyan); background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1)); }
 .role-guest { color: var(--text-dim); background: rgba(255, 255, 255, 0.05); }
 
 .status-dot {

@@ -46,7 +46,7 @@ function phaseLabel(phase: string): string {
 .thinking-block {
   margin: 8px 0;
   padding: 8px 12px;
-  background: rgba(176, 38, 255, 0.06);
+  background: var(--accent-purple-a06, rgba(176, 38, 255, 0.06));
   border-left: 3px solid var(--neon-purple, #b226ff);
   border-radius: 0 8px 8px 0;
 }
@@ -86,7 +86,7 @@ function phaseLabel(phase: string): string {
   gap: 8px;
   padding: 4px 0;
   font-size: 12px;
-  border-bottom: 1px dashed rgba(128, 128, 128, 0.1);
+  border-bottom: 1px dashed var(--text-dim, rgba(128, 128, 128, 0.1));
 }
 .step-phase {
   padding: 2px 6px;
@@ -94,9 +94,9 @@ function phaseLabel(phase: string): string {
   font-size: 11px;
   white-space: nowrap;
 }
-.step-phase.tool_call { background: rgba(0, 245, 255, 0.15); }
-.step-phase.thinking { background: rgba(176, 38, 255, 0.15); }
-.step-phase.composing { background: rgba(181, 234, 215, 0.15); }
+.step-phase.tool_call { background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15)); }
+.step-phase.thinking { background: var(--accent-purple-a15, rgba(176, 38, 255, 0.15)); }
+.step-phase.composing { background: var(--accent-cyan-a15, rgba(181, 234, 215, 0.15)); }
 .step-message { flex: 1; }
 .step-tool {
   color: var(--text-soft, #888);

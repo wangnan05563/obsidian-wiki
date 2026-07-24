@@ -198,11 +198,14 @@ export interface LoggingConfig {
 // 应用配置。
 // apiKeyRef 引用环境变量名（向后兼容）；apiKey 可选，前端配置时写入 config.json。
 // 读取优先级：config.json.llm.apiKey > process.env[apiKeyRef]（M-7 安全要求）。
+// apiKeys：按 provider 索引的多 key 持久化表，切换预设时自动迁移当前 key 到 apiKeys[旧provider]，
+//   并从 apiKeys[新provider] 恢复 key，避免切换预设后 apiKey 仍显示旧 provider 的值。
+//   为什么需要：单 apiKey 字段在预设切换时无法区分 provider 来源，导致 APIKEY 未跟随模型切换错误显示。
 export interface AppConfig {
   vaultPath: string;
   // V1.3 仅 harness
   adapter: 'harness';
-  llm: { provider: string; baseUrl: string; model: string; apiKeyRef: string; apiKey?: string };
+  llm: { provider: string; baseUrl: string; model: string; apiKeyRef: string; apiKey?: string; apiKeys?: Record<string, string> };
   budget: { maxSteps: number; tokenBudget: number };
   server: { host: string; port: number };
   localOnly: boolean;
@@ -432,4 +435,54 @@ export interface QqSolution {
   caveats: string;
   original_refs: string[];
   ts: string;
+}
+
+// ============================================================================
+// 技能（Skill）导入子系统类型定义
+// 对应需求 3：支持上传 ZIP 压缩包或 .skill 格式文件的技能导入功能。
+// 存储路径：karpathy-wiki/data/skills/{skillId}/
+// 文件格式：.skill（ZIP 归档主格式，内含 SKILL.md + 可选 config/references/assets 等子目录）
+//          或 .md（纯 Markdown 辅格式，单文件技能）
+// ============================================================================
+
+// 技能元数据（GET /api/skills 列表项 + GET /api/skills/:id 详情头）
+// - id: 技能唯一标识（导入时从文件名派生，白名单清洗后作为目录名）
+// - name: 技能名称（从 SKILL.md frontmatter name 字段或文件名派生）
+// - description: 技能描述（从 SKILL.md frontmatter description 字段或首段文本派生）
+// - format: 导入文件格式（'zip' ZIP 归档 | 'md' 纯 Markdown）
+// - importedAt: 导入时间戳（ISO8601，落盘时生成）
+// - size: 技能目录占用字节数（导入时计算，便于用户感知存储占用）
+// - entryFile: 入口文件相对路径（如 'SKILL.md' 或 'skill.md'）
+export interface SkillMeta {
+  id: string;
+  name: string;
+  description: string;
+  format: 'zip' | 'md';
+  importedAt: string;
+  size: number;
+  entryFile: string;
+}
+
+// 技能详情（GET /api/skills/:id 返回）
+// 在 SkillMeta 基础上扩展内容字段，供前端预览技能全文
+export interface SkillDetail extends SkillMeta {
+  // SKILL.md 文件全文内容（Markdown）
+  content: string;
+  // 技能目录下所有文件相对路径列表（便于前端展示技能结构树）
+  files: string[];
+}
+
+// 技能导入请求体（POST /api/skills/import multipart 上传）
+// 由 multipart 解析后填充，file 字段为上传的 ZIP 或 .md 文件
+export interface SkillImportResult {
+  ok: boolean;
+  skill: SkillMeta;
+  // 警告信息列表（如跳过的非法文件、超出大小限制的单文件等，不阻断导入但需告知用户）
+  warnings: string[];
+}
+
+// 技能导入校验错误（POST /api/skills/import 返回 400/500 时）
+export interface SkillImportError {
+  error: string;
+  details?: string;
 }

@@ -330,7 +330,7 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.05);
   border-radius: 4px;
   overflow: hidden;
-  border: 1px solid rgba(176, 38, 255, 0.15);
+  border: 1px solid var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
 }
 
 /* 流光进度条 */
@@ -340,7 +340,7 @@ onMounted(() => {
   background-size: 40px 100%;
   border-radius: 4px;
   transition: width 0.5s cubic-bezier(0.23, 1, 0.32, 1);
-  box-shadow: 0 0 12px rgba(255, 0, 110, 0.5);
+  box-shadow: 0 0 12px var(--accent-pink-a50, rgba(255, 0, 110, 0.5));
   animation: flow 1.5s linear infinite;
 }
 
@@ -366,15 +366,15 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 22px 12px;
-  background: rgba(176, 38, 255, 0.06);
-  border: 1px solid rgba(176, 38, 255, 0.15);
+  background: var(--accent-purple-a06, rgba(176, 38, 255, 0.06));
+  border: 1px solid var(--accent-purple-a15, rgba(176, 38, 255, 0.15));
   border-radius: var(--radius-card);
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .shortcut-item:hover {
-  background: rgba(176, 38, 255, 0.12);
+  background: var(--accent-purple-a12, rgba(176, 38, 255, 0.12));
   border-color: var(--neon-purple);
 }
 

@@ -53,11 +53,11 @@ function handleStop() {
   align-items: center;
   gap: 10px;
   padding: 8px 16px;
-  background: rgba(26, 26, 46, 0.92);
+  background: var(--bg-card-solid, rgba(26, 26, 46, 0.92));
   backdrop-filter: var(--blur, blur(12px));
-  border: 1px solid rgba(0, 245, 255, 0.3);
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
   border-radius: 24px;
-  box-shadow: 0 4px 20px rgba(0, 245, 255, 0.15);
+  box-shadow: 0 4px 20px var(--accent-cyan-a15, rgba(0, 245, 255, 0.15));
   z-index: 100;
   font-size: 13px;
   color: var(--text-main, #ccc);
@@ -77,15 +77,15 @@ function handleStop() {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  border: 1px solid rgba(0, 245, 255, 0.3);
-  background: rgba(0, 245, 255, 0.08);
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   color: var(--neon-cyan, #00f5ff);
   cursor: pointer;
   font-size: 12px;
   transition: all 0.2s;
 }
 .ctrl-btn:hover {
-  background: rgba(0, 245, 255, 0.2);
+  background: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-color: var(--neon-cyan, #00f5ff);
 }
 

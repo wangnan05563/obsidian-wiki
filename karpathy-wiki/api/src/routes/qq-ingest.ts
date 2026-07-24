@@ -4,12 +4,13 @@
 // M1 桩实现：extract（501，待 M2 实现 LLM 抽取）、compile/batch（501，待 M2 实现）
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { EngineAdapter, AppConfig, QqPreprocessResult } from '../types.js';
+import type { EngineAdapter, AppConfig, QqPreprocessResult, QqConfig } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { createSSESender } from '../utils/sse.js';
 import { withCompileLock } from '../compile-queue.js';
 import { preprocessQqChat, redactExtractOutput } from '../qq-ingest/preprocess/qq-preprocess.js';
 import { extractWorkflow } from '../qq-ingest/qq-extract-workflow.js';
+import { saveQqConfig } from '../config.js';
 
 // rawId 校验正则：UUID v4 格式，防路径穿越
 const RAW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -448,6 +449,70 @@ export function registerQqIngestRoute(
       });
     } finally {
       safeEnd();
+    }
+  });
+
+  // ==========================================================================
+  // GET /api/qq-ingest/config
+  // 读取 QQ 导入子系统配置（config.json → qq 字段）
+  // 为什么独立端点而非复用 /api/config：qq 字段结构复杂且可选，独立端点便于前端按需拉取
+  // 缺失时返回默认值，确保前端表单始终有可编辑内容
+  // ==========================================================================
+  app.get('/api/qq-ingest/config', async (request, reply) => {
+    try {
+      // config.qq 可能缺失（首次使用），用默认值兜底
+      const qq: QqConfig = config.qq ?? {
+        noise_rules: {
+          'NR-1': true, 'NR-2': true, 'NR-3': true,
+          'NR-4': true, 'NR-5': true, 'NR-6': true,
+        },
+        privacy_patterns: {
+          phone: String.raw`1[3-9]\d{9}`,
+          id_card: String.raw`\d{17}[\dXx]`,
+          email: String.raw`[\w.-]+@[\w.-]+\.\w+`,
+          card: String.raw`\d{16,19}`,
+          qq: String.raw`(?<=QQ|扣扣|qq号|企鹅)\s*[0-9]{5,11}`,
+        },
+        max_batch_size: 20,
+        chunk_threshold: 200,
+        extract_model: 'glm-4-plus',
+        extract_base_url: '',
+        extract_token_budget: 50000,
+      };
+      return reply.send({ qq });
+    } catch (err: unknown) {
+      request.log.error({ err }, 'qq-ingest config get error');
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ==========================================================================
+  // PUT /api/qq-ingest/config
+  // 更新 QQ 导入子系统配置（noise_rules/privacy_patterns/max_batch_size 等）
+  // 仅更新显式提供的字段，未提供字段保留原值（saveQqConfig 内部条件合并）
+  // 安全：privacy_patterns 是用户自定义正则，运行时由 qq-preprocess 编译，需 try/catch 防止正则错误
+  // ==========================================================================
+  app.put('/api/qq-ingest/config', async (request, reply) => {
+    // 兼容两种请求格式：{ qq: QqConfig }（前端 Config.vue）和 QqConfig（直接传）
+    // 为什么需要兼容：前端 saveQqConfigForm 发送 { qq: qqConfig }，但 API 约定可能变化
+    const raw = (request.body ?? {}) as { qq?: Partial<QqConfig> } & Partial<QqConfig>;
+    const body = raw.qq ?? raw;
+    try {
+      const updated = await saveQqConfig({
+        noise_rules: body.noise_rules,
+        privacy_patterns: body.privacy_patterns,
+        max_batch_size: body.max_batch_size,
+        chunk_threshold: body.chunk_threshold,
+        extract_model: body.extract_model,
+        extract_base_url: body.extract_base_url,
+        extract_token_budget: body.extract_token_budget,
+      });
+      // 同步更新运行时 config 引用，避免后续路由用旧值
+      config.qq = updated.qq;
+      return reply.send({ qq: updated.qq });
+    } catch (err: unknown) {
+      request.log.error({ err }, 'qq-ingest config put error');
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 }

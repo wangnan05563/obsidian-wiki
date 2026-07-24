@@ -1,4 +1,4 @@
-// SSE 事件相关类型定义
+﻿// SSE 事件相关类型定义
 // 后端按 step 推送进度，这里保持与后端字段对齐
 
 export type CompileStep =
@@ -93,7 +93,7 @@ export interface BatchStartData {
 export interface BatchFileGroup {
   fileIndex: number;
   fileName: string;
-  status: 'pending' | 'running' | 'done' | 'error';
+  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled';
   timeline: TimelineItem[];
   pages: Array<{ path: string; title: string }>;
   errorMessage?: string;
@@ -526,6 +526,38 @@ export interface AiSaveResult {
   config: AiConfig;
 }
 
+// ===== 技能导入相关类型 =====
+
+// 技能元数据（GET /api/skills 列表项）
+// 与后端 SkillMeta 对齐（type-sync-rule CODING-015）
+export interface SkillMeta {
+  id: string;
+  name: string;
+  description: string;
+  format: 'zip' | 'md';
+  importedAt: string;
+  size: number;
+  entryFile: string;
+}
+
+// 技能详情（GET /api/skills/:id 返回）
+export interface SkillDetail extends SkillMeta {
+  content: string;
+  files: string[];
+}
+
+// 技能导入结果（POST /api/skills/import 返回）
+export interface SkillImportResult {
+  ok: boolean;
+  skill: SkillMeta;
+  warnings: string[];
+}
+
+// 技能列表响应（GET /api/skills 返回）
+export interface SkillListResponse {
+  skills: SkillMeta[];
+}
+
 // ===== 系统清理相关类型 =====
 
 // 清理目标（4 类对象 + all）
@@ -594,7 +626,8 @@ export type AuthPermission =
   | 'cleanup'
   | 'help'
   | 'about'
-  | 'users';
+  | 'users'
+  | 'skill';
 
 // 登录请求体
 export interface LoginRequest {
@@ -658,5 +691,93 @@ export interface UserListResponse {
 export interface AuditLogResponse {
   entries: AuditLogEntry[];
   count: number;
+}
+
+// ===== QQ 草稿审核相关类型（与后端 qq-ingest 路由对齐）=====
+
+// 草稿列表项（GET /api/qq-ingest/drafts 返回）
+export interface DraftItem {
+  path: string;
+  name: string;
+}
+
+// 草稿列表响应
+export interface DraftListResponse {
+  drafts: DraftItem[];
+}
+
+// 草稿编译 SSE 事件类型联合
+// 与后端 send('progress'|'page'|'done'|'error') 对齐
+export type DraftCompileEventType = 'progress' | 'page' | 'done' | 'error';
+
+// 草稿编译 SSE 事件数据（与后端 ProgressEvent 对齐，扩展批量定位字段）
+export interface DraftCompileEvent {
+  step: string;
+  status: 'running' | 'done' | 'error';
+  message: string;
+  data?: {
+    path?: string;
+    title?: string;
+    cached?: boolean;
+    fileIndex?: number;
+    fileCount?: number;
+    fileName?: string;
+  };
+}
+
+// 批量编译单个 draft 的执行状态
+export type DraftBatchStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
+
+// 批量编译中单个 draft 的执行记录
+export interface DraftBatchItem {
+  path: string;
+  name: string;
+  status: DraftBatchStatus;
+  message?: string;
+  // 编译生成的正式页面路径列表
+  pages: Array<{ path: string; title: string }>;
+}
+
+// ===== QQ 导入子系统配置类型（与后端 QqConfig 对齐，type-sync-rule）=====
+
+// QQ 导入子系统配置（GET/PUT /api/qq-ingest/config）
+// - noise_rules: 噪声过滤规则开关（NR-1~NR-6）
+// - privacy_patterns: PII 脱敏正则（用户自定义，运行时编译）
+// - max_batch_size: 批量上传上限
+// - chunk_threshold: 长文本分块阈值（消息条数）
+// - extract_model: 抽取阶段独立 LLM 模型
+// - extract_base_url: 抽取阶段独立 baseUrl（空串回退至 llm.baseUrl）
+// - extract_token_budget: 抽取阶段 token 预算（0 回退至 budget.tokenBudget）
+export interface QqConfigData {
+  noise_rules: Record<string, boolean>;
+  privacy_patterns: Record<string, string>;
+  max_batch_size: number;
+  chunk_threshold: number;
+  extract_model: string;
+  extract_base_url: string;
+  extract_token_budget: number;
+}
+
+// QQ 配置响应（GET /api/qq-ingest/config 返回）
+export interface QqConfigResponse {
+  qq: QqConfigData;
+}
+
+// QQ 上传 SSE 事件数据（与后端 send('progress'|'done'|'error') 对齐）
+export interface QqUploadEvent {
+  step: string;
+  status: 'running' | 'done' | 'error';
+  message: string;
+  data?: {
+    rawId?: string;
+    meta?: {
+      chatName: string;
+      dateRange: string;
+      originalCount: number;
+      filteredCount: number;
+      redactedCount: number;
+    };
+    rawPath?: string;
+  };
 }
 

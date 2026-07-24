@@ -653,10 +653,10 @@ onBeforeUnmount(() => {
 .glass-card {
   background: var(--bg-card, rgba(20, 20, 35, 0.6));
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(0, 245, 255, 0.15);
+  border: 1px solid var(--accent-cyan-a15, rgba(0, 245, 255, 0.15));
   border-radius: 16px;
   padding: 24px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 32px var(--accent-purple-a20, rgba(0, 0, 0, 0.3));
 }
 
 .card-title {
@@ -702,7 +702,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono, monospace);
   font-size: 14px;
   color: var(--neon-cyan, #00f5ff);
-  background: rgba(0, 245, 255, 0.08);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   padding: 6px 12px;
   border-radius: 8px;
   word-break: break-all;
@@ -772,7 +772,7 @@ onBeforeUnmount(() => {
 
 .manual-path code {
   font-family: var(--font-mono, monospace);
-  background: rgba(255, 0, 110, 0.1);
+  background: var(--accent-pink-a10, rgba(255, 0, 110, 0.1));
   padding: 2px 8px;
   border-radius: 4px;
   color: var(--neon-pink, #ff006e);
@@ -824,7 +824,7 @@ onBeforeUnmount(() => {
 
 .info-line code {
   font-family: var(--font-mono, monospace);
-  background: rgba(0, 245, 255, 0.08);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   padding: 2px 8px;
   border-radius: 4px;
   color: var(--neon-cyan, #00f5ff);

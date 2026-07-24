@@ -13,7 +13,17 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
 
   app.get('/api/compile/runs', async (_request, reply) => {
     try {
-      const files = await fs.readdir(stateDir);
+      // 目录不存在时返回空列表：首次使用或清理后 state 目录尚未创建
+      // 为什么不在这里 mkdir：state 目录由 compile 流程按需创建，查询接口不应有副作用
+      let files: string[];
+      try {
+        files = await fs.readdir(stateDir);
+      } catch (err: unknown) {
+        if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+          return reply.send({ runs: [] });
+        }
+        throw err;
+      }
       const runs = [];
       for (const f of files) {
         if (!f.endsWith('.json')) continue;

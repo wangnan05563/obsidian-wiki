@@ -57,6 +57,10 @@ export const useCompileStore = defineStore('compile', () => {
   const batchGroups = ref<BatchFileGroup[]>([]);
   // 批量编译的拒绝列表（来自 batch_start 事件）
   const batchRejected = ref<Array<{ name: string; reason: string }>>([]);
+  // 用户主动取消标识：与 errorMessage 区分，让进度条组件能识别"取消态"而非"错误态"
+  // 为什么独立字段：errorMessage 用于后端推送的错误事件，cancelCompile 是用户主动行为，
+  //   两者视觉提示不同（取消是中性粉色，错误是红色），且文案语义不同
+  const isCancelled = ref(false);
 
   // 步骤中文名
   const stepLabel = computed(() => (s: CompileStep | null) =>
@@ -84,6 +88,7 @@ export const useCompileStore = defineStore('compile', () => {
     pendingBatchPayload.value = null;
     batchGroups.value = [];
     batchRejected.value = [];
+    isCancelled.value = false;
   }
 
   // 中止当前编译：仅复位 isCompiling，保留 pendingPayload/isDone/errorMessage
@@ -94,6 +99,15 @@ export const useCompileStore = defineStore('compile', () => {
     if (isCompiling.value) {
       isCompiling.value = false;
     }
+  }
+
+  // 用户主动取消编译：标记 isCancelled 让进度条组件切换到"取消态"视觉
+  // 与 abortCompile 的区别：abortCompile 是切走页面时的隐式中止，不设置取消标识；
+  //   cancelCompile 是用户显式点击"取消编译"按钮，需要在 UI 上展示取消态
+  // 为什么不复位 batchGroups：保留已完成进度供用户查看（"已完成 3/10"）
+  function cancelCompile() {
+    isCancelled.value = true;
+    isCompiling.value = false;
   }
 
   // 投递前预存载荷并进入编译态
@@ -320,8 +334,10 @@ export const useCompileStore = defineStore('compile', () => {
     pendingBatchPayload,
     batchGroups,
     batchRejected,
+    isCancelled,
     reset,
     abortCompile,
+    cancelCompile,
     prepareCompile,
     prepareBatchCompile,
     handleEvent,

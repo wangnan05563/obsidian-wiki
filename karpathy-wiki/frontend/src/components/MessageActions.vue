@@ -101,7 +101,7 @@ function handleFeedback(type: 'up' | 'down') {
   transition: all 0.2s;
 }
 .action-btn:hover {
-  background: rgba(0, 245, 255, 0.1);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
   color: var(--neon-cyan, #00f5ff);
 }
 .action-btn.active {

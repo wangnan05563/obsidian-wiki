@@ -21,7 +21,9 @@ export type AuthPermission =
   | 'help'
   | 'about'
   // 用户管理是独立的权限点，不对应菜单 key
-  | 'users';
+  | 'users'
+  // 技能导入管理：管理员专属，与 config/cleanup 同级
+  | 'skill';
 
 // 用户记录（持久化到 users.json）
 // passwordHash + salt 用于 PBKDF2 验证；password 字段不存储

@@ -118,8 +118,8 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   font-size: 0.9em;
   padding: 2px 6px;
-  background: rgba(0, 245, 255, 0.1);
-  border: 1px solid rgba(0, 245, 255, 0.18);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
+  border: 1px solid var(--accent-cyan-a18, rgba(0, 245, 255, 0.18));
   border-radius: 4px;
   color: var(--neon-cyan);
   word-break: break-all;
@@ -129,8 +129,8 @@ onBeforeUnmount(() => {
 .md-body :deep(pre) {
   margin: 0.75em 0;
   padding: 14px 16px;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  background: var(--bg-scene, rgba(0, 0, 0, 0.35));
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-radius: 10px;
   overflow-x: auto;
   backdrop-filter: var(--blur);
@@ -151,7 +151,7 @@ onBeforeUnmount(() => {
   margin: 0.75em 0;
   padding: 0.5em 1em;
   border-left: 3px solid var(--neon-purple);
-  background: rgba(176, 38, 255, 0.06);
+  background: var(--accent-purple-a06, rgba(176, 38, 255, 0.06));
   color: var(--text-soft);
   border-radius: 0 8px 8px 0;
 }
@@ -166,7 +166,7 @@ onBeforeUnmount(() => {
   border-collapse: collapse;
   width: 100%;
   font-size: 0.94em;
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-radius: 8px;
   overflow: hidden;
 }
@@ -174,32 +174,32 @@ onBeforeUnmount(() => {
 .md-body :deep(th),
 .md-body :deep(td) {
   padding: 8px 12px;
-  border: 1px solid rgba(0, 245, 255, 0.12);
+  border: 1px solid var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
   text-align: left;
 }
 
 .md-body :deep(th) {
-  background: rgba(0, 245, 255, 0.08);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   font-weight: 700;
   color: var(--neon-cyan);
 }
 
 .md-body :deep(tr:nth-child(2n) td) {
-  background: rgba(0, 245, 255, 0.03);
+  background: var(--accent-cyan-a03, rgba(0, 245, 255, 0.03));
 }
 
 /* 链接：发光高亮 */
 .md-body :deep(a) {
   color: var(--neon-cyan);
   text-decoration: none;
-  border-bottom: 1px dashed rgba(0, 245, 255, 0.4);
+  border-bottom: 1px dashed var(--accent-cyan-a40, rgba(0, 245, 255, 0.4));
   transition: all 0.2s ease;
 }
 
 .md-body :deep(a:hover) {
   color: var(--neon-purple);
   border-bottom-color: var(--neon-purple);
-  text-shadow: 0 0 6px rgba(176, 38, 255, 0.6);
+  text-shadow: 0 0 6px var(--accent-purple-a60, rgba(176, 38, 255, 0.6));
 }
 
 /* v2：图片样式 */

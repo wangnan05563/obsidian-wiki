@@ -608,8 +608,8 @@ onBeforeUnmount(() => {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  border: 1px solid rgba(0, 245, 255, 0.3);
-  background: rgba(0, 245, 255, 0.1);
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
   color: var(--neon-cyan, #00f5ff);
   cursor: pointer;
   font-size: 16px;
@@ -617,7 +617,7 @@ onBeforeUnmount(() => {
   transition: all 0.2s ease;
 }
 .sidebar-show-btn:hover {
-  background: rgba(0, 245, 255, 0.2);
+  background: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-color: var(--neon-cyan, #00f5ff);
 }
 
@@ -700,8 +700,8 @@ onBeforeUnmount(() => {
 
 .suggestion-chip {
   padding: 8px 16px;
-  background: rgba(176, 38, 255, 0.08);
-  border: 1px solid rgba(176, 38, 255, 0.3);
+  background: var(--accent-purple-a08, rgba(176, 38, 255, 0.08));
+  border: 1px solid var(--accent-purple-a30, rgba(176, 38, 255, 0.3));
   border-radius: var(--radius-pill);
   font-size: 13px;
   color: var(--text-base);
@@ -711,7 +711,7 @@ onBeforeUnmount(() => {
 }
 
 .suggestion-chip:hover {
-  background: rgba(176, 38, 255, 0.18);
+  background: var(--accent-purple-a18, rgba(176, 38, 255, 0.18));
   border-color: var(--neon-purple);
   color: var(--neon-cyan);
   transform: translateY(-2px);
@@ -762,8 +762,8 @@ onBeforeUnmount(() => {
 }
 
 .msg-bubble.assistant {
-  background: rgba(0, 245, 255, 0.06);
-  border: 1px solid rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a06, rgba(0, 245, 255, 0.06));
+  border: 1px solid var(--accent-cyan-a25, rgba(0, 245, 255, 0.25));
   border-top-left-radius: 4px;
   backdrop-filter: var(--blur);
 }
@@ -782,7 +782,7 @@ onBeforeUnmount(() => {
   /* 文字颜色随主题切换：深色主题下 --text-bright 为浅紫近白，浅色主题（macaron）下为深紫
      避免 macaron 主题下浅粉背景 + 白色文字导致看不清的问题 */
   color: var(--text-bright);
-  box-shadow: 0 4px 20px rgba(255, 0, 110, 0.3);
+  box-shadow: 0 4px 20px var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
 }
 
 /* 流式输出时的脉动效果 */
@@ -806,7 +806,7 @@ onBeforeUnmount(() => {
 .search-progress {
   margin: 4px 0 8px;
   padding: 4px 10px;
-  background: rgba(0, 245, 255, 0.08);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   border-left: 2px solid var(--neon-cyan);
   border-radius: 0 4px 4px 0;
   font-size: 12px;
@@ -819,7 +819,7 @@ onBeforeUnmount(() => {
 .msg-followups {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px dashed rgba(176, 38, 255, 0.2);
+  border-top: 1px dashed var(--accent-purple-a20, rgba(176, 38, 255, 0.2));
   display: flex;
   align-items: center;
   gap: 8px;
@@ -842,7 +842,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   overflow-x: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 245, 255, 0.3) transparent;
+  scrollbar-color: var(--accent-cyan-a30, rgba(0, 245, 255, 0.3)) transparent;
   /* 隐藏横向滚动条视觉，保持纯净 */
   -ms-overflow-style: none;
 }
@@ -850,7 +850,7 @@ onBeforeUnmount(() => {
   height: 4px;
 }
 .followups-track::-webkit-scrollbar-thumb {
-  background: rgba(0, 245, 255, 0.3);
+  background: var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
   border-radius: 2px;
 }
 
@@ -860,8 +860,8 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   white-space: nowrap;
   padding: 4px 12px;
-  background: rgba(0, 245, 255, 0.08);
-  border: 1px solid rgba(0, 245, 255, 0.25);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  border: 1px solid var(--accent-cyan-a25, rgba(0, 245, 255, 0.25));
   border-radius: var(--radius-pill);
   font-size: 11px;
   color: var(--neon-cyan);
@@ -871,7 +871,7 @@ onBeforeUnmount(() => {
 }
 
 .followup-chip:hover {
-  background: rgba(0, 245, 255, 0.18);
+  background: var(--accent-cyan-a18, rgba(0, 245, 255, 0.18));
   border-color: var(--neon-cyan);
   transform: translateY(-1px);
 }
@@ -884,7 +884,7 @@ onBeforeUnmount(() => {
   left: 50%;
   transform: translateX(-50%);
   padding: 3px 8px;
-  background: rgba(0, 0, 0, 0.75);
+  background: var(--bg-card-solid, rgba(0, 0, 0, 0.75));
   color: #fff;
   font-size: 10px;
   font-family: var(--font-body);
@@ -965,12 +965,12 @@ onBeforeUnmount(() => {
 /* F-3.1 流式输出态：气泡脉动光晕，首字节后激活，让用户感知"正在生成" */
 @keyframes neon-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(0, 245, 255, 0);
-    border-color: rgba(0, 245, 255, 0.25);
+    box-shadow: 0 0 0 0 transparent;
+    border-color: var(--accent-cyan-a25, rgba(0, 245, 255, 0.25));
   }
   50% {
-    box-shadow: 0 0 20px 2px rgba(0, 245, 255, 0.35);
-    border-color: rgba(0, 245, 255, 0.6);
+    box-shadow: 0 0 20px 2px var(--accent-cyan-a35, rgba(0, 245, 255, 0.35));
+    border-color: var(--accent-cyan-a60, rgba(0, 245, 255, 0.6));
   }
 }
 
@@ -1023,8 +1023,8 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-family: var(--font-mono, monospace);
   color: var(--neon-cyan, #00f5ff);
-  background: rgba(0, 245, 255, 0.12);
-  border: 1px solid rgba(0, 245, 255, 0.3);
+  background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
   border-radius: 4px;
   pointer-events: none;
   user-select: none;
@@ -1065,8 +1065,8 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-family: var(--font-mono, monospace);
   color: var(--text-soft, #888);
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(0, 245, 255, 0.2);
+  background: var(--bg-scene, rgba(0, 0, 0, 0.35));
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
@@ -1082,7 +1082,7 @@ onBeforeUnmount(() => {
 
 .markdown-body :deep(.code-copy-btn:hover) {
   color: var(--neon-cyan, #00f5ff);
-  border-color: rgba(0, 245, 255, 0.5);
+  border-color: var(--accent-cyan-a50, rgba(0, 245, 255, 0.5));
 }
 
 /* 有语言徽章时，复制按钮下移避免与徽章重叠 */
@@ -1121,8 +1121,8 @@ onBeforeUnmount(() => {
   margin: 0.75em 0;
   border-radius: 10px;
   overflow: hidden;
-  border: 1px solid rgba(0, 245, 255, 0.2);
-  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+  background: var(--bg-scene, rgba(0, 0, 0, 0.2));
 }
 
 /* 原生 video / audio：宽度自适应，避免超大尺寸撑破气泡 */

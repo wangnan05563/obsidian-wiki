@@ -1,17 +1,26 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useAuthStore } from '../stores/auth';
-import RobotAvatar from '../components/RobotAvatar.vue';
+import { useTheme } from '../composables/useTheme';
+import CognitionIcon from '../components/CognitionIcon.vue';
 
-// 登录页面：本地优先应用最简登录
-// 为什么不引入复杂认证（OAuth/SSO）：本地应用无需第三方身份提供商
-// UI 风格：与主应用保持一致（毛玻璃卡片 + 霓虹色系 + 圆角）
+// 登录页面：Luminous Cognition 主题自适应
+// 背景图随主题相位切换：浅色主题（macaron/ecommerce）→ bg-light，深色主题 → bg-dark
+// 为什么不用 CSS filter 反色：会破坏 PNG 原画质感，两套图分别由同一渲染脚本生成，色彩精准
 const authStore = useAuthStore();
+const { currentTheme } = useTheme();
 
 const username = ref('');
 const password = ref('');
 const loading = ref(false);
 const errorMsg = ref('');
+
+// 浅色主题清单：与 useTheme.ts 中的视觉分类保持一致
+const lightThemes = ['macaron', 'ecommerce'];
+const bgImage = computed(() => {
+  const isLight = lightThemes.includes(currentTheme.value);
+  return isLight ? '/images/login/bg-light.png' : '/images/login/bg-dark.png';
+});
 
 async function handleLogin() {
   if (!username.value || !password.value) {
@@ -38,9 +47,21 @@ function handleKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="login-page">
+    <!-- 主题自适应背景层：cover 全屏，crossfade 过渡 -->
+    <Transition name="bg-fade" mode="out-in">
+      <div
+        :key="bgImage"
+        class="login-bg"
+        :style="{ backgroundImage: `url(${bgImage})` }"
+      />
+    </Transition>
+
+    <!-- 背景蒙版：保证卡片可读性，深浅主题分级 -->
+    <div class="login-scrim" />
+
     <div class="login-card glass-card">
       <div class="login-header">
-        <RobotAvatar :size="64" />
+        <CognitionIcon :size="72" floating />
         <h1 class="login-title grad-text">AI 知识库</h1>
         <p class="login-subtitle">请登录以继续</p>
       </div>
@@ -95,22 +116,63 @@ function handleKeydown(e: KeyboardEvent) {
 
 <style scoped>
 .login-page {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
+  overflow: hidden;
 }
 
+/* 背景图层：cover 全屏，定位在 z=0 */
+.login-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  z-index: 0;
+  /* 背景缓入：与 crossfade 配合 */
+  will-change: opacity;
+}
+
+/* 主题切换时背景 crossfade 过渡 */
+.bg-fade-enter-active,
+.bg-fade-leave-active {
+  transition: opacity 0.8s ease;
+}
+.bg-fade-enter-from,
+.bg-fade-leave-to {
+  opacity: 0;
+}
+
+/* 蒙版：增强卡片可读性；opacity 由 scrimOpacity 响应式控制 */
+.login-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: radial-gradient(
+    ellipse 55% 55% at 50% 50%,
+    var(--bg-void) 0%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* 卡片：z=2，位于背景与蒙版之上 */
 .login-card {
+  position: relative;
+  z-index: 2;
   width: 100%;
   max-width: 400px;
   padding: 40px 32px;
   border-radius: var(--radius-card, 16px);
   background: var(--bg-glass);
   backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--accent-purple-a30);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 32px var(--accent-purple-a20, rgba(0, 0, 0, 0.2));
 }
 
 .login-header {
@@ -118,7 +180,7 @@ function handleKeydown(e: KeyboardEvent) {
   margin-bottom: 32px;
 }
 
-.login-header :deep(.robot-avatar) {
+.login-header :deep(.cognition-icon) {
   margin: 0 auto 12px;
 }
 
@@ -198,12 +260,12 @@ function handleKeydown(e: KeyboardEvent) {
   cursor: pointer;
   transition: all 0.3s ease;
   letter-spacing: 1px;
-  box-shadow: 0 4px 16px rgba(255, 0, 110, 0.3);
+  box-shadow: 0 4px 16px var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
 }
 
 .login-btn:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 6px 24px rgba(255, 0, 110, 0.4);
+  box-shadow: 0 6px 24px var(--accent-pink-a40, rgba(255, 0, 110, 0.4));
 }
 
 .login-btn:disabled {
@@ -229,7 +291,7 @@ function handleKeydown(e: KeyboardEvent) {
   font-family: var(--font-mono);
   font-size: 10px;
   padding: 2px 6px;
-  background: rgba(0, 245, 255, 0.08);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   border-radius: 4px;
   color: var(--neon-cyan);
 }

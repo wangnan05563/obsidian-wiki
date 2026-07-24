@@ -701,7 +701,7 @@ onBeforeUnmount(() => {
 }
 
 .sidebar-search :deep(.el-input__wrapper) {
-  background: rgba(10, 1, 24, 0.4) !important;
+  background: var(--bg-scene, rgba(10, 1, 24, 0.4)) !important;
 }
 
 .anchor-nav {
