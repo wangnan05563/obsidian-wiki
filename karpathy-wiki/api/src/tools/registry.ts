@@ -10,8 +10,8 @@
 
 import type { ToolDefinition, RunContext } from '@wiki/harness';
 import type { ToolsConfig, McpServerEntry, CliToolEntry } from '../types.js';
-import { routeTools, isToolEnabled } from './scene-router.js';
-import { listMcpTools, buildMcpToolDefinition, disconnectAllMcpServers } from './mcp-client.js';
+import { routeTools, isToolEnabled, isMcpServerTriggered } from './scene-router.js';
+import { listMcpTools, callMcpTool, buildMcpToolDefinition, disconnectAllMcpServers } from './mcp-client.js';
 import { buildCliToolDefinition } from './cli-executor.js';
 
 // 扩展工具加载结果。
@@ -48,31 +48,139 @@ async function loadCliTools(config: ToolsConfig, enabledToolNames: string[]): Pr
   return result;
 }
 
+// 根据 placeholderTool 的 name，在真正 connect MCP 后查找对应真实工具，返回该工具的调用结果。
+// 为什么需要：placeholder 工具与真实工具名不一定完全一致（MCP 可能添加前后缀），
+// 做一次 case-insensitive 前缀包含匹配即可覆盖大多数场景。
+// 找不到匹配时返回友好错误，告知用户该 MCP 服务器未暴露同名工具。
+async function resolveAndCallLazyTool(
+  serverEntry: McpServerEntry,
+  placeholderToolName: string,
+  mcpTimeoutMs: number | undefined,
+  args: unknown,
+): Promise<{ output?: string; error?: string }> {
+  // 首次调用触发真实 connect + tools/list
+  const mcpTools = await listMcpTools(serverEntry, mcpTimeoutMs);
+  const lowerName = placeholderToolName.toLowerCase();
+  const matched = mcpTools.find((t) => t.name.toLowerCase() === lowerName)
+    || mcpTools.find((t) => t.name.toLowerCase().includes(lowerName));
+  if (!matched) {
+    const available = mcpTools.map((t) => t.name).join(', ') || '(none)';
+    return {
+      error: `[MCP:${serverEntry.name}] 工具 "${placeholderToolName}" 在该服务器上不存在。可用工具：${available}`,
+    };
+  }
+  const result = await callMcpTool(serverEntry, matched.name, args, mcpTimeoutMs);
+  if (result.isError) {
+    const text = result.content.map((c) => c.text || '').join('\n');
+    return { error: text || 'MCP tool returned an error' };
+  }
+  const text = result.content.map((c) => c.text || '').join('\n');
+  return { output: text };
+}
+
+// 构建懒加载占位 ToolDefinition（不立即连接 MCP，首次 handler 调用时才连接）。
+// 为什么需要：auto 模式下并非每次问答都用到所有 MCP，提前 connect + initialize 会消耗大量时间
+// （npx 拉包、握手超时），用户体验差。占位工具让 LLM 能感知可用能力，真正用到时才连接。
+function buildLazyMcpToolDefinition(
+  serverEntry: McpServerEntry,
+  placeholder: { name: string; description: string; parameters?: object },
+  mcpTimeoutMs?: number,
+): ToolDefinition {
+  const fullName = `mcp__${serverEntry.name}__${placeholder.name}`;
+  let connectedCache: Promise<void> | null = null;
+  return {
+    name: fullName,
+    description: `[MCP:${serverEntry.name}] ${placeholder.description}（首次调用时自动连接，如网络不可用可能超时）`,
+    parameters: placeholder.parameters ?? { type: 'object' as const, properties: {}, required: [] },
+    handler: async (args: unknown, _ctx: unknown) => {
+      try {
+        // 保证并发调用不会重复连接 MCP 服务器
+        if (!connectedCache) {
+          connectedCache = resolveAndCallLazyTool(serverEntry, placeholder.name, mcpTimeoutMs, args)
+            .then(() => {})
+            .catch(() => { connectedCache = null; });
+        }
+        const res = await resolveAndCallLazyTool(serverEntry, placeholder.name, mcpTimeoutMs, args);
+        return res;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { error: `MCP tool call failed (lazy connect): ${msg}` };
+      }
+    },
+  };
+}
+
+// 收集 auto 模式下占位工具（未命中 triggerKeywords 的服务器）。
+// 为什么需要：即使某个 MCP 服务器未被关键词命中，也应注册占位工具，让 LLM 知道有这些能力，
+// 同时避免预先 connect MCP 带来的握手开销。命中 triggerKeywords 的服务器则直接真实加载。
+function collectLazyPlaceholderTools(
+  question: string,
+  config: ToolsConfig,
+  enabledToolNames: string[],
+): ToolDefinition[] {
+  const tools: ToolDefinition[] = [];
+  for (const server of config.mcpServers) {
+    if (!server.enabled) continue;
+    if (!server.placeholderTools || server.placeholderTools.length === 0) continue;
+    // 已经 trigger 命中的服务器不会走到这（在 loadMcpTools 里真实加载了），避免重复注册
+    if (isMcpServerTriggered(question, server)) continue;
+    // 占位工具名（mcp__{server}）同样需要通过 isToolEnabled 过滤
+    if (!isToolEnabled(`mcp__${server.name}`, enabledToolNames)) continue;
+    for (const ph of server.placeholderTools) {
+      tools.push(buildLazyMcpToolDefinition(server, ph, config.mcpTimeoutMs));
+    }
+  }
+  return tools;
+}
+
 // 加载启用的 MCP 服务器工具为 ToolDefinition 列表。
 // 提取为独立函数降低 loadExtendedTools 认知复杂度（S3776）。
 // 传递 config.mcpTimeoutMs 作为 RPC 超时默认值（per-server timeoutMs 优先）。
 // 单个服务器连接失败仅记录错误不阻断其他服务器加载。
+//
+// §并行加载优化：原串行 for-await 在多个 MCP 服务器同时不可达时，会累计超时
+// （2 个服务器 × 30s = 60s），刚好触发前端 60s 超时阈值，导致 AI 回复被前端中断。
+// 改用 Promise.allSettled 并行加载，总耗时收敛到单服务器超时上限（30s），
+// 给 LLM 留出足够首字节时间，避免误判"AI 未回复"。
 async function loadMcpTools(config: ToolsConfig, enabledToolNames: string[]): Promise<LoadedTools> {
   const result: LoadedTools = { tools: [], errors: [] };
-  for (const serverEntry of config.mcpServers) {
-    if (!serverEntry.enabled) continue;
-    if (!isToolEnabled(`mcp__${serverEntry.name}`, enabledToolNames)) continue;
-    try {
+  // 先过滤出启用的服务器，避免对禁用服务器发起连接
+  const activeServers = config.mcpServers.filter(
+    (s) => s.enabled && isToolEnabled(`mcp__${s.name}`, enabledToolNames),
+  );
+  if (activeServers.length === 0) return result;
+
+  // 并行加载：每个服务器的连接 + tools/list 独立 Promise，互不阻塞
+  // 为什么用 allSettled 而非 all：单服务器失败不应阻断其他服务器的工具加载，
+  //   allSettled 总是 resolve，失败结果在 settled 数组中以 rejected 状态呈现
+  const settledResults = await Promise.allSettled(
+    activeServers.map(async (serverEntry) => {
       const mcpTools = await listMcpTools(serverEntry, config.mcpTimeoutMs);
-      for (const tool of mcpTools) {
+      // 同一服务器的多个工具构建可同步进行，无需再并行
+      return mcpTools.map((tool) => {
         const toolDef = buildMcpToolDefinition(serverEntry, tool, config.mcpTimeoutMs);
-        result.tools.push({
+        return {
           name: toolDef.name,
           description: toolDef.description,
           parameters: toolDef.parameters,
           handler: async (args: unknown, ctx: RunContext) => toolDef.handler(args, ctx),
-        });
-      }
-    } catch (err) {
-      // MCP 连接失败：记录错误但继续加载其他服务器
+        };
+      });
+    }),
+  );
+
+  // 收集结果：fulfilled 合并 tools，rejected 转 errors
+  // 为什么用 entries + index 而非直接 map：需要在 rejected 分支拿到对应 serverEntry 名字
+  for (let i = 0; i < settledResults.length; i++) {
+    const settled = settledResults[i];
+    const serverEntry = activeServers[i];
+    if (settled.status === 'fulfilled') {
+      result.tools.push(...settled.value);
+    } else {
+      // MCP 连接失败：记录错误但继续收集其他服务器的结果
       result.errors.push({
         source: `mcp:${serverEntry.name}`,
-        message: err instanceof Error ? err.message : String(err),
+        message: settled.reason instanceof Error ? settled.reason.message : String(settled.reason),
       });
     }
   }
@@ -103,7 +211,11 @@ export async function loadExtendedTools(
   // 2. 顺序加载 CLI 工具与 MCP 工具，保持原有加载顺序便于日志可读
   const cliResult = await loadCliTools(config, enabledToolNames);
   const mcpResult = await loadMcpTools(config, enabledToolNames);
-  return mergeLoaded(cliResult, mcpResult);
+  // 2.5 auto 模式懒加载：triggerKeywords 未命中但配置了 placeholderTools 的服务器注册占位工具
+  const lazyPlaceholders = config.routerMode === 'auto'
+    ? collectLazyPlaceholderTools(question, config, enabledToolNames)
+    : [];
+  return mergeLoaded(cliResult, mcpResult, { tools: lazyPlaceholders, errors: [] });
 }
 
 // 列出所有配置的扩展工具（供 /api/tools/list 路由调用，前端展示用）。

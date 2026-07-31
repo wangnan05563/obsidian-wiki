@@ -181,7 +181,24 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
     Write-Ok "SPA 已存在且 -SkipSPA 已指定，跳过构建"
 } else {
     # 构建前端：vite.config.ts 中 outDir 指向 api/public
-    & $pkgCmd run build
+    # 为什么加 --base=/：vite 默认 base='/wiki/'（Tailscale Funnel 模式），
+    #   exe 本地运行时不经过 Funnel 剥离前缀，前端 API 请求若带 /wiki/ 前缀会 404。
+    #   --base=/ 覆盖默认值，让 fetch 路径为 /api/xxx 直接命中后端路由。
+    # 为什么用等号形式 --base=/ 而非空格形式 --base /：
+    #   PowerShell 传参时 --base / 被拆分为两个独立 token "--base" 和 "/"，
+    #   commander.js 在 Windows 上把单独的 "/" 当作 Windows 风格选项前缀（如 /help），
+    #   不会将其作为 --base 的值消费，导致 vite 回退到 config 中的默认 base='/wiki/'，
+    #   前端 API_BASE 变成 '/wiki/api'，后端未注册该前缀路由 → 登录 HTTP 404。
+    #   等号形式是 commander 标准语法，值与选项名一体传递，不依赖 shell 分词，跨平台可靠。
+    # 为什么不直接用 pnpm run build：
+    #   pnpm run build 包含 vue-tsc 类型检查，exe 构建场景下类型错误已在上次开发时验证，
+    #   跳过可避免已知类型问题阻塞打包
+    Push-Location (Join-Path $repoRoot "frontend")
+    try {
+        & npx vite build --base=/
+    } finally {
+        Pop-Location
+    }
     if ($LASTEXITCODE -ne 0) { throw "SPA 构建失败" }
 
     if (-not (Test-Path $spaIndex)) {
@@ -215,7 +232,9 @@ $esbuildArgs = @(
     # esbuild 0.25+ 破坏性变更，--define 值只允许 entity name 或 JS literal，
     # 不再允许函数调用表达式（如 require('url').pathToFileURL(...)）
     # 方案：banner 在 bundle 顶部注入 var 定义，define 把 import.meta.url 替换为标识符
-    "--banner:js=var __import_meta_url=require('url').pathToFileURL(__filename).href",
+    # 为什么检测 __filename 是否存在：SEA exe 中 __filename 指向构建时的 bundle.cjs，
+    # 用户机器上该文件不存在，需改用 process.execPath（exe 路径）让路径解析正确
+    "--banner:js=var __import_meta_url=require('url').pathToFileURL(require('fs').existsSync(__filename)?__filename:process.execPath).href",
     "--define:import.meta.url=__import_meta_url",
     "--log-level=info"
 )
@@ -288,12 +307,31 @@ if (Test-Path $spaSource) {
 }
 
 # 6.2 配置文件（config.json）
-Write-Host "  [6.2] 复制配置文件..."
+# 为什么不直接 Copy-Item：开发环境 config.json 含明文 API Key（llm.apiKey / llm.apiKeys /
+#   webSearch.apiKey / media.agnes.apiKey），原样复制到安装包会泄露密钥。
+#   打包时必须清除所有敏感字段，用户通过 .env 注入 API Key。
+Write-Host "  [6.2] 复制配置文件（清除敏感字段）..."
 $configSource = Join-Path $repoRoot "api\config.json"
 $configTarget = Join-Path $pkgOutputDir "config.json"
 if (Test-Path $configSource) {
-    Copy-Item -Force $configSource $configTarget
-    Write-Ok "config.json 已复制"
+    $configObj = Get-Content $configSource -Raw -Encoding UTF8 | ConvertFrom-Json
+    # 清除明文 API Key：保留 apiKeyRef（引用名）让用户通过 .env 填入实际值
+    if ($configObj.llm) {
+        $configObj.llm.PSObject.Properties.Remove('apiKey')
+        if ($configObj.llm.apiKeys) {
+            $configObj.llm.PSObject.Properties.Remove('apiKeys')
+        }
+    }
+    if ($configObj.webSearch) {
+        $configObj.webSearch.PSObject.Properties.Remove('apiKey')
+    }
+    if ($configObj.media -and $configObj.media.agnes) {
+        $configObj.media.agnes.PSObject.Properties.Remove('apiKey')
+    }
+    # 用 UTF-8 无 BOM 写入：避免 SEA exe 读取 JSON 时 BOM 导致解析失败
+    $jsonStr = $configObj | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($configTarget, $jsonStr, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Ok "config.json 已复制（已清除 llm.apiKey / apiKeys / webSearch.apiKey / media.agnes.apiKey）"
 } else {
     # 生成默认配置
     $defaultConfig = @{
@@ -353,6 +391,79 @@ if (Test-Path $promptsSource) {
     Write-Ok "prompts 已复制"
 } else {
     Write-Warn "prompts 源目录不存在：$promptsSource"
+}
+
+# 6.6 pdf-parse 运行时依赖
+# 为什么需要：pdf-convert.ts 用 createRequire 加载 pdf-parse/lib/pdf-parse.js，
+# esbuild 无法静态分析 createRequire 的 require，不会将其打包进 bundle。
+# SEA exe 安装目录无 node_modules，运行时 require 找不到模块。
+# pdf-parse/lib/pdf-parse.js 内部还有动态 require `./pdf.js/${version}/build/pdf.js`，
+# 同样无法被 esbuild 打包，必须将 pdf.js 文件一并复制到 exe 同级目录。
+# 为什么只复制 v1.10.100：pdf-parse 默认 options.version = 'v1.10.100'，其他版本不会被加载
+# 为什么排除 .map：source map 仅用于调试，运行时不需要，可减小安装包体积（约 4.5 MB）
+Write-Host "  [6.6] 复制 pdf-parse 运行时依赖..."
+$runtimeDepsTarget = Join-Path $pkgOutputDir "node_modules"
+
+# pdf-parse：只复制 lib/pdf-parse.js + lib/pdf.js/v1.10.100/build/*.js + package.json
+$pdfParseSource = Join-Path $repoRoot "api\node_modules\pdf-parse"
+$pdfParseTarget = Join-Path $runtimeDepsTarget "pdf-parse"
+if (Test-Path $pdfParseSource) {
+    # 创建目录结构
+    $pdfJsBuildTarget = Join-Path $pdfParseTarget "lib\pdf.js\v1.10.100\build"
+    New-Item -ItemType Directory -Force $pdfJsBuildTarget | Out-Null
+
+    # 复制 package.json（require 解析需要）
+    Copy-Item -Force (Join-Path $pdfParseSource "package.json") (Join-Path $pdfParseTarget "package.json")
+    # 复制核心文件 lib/pdf-parse.js
+    Copy-Item -Force (Join-Path $pdfParseSource "lib\pdf-parse.js") (Join-Path $pdfParseTarget "lib\pdf-parse.js")
+    # 复制 pdf.js v1.10.100 build 目录（只复制 .js，不复制 .map）
+    $pdfJsBuildSource = Join-Path $pdfParseSource "lib\pdf.js\v1.10.100\build"
+    Copy-Item -Force (Join-Path $pdfJsBuildSource "pdf.js") (Join-Path $pdfJsBuildTarget "pdf.js")
+    Copy-Item -Force (Join-Path $pdfJsBuildSource "pdf.worker.js") (Join-Path $pdfJsBuildTarget "pdf.worker.js")
+    Write-Ok "pdf-parse 已复制（仅 v1.10.100，排除 .map）"
+} else {
+    Write-Warn "pdf-parse 源目录不存在：$pdfParseSource，PDF 解析功能将不可用"
+}
+
+# node-ensure：pdf.js v1.10.100 内部 require('node-ensure') 的运行时依赖
+# 为什么用递归查找：pnpm 将 node-ensure 作为 pdf-parse 的间接依赖放在 .pnpm 目录下，
+# 路径随 pnpm 版本变化，递归查找最稳健
+$nodeEnsureSource = $null
+$pnpmNodeEnsure = Join-Path $repoRoot "node_modules\.pnpm"
+if (Test-Path $pnpmNodeEnsure) {
+    $nodeEnsureSource = Get-ChildItem -Path $pnpmNodeEnsure -Filter "node-ensure" -Directory -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName "index.js") } |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+# 兜底：检查 api/node_modules 下是否有 node-ensure（非 pnpm 环境或已提升）
+if (-not $nodeEnsureSource) {
+    $apiNodeEnsure = Join-Path $repoRoot "api\node_modules\node-ensure"
+    if (Test-Path (Join-Path $apiNodeEnsure "index.js")) {
+        $nodeEnsureSource = $apiNodeEnsure
+    }
+}
+
+if ($nodeEnsureSource) {
+    $nodeEnsureTarget = Join-Path $runtimeDepsTarget "node-ensure"
+    New-Item -ItemType Directory -Force $nodeEnsureTarget | Out-Null
+    Copy-Item -Force (Join-Path $nodeEnsureSource "package.json") (Join-Path $nodeEnsureTarget "package.json")
+    Copy-Item -Force (Join-Path $nodeEnsureSource "index.js") (Join-Path $nodeEnsureTarget "index.js")
+    Write-Ok "node-ensure 已复制（来源：$nodeEnsureSource）"
+} else {
+    Write-Warn "node-ensure 未找到，pdf.js 运行时可能报 require('node-ensure') 错误"
+}
+
+# 6.7 复制 llm-presets.json（LLM 厂商预设列表）
+# 为什么需要：ai.ts 通过 getResourcePath('llm-presets.json') 加载预设列表，
+# SEA 模式下 getResourcePath 返回 exe 同级目录，必须将 llm-presets.json 复制到 exe 目录
+Write-Host "  [6.7] 复制 llm-presets.json..."
+$apiDir = Join-Path $repoRoot "api"
+$llmPresetsSource = Join-Path $apiDir "llm-presets.json"
+if (Test-Path $llmPresetsSource) {
+    Copy-Item -Force $llmPresetsSource (Join-Path $pkgOutputDir "llm-presets.json")
+    Write-Ok "llm-presets.json 已复制"
+} else {
+    Write-Warn "llm-presets.json 源文件不存在：$llmPresetsSource，LLM 预设功能将不可用"
 }
 
 # 写入构建就绪标记

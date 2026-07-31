@@ -82,8 +82,13 @@ function parseDiffLines(diff: string): DiffLine[] {
   return lines;
 }
 
+// 只读 GET 路由的统一限流配置（P1-4）：
+// 全局默认 60 req/min 兜底写操作（PUT /api/schema），这里覆盖为 300 req/min
+// 适用于 schema 内容查询、git 历史与 diff 三个 GET 端点
+const READ_RATE_LIMIT = { max: 300, timeWindow: '1 minute' };
+
 export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) {
-  app.get('/api/schema', async (_request, reply) => {
+  app.get('/api/schema', { config: { rateLimit: READ_RATE_LIMIT } }, async (_request, reply) => {
     try {
       const content = await vault.readFile('SCHEMA.md');
       return reply.send({ content });
@@ -112,7 +117,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
     }
   });
 
-  app.get('/api/schema/history', async (_request, reply) => {
+  app.get('/api/schema/history', { config: { rateLimit: READ_RATE_LIMIT } }, async (_request, reply) => {
     const vaultPath = vault.getVaultPath();
     const cacheKey = vaultPath;
 
@@ -145,7 +150,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
     return reply.send(result);
   });
 
-  app.get('/api/schema/diff', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/schema/diff', { config: { rateLimit: READ_RATE_LIMIT } }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { from?: string; to?: string };
     if (!query.from) {
       return reply.code(400).send({ error: '缺少 from 参数' });

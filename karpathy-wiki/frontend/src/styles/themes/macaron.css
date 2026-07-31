@@ -75,6 +75,10 @@
   --graph-concepts-border: #c8f0e8;
   --graph-comparisons-border: #d4b5e8;
   --graph-queries-border: #ffd4e0;
+  --graph-qa: #ffd699;
+  --graph-solutions: #b8e0a8;
+  --graph-qa-border: #ffe4b8;
+  --graph-solutions-border: #c8f0b8;
   --graph-edge: rgba(200, 162, 232, 0.4);
   --graph-edge-highlight: #a8e0d8;
   --graph-label: #4a3a52;
@@ -317,6 +321,8 @@
 }
 
 [data-theme="macaron"] ::selection {
-  background: rgba(255, 179, 209, 0.4);
+  /* macaron 浅色主题：用更深的紫色 0.5 透明度，确保浅色背景上选区高亮明显
+     为什么用紫色而非粉色：浅粉背景上浅粉选区对比度不足，紫色与粉色互补对比更强 */
+  background: var(--accent-purple-a50, rgba(200, 162, 232, 0.5));
   color: var(--text-bright);
 }

@@ -181,7 +181,6 @@ onMounted(() => {
       <!-- 页头 -->
       <div class="skill-head">
         <div class="head-text">
-          <span class="head-tag">// SKILL MANAGER</span>
           <h2 class="head-title grad-text">技能管理</h2>
           <p class="head-tip">导入 · 浏览 · 删除外部技能资源</p>
         </div>

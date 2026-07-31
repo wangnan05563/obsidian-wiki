@@ -348,7 +348,7 @@ describe('集成测试：RBAC 权限边界', () => {
       const admin = await findUserByUsername('admin');
       expect(admin).not.toBeNull();
       // 2. 验证密码
-      const pwdOk = verifyPassword('admin123', admin!.salt, admin!.passwordHash, 100000);
+      const pwdOk = await verifyPassword('admin123', admin!.salt, admin!.passwordHash, 100000);
       expect(pwdOk).toBe(true);
       // 3. 创建会话
       const session = createSession({
@@ -381,7 +381,7 @@ describe('集成测试：RBAC 权限边界', () => {
 
     it('普通用户完整流程（含越权拒绝）', async () => {
       const user = await findUserByUsername('user');
-      expect(verifyPassword('user123', user!.salt, user!.passwordHash, 100000)).toBe(true);
+      expect(await verifyPassword('user123', user!.salt, user!.passwordHash, 100000)).toBe(true);
       const session = createSession({
         userId: user!.id,
         username: user!.username,
@@ -413,7 +413,7 @@ describe('集成测试：RBAC 权限边界', () => {
 
     it('游客完整流程', async () => {
       const guest = await findUserByUsername('guest');
-      expect(verifyPassword('guest123', guest!.salt, guest!.passwordHash, 100000)).toBe(true);
+      expect(await verifyPassword('guest123', guest!.salt, guest!.passwordHash, 100000)).toBe(true);
       const session = createSession({
         userId: guest!.id,
         username: guest!.username,
@@ -439,7 +439,7 @@ describe('集成测试：RBAC 权限边界', () => {
       const updated = await findUserByUsername('user');
       expect(updated?.enabled).toBe(false);
       // 密码哈希仍可验证
-      expect(verifyPassword('user123', updated!.salt, updated!.passwordHash, 100000)).toBe(true);
+      expect(await verifyPassword('user123', updated!.salt, updated!.passwordHash, 100000)).toBe(true);
     });
 
     it('最后一个管理员不可删除（防止系统失去管理入口）', async () => {

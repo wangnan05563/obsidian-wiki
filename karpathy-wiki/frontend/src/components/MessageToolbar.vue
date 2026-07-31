@@ -1,28 +1,68 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { DocumentCopy, Document, RefreshRight, VideoPlay, VideoPause } from '@element-plus/icons-vue';
+// 统一采用 Element Plus 开源图标库（@element-plus/icons-vue），避免使用 emoji 或 AI 预制图标
+import {
+  DocumentCopy,
+  Document,
+  RefreshRight,
+  VideoPlay,
+  VideoPause,
+  Delete,
+  Star,
+  StarFilled,
+} from '@element-plus/icons-vue';
 import { useTtsStore } from '../stores/tts';
 import { msgFeedbackKey } from '../constants/storageKeys';
 
-// F-3.7 + F-3.13 + F-3.6 消息操作工具栏：hover assistant 气泡时浮窗淡入
-// 当前实现：复制纯文本 / 复制 MD / 朗读 / 重新生成 / 👍 / 👎
+// F-3.7 + F-3.13 + F-3.6 消息操作工具栏：hover 气泡时浮窗淡入
+// user 消息：时间 / 复制 / 删除
+// assistant 消息：时间 / 复制纯文本 / 复制 MD / 朗读 / 重新生成 / 点赞 / 点踩 / 删除
 const props = defineProps<{
   content: string;
   // F-3.13 消息 ID：用于 localStorage 反馈持久化的 key，以及 TTS 朗读切换
   msgId?: string;
   // F-3.13 是否允许重新生成：流式输出中或正在加载时应禁用
   canRegenerate?: boolean;
+  // 消息角色：决定工具栏内容差异化（user 仅复制+删除，assistant 含朗读/重新生成/反馈）
+  role: 'user' | 'assistant';
+  // 消息创建时间（ISO 字符串）：用于工具栏左侧时间显示
+  createdAt?: string;
 }>();
 
 const emit = defineEmits<{
   // F-3.13 重新生成：父组件处理"复用 user 问题 + 丢弃当前 assistant 回答 + 触发新问答"
   regenerate: [];
+  // 删除当前消息：父组件调用 store.removeMessage(idx)
+  remove: [];
 }>();
 
 // F-3.13 反馈状态：'up' | 'down' | null
 // 为什么用 ref + localStorage 同步：本地读取避免每次点击都查 localStorage
 const feedback = ref<'up' | 'down' | null>(null);
+
+// 时间显示：短格式 HH:mm 常态显示，完整格式 YYYY-MM-DD HH:mm:ss 在 title 中 hover 显示
+// 为什么用 computed 而非方法：依赖 props.createdAt 变化时自动重算
+const timeDisplay = computed(() => {
+  if (!props.createdAt) return '';
+  const d = new Date(props.createdAt);
+  if (Number.isNaN(d.getTime())) return '';
+  // 短格式：HH:mm（同日）或 MM-DD HH:mm（跨日）
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (sameDay) {
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+});
+const timeFull = computed(() => {
+  if (!props.createdAt) return '';
+  const d = new Date(props.createdAt);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+});
 
 // F-3.6 TTS：通过 store 协调多条消息的朗读切换，避免同时多条朗读
 const ttsStore = useTtsStore();
@@ -38,7 +78,7 @@ const ttsState = computed(() => {
   return ttsStore.state;
 });
 
-// F-3.6 朗读按钮图标：未朗读 → 🔊；朗读中 → ⏸；已暂停 → ▶
+// F-3.6 朗读按钮图标：未朗读 → VideoPlay；朗读中 → VideoPause；已暂停 → VideoPlay
 const ttsIcon = computed(() => {
   if (ttsState.value === 'playing') return VideoPause;
   if (ttsState.value === 'paused') return VideoPlay;
@@ -143,6 +183,18 @@ async function handleCopyMarkdown() {
   ElMessage[ok ? 'success' : 'warning'](ok ? '已复制 Markdown' : '复制失败，请手动选择');
 }
 
+// user 消息复制：直接复制原始内容（无 markdown 解析需求）
+async function handleCopyUser() {
+  const ok = await copyToClipboard(props.content);
+  ElMessage[ok ? 'success' : 'warning'](ok ? '已复制' : '复制失败，请手动选择');
+}
+
+// 删除当前消息：直接 emit，由父组件调用 store.removeMessage(idx)
+// 为什么不在组件内直接操作 store：组件应保持"无状态 UI"职责，删除由父组件统一管理索引
+function handleRemove() {
+  emit('remove');
+}
+
 // F-3.6 朗读切换：根据当前状态决定 speak / pause / resume / stop
 // 切换到其他消息会自动停止当前（store.speak 内部已处理）
 function handleTtsToggle() {
@@ -197,94 +249,128 @@ function handleFeedback(type: 'up' | 'down') {
 <template>
   <!-- F-3.7 / F-3.13 / F-3.6 浮窗：默认透明 + pointer-events:none，hover 父气泡时显现 -->
   <div class="msg-toolbar" @click.stop>
-    <button
-      class="toolbar-btn"
-      title="复制纯文本"
-      @click="handleCopyPlain"
-    >
-      <el-icon><Document /></el-icon>
-    </button>
-    <button
-      class="toolbar-btn"
-      title="复制 Markdown"
-      @click="handleCopyMarkdown"
-    >
-      <el-icon><DocumentCopy /></el-icon>
-    </button>
-    <!-- F-3.6 朗读按钮：未朗读 ▶；朗读中 ⏸；已暂停 ▶；不支持时灰显 -->
-    <button
-      class="toolbar-btn"
-      :class="{ active: ttsState !== 'idle', disabled: !ttsSupported }"
-      :disabled="!ttsSupported"
-      :title="ttsTitle"
-      @click="handleTtsToggle"
-    >
-      <el-icon><component :is="ttsIcon" /></el-icon>
-    </button>
-    <!-- F-3.6 语速调节按钮：点击展开浮窗滑块，仅当本消息正在朗读时显示 -->
-    <button
-      v-if="ttsState !== 'idle'"
-      class="toolbar-btn rate-btn"
-      :class="{ active: showRatePanel }"
-      title="语速"
-      @click.stop="showRatePanel = !showRatePanel"
-    >{{ Math.round(ttsStore.rate * 100) / 100 }}x</button>
-    <!-- F-3.6 语速浮窗：0.5-2.0 滑块，步长 0.1，默认 1.0 -->
-    <div v-if="showRatePanel && ttsState !== 'idle'" class="rate-panel" @click.stop>
-      <span class="rate-label">语速 {{ ttsStore.rate.toFixed(1) }}x</span>
-      <input
-        type="range"
-        min="0.5"
-        max="2.0"
-        step="0.1"
-        :value="ttsStore.rate"
-        class="rate-slider"
-        @input="handleRateChange(($event.target as HTMLInputElement).value)"
-      />
-      <button class="rate-reset" title="恢复默认 1.0x" @click="handleRateChange('1')">1.0x</button>
-    </div>
-    <!-- F-3.13 重新生成：复用该消息对应的 user 问题，重新发起问答 -->
-    <button
-      class="toolbar-btn"
-      :class="{ disabled: canRegenerate === false }"
-      :title="canRegenerate === false ? '回答生成中' : '重新生成'"
-      @click="handleRegenerate"
-    >
-      <el-icon><RefreshRight /></el-icon>
-    </button>
-    <!-- F-3.13 反馈：👍 / 👎，写 localStorage 持久化 -->
-    <button
-      class="toolbar-btn"
-      :class="{ active: feedback === 'up' }"
-      title="点赞"
-      @click="handleFeedback('up')"
-    >👍</button>
-    <button
-      class="toolbar-btn"
-      :class="{ active: feedback === 'down' }"
-      title="点踩"
-      @click="handleFeedback('down')"
-    >👎</button>
+    <!-- 时间戳：左对齐显示，hover 显示完整时间 -->
+    <span v-if="timeDisplay" class="toolbar-time" :title="timeFull">{{ timeDisplay }}</span>
+
+    <!-- user 消息工具栏：复制 + 删除 -->
+    <template v-if="role === 'user'">
+      <button class="toolbar-btn" title="复制" @click="handleCopyUser">
+        <el-icon><DocumentCopy /></el-icon>
+      </button>
+      <button class="toolbar-btn danger-btn" title="删除" @click="handleRemove">
+        <el-icon><Delete /></el-icon>
+      </button>
+    </template>
+
+    <!-- assistant 消息工具栏：复制纯文本 / 复制 MD / 朗读 / 重新生成 / 点赞 / 点踩 / 删除 -->
+    <template v-else>
+      <button
+        class="toolbar-btn"
+        title="复制纯文本"
+        @click="handleCopyPlain"
+      >
+        <el-icon><Document /></el-icon>
+      </button>
+      <button
+        class="toolbar-btn"
+        title="复制 Markdown"
+        @click="handleCopyMarkdown"
+      >
+        <el-icon><DocumentCopy /></el-icon>
+      </button>
+      <!-- F-3.6 朗读按钮：未朗读 ▶；朗读中 ⏸；已暂停 ▶；不支持时灰显 -->
+      <button
+        class="toolbar-btn"
+        :class="{ active: ttsState !== 'idle', disabled: !ttsSupported }"
+        :disabled="!ttsSupported"
+        :title="ttsTitle"
+        @click="handleTtsToggle"
+      >
+        <el-icon><component :is="ttsIcon" /></el-icon>
+      </button>
+      <!-- F-3.6 语速调节按钮：点击展开浮窗滑块，仅当本消息正在朗读时显示 -->
+      <button
+        v-if="ttsState !== 'idle'"
+        class="toolbar-btn rate-btn"
+        :class="{ active: showRatePanel }"
+        title="语速"
+        @click.stop="showRatePanel = !showRatePanel"
+      >{{ Math.round(ttsStore.rate * 100) / 100 }}x</button>
+      <!-- F-3.6 语速浮窗：0.5-2.0 滑块，步长 0.1，默认 1.0 -->
+      <div v-if="showRatePanel && ttsState !== 'idle'" class="rate-panel" @click.stop>
+        <span class="rate-label">语速 {{ ttsStore.rate.toFixed(1) }}x</span>
+        <input
+          type="range"
+          min="0.5"
+          max="2.0"
+          step="0.1"
+          :value="ttsStore.rate"
+          class="rate-slider"
+          @input="handleRateChange(($event.target as HTMLInputElement).value)"
+        />
+        <button class="rate-reset" title="恢复默认 1.0x" @click="handleRateChange('1')">1.0x</button>
+      </div>
+      <!-- F-3.13 重新生成：复用该消息对应的 user 问题，重新发起问答 -->
+      <button
+        class="toolbar-btn"
+        :class="{ disabled: canRegenerate === false }"
+        :title="canRegenerate === false ? '回答生成中' : '重新生成'"
+        @click="handleRegenerate"
+      >
+        <el-icon><RefreshRight /></el-icon>
+      </button>
+      <!-- F-3.13 反馈：Star / StarFilled，写 localStorage 持久化 -->
+      <button
+        class="toolbar-btn"
+        :class="{ active: feedback === 'up' }"
+        title="点赞"
+        @click="handleFeedback('up')"
+      >
+        <el-icon><StarFilled v-if="feedback === 'up'" /><Star v-else /></el-icon>
+      </button>
+      <button
+        class="toolbar-btn"
+        :class="{ active: feedback === 'down' }"
+        title="点踩"
+        @click="handleFeedback('down')"
+      >
+        <el-icon><Star v-if="feedback === 'down'" /><StarFilled v-else /></el-icon>
+      </button>
+      <!-- 删除按钮：danger 样式以示警告 -->
+      <button class="toolbar-btn danger-btn" title="删除" @click="handleRemove">
+        <el-icon><Delete /></el-icon>
+      </button>
+    </template>
   </div>
 </template>
 
 <style scoped>
+/* 工具栏：气泡外部下方流式布局，避免挡住气泡内文字
+   为什么从 absolute 改为 static：absolute 定位在气泡内部会覆盖文字，
+   改为气泡下方独立行显示，hover 气泡或工具栏时显现 */
 .msg-toolbar {
-  position: absolute;
-  top: 4px;
-  right: 4px;
   display: flex;
+  align-items: center;
   gap: 2px;
   padding: 2px 4px;
-  background: var(--bg-scene, rgba(0, 0, 0, 0.45));
-  backdrop-filter: var(--blur);
-  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
-  border-radius: 6px;
+  margin-top: 4px;
+  background: transparent;
   /* 默认隐藏：hover 父气泡才显现，避免常态视觉噪音 */
   opacity: 0;
   pointer-events: none;
   transition: opacity 200ms ease;
-  z-index: 2;
+}
+
+/* 时间戳：左侧紧凑显示，弱化以突出操作按钮 */
+.toolbar-time {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-soft, #888);
+  padding: 0 4px;
+  margin-right: 2px;
+  border-right: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+  white-space: nowrap;
+  user-select: none;
 }
 
 .toolbar-btn {
@@ -306,6 +392,12 @@ function handleFeedback(type: 'up' | 'down') {
 .toolbar-btn:hover {
   background: var(--accent-cyan-a18, rgba(0, 245, 255, 0.18));
   color: var(--neon-cyan, #00f5ff);
+}
+
+/* 删除按钮：hover 时使用主题粉色警示色，与其他操作按钮视觉区分 */
+.toolbar-btn.danger-btn:hover {
+  background: var(--accent-pink-a25, rgba(255, 0, 110, 0.25));
+  color: var(--neon-pink, #ff006e);
 }
 
 /* F-3.6 / F-3.13 激活态：高亮显示当前朗读/反馈状态 */

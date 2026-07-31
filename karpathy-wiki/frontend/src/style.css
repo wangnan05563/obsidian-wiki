@@ -80,6 +80,10 @@
   --graph-concepts-border: #7afaff;
   --graph-comparisons-border: #d366ff;
   --graph-queries-border: #ff7ad9;
+  --graph-qa: #ff9500;
+  --graph-solutions: #00ff88;
+  --graph-qa-border: #ffb84d;
+  --graph-solutions-border: #5fffaa;
   --graph-edge: rgba(176, 38, 255, 0.45);
   --graph-edge-highlight: #00f5ff;
   --graph-label: #f3e9ff;
@@ -637,9 +641,9 @@ body {
   background: linear-gradient(180deg, var(--neon-cyan), var(--neon-purple));
 }
 
-/* 选中文本 */
+/* 选中文本：用主题变量让各主题自动适配，避免硬编码颜色在浅色主题下不明显 */
 ::selection {
-  background: rgba(255, 0, 110, 0.4);
+  background: var(--accent-pink-a40, rgba(255, 0, 110, 0.4));
   color: var(--text-bright);
 }
 

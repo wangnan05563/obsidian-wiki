@@ -22,6 +22,12 @@ export const STORAGE_KEYS = {
   FLOATING_CHAT_OPEN: 'floatingChatOpen',
   /** 认证 token（auth store），仅存非敏感会话 token，用户信息存内存 */
   AUTH_TOKEN: 'authToken',
+  /** 多输出模式多选偏好持久化（query store），用户偏好的 thinking/tool_call/answer/multimodal 可见性 */
+  OUTPUT_MODES: 'outputModes',
+  /** §真流式输出开关持久化（query store），用户偏好是否启用 LLM 逐 token 流式推送 */
+  STREAM_MODE: 'streamMode',
+  /** 中间件多选偏好持久化（query store），用户启用的 query workflow 功能模块列表 */
+  MIDDLEWARES: 'middlewares',
 } as const;
 
 /** 按预设派生 localStorage 完整键名（如 llmPresetConfig:openai） */

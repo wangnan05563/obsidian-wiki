@@ -1,3 +1,4 @@
+import { API_BASE } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { UserInfo, LoginRequest, LoginResponse, CreateUserRequest, UpdateUserRequest, AuthPermission, AuthRole } from '../types';
@@ -92,7 +93,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(params: LoginRequest): Promise<boolean> {
     error.value = '';
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
@@ -123,7 +124,7 @@ export const useAuthStore = defineStore('auth', () => {
       return;
     }
     try {
-      await authFetch('/api/auth/logout', { method: 'POST' });
+      await authFetch(`${API_BASE}/auth/logout`, { method: 'POST' });
     } catch {
       // 后端不可用也清除本地状态
     } finally {
@@ -146,7 +147,7 @@ export const useAuthStore = defineStore('auth', () => {
       return false;
     }
     try {
-      const res = await authFetch('/api/auth/me');
+      const res = await authFetch(`${API_BASE}/auth/me`);
       if (!res.ok) {
         // token 失效
         clearAuth();
@@ -185,7 +186,7 @@ export const useAuthStore = defineStore('auth', () => {
   // 获取用户列表
   async function listUsers(): Promise<UserInfo[] | null> {
     if (!isAdmin.value) return null;
-    const res = await authFetch('/api/auth/users');
+    const res = await authFetch(`${API_BASE}/auth/users`);
     if (!res.ok) return null;
     const data = await res.json() as { users: UserInfo[] };
     return data.users;
@@ -194,7 +195,7 @@ export const useAuthStore = defineStore('auth', () => {
   // 创建用户
   async function createUser(params: CreateUserRequest): Promise<UserInfo | null> {
     if (!isAdmin.value) return null;
-    const res = await authFetch('/api/auth/users', {
+    const res = await authFetch(`${API_BASE}/auth/users`, {
       method: 'POST',
       body: JSON.stringify(params),
     });
@@ -205,7 +206,7 @@ export const useAuthStore = defineStore('auth', () => {
   // 更新用户
   async function updateUser(id: string, params: UpdateUserRequest): Promise<UserInfo | null> {
     if (!isAdmin.value) return null;
-    const res = await authFetch(`/api/auth/users/${id}`, {
+    const res = await authFetch(`${API_BASE}/auth/users/${id}`, {
       method: 'PUT',
       body: JSON.stringify(params),
     });
@@ -216,7 +217,7 @@ export const useAuthStore = defineStore('auth', () => {
   // 删除用户
   async function deleteUser(id: string): Promise<boolean> {
     if (!isAdmin.value) return false;
-    const res = await authFetch(`/api/auth/users/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`${API_BASE}/auth/users/${id}`, { method: 'DELETE' });
     return res.ok;
   }
 

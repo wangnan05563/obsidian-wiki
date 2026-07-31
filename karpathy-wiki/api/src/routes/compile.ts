@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { EngineAdapter, CompileInput, BatchCompileConfig } from '../types.js';
+import type { EngineAdapter, CompileInput, BatchCompileConfig, AppConfig } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 import { createSSESender } from '../utils/sse.js';
 
@@ -56,6 +56,8 @@ export function registerCompileRoute(
   app: FastifyInstance,
   adapter: EngineAdapter,
   batchConfig?: BatchCompileConfig,
+  // FR-10-1: 传入完整 config 用于 compile 末尾生成 ai_tags 建议（调用 LLM）
+  appConfig?: AppConfig,
 ) {
   const batch = batchConfig ?? DEFAULT_BATCH_CONFIG;
   app.post('/api/compile', {
@@ -106,10 +108,11 @@ export function registerCompileRoute(
       // §12.3-5：串行队列包装，保证并发 compile 请求不产生 index.md/log.md 追加竞态。
       // withCompileLock 等待前一个 compile 完成后才开始消费本次迭代。
       await withCompileLock(async () => {
-        for await (const ev of adapter.compile(input)) {
+        for await (const ev of adapter.compile(input, appConfig)) {
           // 客户端已断开：提前退出迭代避免继续触发 LLM 调用与 vault 写入
           if (isAborted()) break;
           // 区分进度事件与页面生成事件：data 含 path/title 视为 page 事件
+          // FR-10-1: generate_tags 步骤归为 progress 事件（无 path/title）
           if (ev.step === 'done') {
             send('done', ev);
           } else if (ev.data?.path && ev.data?.title) {
@@ -268,7 +271,7 @@ export function registerCompileRoute(
     ): Promise<boolean> => {
       let fileFailed = false;
       try {
-        for await (const ev of adapter.compile(input)) {
+        for await (const ev of adapter.compile(input, appConfig)) {
           // 客户端已断开：提前退出迭代，停止当前文件的剩余步骤
           if (isAborted()) break;
           // 把 fileIndex/fileCount/fileName 注入到每个事件的 data，前端按 fileIndex 路由到对应分组

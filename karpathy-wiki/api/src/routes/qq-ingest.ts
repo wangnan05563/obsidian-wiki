@@ -73,8 +73,8 @@ export function registerQqIngestRoute(
       // 阶段1：解析与格式归一化
       send('progress', { step: 'parse', status: 'running', message: `开始解析文件: ${fileName}` });
 
-      const rawText = buffer.toString('utf8');
-      const data = await preprocessQqChat(rawText, fileName, qqConfig);
+      // 直接传 Buffer：xlsx 等二进制格式需保留原始字节，由 preprocessQqChat 内部按 fileName 分发
+      const data = await preprocessQqChat(buffer, fileName, qqConfig);
 
       if (isAborted()) { safeEnd(); return; }
 

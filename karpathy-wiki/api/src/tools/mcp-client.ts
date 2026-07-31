@@ -52,14 +52,18 @@ const connections = new Map<string, McpConnection>();
 // 导致同一服务器被连接多次。inflight Promise 让并发调用复用同一个连接过程。
 const inflightConnections = new Map<string, Promise<McpConnection>>();
 
-// JSON-RPC 请求默认超时（ms）。
-// 为什么保留默认值：McpServerEntry.timeoutMs 缺失时的 fallback，避免 config 未配置时崩溃。
-// 实际值应从 config.json -> tools.mcpTimeoutMs 或 McpServerEntry.timeoutMs 读取（BR-034）。
+// 常规 JSON-RPC 请求默认超时（ms），用于 tools/list / tools/call。
 const DEFAULT_RPC_TIMEOUT_MS = 30000;
 
+// initialize 握手专用超时（ms）。
+// 为什么需要独立值：首次启动 stdio MCP（npx 包下载 + Node.js 进程加载）时，
+// 子进程需要较长时间才能响应 initialize RPC，30 秒不足以覆盖首次 npx 拉包场景。
+// 常规 RPC 不应该这么长，避免异常挂起。
+const DEFAULT_INIT_TIMEOUT_MS = 120000;
+
 // stdio 模式：向子进程 stdin 写入 JSON-RPC 消息并等待 stdout 响应。
-// 为什么用换行分隔：JSON-RPC over stdio 约定每条消息以 \n 结尾，便于流式解析。
-function sendRpcStdio(conn: McpConnection, method: string, params: unknown): Promise<unknown> {
+// overrideTimeoutMs 非空时覆盖 conn.rpcTimeoutMs，用于 initialize 等长耗时 RPC。
+function sendRpcStdio(conn: McpConnection, method: string, params: unknown, overrideTimeoutMs?: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!conn.process?.stdin) {
       reject(new Error(`MCP server "${conn.serverName}" process not available`));
@@ -67,11 +71,12 @@ function sendRpcStdio(conn: McpConnection, method: string, params: unknown): Pro
     }
     const id = conn.nextId++;
     const message = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
+    const timeoutMs = overrideTimeoutMs ?? conn.rpcTimeoutMs;
 
     const timer = setTimeout(() => {
       conn.pending.delete(id);
-      reject(new Error(`MCP RPC "${method}" timed out after ${conn.rpcTimeoutMs}ms`));
-    }, conn.rpcTimeoutMs);
+      reject(new Error(`MCP RPC "${method}" timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
 
     conn.pending.set(id, { resolve, reject, timer });
     conn.process.stdin.write(message);
@@ -79,17 +84,15 @@ function sendRpcStdio(conn: McpConnection, method: string, params: unknown): Pro
 }
 
 // http/sse 模式：用 fetch 发送 JSON-RPC 请求。
-// 为什么不用长连接 SSE：tools/list 和 tools/call 是一次性请求-响应，普通 POST 即可。
-// 为什么不传 env header：http/sse 模式下 env 通过 header 传输有泄露风险（env 可能含 API Key），
-//   stdio 模式 env 通过子进程 stdin 注入更安全。http/sse 模式如需鉴权请在服务器端配置。
-async function sendRpcHttp(conn: McpConnection, method: string, params: unknown): Promise<unknown> {
+async function sendRpcHttp(conn: McpConnection, method: string, params: unknown, overrideTimeoutMs?: number): Promise<unknown> {
   const id = conn.nextId++;
   const body = JSON.stringify({ jsonrpc: '2.0', id, method, params });
+  const timeoutMs = overrideTimeoutMs ?? conn.rpcTimeoutMs;
   const res = await fetch(conn.url!, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
-    signal: AbortSignal.timeout(conn.rpcTimeoutMs),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`MCP HTTP ${res.status}: ${await res.text()}`);
   const json = await res.json() as { result?: unknown; error?: { message: string } };
@@ -98,9 +101,10 @@ async function sendRpcHttp(conn: McpConnection, method: string, params: unknown)
 }
 
 // 统一的 JSON-RPC 调用入口
-function sendRpc(conn: McpConnection, method: string, params: unknown = {}): Promise<unknown> {
-  if (conn.transport === 'stdio') return sendRpcStdio(conn, method, params);
-  return sendRpcHttp(conn, method, params);
+// overrideTimeoutMs：可选，临时覆盖 conn.rpcTimeoutMs，用于 initialize 等长耗时场景
+function sendRpc(conn: McpConnection, method: string, params: unknown = {}, overrideTimeoutMs?: number): Promise<unknown> {
+  if (conn.transport === 'stdio') return sendRpcStdio(conn, method, params, overrideTimeoutMs);
+  return sendRpcHttp(conn, method, params, overrideTimeoutMs);
 }
 
 // 处理 stdio stdout 的 JSON-RPC 响应（可能含多条消息粘连）
@@ -150,9 +154,13 @@ export async function connectMcpServer(entry: McpServerEntry, defaultTimeoutMs?:
 
   if (entry.transport === 'stdio') {
     if (!entry.command) throw new Error(`MCP server "${entry.name}" stdio transport requires "command"`);
-    // spawn 子进程，env 注入配置的环境变量（stdio 模式安全：env 经子进程 stdin 传递，不暴露）
+    // Windows 上 npx/npm/node 等命令实际是 .cmd 批处理脚本，spawn 默认 shell:false 找不到，
+    // 会抛 ENOENT。这里在 win32 上启用 shell:true 让 spawn 通过 cmd.exe 解析 .cmd 后缀。
+    // 非 Windows 平台保持 shell:false 避免引号转义带来的参数解析差异。
+    // 安全权衡：args 来自 config.json（管理员受信任配置），非终端用户输入，命令注入风险可控；
+    // Node.js DEP0190 警告在此场景下可接受，无需通过逐参数转义消除。
     conn.process = spawn(entry.command, entry.args || [], {
-      shell: false,
+      shell: process.platform === 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...entry.env },
     });
@@ -187,12 +195,15 @@ export async function connectMcpServer(entry: McpServerEntry, defaultTimeoutMs?:
   }
 
   // initialize 握手
+  // 为什么用独立的 initTimeoutMs：首次启动 MCP 需要 npx 拉包、Node.js 加载依赖，
+  // 比常规 tools/call RPC 慢得多。用 DEFAULT_INIT_TIMEOUT_MS 兜底，per-server 仍可用 timeoutMs 覆盖。
+  const initTimeoutMs = entry.timeoutMs ?? defaultTimeoutMs ?? DEFAULT_INIT_TIMEOUT_MS;
   try {
     await sendRpc(conn, 'initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
       clientInfo: { name: 'karpathy-wiki', version: '1.0.0' },
-    });
+    }, initTimeoutMs);
     // stdio 模式需发送 initialized 通知（无 id，无响应）
     if (conn.transport === 'stdio' && conn.process?.stdin) {
       conn.process.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');

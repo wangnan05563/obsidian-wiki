@@ -1,15 +1,33 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import { ElMessage } from 'element-plus';
+import { Lightning, Iphone, Link, Close, StarFilled, Document } from '@element-plus/icons-vue';
 import { Network, type Options } from 'vis-network';
 import { DataSet } from 'vis-data';
-import type { GraphData } from '../types';
+import type { GraphData, RecommendedPage } from '../types';
 
 const containerRef = ref<HTMLDivElement | null>(null);
 const loading = ref(false);
 const nodeCount = ref(0);
 const edgeCount = ref(0);
 let network: Network | null = null;
+
+// FR-16-1 Discover Sources 状态
+// 右键菜单：contextMenu.visible 控制显示，contextMenu.x/y 是相对画布坐标
+// 为什么用画布坐标：菜单是 graph-card 子元素，position absolute 相对父容器定位
+const contextMenu = ref<{ visible: boolean; x: number; y: number; pagePath: string }>({
+  visible: false,
+  x: 0,
+  y: 0,
+  pagePath: '',
+});
+// 推荐侧边栏：selectedPage 为空时侧边栏隐藏
+const selectedPage = ref<string>('');
+const recommendations = ref<RecommendedPage[]>([]);
+const recommendLoading = ref(false);
+// 链接建立中的目标 path，用于按钮 loading 状态
+const linkingPath = ref<string>('');
 
 // §12.3-2 大节点降级：节点数超过阈值时切换为高性能模式
 // 200 节点以下：完整渲染（平滑曲线 + 阴影 + 悬停）
@@ -25,17 +43,37 @@ const degraded = computed(() => isLarge.value || isHuge.value);
 const isNarrowScreen = ref(false);
 const listView = ref(false);
 
+// FR-15-5：类型过滤 + 实体子图视图模式
+// typeFilter: 空字符串=全部，否则按目录首段过滤（与 SCHEMA.md type 枚举对齐）
+// entityOnly: 实体子图模式，只显示 entities/ 节点及其一阶邻居（入链+出链）
+const typeFilter = ref('');
+const entityOnly = ref(false);
+
+// 6 目录与中文标签映射（复用图例标签，避免重复维护）
+const DIR_OPTIONS = [
+  { label: '全部类型', value: '' },
+  { label: '实体', value: 'entities' },
+  { label: '概念', value: 'concepts' },
+  { label: '对比', value: 'comparisons' },
+  { label: '问答', value: 'queries' },
+  { label: '业务问答', value: 'qa' },
+  { label: '方案沉淀', value: 'solutions' },
+];
+
 // Read theme color from CSS variable (theme-aware)
 function getThemeVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#b026ff';
 }
 // Directory color mapping: read from CSS vars so nodes follow the active theme
+// FR-15-5：补全 6 目录颜色，与 SCHEMA.md type 枚举对齐
 function getDirColors(): Record<string, string> {
   return {
     entities: getThemeVar('--graph-entities'),
     concepts: getThemeVar('--graph-concepts'),
     comparisons: getThemeVar('--graph-comparisons'),
     queries: getThemeVar('--graph-queries'),
+    qa: getThemeVar('--graph-qa'),
+    solutions: getThemeVar('--graph-solutions'),
   };
 }
 function getDirBorders(): Record<string, string> {
@@ -44,6 +82,8 @@ function getDirBorders(): Record<string, string> {
     concepts: getThemeVar('--graph-concepts-border'),
     comparisons: getThemeVar('--graph-comparisons-border'),
     queries: getThemeVar('--graph-queries-border'),
+    qa: getThemeVar('--graph-qa-border'),
+    solutions: getThemeVar('--graph-solutions-border'),
   };
 }
 
@@ -52,13 +92,56 @@ function checkScreenSize() {
   isNarrowScreen.value = window.innerWidth < 768;
 }
 
+// FR-15-5：过滤图谱数据
+// - typeFilter: 按目录首段过滤节点（仅保留该目录的节点 + 相连的边）
+// - entityOnly: 实体子图模式，只显示 entities/ 节点及其一阶邻居（入链+出链）
+// 为什么 entityOnly 优先于 typeFilter：实体子图是更严格的过滤模式，两者同时开启时以实体子图为准
+function filterGraphData(data: GraphData): GraphData {
+  if (!typeFilter.value && !entityOnly.value) return data;
+
+  let keptNodes: Set<string>;
+
+  if (entityOnly.value) {
+    // 实体子图：entities 节点 + 一阶邻居（入链+出链目标）
+    // 为什么包含一阶邻居：实体图谱需展示实体与其他页面的关联关系
+    const entityNodes = new Set(data.nodes.filter((n) => n.startsWith('entities/')));
+    keptNodes = new Set(entityNodes);
+    for (const edge of data.edges) {
+      if (entityNodes.has(edge.from)) keptNodes.add(edge.to);
+      if (entityNodes.has(edge.to)) keptNodes.add(edge.from);
+    }
+  } else {
+    // 类型过滤：只保留该目录的节点
+    keptNodes = new Set(
+      data.nodes.filter((n) => {
+        const dir = n.split('/')[0] ?? '';
+        return dir === typeFilter.value;
+      }),
+    );
+  }
+
+  const nodes = data.nodes.filter((n) => keptNodes.has(n));
+  const edges = data.edges.filter((e) => keptNodes.has(e.from) && keptNodes.has(e.to));
+  return { nodes, edges };
+}
+
+// FR-15-5：切换实体子图模式
+// 为什么切换时清空 typeFilter：避免两个过滤模式冲突
+function toggleEntityOnly() {
+  entityOnly.value = !entityOnly.value;
+  if (entityOnly.value) typeFilter.value = '';
+  loadGraph();
+}
+
 // 加载图谱数据并渲染
 async function loadGraph() {
   loading.value = true;
   try {
-    const res = await fetch('/api/graph');
+    const res = await fetch(`${API_BASE}/graph`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: GraphData = await res.json();
+    const raw: GraphData = await res.json();
+    // FR-15-5：按类型过滤 + 实体子图模式
+    const data = filterGraphData(raw);
     nodeCount.value = data.nodes.length;
     edgeCount.value = data.edges.length;
     // 窄屏或用户手动切换时用列表视图，否则用图谱
@@ -207,6 +290,115 @@ function renderGraph(data: GraphData) {
     network.destroy();
   }
   network = new Network(containerRef.value, { nodes: nodesDS, edges: edgesDS }, options);
+
+  // FR-16-1 右键节点弹出上下文菜单
+  // 为什么用 oncontext 而非 oncontext({node})：vis-network 的 oncontext 回调签名无 node 参数，
+  // 需用 getNodeAt(pointer.DOM) 显式查询，否则拿到 undefined
+  network.on('oncontext', (params) => {
+    // 阻止默认浏览器右键菜单
+    if (params.event) {
+      params.event.preventDefault();
+    }
+    if (!network) return;
+    // pointer.DOM 是相对画布的坐标，用于菜单定位
+    const nodeId = network.getNodeAt(params.pointer.DOM);
+    if (typeof nodeId === 'string' && nodeId) {
+      // 转换为相对 graph-card 的坐标（菜单的定位父元素）
+      const canvasRect = containerRef.value?.getBoundingClientRect();
+      const cardRect = containerRef.value?.parentElement?.getBoundingClientRect();
+      if (canvasRect && cardRect) {
+        contextMenu.value = {
+          visible: true,
+          x: canvasRect.left - cardRect.left + params.pointer.DOM.x,
+          y: canvasRect.top - cardRect.top + params.pointer.DOM.y,
+          pagePath: nodeId,
+        };
+      }
+    } else {
+      // 点空白处隐藏菜单
+      contextMenu.value.visible = false;
+    }
+  });
+
+  // 左键点击节点也加载推荐（提升发现性，右键作为高级入口）
+  network.on('click', (params) => {
+    if (params.nodes.length > 0) {
+      const nodeId = params.nodes[0] as string;
+      // 不弹菜单，直接打开侧边栏加载推荐
+      openRecommendations(nodeId);
+    }
+  });
+}
+
+// FR-16-1 加载推荐页面列表
+async function openRecommendations(pagePath: string) {
+  selectedPage.value = pagePath;
+  contextMenu.value.visible = false;
+  recommendLoading.value = true;
+  recommendations.value = [];
+  try {
+    const url = `${API_BASE}/discover/recommend?pagePath=${encodeURIComponent(pagePath)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = (await res.json()) as { recommendations: RecommendedPage[] };
+    recommendations.value = data.recommendations;
+    if (data.recommendations.length === 0) {
+      ElMessage.info('未找到相关但未连接的笔记');
+    }
+  } catch (err) {
+    ElMessage.error('加载推荐失败：' + (err as Error).message);
+  } finally {
+    recommendLoading.value = false;
+  }
+}
+
+// FR-16-1 一键建立双链
+async function createLink(targetPath: string) {
+  if (!selectedPage.value) return;
+  linkingPath.value = targetPath;
+  try {
+    const res = await fetch(`${API_BASE}/discover/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourcePath: selectedPage.value, targetPath }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    ElMessage.success('已建立双链：' + targetPath);
+    // 从推荐列表移除已链接的项
+    recommendations.value = recommendations.value.filter((r) => r.path !== targetPath);
+    // 刷新图谱以显示新边
+    await loadGraph();
+  } catch (err) {
+    ElMessage.error('建立双链失败：' + (err as Error).message);
+  } finally {
+    linkingPath.value = '';
+  }
+}
+
+// 关闭推荐侧边栏
+function closeRecommendations() {
+  selectedPage.value = '';
+  recommendations.value = [];
+}
+
+// 关闭右键菜单（点击菜单外区域时触发）
+function closeContextMenu() {
+  contextMenu.value.visible = false;
+}
+
+// FR-15-5（AC-15-7）：打开笔记到 Browse 视图
+// 复用 RefsList.vue 的 karpathy:jump-vault 事件机制，App.vue 监听后切换到 browse 视图，
+// Browse.vue onMounted 读取 sessionStorage.karpathy:jumpPath 自动定位到对应文件
+function openPageInBrowse(pagePath: string) {
+  sessionStorage.setItem('karpathy:jumpPath', pagePath);
+  globalThis.dispatchEvent(new CustomEvent('karpathy:jump-vault', { detail: { path: pagePath } }));
+  contextMenu.value.visible = false;
 }
 
 onMounted(() => {
@@ -254,7 +446,6 @@ watch(loading, () => {
 
       <div class="graph-head">
         <div class="head-text">
-          <span class="head-tag">// NEURAL GRAPH</span>
           <h2 class="head-title grad-text">知识图谱</h2>
           <p class="head-tip">页面间的双向链接关系可视化</p>
         </div>
@@ -274,9 +465,36 @@ watch(loading, () => {
         <el-button size="small" class="neon-btn" :loading="loading" @click="loadGraph">刷新</el-button>
       </div>
 
+      <!-- FR-15-5：类型过滤 + 实体子图模式（AC-15-5, AC-15-7） -->
+      <!-- 为什么仅图谱视图显示：列表视图本身按目录分组，无需额外过滤 -->
+      <div v-if="!listView" class="graph-filter-bar">
+        <el-select
+          v-model="typeFilter"
+          placeholder="类型筛选"
+          size="small"
+          clearable
+          class="graph-type-select"
+          @change="loadGraph"
+        >
+          <el-option
+            v-for="opt in DIR_OPTIONS"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+        <el-button
+          size="small"
+          :class="['neon-btn', { 'entity-active': entityOnly }]"
+          @click="toggleEntityOnly"
+        >
+          {{ entityOnly ? '退出实体子图' : '实体子图' }}
+        </el-button>
+      </div>
+
       <!-- 降级提示 -->
       <div v-if="degraded && !listView" class="degrade-bar">
-        <span class="degrade-icon">⚡</span>
+        <el-icon class="degrade-icon"><Lightning /></el-icon>
         <span class="degrade-text">
           {{ isHuge ? '节点数超过 500，已启用超大图模式（简化样式 + 快速布局）' : '节点数超过 200，已启用性能优化模式' }}
         </span>
@@ -284,11 +502,12 @@ watch(loading, () => {
 
       <!-- 小屏提示 -->
       <div v-if="isNarrowScreen && !listView" class="degrade-bar">
-        <span class="degrade-icon">📱</span>
+        <el-icon class="degrade-icon"><Iphone /></el-icon>
         <span class="degrade-text">小屏设备，建议切换列表视图以获得更好体验</span>
       </div>
 
       <!-- 图例：霓虹色点带发光 -->
+      <!-- FR-15-5：补全 6 目录图例，与 SCHEMA.md type 枚举对齐 -->
       <div v-if="!listView" class="legend-bar">
         <span class="legend-item">
           <span class="legend-dot" style="background: var(--graph-entities); box-shadow: 0 0 10px var(--graph-entities)"></span>实体
@@ -301,6 +520,12 @@ watch(loading, () => {
         </span>
         <span class="legend-item">
           <span class="legend-dot" style="background: var(--graph-queries); box-shadow: 0 0 10px var(--graph-queries)"></span>问答
+        </span>
+        <span class="legend-item">
+          <span class="legend-dot" style="background: var(--graph-qa); box-shadow: 0 0 10px var(--graph-qa)"></span>业务问答
+        </span>
+        <span class="legend-item">
+          <span class="legend-dot" style="background: var(--graph-solutions); box-shadow: 0 0 10px var(--graph-solutions)"></span>方案沉淀
         </span>
       </div>
 
@@ -331,11 +556,80 @@ watch(loading, () => {
               <span class="group-count">{{ group.pages.length }} 页</span>
             </div>
       <div class="group-pages">
-              <div v-for="page in group.pages" :key="page.path" class="page-item">
+              <div v-for="page in group.pages" :key="page.path" class="page-item" @click="openRecommendations(page.path)">
                 <span class="page-name">▸ {{ page.name }}</span>
                 <span class="page-links">⟶ {{ page.links }}</span>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FR-16-1 右键上下文菜单：仅图谱视图 + 节点上右键时显示 -->
+      <div
+        v-if="contextMenu.visible && !listView"
+        class="ctx-menu"
+        :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+        @click.stop
+      >
+        <div class="ctx-item" @click="openPageInBrowse(contextMenu.pagePath)">
+          <el-icon class="ctx-icon"><Document /></el-icon>
+          <span>打开笔记</span>
+        </div>
+        <div class="ctx-item" @click="openRecommendations(contextMenu.pagePath)">
+          <el-icon class="ctx-icon"><Link /></el-icon>
+          <span>查看推荐笔记</span>
+        </div>
+        <div class="ctx-item ctx-close" @click="closeContextMenu">
+          <el-icon class="ctx-icon"><Close /></el-icon>
+          <span>关闭</span>
+        </div>
+      </div>
+
+      <!-- FR-16-1 推荐侧边栏：右侧浮层，覆盖图谱右半部分 -->
+      <div v-if="selectedPage" class="recommend-panel">
+        <div class="recommend-head">
+          <div class="recommend-title">
+            <el-icon class="recommend-icon"><Lightning /></el-icon>
+            <span>推荐笔记</span>
+          </div>
+          <button class="recommend-close" @click="closeRecommendations" aria-label="关闭">
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
+        <div class="recommend-source">
+          <span class="source-label">源页面：</span>
+          <code class="source-path">{{ selectedPage }}</code>
+        </div>
+        <div v-if="recommendLoading" class="recommend-loading">
+          <p>// 寻找相关笔记中…</p>
+        </div>
+        <div v-else-if="recommendations.length === 0" class="recommend-empty">
+          <p>未找到相关但未连接的笔记</p>
+        </div>
+        <div v-else class="recommend-list">
+          <div
+            v-for="rec in recommendations"
+            :key="rec.path"
+            class="recommend-card"
+          >
+            <div class="rec-head">
+              <span class="rec-title">{{ rec.title }}</span>
+              <span class="rec-score" :title="`匹配 ${rec.score} 个维度`">
+                <el-icon><StarFilled /></el-icon>{{ rec.score }}
+              </span>
+            </div>
+            <div class="rec-path"><code>{{ rec.path }}</code></div>
+            <div class="rec-reasons">
+              <span v-for="(reason, idx) in rec.reasons" :key="idx" class="rec-reason">{{ reason }}</span>
+            </div>
+            <button
+              class="neon-btn rec-link-btn"
+              :disabled="linkingPath === rec.path"
+              @click="createLink(rec.path)"
+            >
+              {{ linkingPath === rec.path ? '建立中…' : '建立双链' }}
+            </button>
           </div>
         </div>
       </div>
@@ -347,12 +641,17 @@ watch(loading, () => {
 .graph-page {
   display: flex;
   flex-direction: column;
+  /* 高度填满 .content：侧栏布局后顶部导航与页脚已删除，
+     让图谱画布视野延展到页面底部 */
+  height: 100%;
 }
 
 .graph-card {
   position: relative;
   padding: 24px 28px;
-  height: calc(100vh - 220px);
+  /* flex: 1 让卡片填满 .graph-page 剩余高度，
+     替代原 calc(100vh - 220px) 顶部布局下为导航+页脚预留的固定减去值 */
+  flex: 1;
   min-height: 480px;
   display: flex;
   flex-direction: column;
@@ -675,5 +974,244 @@ watch(loading, () => {
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--neon-cyan);
+}
+
+/* FR-16-1 右键上下文菜单：浮层 + 毛玻璃 */
+.ctx-menu {
+  position: absolute;
+  z-index: 20;
+  min-width: 180px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--accent-purple-a40);
+  border-radius: var(--radius-card);
+  box-shadow: var(--glow-cyan);
+  padding: 6px 0;
+  font-family: var(--font-mono);
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-base);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ctx-item:hover {
+  background: var(--accent-purple-a15);
+  color: var(--neon-cyan);
+}
+
+.ctx-item.ctx-close:hover {
+  color: var(--neon-pink, var(--accent-pink-a70));
+}
+
+.ctx-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+/* FR-16-1 推荐侧边栏：右侧浮层，固定宽度，毛玻璃背景 */
+.recommend-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 340px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-glass);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--accent-cyan-a30);
+  border-radius: var(--radius-card);
+  box-shadow: var(--glow-cyan);
+  overflow: hidden;
+}
+
+.recommend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--accent-purple-a20);
+  flex-shrink: 0;
+}
+
+.recommend-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: 0.05em;
+}
+
+.recommend-icon {
+  font-size: 15px;
+  color: var(--neon-cyan);
+}
+
+.recommend-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-purple-a30);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recommend-close:hover {
+  border-color: var(--neon-pink, var(--accent-pink-a70));
+  color: var(--neon-pink, var(--accent-pink-a70));
+  transform: rotate(90deg);
+}
+
+.recommend-source {
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--text-soft);
+  border-bottom: 1px dashed var(--accent-cyan-a15);
+  flex-shrink: 0;
+  word-break: break-all;
+}
+
+.source-label {
+  font-family: var(--font-mono);
+  margin-right: 4px;
+}
+
+.source-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a10);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.recommend-loading,
+.recommend-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-soft);
+  text-align: center;
+}
+
+.recommend-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recommend-card {
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-input);
+  padding: 12px 14px;
+  transition: all 0.25s ease;
+}
+
+.recommend-card:hover {
+  border-color: var(--neon-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+.rec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rec-title {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-bright);
+  word-break: break-all;
+}
+
+.rec-score {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a30);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+}
+
+.rec-path {
+  margin-bottom: 8px;
+}
+
+.rec-path code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-soft);
+  word-break: break-all;
+}
+
+.rec-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.rec-reason {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-base);
+  background: var(--accent-purple-a12);
+  border: 1px solid var(--accent-purple-a20);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.rec-link-btn {
+  width: 100%;
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+}
+
+.rec-link-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 窄屏适配：侧边栏占满宽度 */
+@media (max-width: 768px) {
+  .recommend-panel {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    bottom: 8px;
+    width: auto;
+  }
 }
 </style>

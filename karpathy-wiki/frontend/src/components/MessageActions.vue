@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { Check, DocumentCopy, Document, Microphone, VideoPause, Refresh, Star, StarFilled } from '@element-plus/icons-vue';
 import { useClipboard } from '../composables/useClipboard';
 import { useTtsStore } from '../stores/tts';
 
@@ -53,28 +54,26 @@ function handleFeedback(type: 'up' | 'down') {
 <template>
   <div class="message-actions">
     <button class="action-btn" :class="{ active: copiedPlain }" @click="handleCopyPlain" title="复制纯文本">
-      <span v-if="copiedPlain">✓</span>
-      <span v-else>📋</span>
+      <el-icon><component :is="copiedPlain ? Check : DocumentCopy" /></el-icon>
       <span class="btn-label">{{ copiedPlain ? '已复制' : '纯文本' }}</span>
     </button>
     <button class="action-btn" :class="{ active: copiedMd }" @click="handleCopyMd" title="复制 Markdown">
-      <span v-if="copiedMd">✓</span>
-      <span v-else>📝</span>
+      <el-icon><component :is="copiedMd ? Check : Document" /></el-icon>
       <span class="btn-label">{{ copiedMd ? '已复制' : 'MD' }}</span>
     </button>
     <button class="action-btn" :class="{ active: isCurrentPlaying }" @click="handleTts" title="语音朗读">
-      <span>{{ isCurrentPlaying ? '⏹' : '🔊' }}</span>
+      <el-icon><VideoPause v-if="isCurrentPlaying" /><Microphone v-else /></el-icon>
       <span class="btn-label">{{ isCurrentPlaying ? '停止' : '朗读' }}</span>
     </button>
     <button class="action-btn" @click="emit('regenerate', props.index)" title="重新生成">
-      <span>🔄</span>
+      <el-icon><Refresh /></el-icon>
       <span class="btn-label">重生成</span>
     </button>
     <button class="action-btn" @click="handleFeedback('up')" title="赞">
-      <span>👍</span>
+      <el-icon><StarFilled /></el-icon>
     </button>
     <button class="action-btn" @click="handleFeedback('down')" title="踩">
-      <span>👎</span>
+      <el-icon><Star /></el-icon>
     </button>
   </div>
 </template>

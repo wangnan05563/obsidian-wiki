@@ -1,173 +1,207 @@
-import { inflateSync } from 'node:zlib';
+import path from 'node:path';
 
-// Office 文档转 Markdown 工具
-// 为什么手写 ZIP/XML 解析而非引入 mammoth/jszip:OOXML 本质是 ZIP+XML,
-// 仅需读取文档内文本与表格结构,手写最小解析器避免新增运行时依赖,且便于打包裁剪。
+// ZIP Parser - Central Directory scan
+interface ZipEntry { name: string; data: Buffer; }
 
-export interface OfficeConvertResult {
-  contentType: 'document' | 'spreadsheet' | 'presentation' | 'unsupported';
-  markdown: string;
-}
-
-interface ZipEntry {
-  name: string;
-  data: Buffer;
-}
-
-// 解析 ZIP buffer → 文件条目列表
-// 为什么从本地文件头遍历而非中央目录:本地头顺序排列在 buffer 前部,
-// 逐个读取直到签名失配即可,实现最简且对 stored/deflate 均适用。
-function parseZip(buf: Buffer): ZipEntry[] {
-  const entries: ZipEntry[] = [];
-  let offset = 0;
-  while (offset + 30 <= buf.length) {
-    const sig = buf.readUInt32LE(offset);
-    if (sig !== 0x04034b50) break; // 进入中央目录或 EOCD,本地头结束
-    const compression = buf.readUInt16LE(offset + 8);
-    const compressedSize = buf.readUInt32LE(offset + 18);
-    const filenameLen = buf.readUInt16LE(offset + 26);
-    const extraLen = buf.readUInt16LE(offset + 28);
-    const nameStart = offset + 30;
-    const name = buf.slice(nameStart, nameStart + filenameLen).toString('utf-8');
-    const dataStart = nameStart + filenameLen + extraLen;
-    let data: Buffer;
-    if (compression === 0) {
-      // stored:数据未压缩,直接切片
-      data = buf.slice(dataStart, dataStart + compressedSize);
-    } else if (compression === 8) {
-      // deflate:真实 Office 文档多用此压缩,用 zlib 解压
-      data = inflateSync(buf.slice(dataStart, dataStart + compressedSize));
-    } else {
-      // 未知压缩方式:无法解读,跳过该条目数据
-      data = Buffer.alloc(0);
-    }
-    entries.push({ name, data });
-    offset = dataStart + compressedSize;
+// 为什么 export：qq-preprocess 解析 xlsx 时需复用同一 zip 解压实现，避免重复维护
+export async function parseZip(buffer: Buffer): Promise<Map<string, Buffer>> {
+  const entries = new Map<string, Buffer>();
+  var eocdOffset = -1;
+  for (var i = buffer.length - 22; i >= 0; i--) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) { eocdOffset = i; break; }
+  }
+  if (eocdOffset < 0) return entries;
+  const totalEntries = buffer.readUInt16LE(eocdOffset + 8);
+  const cdOffset = buffer.readUInt32LE(eocdOffset + 16);
+  var pos = cdOffset;
+  for (var ei = 0; ei < totalEntries; ei++) {
+    if (buffer.readUInt32LE(pos) !== 0x02014b50) break;
+    const fileNameLen = buffer.readUInt16LE(pos + 28);
+    const extraFieldLen = buffer.readUInt16LE(pos + 30);
+    const commentLen = buffer.readUInt16LE(pos + 32);
+    const relativeOffset = buffer.readUInt32LE(pos + 42);
+    const compressedSize = buffer.readUInt32LE(pos + 20);
+    const name = buffer.toString('utf-8', pos + 46, pos + 46 + fileNameLen);
+    const dataStart = relativeOffset + 30 + fileNameLen + extraFieldLen;
+    const data = buffer.subarray(dataStart, dataStart + compressedSize);
+    entries.set(name, data);
+    pos += 46 + fileNameLen + extraFieldLen + commentLen;
   }
   return entries;
 }
 
-// 提取 XML 中所有匹配标签的捕获组(避免重复编译正则)
-function extractAll(xml: string, regex: RegExp): string[] {
-  const out: string[] = [];
-  let m: RegExpExecArray | null;
-  const re = new RegExp(regex.source, regex.flags);
-  while ((m = re.exec(xml)) !== null) {
-    out.push(m[1]);
-  }
-  return out;
+// 为什么 export：qq-preprocess 解析 HTML 时需复用同一 entity 解码，避免实现分叉
+export function decodeXmlEntities(xml: string): string {
+  return xml.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
-// docx → Markdown
-// 解析 word/document.xml:每个 <w:p> 为段落,<w:t> 为文本片段,<w:pStyle> 标识标题样式
-function parseDocx(entries: ZipEntry[]): OfficeConvertResult {
-  const doc = entries.find((e) => e.name === 'word/document.xml');
-  if (!doc) return { contentType: 'document', markdown: '' };
-  const xml = doc.data.toString('utf-8');
-  const lines: string[] = [];
-  const paragraphs = extractAll(xml, /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g);
-  for (const para of paragraphs) {
-    const texts = extractAll(para, /<w:t[^>]*>([\s\S]*?)<\/w:t>/g);
-    let text = texts.join('');
-    const styleMatch = para.match(/<w:pStyle\s+w:val="([^"]*)"/);
-    if (styleMatch && /heading/i.test(styleMatch[1])) {
-      // 标题样式 HeadingN → N 个 #,缺失数字默认一级
-      const levelMatch = styleMatch[1].match(/(\d+)/);
-      const level = levelMatch ? Math.min(parseInt(levelMatch[1], 10), 6) : 1;
-      text = '#'.repeat(level) + ' ' + text;
+function escapeMarkdownPipe(text: string): string {
+  return text.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+export async function convertDocxToMarkdown(buffer: Buffer): Promise<string> {
+  const entries = await parseZip(buffer);
+  let markdown = '';
+  const docBuffer = entries.get('word/document.xml');
+  if (!docBuffer) return '[Error: document.xml not found]';
+  const docXml = docBuffer.toString('utf-8');
+  const PARA_RE = /<w:p[^>]*>([\s\S]*?)<\/w:p>/g;
+  let paraMatch;
+  while ((paraMatch = PARA_RE.exec(docXml)) !== null) {
+    const paraContent = paraMatch[1];
+    const isHeading = /pStyle[^"]*"Heading\d"/i.test(paraContent);
+    const isBold = /<w:b([ >\/])/i.test(paraContent);
+    const textMatches = paraContent.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [];
+    let paraText = '';
+    for (const t of textMatches) {
+      const inner = t.match(/>([^<]*)</);
+      if (inner && inner[1] !== undefined) paraText += decodeXmlEntities(inner[1]);
     }
-    if (text.trim()) lines.push(text);
+    if (isHeading && paraText.trim()) {
+      const levelMatch = paraContent.match(/Heading(\d)/i);
+      const level = levelMatch ? parseInt(levelMatch[1]) : 1;
+      markdown += '\n' + '#'.repeat(Math.min(level, 6)) + ' ' + paraText.trim() + '\n\n';
+    } else if (paraText.trim()) {
+      markdown += isBold ? '**' + paraText.trim() + '** ' : paraText + ' ';
+    }
   }
-  return { contentType: 'document', markdown: lines.join('\n\n') };
+  return markdown.trim() || '[No text content extracted]';
 }
 
-// xlsx → Markdown 表格
-// 解析 sharedStrings(共享字符串表)+ worksheets(单元格引用共享字符串索引)
-function parseXlsx(entries: ZipEntry[]): OfficeConvertResult {
-  // 共享字符串:<si><t>文本</t></si>
-  const ssEntry = entries.find((e) => e.name === 'xl/sharedStrings.xml');
-  const sharedStrings: string[] = [];
-  if (ssEntry) {
-    const ssXml = ssEntry.data.toString('utf-8');
-    for (const si of extractAll(ssXml, /<si\b[^>]*>([\s\S]*?)<\/si>/g)) {
-      const tMatch = si.match(/<t[^>]*>([\s\S]*?)<\/t>/);
-      sharedStrings.push(tMatch ? tMatch[1] : '');
-    }
-  }
-  // 工作表名:从 workbook.xml 读取,保持原始顺序
-  const wbEntry = entries.find((e) => e.name === 'xl/workbook.xml');
-  const sheetNames: string[] = [];
-  if (wbEntry) {
-    const wbXml = wbEntry.data.toString('utf-8');
-    const sheetRe = /<sheet\b[^>]*name="([^"]*)"/g;
-    let m: RegExpExecArray | null;
-    while ((m = sheetRe.exec(wbXml)) !== null) sheetNames.push(m[1]);
-  }
-  // 工作表数据:按文件名排序保证 slide1/sheet1 顺序稳定
-  const sheetEntries = entries
-    .filter((e) => /^xl\/worksheets\/sheet\d+\.xml$/.test(e.name))
-    .sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
-  const parts: string[] = ['# Excel 工作簿'];
-  sheetEntries.forEach((sheetEntry, idx) => {
-    const sheetName = sheetNames[idx] || `Sheet${idx + 1}`;
-    parts.push(`## Sheet: ${sheetName}`);
-    const sheetXml = sheetEntry.data.toString('utf-8');
-    const rows: string[][] = [];
-    for (const rowContent of extractAll(sheetXml, /<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
-      const cells: string[] = [];
-      const cRe = /<c\b[^>]*>([\s\S]*?)<\/c>/g;
-      let cm: RegExpExecArray | null;
-      while ((cm = cRe.exec(rowContent)) !== null) {
-        // t="s" 表示值为共享字符串索引,其余按字面量处理
-        const tAttr = /<c\b[^>]*\bt="([^"]*)"/.exec(cm[0].slice(0, cm[0].indexOf('>') + 1));
-        const vMatch = cm[1].match(/<v>([\s\S]*?)<\/v>/);
-        let value = '';
-        if (vMatch) {
-          value = tAttr && tAttr[1] === 's' ? sharedStrings[parseInt(vMatch[1], 10)] || '' : vMatch[1];
-        }
-        cells.push(value);
+export async function convertXlsxToMarkdown(buffer: Buffer): Promise<string> {
+  const entries = await parseZip(buffer);
+  let markdown = '# Excel 工作簿\n\n';
+  const ssBuffer = entries.get('xl/sharedStrings.xml');
+  const stringCache = new Map<number, string>();
+  if (ssBuffer) {
+    const ssXml = ssBuffer.toString('utf-8');
+    const siRegex = /<si>([\s\S]*?)<\/si>/g;
+    let siMatch;
+    let idx = 0;
+    while ((siMatch = siRegex.exec(ssXml)) !== null) {
+      const textParts = siMatch[1].match(/<t[^>]*>([^<]*)<\/t>/g) || [];
+      let text = '';
+      for (const t of textParts) {
+        const m = t.match(/>([^<]*)</);
+        if (m && m[1] !== undefined) text += m[1];
       }
-      rows.push(cells);
-    }
-    if (rows.length > 0) {
-      const header = rows[0];
-      parts.push('| ' + header.join(' | ') + ' |');
-      parts.push('| ' + header.map(() => '---').join(' | ') + ' |');
-      for (let i = 1; i < rows.length; i++) {
-        parts.push('| ' + rows[i].join(' | ') + ' |');
-      }
-    }
-  });
-  return { contentType: 'spreadsheet', markdown: parts.join('\n') };
-}
-
-// pptx → Markdown 列表
-// 解析 ppt/slides/slideN.xml:每个 <a:t> 文本作为列表项
-function parsePptx(entries: ZipEntry[]): OfficeConvertResult {
-  const slideEntries = entries
-    .filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e.name))
-    .sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
-  const parts: string[] = ['# PowerPoint'];
-  for (const slideEntry of slideEntries) {
-    const xml = slideEntry.data.toString('utf-8');
-    for (const t of extractAll(xml, /<a:t>([\s\S]*?)<\/a:t>/g)) {
-      if (t.trim()) parts.push('- ' + t);
+      stringCache.set(idx++, decodeXmlEntities(text));
     }
   }
-  return { contentType: 'presentation', markdown: parts.join('\n') };
+  const wbBuffer = entries.get('xl/workbook.xml');
+  if (!wbBuffer) return '[Error: workbook.xml not found]';
+  const wbXml = wbBuffer.toString('utf-8');
+  const sheetRegex = /<sheet [^>]*name="([^"]*)"[^>]*r:id="rId(\d+)"/g;
+  let sheetMatch;
+  while ((sheetMatch = sheetRegex.exec(wbXml)) !== null) {
+    const sheetName = sheetMatch[1];
+    const ridNum = sheetMatch[2];
+    const sheetIdx = parseInt(ridNum);
+    const sheetFile = 'xl/worksheets/sheet' + sheetIdx + '.xml';
+    const sheetBuf = entries.get(sheetFile);
+    if (!sheetBuf) continue;
+    const sheetXml = sheetBuf.toString('utf-8');
+    markdown += '## Sheet: ' + sheetName + '\n\n';
+    markdown += '| Cell | Value |\n|------|-------|\n';
+    const cellRegex = /<c[^>]*r="([A-Z]+)(\d+)"[^>]*>([\s\S]*?)<\/c>/g;
+    let cellMatch;
+    const rows = new Map<number, Array<{ col: number; value: string }>>();
+    while ((cellMatch = cellRegex.exec(sheetXml)) !== null) {
+      const colStr = cellMatch[1];
+      const rowNum = parseInt(cellMatch[2]);
+      const cellContent = cellMatch[3];
+      const colNum = colToNumber(colStr);
+      let value = '';
+      const vMatch = cellContent.match(/<v>([^<]*)<\/v>/);
+      if (vMatch && vMatch[1] !== undefined) {
+        value = stringCache.get(parseInt(vMatch[1])) || vMatch[1];
+      } else {
+        const tMatch = cellContent.match(/<t[^>]*>([^<]*)<\/t>/);
+        if (tMatch && tMatch[1] !== undefined) value = decodeXmlEntities(tMatch[1]);
+      }
+      if (!rows.has(rowNum)) rows.set(rowNum, []);
+      rows.get(rowNum)!.push({ col: colNum, value: escapeMarkdownPipe(value) });
+    }
+    const sortedRows = [...rows.entries()].sort((a, b) => a[0] - b[0]);
+    for (const [, cells] of sortedRows) {
+      const rowStrs = new Array(maxColInRow(cells) + 1).fill('');
+      for (const c of cells) rowStrs[c.col] = c.value;
+      markdown += '| ' + rowStrs.join(' | ') + ' |\n';
+    }
+    markdown += '\n';
+  }
+  return markdown;
 }
 
-// 主入口:按扩展名分流,旧版二进制格式(.doc/.xls/.ppt)无法用 OOXML 解析器处理,返回友好提示
-export function convertOfficeFile(filename: string, buffer: Buffer): OfficeConvertResult {
-  const extMatch = filename.toLowerCase().match(/\.(\w+)$/);
-  const ext = extMatch ? extMatch[1] : '';
-  if (ext === 'docx') return parseDocx(parseZip(buffer));
-  if (ext === 'xlsx') return parseXlsx(parseZip(buffer));
-  if (ext === 'pptx') return parsePptx(parseZip(buffer));
-  // 旧版二进制格式与未知扩展名:提示用户另存为 OOXML 格式
-  let markdown = `不支持的格式: .${ext}`;
-  if (ext === 'doc') markdown += ',请另存为 .docx 后重试';
-  else if (ext === 'xls') markdown += ',请另存为 .xlsx 后重试';
-  else if (ext === 'ppt') markdown += ',请另存为 .pptx 后重试';
-  return { contentType: 'unsupported', markdown };
+function colToNumber(colStr: string): number {
+  var num = 0;
+  for (var ch of colStr) num = num * 26 + (ch.charCodeAt(0) - 65);
+  return num;
+}
+
+function maxColInRow(cells: Array<{ col: number }>) {
+  var max = 0;
+  for (var c of cells) max = Math.max(max, c.col);
+  return max;
+}
+
+﻿export async function convertPptxToMarkdown(buffer: Buffer): Promise<string> {
+  const entries = await parseZip(buffer);
+  let markdown = '# PowerPoint\n\n';
+  const presBuffer = entries.get('ppt/presentation.xml');
+  if (!presBuffer) return '[Error: presentation.xml not found]';
+  const presXml = presBuffer.toString('utf-8');
+  const sldRegex = /<(?:p:)?sldId[^>]*r:id="rId(\d+)"/g;
+  let sldMatch;
+  var slideIdx = 0;
+  while ((sldMatch = sldRegex.exec(presXml)) !== null) {
+    slideIdx++;
+    const slideFile = 'ppt/slides/slide' + slideIdx + '.xml';
+    const slideBuffer = entries.get(slideFile);
+    if (!slideBuffer) continue;
+    const slideXml = slideBuffer.toString('utf-8');
+    const textRegex = /<a:t>([^<]*)<\/a:t>/g;
+    const texts: string[] = [];
+    let txMatch;
+    while ((txMatch = textRegex.exec(slideXml)) !== null) {
+      const t = decodeXmlEntities(txMatch[1]);
+      if (t.trim()) texts.push(t);
+    }
+    // 为什么统一作为列表项：commit 设计意图为"pptx 幻灯片列表项"，
+    // 全局已有 # PowerPoint 前缀；保留 isTitle 分支会让首个文本变成 # 标题，
+    // 与全局前缀冲突且破坏列表项语义
+    markdown += '---\n\n## Slide ' + slideIdx + '\n\n';
+    for (const t of texts) {
+      if (t.trim()) markdown += '- ' + t.trim() + '\n';
+    }
+    markdown += '\n';
+  }
+  return markdown.trim();
+}
+
+export interface ConversionResult {
+  contentType: 'document' | 'spreadsheet' | 'presentation' | 'unsupported';
+  markdown: string;
+}
+
+export async function convertOfficeFile(fileName: string, buffer: Buffer): Promise<ConversionResult> {
+  const ext = path.extname(fileName).toLowerCase().slice(1);
+  if (['doc', 'xls', 'ppt'].includes(ext)) {
+    return {
+      contentType: 'unsupported',
+      markdown: `[Unsupported format: .${ext}]\n\nThis is an old binary Office format (OLE Compound Document).\nPlease save the file as .docx / .xlsx / .pptx and re-upload.`
+    };
+  }
+  switch (ext) {
+    case 'docx':
+    case 'doc':
+      return { contentType: 'document', markdown: await convertDocxToMarkdown(buffer) };
+    case 'xlsx':
+    case 'xls':
+      return { contentType: 'spreadsheet', markdown: await convertXlsxToMarkdown(buffer) };
+    case 'pptx':
+    case 'ppt':
+      return { contentType: 'presentation', markdown: await convertPptxToMarkdown(buffer) };
+    default:
+      return { contentType: 'unsupported', markdown: '' };
+  }
 }

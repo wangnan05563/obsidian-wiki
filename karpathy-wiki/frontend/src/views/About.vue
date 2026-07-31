@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { CopyDocument, Refresh, Check, Top, Warning, Search } from '@element-plus/icons-vue';
@@ -155,7 +156,7 @@ const filteredDeps = computed(() => {
 // ===== API 调用 =====
 async function loadInfo() {
   try {
-    const res = await fetch('/api/about');
+    const res = await fetch(`${API_BASE}/about`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     info.value = {
@@ -182,7 +183,7 @@ async function performCheck() {
   isChecking = true;
   updateState.value = { kind: 'loading' };
   try {
-    const res = await fetch('/api/about/check-update');
+    const res = await fetch(`${API_BASE}/about/check-update`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.has_update) {
@@ -271,7 +272,6 @@ onBeforeUnmount(() => {
 
       <div class="about-head">
         <div class="head-text">
-          <span class="head-tag">// SYSTEM ABOUT</span>
           <h2 class="head-title grad-text">{{ TEXTS.h1Title }}</h2>
           <p class="head-tip">版本信息 · 系统元数据 · 文档资源</p>
         </div>

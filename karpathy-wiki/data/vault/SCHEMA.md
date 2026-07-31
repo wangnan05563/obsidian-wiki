@@ -40,6 +40,21 @@ ts: 2026-07-20T14:30:15Z
 ---
 ```
 
+## frontmatter 实体关系字段（FR-15-6，compile 阶段 LLM 抽取）
+```yaml
+---
+# entities: 本页与其它实体的关系列表（仅 compile 阶段由 LLM 抽取，不引入独立 NER 模型）
+# - name: 相关实体页面名（不含 .md 后缀，必须与正文 [[页面名]] 一致）
+# - relation: 关系类型（snake_case），常用值：leader_of / member_of / depends_on / created_by / related_to
+entities: [{name: "项目X", relation: "leader_of"}, {name: "团队A", relation: "member_of"}]
+---
+```
+
+**抽取约束**：
+- 仅抽取原始资料中明确出现的关系，禁止编造
+- `name` 必须在正文 `[[双向链接]]` 中出现，保证图谱拓扑一致
+- 若本页不涉及任何实体关系，frontmatter 中不要写 `entities` 字段
+
 ## 双向链接
 - 使用 [[页面名]] 链接到其他页面
 - 文件名与页面名一致（例如 [[llm-wiki]] 对应 concepts/llm-wiki.md）

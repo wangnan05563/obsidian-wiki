@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { Reading, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
 import type { Reference } from '../types';
 
 // F-3.8 参考文章列表（仿豆包「搜索 N 个关键词，参考 N 篇资料」）
@@ -57,13 +58,13 @@ function handleRefClick(ref: Reference) {
   <div class="refs-list" v-if="refs.length > 0">
     <!-- 顶部横条：仿豆包「参考 N 篇资料」+ 来源统计 + 折叠箭头 -->
     <div class="refs-header" @click="toggleExpanded">
-      <span class="refs-icon">📚</span>
+      <el-icon class="refs-icon"><Reading /></el-icon>
       <span class="refs-title">
         参考 {{ refs.length }} 篇资料
         <span v-if="vaultCount > 0" class="source-stat vault">知识库 {{ vaultCount }}</span>
         <span v-if="webCount > 0" class="source-stat web">联网 {{ webCount }}</span>
       </span>
-      <span class="toggle">{{ expanded ? '▼' : '▶' }}</span>
+      <el-icon class="toggle"><component :is="expanded ? ArrowDown : ArrowRight" /></el-icon>
     </div>
 
     <!-- 卡片列表：默认前 3 条，超过折叠 -->

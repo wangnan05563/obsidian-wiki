@@ -1,20 +1,23 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ToolDefinition, HarnessConfig } from '@wiki/harness';
+import type { ToolDefinition, HarnessConfig, StepEvent } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
-import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef, WebSearchConfig, ToolsConfig } from '../types.js';
+import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef, WebSearchConfig, ToolsConfig, MediaConfig, AppConfig } from '../types.js';
 import { searchPages } from '../search-util.js';
 import { createWebSearchTool } from '../tools/web-search.js';
 import { loadExtendedTools } from '../tools/registry.js';
+// FR-09-2 多模态输出：主问答完成后追加生成 mindmap/faq/timeline
+// 为什么放在主问答之后：避免结构化输出污染主答案的流式体验；失败不阻塞主问答
+import { generateMultimodalOutput, getModeLabel } from './multimodal-output-workflow.js';
+// v3 媒体生成：图像/PPT 在 done 前推送 image/ppt 事件
+import { generateImage, generatePpt } from './media-generation-workflow.js';
 
 // 加载 query prompt 单点存储。与 compile 共用 prompts/ 目录，保证两阶段等价（M-3）。
-// esbuild 打包时通过 --define 替换 import.meta.url 为 CJS 等价表达式
-import { fileURLToPath } from 'node:url';
-const __dirname_resolved = path.dirname(fileURLToPath(import.meta.url));
+// 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
+import { getPromptPath } from '../utils/runtime.js';
 async function loadQueryPrompt(): Promise<string> {
-  const promptPath = path.resolve(__dirname_resolved, '..', 'prompts', 'query.md');
-  return fs.readFile(promptPath, 'utf8');
+  return fs.readFile(getPromptPath('query.md'), 'utf8');
 }
 
 // JSON Schema 简写：所有工具参数均为对象，避免重复样板。
@@ -30,8 +33,9 @@ function objSchema(properties: Record<string, unknown>, required: string[]) {
 // §5.2 当 options.webSearch 为 true 时，追加 web_search 工具。
 export function createQueryTools(
   vault: VaultService,
-  options: { webSearch?: boolean; webSearchConfig?: WebSearchConfig } = {},
+  options: { webSearch?: boolean; webSearchConfig?: WebSearchConfig; scopeFilter?: { tags?: string[]; folder?: string } } = {},
 ): ToolDefinition[] {
+  const scopeFilter = options.scopeFilter;
   const tools: ToolDefinition[] = [
     {
       name: 'search_pages',
@@ -42,7 +46,8 @@ export function createQueryTools(
       ),
       handler: async (args: unknown) => {
         const { keywords } = args as { keywords: string };
-        return searchPages(vault, keywords);
+        // FR-12 scopeFilter：AI 伙伴预设的范围限定通过 search_pages 的 folder/tags 参数生效
+        return searchPages(vault, keywords, 20, scopeFilter ? { folder: scopeFilter.folder, tags: scopeFilter.tags } : undefined);
       },
     },
     {
@@ -162,13 +167,45 @@ function generateFollowups(question: string, answer: string, refs: string[]): st
   return [...new Set(followups)].slice(0, 3);
 }
 
-// 把答案文本按中英文句号/问号/感叹号切分，逐块 yield 模拟流式输出。
+// 把答案文本按更细粒度（小段）切分，逐块 yield 模拟流式输出。
+// v2 优化：从"按句子切分"改为"按短句/短语切分"：
+//   1. 句子切分（句号/问号/感叹号边界）后单块仍可能很长（80-200 字），首屏等待仍久
+//   2. 短句切分：句号、问号、感叹号、分号、逗号、冒号、换行都作为自然切分点，
+//      单块平均 4-10 字，配合前端逐字渲染可获得接近真实 LLM stream 的"打字机"体验
+//   3. 标点保护：切分时把标点保留在前一块末尾，避免"票交所接口。"被切成"票交所接口" + "。"
 // 全角/半角标点经 NFKC 归一化后等价，去重保留全角作主分隔符（S5869）；
 // 显式分组明确 | 优先级（S5850）
 function* yieldAnswerInSentences(answer: string): Iterable<AnswerChunk> {
-  const sentences = answer.match(/(?:[^。！？.!]*[。！？.!]+)|(?:[^。！？.!]+$)/g) ?? [answer];
-  for (const s of sentences) {
-    if (s.trim()) {
+  // 用非贪婪正则按中文常用标点切分，标点跟随前一块；末尾无标点的尾部单独成块
+  // 切分字符：。！？；，：、  + 半角 . ! ? ; , :
+  const splitRe = /([。！？；，：、.!?;,:]+)|([^。！？；，：、.!?;,:]+$)/g;
+  const parts: string[] = [];
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = splitRe.exec(answer)) !== null) {
+    if (m.index > lastIndex) {
+      // 上一个切分点到本次匹配起点之间的剩余文本
+      const tail = answer.slice(lastIndex, m.index);
+      if (tail) parts.push(tail);
+    }
+    if (m[1]) {
+      // 标点跟随前一块：把标点合并到最后一个非空 part
+      const last = parts.pop();
+      parts.push((last || '') + m[1]);
+    } else if (m[2]) {
+      // 末尾无标点的尾部
+      parts.push(m[2]);
+    }
+    lastIndex = splitRe.lastIndex;
+  }
+  // 处理最后一段（lastIndex 之后的剩余）
+  if (lastIndex < answer.length) {
+    parts.push(answer.slice(lastIndex));
+  }
+  // 兜底：空结果
+  if (parts.length === 0 && answer) parts.push(answer);
+  for (const s of parts) {
+    if (s) {
       yield { text: s };
     }
   }
@@ -177,6 +214,29 @@ function* yieldAnswerInSentences(answer: string): Iterable<AnswerChunk> {
 // query 进度步骤与进度事件类型（S4323：提取联合类型为别名，多处复用）
 type QueryProgressStep = 'searching' | 'fetching' | 'done';
 type QueryProgress = { step: QueryProgressStep; count?: number };
+
+// v2: 多输出模式多选类型与默认值
+// 与 QueryInput.outputModes 一致；空数组/未配置时全开
+type OutputMode = 'thinking' | 'tool_call' | 'answer' | 'multimodal';
+const ALL_OUTPUT_MODES: OutputMode[] = ['thinking', 'tool_call', 'answer', 'multimodal'];
+
+// 判断某类事件是否在用户的 outputModes 集合中
+// 为什么提取独立函数：yield 处反复调用，避免重复 includes 表达式（S3358）
+function shouldEmit(mode: OutputMode, allowed: Set<OutputMode> | null): boolean {
+  // null 表示全开（无配置或未设置）
+  return allowed === null || allowed.has(mode);
+}
+
+// 中间件开关判断：未配置 middlewares（null）时默认开启，配置后按是否包含 key 决定
+// 为什么提取独立函数：内层函数（queryWithHarness/queryWithHarnessStream）多处调用，
+// 避免重复 Set 构造与 has 判断（S3358）
+// 与 queryWorkflow 顶层 useXxx 派生布尔的关系：顶层用于跨函数传递（effectiveInput），
+// 此函数用于内层函数内部判断（extended_tools/followups），职责分离
+function shouldRunMiddleware(middlewares: string[] | undefined, key: string): boolean {
+  // 未配置 middlewares 或空数组 → 走默认行为（开启），保持向后兼容
+  if (!middlewares || middlewares.length === 0) return true;
+  return middlewares.includes(key);
+}
 
 // afterStep hook 收集的可变状态。
 // 提取为独立接口便于在辅助函数间传递，降低 queryWithHarness 与 afterStep hook 认知复杂度（S3776）。
@@ -308,14 +368,16 @@ async function loadExtendedToolsWithFeedback(
 // 走 @wiki/harness ReAct 循环，注入 search_pages/read_page/web_search 工具，由 LLM 自主调用。
 // 通过 afterStep hook 收集 thinking 步骤，run 完成后一次性 yield（harness.run 是阻塞 Promise，运行中无法 yield）。
 // 失败时（harness.run 抛异常或返回 status='failed'）通过 throw 让上层降级链接管。
+// v2: outputModes 透传到内部 yield 过滤（null = 全开）
 async function* queryWithHarness(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   input: QueryInput,
-  options: { webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig },
+  options: { webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig; scopeFilter?: { tags?: string[]; folder?: string }; systemPrompt?: string },
   collectedThinking: ThinkingChunk[],
   collectedWebRefs: WebRef[],
   collectedProgress: QueryProgress[],
+  outputModes: Set<OutputMode> | null,
 ): AsyncGenerator<AnswerChunk, void, unknown> {
   // 1. 构造 prompt：问答指令 + 用户问题 + 历史 + 附件提示 + 模式提示
   const promptTemplate = await loadQueryPrompt();
@@ -325,6 +387,8 @@ async function* queryWithHarness(
   const historySection = historyStr ? `## 历史对话\n${historyStr}` : '';
   const attachmentHint = buildAttachmentHint(input.attachments);
   const deepHint = buildDeepModeHint(input.mode);
+  // FR-12 额外系统提示：AI 伙伴预设的 systemPrompt 追加到 prompt 末尾
+  const skillHint = options.systemPrompt ? `\n## AI 伙伴指令\n${options.systemPrompt}\n` : '';
 
   const task = `${promptTemplate}
 
@@ -334,6 +398,7 @@ ${input.question}
 ${historySection}
 ${attachmentHint}
 ${deepHint}
+${skillHint}
 `;
 
   // 2. 联网搜索可用性检查（委托给 initWebSearchState 降低复杂度 S3776）
@@ -352,10 +417,16 @@ ${deepHint}
   const tools = createQueryTools(vault, {
     webSearch: webSearchAvailable,
     webSearchConfig: options.webSearchConfig,
+    // FR-12 scopeFilter：AI 伙伴预设的范围限定通过 search_pages 的 folder/tags 生效
+    scopeFilter: options.scopeFilter,
   });
 
   // 加载扩展工具（委托给 loadExtendedToolsWithFeedback 降低复杂度 S3776）
-  await loadExtendedToolsWithFeedback(input.question, options.toolsConfig, tools, collectedThinking);
+  // 中间件 'extended_tools' 控制：未配置 middlewares 或含 'extended_tools' 时加载
+  // 为什么放这里：toolsConfig 存在 ≠ 用户想启用扩展工具，middlewares 给用户最终控制权
+  if (shouldRunMiddleware(input.middlewares, 'extended_tools')) {
+    await loadExtendedToolsWithFeedback(input.question, options.toolsConfig, tools, collectedThinking);
+  }
 
   const harness = new Harness({
     ...harnessConfig,
@@ -385,13 +456,20 @@ ${deepHint}
   // 5. yield 收集到的 progress 事件（联网搜索进度）
   // 为什么 progress 在 thinking 之前 yield：progress 是更高级别的状态提示，
   // 让前端 searchProgress 立即更新，与 thinking 步骤互补
+  // v2: progress 总是发出（不属于可配置 outputModes，是基础设施状态）
   for (const p of collectedProgress) {
     yield { progress: p };
   }
 
   // 6. yield 收集到的 thinking 步骤（工具调用历史）
+  // v2: 每个 thinking chunk 补 ts 字段（前端计算单步耗时）
+  // v2: 按 allowed Set 过滤，避免用户在"隐藏思考过程"模式下仍收到所有步骤
   for (const t of collectedThinking) {
-    yield { thinking: t };
+    // tool_call 步骤在 outputModes 包含 'tool_call' 时才显示思考细节
+    // 但 'thinking' / 'composing' 步骤归入 'thinking' 类别
+    const category: OutputMode = t.phase === 'tool_call' ? 'tool_call' : 'thinking';
+    if (!shouldEmit(category, outputModes)) continue;
+    yield { thinking: { ...t, ts: t.ts || new Date().toISOString() } };
   }
 
   // 7. 将 finalContent 按句切分，逐块 yield 模拟流式输出
@@ -411,9 +489,160 @@ ${deepHint}
     return true;
   });
   // §5.2 生成追问建议：基于问题和答案提取关键概念，构造 3 个延伸问题
-  const followups = generateFollowups(input.question, answer, refs);
-  if (followups.length > 0) {
-    yield { followups };
+  // 中间件 'followups' 控制：未配置 middlewares 或含 'followups' 时生成
+  // 为什么用 shouldRunMiddleware：与 extended_tools 一致的中间件判断模式
+  if (shouldRunMiddleware(input.middlewares, 'followups')) {
+    const followups = generateFollowups(input.question, answer, refs);
+    if (followups.length > 0) {
+      yield { followups };
+    }
+  }
+  yield { refs, webRefs, done: true };
+}
+
+// §真流式降级链第 1 级：queryWithHarnessStream
+//   与 queryWithHarness 平行，差异在调用 harness.runStream 而非 harness.run
+//   LLM 逐 delta 即时 yield，工具调用生命周期事件化推送 thinking
+//   失败时（harness.runStream 抛异常或 yield error 事件）通过 throw 让上层降级链接管
+async function* queryWithHarnessStream(
+  harnessConfig: HarnessConfig,
+  vault: VaultService,
+  input: QueryInput,
+  options: { webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig; scopeFilter?: { tags?: string[]; folder?: string }; systemPrompt?: string },
+  collectedThinking: ThinkingChunk[],
+  collectedWebRefs: WebRef[],
+  collectedProgress: QueryProgress[],
+  outputModes: Set<OutputMode> | null,
+): AsyncGenerator<AnswerChunk, void, unknown> {
+  // 复用 queryWithHarness 的 prompt 构造逻辑（保持两分支等价）
+  const promptTemplate = await loadQueryPrompt();
+  const historyStr = input.history && input.history.length > 0
+    ? input.history.map((h) => `${h.role === 'user' ? '用户' : '助手'}: ${h.content}`).join('\n')
+    : '';
+  const historySection = historyStr ? `## 历史对话\n${historyStr}` : '';
+  const attachmentHint = buildAttachmentHint(input.attachments);
+  const deepHint = buildDeepModeHint(input.mode);
+  const skillHint = options.systemPrompt ? `\n## AI 伙伴指令\n${options.systemPrompt}\n` : '';
+
+  const task = `${promptTemplate}
+
+## 用户问题
+${input.question}
+
+${historySection}
+${attachmentHint}
+${deepHint}
+${skillHint}
+`;
+
+  const webSearchAvailable = initWebSearchState(input, options, collectedThinking, collectedProgress);
+  const afterStepState: AfterStepState = {
+    thinking: collectedThinking,
+    webRefs: collectedWebRefs,
+    progress: collectedProgress,
+    webSearchDowngradeNotified: false,
+  };
+
+  const tools = createQueryTools(vault, {
+    webSearch: webSearchAvailable,
+    webSearchConfig: options.webSearchConfig,
+    scopeFilter: options.scopeFilter,
+  });
+  // 中间件 'extended_tools' 控制：与 queryWithHarness 一致的判断逻辑
+  if (shouldRunMiddleware(input.middlewares, 'extended_tools')) {
+    await loadExtendedToolsWithFeedback(input.question, options.toolsConfig, tools, collectedThinking);
+  }
+
+  const harness = new Harness({
+    ...harnessConfig,
+    tools,
+    hooks: {
+      // 流式分支下 afterStep 仍用于收集 webRefs/progress（thinking 由 runLoopStream 内事件即时推送）
+      afterStep: async (_ctx, _step, result) => {
+        const stepResult = result as unknown as StepResult;
+        collectWebSearchResults(stepResult, afterStepState);
+      },
+    },
+  });
+
+  // §消费 runStream 事件流：delta 即时转发，tool_call/tool_result 推送 thinking，done 收尾
+  let finalAnswer = '';
+  let encounteredError: Error | null = null;
+
+  for await (const evt of harness.runStream({ task, context: { question: input.question } })) {
+    const stepEvt = evt as StepEvent;
+    switch (stepEvt.type) {
+      case 'delta':
+        // 真流式核心：LLM token 增量即时推送，前端 streamingAnswer 逐字追加
+        if (shouldEmit('answer', outputModes)) {
+          yield { text: stepEvt.text };
+          finalAnswer += stepEvt.text;
+        }
+        break;
+      case 'tool_call':
+        // 工具调用开始：推送 thinking 让前端看到"调用工具 X"
+        if (shouldEmit('tool_call', outputModes)) {
+          collectedThinking.push({
+            phase: 'tool_call',
+            message: `调用工具：${stepEvt.toolCall.function.name}`,
+            ts: new Date().toISOString(),
+          });
+          yield { thinking: { ...collectedThinking[collectedThinking.length - 1], ts: new Date().toISOString() } };
+        }
+        break;
+      case 'tool_result':
+        // 工具调用结束：推送 thinking 让前端看到"工具 X 返回"
+        if (shouldEmit('tool_call', outputModes)) {
+          collectedThinking.push({
+            phase: 'tool_call',
+            message: `工具 ${stepEvt.toolCall.function.name} 返回结果`,
+            ts: new Date().toISOString(),
+          });
+          yield { thinking: { ...collectedThinking[collectedThinking.length - 1], ts: new Date().toISOString() } };
+        }
+        break;
+      case 'done':
+        // finalContent 与累积的 finalAnswer 应一致；如未累积（outputModes 关闭 answer），用 done.finalContent
+        finalAnswer = finalAnswer || stepEvt.finalContent;
+        break;
+      case 'error':
+        encounteredError = new Error(stepEvt.message);
+        break;
+    }
+    if (encounteredError) break;
+  }
+
+  if (encounteredError) {
+    throw encounteredError;
+  }
+
+  // §progress/webRefs 在流式分支也需推送（harness 阶段已收集）
+  for (const p of collectedProgress) {
+    yield { progress: p };
+  }
+  // thinking 已在事件中实时推送，但起始模式 thinking（如 deep mode）仍需补发
+  for (const t of collectedThinking) {
+    const category: OutputMode = t.phase === 'tool_call' ? 'tool_call' : 'thinking';
+    if (!shouldEmit(category, outputModes)) continue;
+    // 已在事件中推送过的 tool_call thinking 跳过，避免重复
+    if (t.phase === 'tool_call') continue;
+    yield { thinking: { ...t, ts: t.ts || new Date().toISOString() } };
+  }
+
+  const answer = finalAnswer || '知识库未覆盖此问题。';
+  const refs = await extractRefs(answer, vault);
+  const seenUrls = new Set<string>();
+  const webRefs = collectedWebRefs.filter((r) => {
+    if (seenUrls.has(r.url)) return false;
+    seenUrls.add(r.url);
+    return true;
+  });
+  // 中间件 'followups' 控制：与 queryWithHarness 一致的判断逻辑
+  if (shouldRunMiddleware(input.middlewares, 'followups')) {
+    const followups = generateFollowups(input.question, answer, refs);
+    if (followups.length > 0) {
+      yield { followups };
+    }
   }
   yield { refs, webRefs, done: true };
 }
@@ -501,6 +730,116 @@ ${input.question}
   yield { refs, done: true };
 }
 
+// FR-09-2 多模态输出包装器：在 done 事件之前 yield multimodal
+// 为什么放在 done 之前：前端 SSE 处理通常在 done 之后停止监听，multimodal 必须在 done 之前到达
+// 为什么先 yield thinking：让前端立即显示"正在生成思维导图..."状态，避免用户以为卡住
+// 为什么传 chunk.refs：主问答已通过 search_pages 工具搜到最相关页面，复用这些路径作为
+// multimodal 生成上下文，避免 collectContextPages 用整句问题做关键词搜索时命中失败
+// 失败策略：catch 错误后 yield thinking 提示失败原因，不阻塞主问答的 done 事件
+// v2: outputModes 过滤 multimodal 事件；用户在配置中关闭 multimodal 时跳过生成
+async function* wrapWithMultimodal(
+  source: AsyncIterable<AnswerChunk>,
+  harnessConfig: HarnessConfig,
+  vault: VaultService,
+  input: QueryInput,
+  outputModes: Set<OutputMode> | null,
+  // v3 媒体生成：image 模式需要 mediaConfig 调用 Agnes API，appConfig 解析 API key
+  mediaConfig?: MediaConfig,
+  appConfig?: AppConfig,
+): AsyncGenerator<AnswerChunk, void, unknown> {
+  // 用户在多输出模式中关闭 multimodal 时跳过整个 multimodal 生成（节省 LLM token）
+  // 单独的 'composing' thinking 提示（"正在生成思维导图"）也跟着被前置 filter 处理
+  for await (const chunk of source) {
+    if (chunk.done && input.outputMode && input.outputMode !== 'normal' && shouldEmit('multimodal', outputModes)) {
+      const mode = input.outputMode;
+      // 在 done 之前推送 multimodal/image/ppt 输出
+      try {
+        if (mode === 'image') {
+          // v3 图像生成：LLM 优化 prompt → Agnes Image API → 下载归档
+          yield {
+            thinking: {
+              phase: 'composing',
+              message: '正在生成图像...',
+              ts: new Date().toISOString(),
+            },
+          };
+          const imageResult = await generateImage(
+            harnessConfig,
+            vault,
+            input.question,
+            chunk.refs,
+            mediaConfig,
+            appConfig,
+          );
+          yield {
+            image: {
+              url: imageResult.url,
+              alt: imageResult.alt,
+              archivePath: imageResult.archivePath,
+            },
+          };
+        } else if (mode === 'ppt') {
+          // v3 PPT 生成：LLM 生成 Marp Markdown → 归档
+          yield {
+            thinking: {
+              phase: 'composing',
+              message: '正在生成 PPT 幻灯片...',
+              ts: new Date().toISOString(),
+            },
+          };
+          const pptResult = await generatePpt(
+            harnessConfig,
+            vault,
+            input.question,
+            chunk.refs,
+          );
+          yield {
+            ppt: {
+              markdown: pptResult.markdown,
+              title: pptResult.title,
+              archivePath: pptResult.archivePath,
+            },
+          };
+        } else {
+          // 原有 mindmap/faq/timeline 模式
+          // 类型断言：if 条件已排除 'normal'/'image'/'ppt'，此时 outputMode 必为 mindmap/faq/timeline 之一
+          const multimodalMode = mode as 'mindmap' | 'faq' | 'timeline';
+          yield {
+            thinking: {
+              phase: 'composing',
+              message: `正在生成${getModeLabel(multimodalMode)}...`,
+              ts: new Date().toISOString(),
+            },
+          };
+          const multimodal = await generateMultimodalOutput(
+            harnessConfig,
+            vault,
+            input.question,
+            multimodalMode,
+            chunk.refs,
+          );
+          yield { multimodal };
+        }
+      } catch (err) {
+        // multimodal/image/ppt 失败不阻塞主问答，推送 thinking 提示失败原因
+        const label = mode === 'image'
+          ? '图像'
+          : mode === 'ppt'
+            ? 'PPT'
+            : getModeLabel(mode as 'mindmap' | 'faq' | 'timeline');
+        yield {
+          thinking: {
+            phase: 'composing',
+            message: `${label} 生成失败：${err instanceof Error ? err.message : String(err)}`,
+            ts: new Date().toISOString(),
+          },
+        };
+      }
+    }
+    yield chunk;
+  }
+}
+
 // 执行 query，返回 AsyncIterable<AnswerChunk>。
 // §6.0.1 降级链编排：queryWithHarness → queryWithSearchFallback → 兜底提示
 // §5.2 改造点：
@@ -509,6 +848,8 @@ ${input.question}
 //   3. 支持 options.attachments 附加附件信息到 prompt
 //   4. 通过 harness afterStep hook 收集 thinking 步骤，run 完成后 yield
 //   5. harness.run 是非流式 Promise，这里把 finalContent 按句切分后逐块 yield
+// FR-09-2 改造：用 wrapWithMultimodal 包装降级链，在 done 之前追加 multimodal 输出
+// v2: input.outputModes 解析为 Set 并透传到内部 yield 过滤；null 表示全开
 export async function* queryWorkflow(
   harnessConfig: HarnessConfig,
   vault: VaultService,
@@ -516,6 +857,12 @@ export async function* queryWorkflow(
   options: {
     webSearchConfig?: WebSearchConfig;
     toolsConfig?: ToolsConfig;
+    // FR-12 AI 伙伴预设：scope 限定检索范围，systemPrompt 追加到 query prompt 末尾
+    scopeFilter?: { tags?: string[]; folder?: string };
+    systemPrompt?: string;
+    // v3 媒体生成：image 模式需要 mediaConfig 调用 Agnes API，appConfig 解析 API key
+    mediaConfig?: MediaConfig;
+    appConfig?: AppConfig;
   } = {},
 ): AsyncIterable<AnswerChunk> {
   // thinking 收集器：harness 阶段收集，fallback 阶段不再追加
@@ -525,28 +872,103 @@ export async function* queryWorkflow(
   // F-3.10 progress 收集器：harness afterStep 中收集 web_search 进度
   const collectedProgress: QueryProgress[] = [];
 
+  // v2: 解析 outputModes 过滤集合
+  // input.outputModes 为空/未设置 → null（表示全开，让所有事件照常发送）
+  // 设置了非空数组 → Set 形式（O(1) 查找）
+  // 类型断言：QueryInput.outputModes 声明为 string[]（JSON 序列化兼容），此处运行时已确保
+  // 元素为 OutputMode 联合成员，断言为 OutputMode[] 以匹配 Set<OutputMode> 类型
+  const outputModes: Set<OutputMode> | null = input.outputModes && input.outputModes.length > 0
+    ? new Set(input.outputModes as OutputMode[])
+    : null;
+
+  // 中间件开关解析：middlewares 优先于 webSearch/mode/stream 等独立字段
+  // 为什么用 Set：O(1) 查找，多处分支判断 contains 性能稳定
+  // 为什么 undefined 时返回 null：null 表示"未配置中间件"，各功能走原默认行为（向后兼容）
+  //   - 已有字段（input.webSearch/input.mode==='deep'/input.stream）继续生效
+  //   - middlewares 配置后，对应项覆盖已有字段
+  const middlewareSet: Set<string> | null = input.middlewares && input.middlewares.length > 0
+    ? new Set(input.middlewares)
+    : null;
+  // 派生布尔：仅在 middlewareSet 非空时计算，避免 undefined 时改变现有行为
+  // 中间件含 'web_search' → 强制启用联网搜索（覆盖 input.webSearch=false）
+  // 中间件含 'deep_thinking' → 强制深度思考模式（覆盖 input.mode !== 'deep'）
+  // 中间件含 'extended_tools' → 启用 MCP/CLI 扩展工具（内层函数用 shouldRunMiddleware 判断）
+  // 中间件含 'followups' → 启用追问建议生成（内层函数用 shouldRunMiddleware 判断）
+  // 中间件含 'stream' → 强制启用真流式（覆盖 input.stream=false）
+  // 为什么 useExtendedTools/useFollowups 不在此派生：extended_tools/followups 控制点在
+  // queryWithHarness/queryWithHarnessStream 内部，通过 shouldRunMiddleware(input.middlewares, key)
+  // 直接判断，避免重复派生与参数传递
+  const useWebSearch = middlewareSet ? middlewareSet.has('web_search') : input.webSearch;
+  const useDeepThinking = middlewareSet ? middlewareSet.has('deep_thinking') : input.mode === 'deep';
+  const useStream = middlewareSet ? middlewareSet.has('stream') : input.stream;
+
+  // 构造 effective input：middlewares 配置覆盖 webSearch/mode/stream 字段
+  // 为什么构造新对象而非修改原 input：input 是函数参数，直接修改会污染调用方数据
+  // 为什么只在 middlewareSet 非空时覆盖：保持向后兼容，无 middlewares 时走原字段
+  // inner 函数（initWebSearchState/buildDeepModeHint）读 input.webSearch/input.mode，
+  // 通过 effectiveInput 覆盖后无需修改 inner 函数签名
+  const effectiveInput: QueryInput = middlewareSet
+    ? {
+        ...input,
+        webSearch: useWebSearch,
+        // 深度思考覆盖：useDeepThinking=true 时强制 'deep'，否则清除 'deep' 模式
+        mode: useDeepThinking ? 'deep' : (input.mode === 'deep' ? '' : input.mode),
+        stream: useStream,
+      }
+    : input;
+
   // 模式提示 thinking：在降级链各分支前 push 一次，harness 阶段 yield 出来
-  if (input.mode === 'deep') {
+  // 为什么改用 useDeepThinking：middlewares 配置后覆盖 input.mode 判断
+  if (useDeepThinking) {
     collectedThinking.push({
       phase: 'thinking',
       message: '深度思考模式已启用，正在深入分析问题...',
+      ts: new Date().toISOString(),
     });
   }
 
   // 起始 thinking 事件（让前端立即看到"正在思考"动画）
-  yield { thinking: { phase: 'thinking', message: '正在思考...' } };
+  // v2: 起始思考也按 outputModes.thinking 过滤（关闭思考时不发起始）
+  if (shouldEmit('thinking', outputModes)) {
+    yield { thinking: { phase: 'thinking', message: '正在思考...', ts: new Date().toISOString() } };
+  }
 
-  // 降级链第 1 级：queryWithHarness
+  // 降级链第 1 级：queryWithHarness（默认）或 queryWithHarnessStream（真流式）
+  // §真流式切换：input.stream=true 走 LLM 逐 token 推送，false/undefined 走按句切分假流式
+  // 默认值由 adapter.query 入口补齐（appConfig.llm.stream），此处仅消费 input.stream
+  // 中间件 'stream' 优先级最高：middlewareSet 含 'stream' 时覆盖 input.stream
+  // FR-09-2 用 wrapWithMultimodal 包装：在 done 之前追加 multimodal 输出
   let harnessSucceeded = false;
   try {
-    for await (const chunk of queryWithHarness(
+    const harnessFlow = useStream
+      ? queryWithHarnessStream(
+          harnessConfig,
+          vault,
+          effectiveInput,
+          options,
+          collectedThinking,
+          collectedWebRefs,
+          collectedProgress,
+          outputModes,
+        )
+      : queryWithHarness(
+          harnessConfig,
+          vault,
+          effectiveInput,
+          options,
+          collectedThinking,
+          collectedWebRefs,
+          collectedProgress,
+          outputModes,
+        );
+    for await (const chunk of wrapWithMultimodal(
+      harnessFlow,
       harnessConfig,
       vault,
       input,
-      options,
-      collectedThinking,
-      collectedWebRefs,
-      collectedProgress,
+      outputModes,
+      options.mediaConfig,
+      options.appConfig,
     )) {
       yield chunk;
     }
@@ -558,13 +980,23 @@ export async function* queryWorkflow(
   if (harnessSucceeded) return;
 
   // 降级链第 2 级：queryWithSearchFallback
-  yield { thinking: { phase: 'composing', message: '降级搜索中...' } };
+  if (shouldEmit('thinking', outputModes)) {
+    yield { thinking: { phase: 'composing', message: '降级搜索中...', ts: new Date().toISOString() } };
+  }
   let fallbackSucceeded = false;
   try {
-    for await (const chunk of queryWithSearchFallback(
+    for await (const chunk of wrapWithMultimodal(
+      queryWithSearchFallback(
+        harnessConfig,
+        vault,
+        input,
+      ),
       harnessConfig,
       vault,
       input,
+      outputModes,
+      options.mediaConfig,
+      options.appConfig,
     )) {
       yield chunk;
     }
@@ -576,6 +1008,10 @@ export async function* queryWorkflow(
   if (fallbackSucceeded) return;
 
   // 降级链第 3 级：兜底提示
-  yield { text: '知识库未覆盖此问题，或当前问答服务暂不可用。' };
+  // 为什么不包装兜底：兜底是无相关结果场景，multimodal 必然失败（无 context pages），直接 yield 节省调用
+  // 兜底文本也按 outputModes.answer 过滤（关闭 answer 时不发任何兜底文本）
+  if (shouldEmit('answer', outputModes)) {
+    yield { text: '知识库未覆盖此问题，或当前问答服务暂不可用。' };
+  }
   yield { refs: [], done: true };
 }

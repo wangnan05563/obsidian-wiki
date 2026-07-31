@@ -5,11 +5,12 @@ import type {
   RunState,
   BudgetConfig,
   RetryConfig,
+  StepEvent,
   ToolDefinition,
   StateStore,
 } from './types.js';
 import type { LLMAdapter } from './llm/llm-adapter.js';
-import { runLoop } from './loop/tool-loop.js';
+import { runLoop, runLoopStream } from './loop/tool-loop.js';
 import { OpenAICompatibleAdapter } from './llm/openai-compatible.js';
 import { FileStateStore } from './state/file-state-store.js';
 import { HookManager } from './hook/hook-manager.js';
@@ -124,5 +125,36 @@ export class Harness {
     await this.hooks.afterLoop(ctx, result);
 
     return result;
+  }
+
+  // §真流式入口：与 run() 平行，调用 runLoopStream，LLM 逐 token yield
+  //   为什么独立方法：避免 runLoop 改动回归风险，且流式与非流式生命周期管理不同
+  //   不做 stateStore.save：流式场景下中断恢复由消费端基于 sessionId 自行管理
+  //   消费端（queryWorkflow）需在 done/error 时自行持久化
+  async *runStream(task: { task: string; context?: Record<string, unknown> }): AsyncGenerator<StepEvent> {
+    const runId = randomUUID();
+    const ctx: RunContext = {
+      runId,
+      task: task.task,
+      messages: [],
+      step: 0,
+      tokenUsed: 0,
+      state: task.context ?? {},
+    };
+
+    ctx.messages.push({
+      role: 'user',
+      content: task.task,
+    });
+
+    await this.hooks.beforeLoop(ctx);
+
+    yield* runLoopStream(ctx, {
+      llm: this.llm,
+      tools: this.tools,
+      budget: this.budget,
+      retry: this.retry,
+      hooks: this.hooks,
+    });
   }
 }

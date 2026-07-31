@@ -6,27 +6,13 @@ import type { VaultService } from '../vault/vault-service.js';
 // 注册统计路由。
 //   GET /api/stats   返回仪表盘汇总数据（页数、目录分布、最近编译记录）
 // 纯确定性聚合，不调 LLM。
-// § 统计接口也依赖 buildLinkGraph，加缓存避免重复计算。
-const STATS_CACHE_TTL_MS = 30 * 1000; // 30秒
-
-interface StatsResult {
-  totalPages: number;
-  totalLinks: number;
-  dirCounts: Record<string, number>;
-  recentLog: string;
-}
-
-let _statsCache: StatsResult | null = null;
-let _statsCachedAt = 0;
+// § link graph 缓存已下沉到 VaultService.buildLinkGraph，此处不再独立缓存。
+//   /api/graph 与 /api/stats 共享同一份缓存，避免双倍重算。
+// § 只读 GET 限流 300 req/min（P1-4）：Dashboard 一次刷新触发 graph+stats+files 多请求，
+//   全局 60/min 易触发 429 影响监控体验
 
 export function registerStatsRoute(app: FastifyInstance, vault: VaultService) {
-  app.get('/api/stats', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const now = Date.now();
-    // 检查缓存
-    if (_statsCache && (now - _statsCachedAt) < STATS_CACHE_TTL_MS) {
-      return reply.send(_statsCache);
-    }
-
+  app.get('/api/stats', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const graph = await vault.buildLinkGraph();
       const vaultPath = vault.getVaultPath();
@@ -59,18 +45,12 @@ export function registerStatsRoute(app: FastifyInstance, vault: VaultService) {
         // log.md 可能还未创建
       }
 
-      const result: StatsResult = {
+      return reply.send({
         totalPages: graph.nodes.length,
         totalLinks: graph.edges.length,
         dirCounts,
         recentLog,
-      };
-
-      // 写入缓存
-      _statsCache = result;
-      _statsCachedAt = now;
-
-      return reply.send(result);
+      });
     } catch (err: unknown) {
       return reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),

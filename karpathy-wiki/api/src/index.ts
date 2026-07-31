@@ -1,12 +1,14 @@
 import Fastify from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
+import { Writable } from 'node:stream';
 import { execSync, spawn } from 'node:child_process';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import compress from '@fastify/compress';
 import { loadConfig, getEffectiveApiKey } from './config.js';
 import { VaultService } from './vault/vault-service.js';
 import { HarnessAdapter } from './engine/harness-adapter.js';
@@ -23,40 +25,58 @@ import { registerSearchRoute, registerWebSearchRoute } from './routes/search.js'
 import { registerVaultRoute } from './routes/vault.js';
 import { registerAiRoute } from './routes/ai.js';
 import { registerCleanupRoute } from './routes/cleanup.js';
+import { registerDataCleanRoute } from './routes/data-clean.js';
 import { registerQqIngestRoute } from './routes/qq-ingest.js';
+import { registerUrlIngestRoute } from './routes/url-ingest.js';
+import { registerBookmarkIngestRoute } from './routes/bookmark-ingest.js';
 import { registerConversationsRoute } from './routes/conversations.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
 import { registerAboutRoute } from './routes/about.js';
 import { registerToolsRoute } from './routes/tools.js';
 import { registerSkillRoute } from './routes/skill.js';
+// FR-10-1 AI 自动打标签路由：列出待审核 / 手动触发建议 / 确认 tag
+import { registerTagsRoute } from './routes/tags.js';
+// FR-16-1 Discover Sources 路由：基于双链拓扑推荐相关笔记 + 一键建立双链
+import { registerDiscoverRoute } from './routes/discover.js';
+// FR-14-2 Prompt IDE 路由：列出/编辑/试运行 prompts/*.md
+import { registerPromptsRoute } from './routes/prompts.js';
+// FR-09-3 Podcast 路由：生成对话式播客脚本 + 可选 TTS 合成 + 归档到 queries/
+import { registerPodcastRoute } from './routes/podcast.js';
+// v3 媒体生成路由：视频生成异步任务
+import { registerMediaRoute } from './routes/media.js';
 import { initAuthModule, registerAuthRoute } from './routes/auth.js';
 import { shutdownToolRegistry } from './tools/registry.js';
 import { TunnelService } from './tunnel/tunnel-service.js';
+// 全局代理：Node.js fetch（undici）不自动读取系统/IE 代理设置，需显式配置 ProxyAgent
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
 
-// ESM 原生方式获取目录。esbuild 打包时通过 --define 替换 import.meta.url 为 CJS 等价表达式
-import { fileURLToPath } from 'node:url';
-const dirname = path.dirname(fileURLToPath(import.meta.url));
+// 路径解析与打包模式检测统一走 runtime.ts，兼容开发模式与 SEA 打包模式
+// 为什么移除 fileURLToPath + import.meta.url：SEA 模式下 __filename 指向构建时 bundle.cjs，
+// 用户机器不存在，派生的 dirname 不可用，导致日志/SPA 路径解析失败
+// 为什么不用 process.pkg 检测：SEA 模式下 process.pkg 不存在（仅传统 pkg 有），
+// IS_SEA 基于 __filename 是否存在检测，兼容 SEA 与 pkg 两种打包模式
+import { IS_SEA, getApiDir } from './utils/runtime.js';
 
-// pkg 打包模式标志（process.pkg 仅在 pkg 打包后存在）
-const IS_PACKAGED = !!(process as NodeJS.Process & { pkg?: unknown }).pkg;
+// 向后兼容别名：IS_PACKAGED 语义 = 打包模式（SEA 或 pkg），等价于 IS_SEA
+const IS_PACKAGED = IS_SEA;
 
 /**
  * 加载 .env 文件环境变量（pkg 打包模式需要手动加载）
  * 为什么需要：开发模式由 start.ps1 加载，打包后需自行加载
- * 行解析拆分为独立函数，降低 loadEnvFile 认知复杂度（S3776）
+ * 行解析拆分为独立函数，降�?loadEnvFile 认知复杂度（S3776�?
  */
 function applyEnvLine(line: string): void {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#')) return;
-  const m = trimmed.match(/^([^=]+)=(.*)$/); // NOSONAR: 单次匹配取键值，match 返回数组更适合此场景
+  const m = trimmed.match(/^([^=]+)=(.*)$/); // NOSONAR: 单次匹配取键值，match 返回数组更适合此场�?
   if (m && !process.env[m[1].trim()]) {
     process.env[m[1].trim()] = m[2].trim();
   }
 }
 
 function loadEnvFile(): void {
-  // 开发模式和打包模式都加载 .env，避免依赖启动脚本是否加载 .env
-  // 之前仅 IS_PACKAGED 模式加载，但 start-service.ps1 不加载 .env 导致 401
+  // 开发模式和打包模式都加�?.env，避免依赖启动脚本是否加�?.env
+  // 之前�?IS_PACKAGED 模式加载，但 start-service.ps1 不加�?.env 导致 401
   const candidates = [
     path.resolve(process.cwd(), '.env'),
     path.resolve(process.cwd(), 'services', 'api', '.env'),
@@ -74,10 +94,10 @@ function loadEnvFile(): void {
 }
 
 /**
- * 端口清理：杀掉占用目标端口的残留进程（pkg 打包模式）
- * 为什么需要：上次异常退出可能残留进程占用端口
+ * 端口清理：杀掉占用目标端口的残留进程（pkg 打包模式�?
+ * 为什么需要：上次异常退出可能残留进程占用端�?
  */
-// 提取 kill 逻辑到独立函数，降低 cleanupPort 认知复杂度（S3776）
+// 提取 kill 逻辑到独立函数，降低 cleanupPort 认知复杂度（S3776�?
 function killPid(pid: string): boolean {
   try {
     execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
@@ -93,13 +113,13 @@ function cleanupPort(port: number): void {
   try {
     output = execSync('netstat -aon', { encoding: 'utf8', timeout: 5000 });
   } catch {
-    return; // netstat 失败不阻断
+    return; // netstat 失败不阻�?
   }
-  // 用 String.raw 避免正则字符串双重转义（S7780）
+  // �?String.raw 避免正则字符串双重转义（S7780�?
   const pattern = new RegExp(String.raw`:${port}\s+\S+\s+\S+\s+LISTENING\s+(\d+)`);
   const killed = new Set<string>();
   for (const line of output.split(/\r?\n/)) {
-    const m = line.match(pattern); // NOSONAR: 单次匹配取监听端口 PID，match 返回数组更适合此场景
+    const m = line.match(pattern); // NOSONAR: 单次匹配取监听端�?PID，match 返回数组更适合此场�?
     if (m && !killed.has(m[1]) && killPid(m[1])) {
       killed.add(m[1]);
     }
@@ -107,7 +127,7 @@ function cleanupPort(port: number): void {
 }
 
 /**
- * 自动打开浏览器（pkg 打包模式）
+ * 自动打开浏览器（pkg 打包模式�?
  */
 function openBrowser(url: string): void {
   if (!IS_PACKAGED) return;
@@ -120,24 +140,39 @@ function openBrowser(url: string): void {
 }
 
 async function main(): Promise<void> {
-  // pkg 打包模式：加载 .env + 端口清理
+  // pkg 打包模式：加�?.env + 端口清理
   loadEnvFile();
+
+  // 全局代理配置：检测 HTTPS_PROXY/HTTP_PROXY 环境变量，配置 undici ProxyAgent
+  // 为什么需要：Node.js fetch（undici）不自动读取系统/IE 代理设置，
+  // 企业网络环境通过代理访问外网时，需显式配置否则所有外部 API 调用超时
+  // 影响范围：Agnes API（图像/视频）、Tavily 搜索、URL 爬取等所有 fetch 调用
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+    || process.env.https_proxy || process.env.http_proxy;
+  if (proxyUrl) {
+    setGlobalDispatcher(new ProxyAgent(proxyUrl));
+    console.log(`[启动] 全局代理已配置：${proxyUrl}`);
+  }
 
   const config = await loadConfig();
 
-  // pkg 打包模式：清理残留端口
+  // pkg 打包模式：清理残留端�?
   if (IS_PACKAGED) {
-    console.log('[启动] Karpathy-Wiki 打包模式，清理残留端口...');
+    console.log('[启动] Karpathy-Wiki 打包模式，清理残留端�?..');
     cleanupPort(config.server.port);
   }
 
   // Vault 是知识库内容的唯一存储位置，启动时确保目录结构存在（AC-01-5）
   const vault = new VaultService(config.vaultPath);
   await vault.init();
-
-  // 构造 HarnessAdapter。API Key 读取优先级：config.json.llm.apiKey > process.env[apiKeyRef]
+  // § P2-7：启动 chokidar 文件监听器，外部编辑器（Obsidian）修改 vault 时自动失效缓存
+  // 失败不阻断主服务，仅 console.warn 提示
+  await vault.startFileWatcher().catch((err) => {
+    console.warn('[vault] 文件监听器启动失败，缓存失效依赖 writeFile + mtime 检测:', err);
+  });
+  // 构�?HarnessAdapter。API Key 读取优先级：config.json.llm.apiKey > process.env[apiKeyRef]
   // 为什么用 getEffectiveApiKey：开发模式不加载 .env，仅靠环境变量会拿到空串导致 401
-  // §5.2 传递 webSearchConfig：query workflow 注入 web_search 工具时使用
+  // §5.2 传�?webSearchConfig：query workflow 注入 web_search 工具时使�?
   const apiKey = getEffectiveApiKey(config);
   const adapter = new HarnessAdapter(
     {
@@ -154,11 +189,53 @@ async function main(): Promise<void> {
     config.healthCheck.staleDays,
     config.webSearch,
     config.tools,
+    config,
   );
 
-  // 配置驱动的 Fastify logger：level 从 config.json 读取，默认 info
-  // 为什么不用 logger: true：默认配置无法控制级别，且不记录请求级日志
-  const loggingConfig = config.logging ?? { level: 'info', enableRequestLog: true };
+  // 配置驱动�?Fastify logger：level �?config.json 读取，默�?info
+  // 为什么不�?logger: true：默认配置无法控制级别，且不记录请求级日�?
+  const loggingConfig = config.logging ?? { level: 'info', enableRequestLog: true, logFilePath: '' };
+
+  // 日志双写：同时输出到 stdout 和文件，确保事后排障有完整日志落盘
+  // 为什么需要：默认 pino 仅输出到 stdout，进程退出后日志丢失，前端报错时无法追溯后端日志
+  // 降级策略：目录创建/文件打开失败时降级到仅 stdout，不阻断主服务（硬约束 6）
+  // 路径解析：基于 getApiDir() 解析日志文件路径
+  // 开发模式：getApiDir() = api/，logFilePath '../logs/api-dev.log' 解析为 karpathy-wiki/logs/api-dev.log
+  // SEA 模式：getApiDir() = exe 目录，logFilePath 解析为 exe 同级 logs/ 目录
+  let loggerStream: NodeJS.WritableStream | undefined;
+  let logFileStream: fs.WriteStream | undefined;
+  if (loggingConfig.logFilePath) {
+    try {
+      const logPath = path.resolve(getApiDir(), '..', loggingConfig.logFilePath);
+      await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
+      const fileStream = fs.createWriteStream(logPath, { flags: 'a' });
+      // 监听 error 事件，避免 unhandled error 崩溃进程
+      // 为什么需要：多进程争抢同一日志文件时 Windows 抛 EBUSY，未监听会触发 uncaughtException
+      let fileStreamHealthy = true;
+      fileStream.on('error', (err) => {
+        if (fileStreamHealthy) {
+          console.warn(`[日志] 日志文件写入失败，降级到仅 stdout：`, err);
+          fileStreamHealthy = false;
+        }
+      });
+      logFileStream = fileStream; // 供 shutdown 关闭（GS-1 长连接资源清理）
+      loggerStream = new Writable({
+        write(chunk, encoding, callback) {
+          process.stdout.write(chunk, encoding);
+          // fileStream 不健康或已销毁时跳过文件写入，直接回调避免阻塞 pino
+          if (fileStreamHealthy && !fileStream.destroyed) {
+            fileStream.write(chunk, encoding, callback);
+          } else {
+            callback();
+          }
+        },
+      });
+      console.log(`[日志] 日志文件：${logPath}`);
+    } catch (err) {
+      console.warn(`[日志] 日志文件创建失败，降级到仅 stdout：`, err);
+    }
+  }
+
   const app = Fastify({
     logger: {
       level: loggingConfig.level,
@@ -168,20 +245,22 @@ async function main(): Promise<void> {
           return { method: req.method, url: req.url };
         },
       },
+      // 双写 stream：stdout + 文件（loggerStream 未创建时省略，用 pino 默认 stdout）
+      ...(loggerStream ? { stream: loggerStream } : {}),
     },
     // 50MB：支持多附件上传场景，超过此大小的请求体直接拒绝
     bodyLimit: 50 * 1024 * 1024,
+    pluginTimeout: 60000,
   });
-
   // 请求级日志钩子：覆盖 HTTP 层，确保前端报错时后端日志有反馈
-  // 为什么需要：路由 catch 块只通过 SSE 推错误给前端，后端日志流无记录
+  // 为什么需要：路由 catch 块只通过 SSE 推错误给前端，后端日志流无记�?
   if (loggingConfig.enableRequestLog) {
-    // onRequest：记录请求进入（method + url）
+    // onRequest：记录请求进入（method + url�?
     app.addHook('onRequest', async (request) => {
       request.log.info({ method: request.method, url: request.url }, 'incoming request');
     });
 
-    // onResponse：记录请求完成（method + url + statusCode + 耗时）
+    // onResponse：记录请求完成（method + url + statusCode + 耗时�?
     app.addHook('onResponse', async (request, reply) => {
       const elapsedMs = reply.elapsedTime.toFixed(2);
       request.log.info(
@@ -190,7 +269,7 @@ async function main(): Promise<void> {
       );
     });
 
-    // onError：记录请求处理中抛出的错误（未捕获的异常）
+    // onError：记录请求处理中抛出的错误（未捕获的异常�?
     app.addHook('onError', async (request, reply, error) => {
       request.log.error(
         { method: request.method, url: request.url, statusCode: reply.statusCode, err: error },
@@ -199,20 +278,20 @@ async function main(): Promise<void> {
     });
   }
 
-  // 内网穿透：TunnelService 单例提前创建，供 CORS 白名单查询当前 tunnel 公网域名
-  // 为什么提前：CORS origin 回调需要同步查询 tunnel.publicUrl 判断是否放行
+  // 内网穿透：TunnelService 单例提前创建，供 CORS 白名单查询当�?tunnel 公网域名
+  // 为什么提前：CORS origin 回调需要同步查�?tunnel.publicUrl 判断是否放行
   const tunnel = new TunnelService();
 
-  // CORS：限制 origin 为本地开发 + tunnel 域名白名单
-  // 为什么需要：默认跨域全放开会暴露内部 API，白名单收敛到本地与已配置 tunnel
+  // CORS：限�?origin 为本地开�?+ tunnel 域名白名�?
+  // 为什么需要：默认跨域全放开会暴露内�?API，白名单收敛到本地与已配�?tunnel
   await app.register(cors, {
     origin: (origin, cb) => {
-      // 允许本地开发前端、同源请求（无 origin）
+      // 允许本地开发前端、同源请求（�?origin�?
       if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
         cb(null, true);
         return;
       }
-      // 允许 tunnel 运行时的公网域名（quick tunnel 动态域名 + tailscale/cpolar）
+      // 允许 tunnel 运行时的公网域名（quick tunnel 动态域�?+ tailscale/cpolar�?
       const tunnelUrl = tunnel.publicUrl;
       if (tunnelUrl) {
         try {
@@ -222,10 +301,10 @@ async function main(): Promise<void> {
             return;
           }
         } catch {
-          // publicUrl 格式异常，跳过
+          // publicUrl 格式异常，跳�?
         }
       }
-      // 允许配置的 named tunnel 固定 hostname
+      // 允许配置�?named tunnel 固定 hostname
       if (config.tunnel.hostname && origin === `https://${config.tunnel.hostname}`) {
         cb(null, true);
         return;
@@ -235,24 +314,41 @@ async function main(): Promise<void> {
     credentials: true,
   });
 
-  // Helmet：安全响应头。CSP 在 SPA 模式下需特殊配置，暂不启用避免阻断前端资源
+  // Helmet：安全响应头。CSP �?SPA 模式下需特殊配置，暂不启用避免阻断前端资�?
   await app.register(helmet, {
     contentSecurityPolicy: false,
   });
 
-  // Rate-limit：防 LLM token 耗尽攻击。全局 60/min 兜底，破坏性端点在各路由 config 中设置更严格限流
+  // Rate-limit 分级策略（P1-4）：
+  //   - 全局默认 60 req/min：兜底写操作（POST/PUT/DELETE），防 LLM token 耗尽攻击与批量写入
+  //   - 只读 GET 路由（/api/files, /api/graph, /api/stats, /api/schema, /api/tags/pending）
+  //     在各路由 register 中通过 config.rateLimit 覆盖为 300 req/min，提升浏览体验
+  //   - 破坏性端点（compile/tags-suggest）在路由级设置更严格限流（10 req/min）
+  // 为什么 GET 用 300：Dashboard 一次刷新触发 graph+stats+files 多请求，60/min 易触发 429
   await app.register(rateLimit, {
     max: 60,
     timeWindow: '1 minute',
   });
 
-  // 注册 multipart 插件以支持 compile 路由的文件上传
+  // 响应压缩（P2-6）：
+  //   - 对 >1KB 的 JSON 响应自动启用 gzip/brotli
+  //   - 为什么需要：/api/files/pages ~58KB、/api/graph ~36KB，Tailscale Funnel 公网访问带宽受限
+  //   - 为什么阈值 1KB：小响应压缩收益小于 CPU 开销，1KB 以上压缩比通常 > 60%
+  //   - 为什么优先 brotli：压缩率比 gzip 高 15-20%，主流浏览器均支持
+  await app.register(compress, {
+    threshold: 1024,
+    encodings: ['br', 'gzip', 'deflate'],
+  });
+
+  // 注册 multipart 插件以支�?compile 路由的文件上�?
   await app.register(multipart, {
     limits: { fileSize: 1024 * 1024 * 10 }, // 10MB 上限，防止超大文件耗尽内存
   });
 
-  registerCompileRoute(app, adapter, config.batch);
+  registerCompileRoute(app, adapter, config.batch, config);
   registerQueryRoute(app, adapter);
+  // v3 媒体生成：视频任务创建与轮询
+  registerMediaRoute(app, adapter, config);
   registerQueryArchiveRoute(app, vault);
   registerHealthCheckRoute(app, adapter);
   // files/graph/stats 路由直接操作 Vault，不经过 adapter（纯确定性操作）
@@ -264,59 +360,79 @@ async function main(): Promise<void> {
   // §11.2 断点续传：查询中断任务列表（完整 resume 待详细设计）
   const stateDir = path.resolve(config.vaultPath, '..', '.harness', 'state');
   registerRunsRoute(app, stateDir);
-  // 历史会话后端持久化：落盘到 dataDir/conversations/
-  // dataDir 与 vaultPath 同级（data/），遵循"运行时数据与源码分离"约定
+  // 历史会话后端持久化：落盘�?dataDir/conversations/
+  // dataDir �?vaultPath 同级（data/），遵循"运行时数据与源码分离"约定
   const dataDir = path.resolve(config.vaultPath, '..');
   registerConversationsRoute(app, dataDir);
-  // §5.1 全文检索 + Vault 初始化
+  // §5.1 全文检�?+ Vault 初始�?
   // §5.2 联网搜索路由：供前端直接调用展示搜索结果
   registerSearchRoute(app, vault);
   registerWebSearchRoute(app, config.webSearch);
   registerVaultRoute(app, vault);
-  // AI 配置管理 + 系统清理：参考 17_xianyu 项目新增模块
+  // AI 配置管理 + 系统清理：参�?17_xianyu 项目新增模块
   registerAiRoute(app, adapter);
   registerCleanupRoute(app, vault);
+registerDataCleanRoute(app, vault);
   // QQ 聊天记录导入子系统（SRS §6.1 路由族）
-  // 为什么需要 config 完整对象：路由内用 config.qq ?? defaultQqConfig 兜底
+  // 为什么需�?config 完整对象：路由内�?config.qq ?? defaultQqConfig 兜底
   registerQqIngestRoute(app, adapter, vault, config);
-  // 关于页面 + 检查更新：参考 17_xianyu 项目 about 模块
+  // URL 爬取子系统：从入�?URL 出发 BFS 爬取同级/子路径下、最�?N 跳内页面与附�?
+  // 为什么需�?config 完整对象：路由内�?config.urlCrawl ?? defaultUrlCrawlConfig 兜底
+  registerUrlIngestRoute(app, adapter, vault, config);
+  // FR-16-2 浏览器书签导入：解析书签 HTML → Markdown → raw/ → compile
+  // 为什么传入 vaultPath：路由需要将 combinedMarkdown 写入 raw/ 目录
+  registerBookmarkIngestRoute(app, config.vaultPath);
+  // 关于页面 + 检查更新：参�?17_xianyu 项目 about 模块
   registerAboutRoute(app);
-  // 工具配置管理：MCP/CLI/场景路由的可配置化调用（需求 4）
+  // 工具配置管理：MCP/CLI/场景路由的可配置化调用（需�?4�?
   registerToolsRoute(app, adapter);
-  // 技能导入模块：支持上传 ZIP/.md 技能包，统一存储到 data/skills/
-  // 为什么放在 tools 之后：技能与工具配置同属扩展能力管理，但职责独立
+  // 技能导入模块：支持上传 ZIP/.md 技能包，统一存储�?data/skills/
+  // 为什么放�?tools 之后：技能与工具配置同属扩展能力管理，但职责独立
   registerSkillRoute(app);
+  // FR-10-1 AI 自动打标签：compile 末尾追加 ai_tags 建议 + 手动触发 + 确认
+  // 为什么需要 config 完整对象：POST /api/tags/suggest 调用 LLM 需读取 llm.baseUrl/model/apiKey
+  registerTagsRoute(app, vault, config);
+  // FR-16-1 Discover Sources：基于双链拓扑推荐"邻近但未连接"的相关笔记 + 一键建立双链
+  // 为什么不需要 config：纯拓扑计算（同目录/同标签/同作者），不调用 LLM
+  registerDiscoverRoute(app, vault);
+  // FR-14-2 Prompt IDE：列出/编辑/试运行 prompts/*.md
+  // 为什么需要 adapter 与 config：试运行端点调用 adapter.compile，需要 config 提供 LLM 配置
+  registerPromptsRoute(app, adapter, config);
+  // FR-09-3 Podcast：生成对话式播客脚本 + 可选 TTS 合成 + 归档到 queries/
+  // 为什么需要 adapter 与 config：adapter.podcast 调用 generatePodcast workflow，
+  //   config 提供 podcast.ttsApiKey/ttsBaseUrl 决定是否启用 TTS 合成
+  registerPodcastRoute(app, adapter, config);
 
-  // RBAC 权限管理模块：必须在其他路由注册前初始化中间件（全局 preHandler）
-  // 为什么提前初始化：setupAuthMiddleware 通过 addHook 注册全局 preHandler，
+  // RBAC 权限管理模块：必须在其他路由注册前初始化中间件（全局 preHandler）preHandler�?
+  // 为什么提前初始化：setupAuthMiddleware 通过 addHook 注册全局 preHandler�?
   // 必须在路由注册前调用，否则已注册的路由不会经过认证中间件
   if (config.auth) {
     await initAuthModule(config.auth, config.vaultPath);
     registerAuthRoute(app);
-    console.log(`[auth] 权限控制已${config.auth.enabled ? '启用' : '禁用'}`);
+    console.log(`[auth] 权限控制：${config.auth.enabled ? '启用' : '禁用'}`);
   } else {
     console.warn('[auth] 未配置 auth 字段，权限控制未启用');
   }
 
-  // 内网穿透：TunnelService 单例已提前创建（CORS 白名单依赖），此处注入路由
+  // 内网穿透：TunnelService 单例已提前创建（CORS 白名单依赖），此处注入路�?
   registerTunnelRoute(app, tunnel);
   // autoStart 开启时服务启动即建立隧道，失败不阻断主服务
   if (config.tunnel.autoStart) {
     tunnel.start(config.tunnel, config.server.port).catch((err) => {
-      app.log.error({ err }, '隧道开机自启失败');
+      app.log.error({ err }, 'Tunnel boot self-start failed');
     });
   }
 
-  // 健康检查端点（供 docker-compose healthcheck 用）
+  // 健康检查端点（�?docker-compose healthcheck 用）
   app.get('/health', async () => ({ ok: true }));
 
   // SPA 静态资源托管（生产模式 / exe 打包模式）
-  // 为什么需要：开发模式由 Vite 5173 提供前端，生产/exe 模式需后端单端口托管 SPA
-  // 探测顺序：exe 同级 public → api/public → api/static/spa
+  // 为什么需要：开发模式由 Vite 5173 提供前端，生成 exe 模式需后端单端口托管 SPA
+  // 探测顺序：CWD/public（exe 运行模式）→ getApiDir()/public（开发模式 api/public 或 SEA 模式 exe/public）
   const spaCandidates = [
     path.resolve(process.cwd(), 'public'),                      // exe 运行模式：CWD/public
-    path.resolve(dirname, '..', 'public'),                      // tsx 开发模式：src/../public
-    path.resolve(dirname, '..', 'static', 'spa'),               // 兼容旧路径
+    path.resolve(getApiDir(), 'public'),                        // 开发模式：api/public，SEA 模式：exe/public
+    path.resolve(getApiDir(), 'static', 'spa'),                 // 兼容旧路径
   ];
   let spaRoot: string | null = null;
   for (const p of spaCandidates) {
@@ -331,23 +447,31 @@ async function main(): Promise<void> {
       prefix: '/',
       wildcard: false,  // 关闭通配符，手动处理 SPA fallback
     });
-    // SPA fallback：所有未匹配的 GET 请求返回 index.html（Vue Router history 模式）
+    // Tailscale Funnel 路径区分模式：直接访问后端时请求路径可能带 /wiki/ 前缀
+    // 为什么 decorate:false：避免重复装饰 reply.sendFile（第一次注册时已装饰）
+    await app.register(fastifyStatic, {
+      root: spaRoot,
+      prefix: '/wiki/',
+      wildcard: false,
+      decorateReply: false,
+    });
+    // SPA fallback：所有未匹配�?GET 请求返回 index.html（Vue Router history 模式�?
     app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !req.url.startsWith('/api')) {
+      if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/wiki/api')) {
         return reply.sendFile('index.html');
       }
       return reply.code(404).send({ error: 'Not Found' });
     });
-    console.log(`[SPA] 静态资源托管：${spaRoot}`);
+    console.log(`[SPA] 静态资源托管：${spaRoot} (支持 /wiki/ 前缀)`);
   } else {
-    console.log('[SPA] 未找到 SPA 产物，仅 API 模式（开发模式由 Vite 提供前端）');
+    console.log('[SPA] No SPA artifacts found, API-only mode (dev mode served by Vite)');
   }
 
   try {
     await app.listen({ host: config.server.host, port: config.server.port });
     const url = `http://${config.server.host}:${config.server.port}`;
     console.log(`Wiki API running at ${url}`);
-    // pkg 打包模式：自动打开浏览器
+    // pkg 打包模式：自动打开浏览�?
     openBrowser(url);
   } catch (err) {
     app.log.error(err);
@@ -355,13 +479,25 @@ async function main(): Promise<void> {
   }
 
   // shutdown 优雅停止：优先停隧道，避免调度器停止后隧道仍转发流量到已关闭服务
-  // 为什么用 process 信号而非 Fastify 钩子：pkg 打包模式下 Ctrl+C 走 SIGINT，需在进程级捕获
-  // 为什么 async：需等待 MCP 子进程清理完成再 exit，避免孤儿进程
+  // 为什么用 process 信号而非 Fastify 钩子：pkg 打包模式�?Ctrl+C �?SIGINT，需在进程级捕获
+  // 为什�?async：需等待 MCP 子进程清理完成再 exit，避免孤儿进�?
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[关闭] 收到 ${signal}，正在停止隧道与工具连接...`);
     tunnel.stop();
-    // 清理 MCP 子进程连接，按 graceful-shutdown-rule 顺序：子进程 → 连接 → exit
+    // 清理 MCP 子进程连接，�?graceful-shutdown-rule 顺序：子进程 �?连接 �?exit
     await shutdownToolRegistry();
+    // § P2-7：关闭 chokidar 监听器，清空 VaultService 缓存
+    await vault.dispose();
+    // 关闭日志文件流，确保缓冲写入落盘（GS-1：长连接资源清理）
+    // 为什么用超时保护：避免文件系统异常导致退出阻塞，1s 足够小体积日志刷新
+    // 为什么用局部变量 stream：闭包内 TS 无法保证 logFileStream 仍非空，局部变量避免 ! 断言
+    if (logFileStream) {
+      const stream = logFileStream;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 1000);
+        stream.end(() => { clearTimeout(timer); resolve(); });
+      });
+    }
     process.exit(0);
   };
   process.on('SIGINT', () => { void shutdown('SIGINT'); });

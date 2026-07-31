@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { VideoPlay, VideoPause, Bell, Close } from '@element-plus/icons-vue';
 import { useTtsStore } from '../stores/tts';
 
 // §2.x TtsController — TTS 全局浮动控制器。
@@ -29,14 +30,14 @@ function handleStop() {
 <template>
   <transition name="slide-up">
     <div v-if="ttsStore.state !== 'idle'" class="tts-controller">
-      <span class="tts-icon">🔊</span>
+      <el-icon class="tts-icon"><Bell /></el-icon>
       <span class="tts-status">{{ statusText }}</span>
       <div class="tts-controls">
         <button class="ctrl-btn" @click="handlePauseResume" :title="ttsStore.state === 'playing' ? '暂停' : '继续'">
-          {{ ttsStore.state === 'playing' ? '⏸' : '▶' }}
+          <el-icon><component :is="ttsStore.state === 'playing' ? VideoPause : VideoPlay" /></el-icon>
         </button>
         <button class="ctrl-btn" @click="handleStop" title="停止">
-          ⏹
+          <el-icon><Close /></el-icon>
         </button>
       </div>
     </div>

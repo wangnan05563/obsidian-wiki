@@ -32,6 +32,8 @@ export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapte
         model: config.llm.model,
         apiKeyRef: config.llm.apiKeyRef,
         apiKeySet: Boolean(process.env[config.llm.apiKeyRef]),
+        // §真流式默认值：前端 Config 页面展示，Query 页面开关可按请求覆盖
+        stream: config.llm.stream ?? false,
       },
       budget: config.budget,
       server: config.server,

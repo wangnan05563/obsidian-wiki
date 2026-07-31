@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { Check, Close, CircleClose } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
 
 // 批量编译进度条组件
@@ -185,7 +186,7 @@ function handleCancel() {
     <Transition name="banner-fade" mode="out-in">
       <!-- 完成态提示 banner -->
       <div v-if="currentStatus === 'done'" key="done" class="progress-banner success-banner">
-        <span class="banner-icon">✓</span>
+        <el-icon class="banner-icon"><Check /></el-icon>
         <span class="banner-text">
           全部 {{ totalCount }} 篇文档编译完成
           <template v-if="errorCount > 0">
@@ -196,13 +197,13 @@ function handleCancel() {
 
       <!-- 错误态提示 banner -->
       <div v-else-if="currentStatus === 'error'" key="error" class="progress-banner error-banner">
-        <span class="banner-icon">✗</span>
+        <el-icon class="banner-icon"><Close /></el-icon>
         <span class="banner-text">{{ store.errorMessage || '编译过程出错' }}</span>
       </div>
 
       <!-- 取消态提示 banner -->
       <div v-else-if="currentStatus === 'cancelled'" key="cancelled" class="progress-banner cancelled-banner">
-        <span class="banner-icon">⊘</span>
+        <el-icon class="banner-icon"><CircleClose /></el-icon>
         <span class="banner-text">
           已取消编译，保留 {{ completedCount }}/{{ totalCount }} 篇成果
         </span>

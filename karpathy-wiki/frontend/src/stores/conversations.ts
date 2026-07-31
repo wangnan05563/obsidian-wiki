@@ -1,3 +1,4 @@
+import { API_BASE } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { ChatMessage, ConversationRecord } from '../types';
@@ -59,7 +60,7 @@ async function migrateIndexedDbToBackend() {
   // 并发上传所有会话，失败不阻断（下次启动可重试）
   await Promise.all(allConversations.map(async (conv) => {
     try {
-      await fetch(`/api/conversations/${conv.id}`, {
+      await fetch(`${API_BASE}/conversations/${conv.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(conv),
@@ -83,7 +84,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     await migrateIndexedDbToBackend();
 
     try {
-      const res = await fetch('/api/conversations');
+      const res = await fetch(`${API_BASE}/conversations`);
       if (res.ok) {
         const data = await res.json() as { conversations: ConversationRecord[] };
         conversations.value = data.conversations ?? [];
@@ -121,7 +122,7 @@ export const useConversationsStore = defineStore('conversations', () => {
 
     // 后端持久化（权威）；IndexedDB 写入仅作缓存兜底，失败不影响主流程
     try {
-      await fetch(`/api/conversations/${id}`, {
+      await fetch(`${API_BASE}/conversations/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(record),
@@ -147,7 +148,7 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function deleteConversation(id: string) {
     try {
-      await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+      await fetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' });
     } catch {
       // 后端不可用时降级操作 IndexedDB
     }
@@ -164,7 +165,7 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function renameConversation(id: string, title: string) {
     try {
-      await fetch(`/api/conversations/${id}/rename`, {
+      await fetch(`${API_BASE}/conversations/${id}/rename`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
@@ -183,7 +184,7 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function togglePin(id: string) {
     try {
-      const res = await fetch(`/api/conversations/${id}/pin`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/conversations/${id}/pin`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json() as { isPinned: boolean };
         const idx = conversations.value.findIndex((conversation) => conversation.id === id);
@@ -208,7 +209,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     currentConversationId.value = id;
     let messages: ChatMessage[] | null = null;
     try {
-      const res = await fetch(`/api/conversations/${id}`);
+      const res = await fetch(`${API_BASE}/conversations/${id}`);
       if (res.ok) {
         const data = await res.json() as { conversation: ConversationRecord };
         messages = data.conversation.messages;

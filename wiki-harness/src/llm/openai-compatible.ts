@@ -108,6 +108,13 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // §流式 tool_calls 累积器：OpenAI 流式协议中 tool_calls 是分片返回
+    //   第一个分片含 id + function.name + arguments 初始（可能为空串）
+    //   后续分片含 function.arguments 增量片段（无 id/name）
+    //   必须按 index 累积，流结束时合并为完整 ToolCall[]
+    //   为什么用 Map：index 是数字键，Map 保序且查找 O(1)
+    const toolCallAccumulator = new Map<number, ToolCall>();
+
     // SSE 解析：按行分割，data: 前缀为有效载荷，[DONE] 结束
     while (true) {
       const { done, value } = await reader.read();
@@ -122,21 +129,63 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith('data:')) continue;
         const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') return;
+        if (data === '[DONE]') {
+          // 流结束：如有累积的 tool_calls，yield 一次完整数组（delta 为空）
+          // 为什么放在 [DONE] 分支：OpenAI 协议保证 [DONE] 是最后一个事件，此时累积完整
+          if (toolCallAccumulator.size > 0) {
+            const toolCalls = Array.from(toolCallAccumulator.entries())
+              .sort(([a], [b]) => a - b)
+              .map(([, tc]) => tc);
+            yield { delta: '', tool_calls: toolCalls };
+          }
+          return;
+        }
 
         try {
           const parsed = JSON.parse(data) as OpenAIStreamChunk;
           const delta = parsed.choices?.[0]?.delta;
           if (delta) {
-            yield {
-              delta: delta.content ?? '',
-              tool_calls: delta.tool_calls,
-            };
+            // 文本增量直接 yield，消费端可即时追加
+            if (delta.content) {
+              yield { delta: delta.content, tool_calls: undefined };
+            }
+            // tool_calls 分片累积，不立即 yield
+            if (delta.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                // OpenAI 流式 tool_calls 每项含 index 字段（隐含），用 any 取出
+                const idx = (tc as unknown as { index?: number }).index ?? 0;
+                const existing = toolCallAccumulator.get(idx);
+                if (existing) {
+                  // 后续分片：累积 arguments 增量
+                  if (tc.function.arguments) {
+                    existing.function.arguments += tc.function.arguments;
+                  }
+                } else {
+                  // 首个分片：含 id + name + arguments 初始
+                  toolCallAccumulator.set(idx, {
+                    id: tc.id,
+                    type: 'function',
+                    function: {
+                      name: tc.function.name,
+                      arguments: tc.function.arguments || '',
+                    },
+                  });
+                }
+              }
+            }
           }
         } catch {
           // 跳过无法解析的 SSE 行，保持流不中断
         }
       }
+    }
+
+    // 兜底：若未收到 [DONE] 但流自然结束（如连接断开），仍尝试 yield 累积的 tool_calls
+    if (toolCallAccumulator.size > 0) {
+      const toolCalls = Array.from(toolCallAccumulator.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, tc]) => tc);
+      yield { delta: '', tool_calls: toolCalls };
     }
   }
 

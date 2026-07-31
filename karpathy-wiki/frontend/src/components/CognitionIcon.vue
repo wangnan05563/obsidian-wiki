@@ -25,11 +25,13 @@ const { currentTheme } = useTheme();
 
 // 浅色主题清单：与 Login.vue 中的视觉分类保持一致
 const lightThemes = ['macaron', 'ecommerce'];
+// 为什么用 import.meta.env.BASE_URL：vite.config.ts 配置了 base: '/wiki/'，
+// 硬编码 '/images/...' 会被浏览器解析为 host 根路径导致 404，必须拼接 base 前缀
 const iconSrc = computed(() => {
   const isLight = lightThemes.includes(currentTheme.value);
   return isLight
-    ? '/images/login/cognition-icon-light.png'
-    : '/images/login/cognition-icon.png';
+    ? `${import.meta.env.BASE_URL}images/login/cognition-icon-light.png`
+    : `${import.meta.env.BASE_URL}images/login/cognition-icon.png`;
 });
 </script>
 
