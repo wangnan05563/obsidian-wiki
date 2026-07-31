@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import matter from 'gray-matter';
 import type { EngineAdapter, QueryInput, AnswerChunk } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
+import { createSSESender } from '../utils/sse.js';
 import { withCompileLock } from '../compile-queue.js';
 // §6.0.2 per-session Lock：按 question 前 32 字符做 key 串行化
 import { withSessionLock } from '../session-lock.js';
@@ -58,6 +59,18 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
       attachments?: Array<{ data: string; mimeType: string; filename: string }>;
       // 当前请求使用的模型（即时切换）
       model?: string;
+      // FR-09-2 多模态输出模式：'normal' 默认 | 'mindmap' 思维导图 | 'faq' 问答对 | 'timeline' 时间线
+      // v3 扩展：'image' 图像生成 | 'ppt' PPT 生成（走 wrapWithMultimodal 分流到 media-generation-workflow）
+      outputMode?: 'normal' | 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt';
+      // v2: 多选输出模式（控制 thinking/tool_call/answer/multimodal 流式事件可见性）
+      // 与 outputMode 独立：outputMode 控制多模态结构，outputModes 控制流式阶段事件可见性
+      outputModes?: Array<'thinking' | 'tool_call' | 'answer' | 'multimodal'>;
+      // §真流式开关：true 走 LLM 逐 token 推送，false 走按句切分假流式
+      // 未传时由 queryWorkflow 内部用 harnessConfig.llm.stream 兜底
+      stream?: boolean;
+      // 中间件开关：query workflow 中可启用/禁用的功能模块
+      // 与已有字段关系：middlewares 优先，已有字段（webSearch/mode/stream）作为兜底
+      middlewares?: string[];
     };
     // 可选链合并 body nullish 守卫与字段访问（S6582）
     if (!body?.question || typeof body.question !== 'string') {
@@ -73,6 +86,16 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
       webSearch: body.webSearch,
       attachments: body.attachments,
       model: body.model,
+      // FR-09-2 透传 outputMode 到 queryWorkflow，由 wrapWithMultimodal 在 done 之前追加 multimodal 输出
+      outputMode: body.outputMode,
+      // v2: 透传 outputModes 到 queryWorkflow 内部 yield 过滤
+      // 为空/undefined 时 workflow 视为全开（不修改现有行为）
+      outputModes: body.outputModes && body.outputModes.length > 0 ? body.outputModes : undefined,
+      // §真流式透传：undefined 时 queryWorkflow 用 harnessConfig.llm.stream 兜底
+      stream: body.stream,
+      // 中间件配置透传：undefined 时 queryWorkflow 按各功能默认行为执行
+      // 后端按 middlewares 数组中是否包含对应 key 决定是否覆盖默认行为
+      middlewares: body.middlewares,
     };
 
     // 为本次问答分配 sessionId，存入会话存储供 archive 防篡改取用
@@ -89,10 +112,9 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
       'X-Accel-Buffering': 'no',
     });
 
-    const send = (event: string, data: unknown) => {
-      reply.raw.write(`event: ${event}\n`);
-      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
+    // 为什么用 createSSESender：客户端 abort 后 reply.raw 被销毁，继续 write 会抛 ERR_STREAM_DESTROYED
+    // 被 Fastify 作为未捕获异常处理为 HTTP 500，污染日志并误导排障
+    const { send, isAborted, safeEnd } = createSSESender(reply, request);
 
     try {
       // §6.0.2 per-session Lock：同 question 的并发请求串行化，避免 LLM 重复调用浪费 token
@@ -114,9 +136,18 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
         if (chunk.image) {
           send('image', chunk.image);
         }
+        // v3 PPT 事件：Marp Markdown 幻灯片推送
+        if (chunk.ppt) {
+          send('ppt', chunk.ppt);
+        }
         // §5.2 followups 事件：追问建议
         if (chunk.followups) {
           send('followups', { followups: chunk.followups });
+        }
+        // FR-09-2 多模态输出事件：前端 MultimodalOutput 组件渲染 mindmap/faq/timeline
+        // 为什么单独事件类型：与 answer/refs/done 解耦，前端按事件类型独立渲染
+        if (chunk.multimodal) {
+          send('multimodal', chunk.multimodal);
         }
         // §5.2 联网搜索引用：缓存最新 webRefs，与 refs 一起在 done 时发送
         if (chunk.webRefs && chunk.webRefs.length > 0) {
@@ -148,6 +179,8 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
 
       await withSessionLock(input.question, async () => {
         for await (const chunk of adapter.query(input)) {
+          // 客户端已断开：提前退出迭代，停止后续 LLM 调用避免浪费 token
+          if (isAborted()) break;
           dispatchProgressEvents(chunk);
 
           if (chunk.done) {
@@ -171,7 +204,7 @@ export function registerQueryRoute(app: FastifyInstance, adapter: EngineAdapter)
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      reply.raw.end();
+      safeEnd();
     }
   });
 }

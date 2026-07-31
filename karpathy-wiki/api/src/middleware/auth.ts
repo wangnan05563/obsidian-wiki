@@ -31,10 +31,11 @@ export interface AuthMiddlewareConfig {
 // 默认公开路由（无需认证即可访问）
 // 为什么 /api/auth/login 公开：登录接口本身不需要 token
 // 为什么 /health 公开：Docker healthcheck 不带 token
-const DEFAULT_PUBLIC_PATHS = [
+// 为什么导出：auth.ts 注册中间件时复用同一常量，避免字面量重复导致漂移（BR-048）
+export const DEFAULT_PUBLIC_PATHS = [
   '/api/auth/login',
   '/health',
-];
+] as const;
 
 // 初始化认证中间件
 // 为什么 decorate 而非 addHook：decorate 后类型可推断，路由层可直接读 request.currentUser

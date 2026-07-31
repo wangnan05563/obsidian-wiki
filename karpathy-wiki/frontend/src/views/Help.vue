@@ -514,7 +514,6 @@ onBeforeUnmount(() => {
       <!-- 左侧侧栏：搜索 + 章节锚点 -->
       <aside class="help-sidebar">
         <div class="sidebar-header">
-          <span class="sidebar-tag">// DOCS</span>
           <span class="sidebar-title">文档目录</span>
         </div>
         <el-input

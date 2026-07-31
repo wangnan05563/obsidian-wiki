@@ -4,6 +4,8 @@
 // RBAC 权限模块类型 re-export 便于外部统一从 types.ts 导入
 // AuthConfig 本文件内 AppConfig 引用需 import type，其余类型仅 re-export 不在文件内使用
 import type { AuthConfig } from './auth/types.js';
+// UrlCrawlConfig 在文件内被 AppConfig.urlCrawl 字段引用，需 import type（re-export 不等于文件内可用）
+import type { UrlCrawlConfig } from './utils/url-crawl.js';
 
 export type {
   AuthRole,
@@ -20,8 +22,12 @@ export type {
   UpdateUserRequest,
 } from './auth/types.js';
 
+// URL 爬取子系统类型 re-export：config.ts 从 types.ts 统一导入，避免消费端直接引用 utils 子模块
+export type { UrlCrawlConfig } from './utils/url-crawl.js';
+
 export interface EngineAdapter {
-  compile(input: CompileInput): AsyncIterable<ProgressEvent>;
+  // appConfig 可选：传入后 compile 末尾可触发 FR-10-1 ai_tags 建议生成等需要 AppConfig 的扩展逻辑
+  compile(input: CompileInput, appConfig?: AppConfig): AsyncIterable<ProgressEvent>;
   // §11.2 断点续传：从中断点恢复编译
   resumeCompile(runId: string): AsyncIterable<ProgressEvent>;
   query(input: QueryInput): AsyncIterable<AnswerChunk>;
@@ -32,7 +38,16 @@ export interface EngineAdapter {
   // provider/baseUrl/apiKey 变更需同步 LLM 实例，支持预设切换时完整更新
   // §5.2 webSearchConfig 变更需同步内存实例，避免重启服务才生效
   // 需求 4 toolsConfig 变更需同步内存实例，支持 Config 页面保存后即时生效
-  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig }): void;
+  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig; activeSkill?: string; systemPrompt?: string; scope?: SkillPreset['scope']; outputFormat?: string }): void;
+  // FR-09-3 Podcast 生成：调用 podcast-workflow 生成脚本（+ 可选 TTS 合成）
+  // 为什么放在 adapter：与其他 workflow（compile/query）一致，route 通过 adapter 调用，
+  // 避免 route 直接持有 harnessConfig 私有引用
+  podcast(topic: string, appConfig: AppConfig | undefined, scopeFilter?: { tags?: string[]; folder?: string }): Promise<PodcastResult>;
+  // v3 视频生成：创建 Agnes Video 异步任务，返回 taskId/videoId（不阻塞，前端轮询）
+  // 为什么独立于 query SSE 流：视频生成需数分钟，超出 SSE 60 秒超时，走独立 JSON 端点
+  generateVideo(prompt: string, appConfig?: AppConfig): Promise<VideoTaskResult>;
+  // v3 视频任务轮询：查询任务状态，完成时下载视频并归档到 vault
+  pollVideoTask(taskId: string, appConfig?: AppConfig): Promise<VideoTaskResult>;
 }
 
 export interface CompileInput {
@@ -77,6 +92,24 @@ export interface QueryInput {
   attachments?: Array<{ data: string; mimeType: string; filename: string }>;
   // 当前请求使用的模型（用于即时切换，覆盖 config.llm.model）
   model?: string;
+  // FR-09-2 多模态输出模式：'normal'(默认) | 'mindmap' | 'faq' | 'timeline'
+  // 为什么可选：未设置时走普通问答，设置非 normal 时在 done 前追加 multimodal 输出
+  outputMode?: string;
+  // v2 多输出模式过滤：控制 thinking/tool_call/answer/multimodal 哪些类别推送到前端
+  // 为什么用数组而非 Set：JSON 序列化兼容，前端 localStorage 持久化直接存储
+  outputModes?: string[];
+  // §真流式开关：true 走 LLM 逐 token 推送（chatStream），false/undefined 走按句切分假流式
+  // 未传时由路由层用 appConfig.llm.stream 默认值补齐
+  stream?: boolean;
+  // 中间件开关：query workflow 中可启用/禁用的功能模块
+  // 为什么用数组而非对象：JSON 序列化兼容，前端 localStorage 持久化直接存储
+  // 与已有字段（webSearch/mode/stream）关系：middlewares 优先，已有字段作为兜底兼容
+  // - 'web_search' 启用联网搜索（覆盖 webSearch=false）
+  // - 'deep_thinking' 启用深度思考（覆盖 mode !== 'deep'）
+  // - 'extended_tools' 启用 MCP/CLI 扩展工具
+  // - 'followups' 启用追问建议生成（默认开启，middlewares 不含时关闭）
+  // - 'stream' 启用真流式（覆盖 stream=false）
+  middlewares?: string[];
 }
 
 // 思考步骤：与前端 ThinkingStep 类型对齐
@@ -85,6 +118,8 @@ export interface ThinkingChunk {
   message: string;
   tool?: string;
   args?: Record<string, unknown>;
+  // v2 单步耗时时间戳：前端据此计算每步思考耗时
+  ts?: string;
 }
 
 // §5.2 联网搜索引用：与本地 [[页面名]] 引用并行返回。
@@ -108,12 +143,17 @@ export interface AnswerChunk {
   // §5.2 联网搜索进度推送
   progress?: { step: string; count?: number };
   // §5.2 图片推送（多模态场景）
-  image?: { url: string; alt: string; width?: number; height?: number };
+  // archivePath: 下载归档到 vault queries/ 后的相对路径，前端用它构造 /api/files 访问
+  image?: { url: string; alt: string; width?: number; height?: number; archivePath?: string };
+  // v3 PPT 推送：LLM 生成的 Marp Markdown，前端用 @marp-team/marp-core 渲染为幻灯片
+  ppt?: { markdown: string; title: string; archivePath: string };
   // §5.2 追问建议
   followups?: string[];
   // §5.1 done 事件附带的会话信息（供归档用）
   sessionId?: string;
   messageIndex?: number;
+  // FR-09-2 多模态结构化输出：done 前追加的思维导图/FAQ/时间线
+  multimodal?: MultimodalOutput;
 }
 
 export interface HealthReport {
@@ -177,6 +217,9 @@ export interface TunnelConfig {
   credentialsFile: string;
   hostname: string;
   certFile: string;
+  // Tailscale path prefix：'/wiki/' 用于同 ts.net host 多应用共存场景区分路由
+  // 空字符串表示根路径模式（向后兼容旧配置）
+  pathPrefix: string;
 }
 
 export interface WebSearchConfig {
@@ -193,6 +236,10 @@ export interface LoggingConfig {
   level: string;
   // 是否启用 onRequest/onResponse/onError 钩子记录每个 HTTP 请求
   enableRequestLog: boolean;
+  // 日志文件落盘路径（相对 api/ 目录解析，与 vaultPath 风格一致）
+  // 为什么可选：未配置时仅输出到 stdout，进程退出后日志丢失，配置后双写 stdout + 文件便于事后排障
+  // 空串/undefined 表示禁用文件落盘，仅控制台输出
+  logFilePath?: string;
 }
 
 // 应用配置。
@@ -205,7 +252,10 @@ export interface AppConfig {
   vaultPath: string;
   // V1.3 仅 harness
   adapter: 'harness';
-  llm: { provider: string; baseUrl: string; model: string; apiKeyRef: string; apiKey?: string; apiKeys?: Record<string, string> };
+  // §真流式开关：stream=true 时 queryWorkflow 走 LLM 逐 token 推送（chatStream）
+  // 为什么可选：保留向后兼容，老配置文件无此字段时 queryWorkflow 内部用 false 兜底
+  // 权威源：后端 config.json 是默认值，前端可每次请求 body.stream 覆盖
+  llm: { provider: string; baseUrl: string; model: string; apiKeyRef: string; apiKey?: string; apiKeys?: Record<string, string>; stream?: boolean };
   budget: { maxSteps: number; tokenBudget: number };
   server: { host: string; port: number };
   localOnly: boolean;
@@ -223,6 +273,265 @@ export interface AppConfig {
   // QQ 聊天记录导入子系统配置（qq-ingest/）：缺失时使用 defaultConfig 提供的默认值
   // 为什么可选：保留向后兼容，老配置文件无此字段时不阻断启动；不使用 QQ 导入功能的项目可忽略
   qq?: QqConfig;
+  // FR-13-2 OCR config: independent from llm, allows configuring a vision-capable model for OCR
+  // Why optional: when not configured, resolveOcrConfig falls back to llm config
+  ocr?: OcrConfig;
+  // FR-13-3 Audio transcription config: independent from llm for STT (Speech-to-Text)
+  // Why optional: when not configured, resolveAudioConfig falls back to llm config;
+  // audio/video uploads return error message prompting user to configure audio endpoint
+  audio?: AudioConfig;
+  // FR-09-3 Podcast config: TTS provider/voice settings for audio overview generation
+  // Why optional: when not configured, podcast workflow only generates script without audio
+  podcast?: PodcastConfig;
+  // URL 爬取子系统配置：缺失时由 DEFAULT_CRAWL_CONFIG 提供默认值
+  // 为什么可选：保留向后兼容，不使用 URL 爬取功能的老配置文件无需添加此字段
+  urlCrawl?: UrlCrawlConfig;
+  // FR-12 AI 伙伴预设列表（V3.1 新增）
+  // 为什么可选：保留向后兼容，老配置文件无此字段时不阻断启动
+  skills?: SkillPreset[];
+  // 当前激活的 AI 伙伴 id（空=无预设，使用默认 query 行为）
+  activeSkill?: string;
+  // v3 媒体生成配置：Agnes Image/Video API 参数
+  // 为什么可选：保留向后兼容，老配置文件无此字段时使用 defaultConfig 提供的默认值
+  media?: MediaConfig;
+}
+
+
+// FR-13-2 OCR configuration structure
+// apiKeyRef references env var name (backward compat); apiKey optional, written to config.json from frontend
+// Read priority: config.json.ocr.apiKey > process.env[apiKeyRef] > fallback to llm config
+export interface OcrConfig {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeyRef?: string;
+  apiKey?: string;
+}
+
+// FR-13-3 Audio/Video transcription configuration
+// Why independent from llm: main LLM may not support audio transcription (e.g., deepseek-chat),
+// user may configure a dedicated Whisper/audio model endpoint
+// Read priority: config.json.audio.apiKey > process.env[apiKeyRef] > fallback to llm config
+export interface AudioConfig {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeyRef?: string;
+  apiKey?: string;
+}
+
+// FR-09-3 Podcast (Audio Overview) configuration
+// Why independent from llm: podcast TTS may use a different voice model (e.g., doubao-tts) than the main LLM
+// Why optional: when not configured, podcast workflow only generates script without audio synthesis
+export interface PodcastConfig {
+  // TTS provider: doubao / openai / minimax (only doubao has backend stub)
+  ttsProvider: string;
+  // TTS API base URL (e.g., https://openspeech.bytedance.com)
+  ttsBaseUrl: string;
+  // TTS API key (optional: read from env var ttsApiKeyRef if not set)
+  ttsApiKey?: string;
+  ttsApiKeyRef?: string;
+  // Voice ID for Host A (e.g., BV001_streaming)
+  voiceA?: string;
+  // Voice ID for Host B (e.g., BV002_streaming)
+  voiceB?: string;
+  // Speech rate (0.5 - 2.0, default 1.0)
+  rate?: number;
+}
+
+// FR-09-3 Podcast generation result
+export interface PodcastResult {
+  // Generated script (Markdown with ## Host A/B sections)
+  script: string;
+  // Audio file paths relative to vault (empty when TTS not configured)
+  audioFiles: string[];
+  // Total duration in seconds (estimated from script length when TTS not available)
+  durationSec: number;
+  // Archive path under queries/ (e.g., queries/podcast-20260728-120000.md)
+  archivePath: string;
+  // Whether TTS synthesis was performed
+  ttsEnabled: boolean;
+}
+
+// v3 媒体生成配置：Agnes Image/Video API 参数
+// 为什么独立于 llm：图像/视频生成是专用模型，与主 LLM（如 deepseek-chat）解耦
+// API key 优先级：media.agnes.apiKey > llm.apiKeys.agnes > process.env[apiKeyRef]
+export interface MediaConfig {
+  agnes: {
+    // API base URL（OpenAI 兼容接口）
+    baseUrl: string;
+    // 环境变量名（向后兼容，与 apiKey 互斥）
+    apiKeyRef: string;
+    // 直接配置的 API key（可选，与 llm.apiKeys.agnes 互斥）
+    apiKey?: string;
+    // 图像生成模型名
+    imageModel: string;
+    // 视频生成模型名
+    videoModel: string;
+    // 默认图像尺寸（如 1024x768）
+    defaultImageSize: string;
+    // 默认图像比例（如 16:9）
+    defaultImageRatio: string;
+    // 默认视频尺寸（如 1280x720）
+    defaultVideoSize: string;
+    // 默认视频时长（秒）
+    defaultVideoSeconds: number;
+  };
+}
+
+// v3 视频生成异步任务结果
+// 为什么独立接口：视频生成是异步任务，需轮询状态，与同步的 query/podcast 结果结构不同
+export interface VideoTaskResult {
+  // Agnes 任务 ID（创建任务时返回）
+  taskId: string;
+  // Agnes 视频 ID（轮询状态时用）
+  videoId: string;
+  // 任务状态：queued(排队) → processing(生成中) → completed(完成) / failed(失败)
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  // 进度百分比 0-100
+  progress: number;
+  // 完成后的视频下载 URL（仅 completed 时有值）
+  url?: string;
+  // 下载归档到 vault queries/ 后的相对路径（仅 completed 时有值）
+  archivePath?: string;
+  // 失败原因（仅 failed 时有值）
+  error?: string;
+}
+
+// FR-09-2 多模态结构化输出：query 主问答完成后追加的思维导图/FAQ/时间线/图像/PPT
+// 为什么独立接口：多种模式共享 content 字段，type 区分渲染方式
+export interface MultimodalOutput {
+  type: 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt';
+  content: string;
+  // image 模式：图片访问 URL（/api/files?path=...），与 content 互补
+  imageUrl?: string;
+  // ppt 模式：Marp Markdown 源码，前端用 @marp-team/marp-core 渲染
+  pptMarkdown?: string;
+}
+
+// FR-12 AI 伙伴预设：config.json skills 数组项
+// 为什么独立于 toolsConfig：Skills 是预设的概念组合（模型+范围+提示词+工具子集），
+//   toolsConfig 是底层工具注册配置，两者层级不同
+export interface SkillPreset {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  // 可选覆盖 LLM 模型（未设置时使用全局默认）
+  model?: string;
+  // 检索范围限定：'all' 全库 | { tags: [...] } 标签过滤 | { folder: '...' } 目录过滤
+  scope: 'all' | { tags?: string[]; folder?: string };
+  // 额外系统提示词（追加到 query prompt 末尾，非替换）
+  systemPrompt?: string;
+  // 输出格式偏好：qa(问答)/summary(摘要)/podcast(播客)
+  outputFormat?: string;
+  // 工具子集（空数组=不限制，使用 queryWorkflow 默认工具集）
+  tools?: string[];
+}
+
+// ============================================================================
+// 数据清洗模块类型（data-clean/）
+// 被 dedup-engine.ts / quality-scanner.ts / diff-engine.ts / scheduler-manager.ts 共享
+// ============================================================================
+
+// 页面质量评分：scanVault 返回的单页评估结果
+export interface PageQualityScore {
+  path: string;
+  title: string;
+  qualityScore: number;
+  category: {
+    length: number;
+    links: number;
+    frontmatter: number;
+    citations: number;
+    duplicate: number;
+    freshness: number;
+  };
+  metadata: {
+    wordCount: number;
+    lineCount: number;
+    internalLinks: number;
+    inboundLinks: number;
+    lastModified: string;
+    hasFrontmatter: boolean;
+    isDraft: boolean;
+    fileSizeBytes: number;
+    hasBom: boolean;
+    encoding: string;
+    directory: string;
+  };
+  issues: Array<{ code: string; severity: string; detail: string }>;
+  suggestions: Array<{ type: string; detail: string; actionable: boolean }>;
+}
+
+// 重复页面对：deduplicatePages 两两判定结果
+export interface DuplicatePair {
+  pageA: PageQualityScore;
+  pageB: PageQualityScore;
+  similarity: number;
+  matchType: 'exact' | 'near-duplicate' | 'semantic-similar';
+  reason: string;
+}
+
+// 去重结果：deduplicatePages 返回的汇总
+export interface DeduplicateResult {
+  matches: DuplicatePair[];
+  scannedPages: number;
+  uniquePages: number;
+  duplicateGroups: Array<{ pages: string[]; representativePath: string; totalWordsInGroup?: number }>;
+}
+
+// 合并结果：mergeDuplicatePages 返回
+// kept/mergedFrom/updatesApplied/errors/dryRun 为必填：mergeDuplicatePages 初始化时即赋值
+// linkReplacements/archiveResult 为可选：仅在链接替换或归档操作实际发生时赋值
+export interface MergeResult {
+  kept: string;
+  mergedFrom: string[];
+  updatesApplied: number;
+  errors: string[];
+  dryRun: boolean;
+  linkReplacements?: number;
+  archiveResult?: { archived: string[]; errors: string[] };
+}
+
+// 预检结果：precheckVault 返回的编码/frontmatter 健康检查
+export interface PrecheckResult {
+  scannedFiles: number;
+  passed: boolean;
+  warnings: string[];
+  errors: string[];
+  blocked: boolean;
+}
+
+// 定时扫描计划：scheduler-manager 持久化到 JSON 的调度配置
+// lastRun/lastResult 可选：新建计划时尚未执行过扫描
+export interface ScanSchedule {
+  id: string;
+  cron: string;
+  enabled: boolean;
+  lastRun?: string | null;
+  lastResult?: { scannedFiles: number; passed: boolean } | null;
+}
+
+// 行级差异：diff-engine compareFiles 返回的单行 diff
+export interface DiffLine {
+  type: 'context' | 'add' | 'del';
+  content: string;
+  oldLine?: number;
+  newLine?: number;
+}
+
+// 差异对比结果：diff-engine compareFiles 返回
+export interface DiffResult {
+  pathA: string;
+  pathB: string;
+  lines: DiffLine[];
+  summary: {
+    added: number;
+    removed: number;
+    unchanged: number;
+    similarity: number;
+  };
 }
 
 // MCP 服务器配置项。
@@ -231,6 +540,10 @@ export interface AppConfig {
 // env 注入子进程环境变量（如 API Key），避免命令行参数泄露。
 //   注意：env 仅 stdio 模式生效，http/sse 模式不传递 env（避免 header 泄露 API Key）。
 // timeoutMs：JSON-RPC 请求超时（ms），缺失时用 tools.mcpTimeoutMs 或内置默认值。
+// triggerKeywords：懒加载触发关键词。非空时，只在用户问题命中任一关键词才连接该 MCP 服务器；
+//   空数组/缺失时 auto 模式始终加载（保持兼容）。用于区分 Sequential Thinking 和 Excel 等使用场景。
+// placeholderTools：懒加载占位工具列表。未触发关键词时注册占位 ToolDefinition，
+//   让 LLM 从 name/description 感知可用能力，实际调用时才连接 MCP 并发现真实工具。
 export interface McpServerEntry {
   name: string;
   transport: 'stdio' | 'sse' | 'http';
@@ -241,6 +554,15 @@ export interface McpServerEntry {
   // RPC 超时（ms），per-server 覆盖 tools.mcpTimeoutMs
   timeoutMs?: number;
   enabled: boolean;
+  // 懒加载触发关键词（小写匹配，任一命中即启用）
+  triggerKeywords?: string[];
+  // 懒加载占位工具：name 为工具名（不含 mcp__server__ 前缀，buildLazyToolDef 会自动加上），
+  // description 描述能力，parameters 为 JSON Schema
+  placeholderTools?: Array<{
+    name: string;
+    description: string;
+    parameters?: object;
+  }>;
 }
 
 // CLI 工具配置项。

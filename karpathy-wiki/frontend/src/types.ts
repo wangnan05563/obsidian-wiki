@@ -1,4 +1,4 @@
-﻿// SSE 事件相关类型定义
+// SSE 事件相关类型定义
 // 后端按 step 推送进度，这里保持与后端字段对齐
 
 export type CompileStep =
@@ -123,6 +123,12 @@ export interface ChatMessage {
   messageIndex?: number;
   // 是否已归档
   archived?: boolean;
+  // FR-09-2 多模态输出（mindmap/faq/timeline），作为独立卡片渲染在主答案之后
+  multimodal?: MultimodalOutput;
+  // v3 图像生成结果：独立于 multimodal，通过 SSE image 事件推送
+  image?: { url: string; alt: string; archivePath?: string };
+  // v3 PPT 生成结果：Marp Markdown 源码，通过 SSE ppt 事件推送
+  ppt?: { markdown: string; title: string; archivePath: string };
 }
 
 export interface Reference {
@@ -193,6 +199,42 @@ export interface FileContent {
   body: string;
 }
 
+// FR-11 扁平化页面项（GET /api/files/pages）：用于看板视图按 type 分列、日历视图按 created 分组
+export interface PageItem {
+  path: string;
+  name: string;
+  dir: string;
+  frontmatter: Record<string, unknown>;
+}
+
+// FR-10-1 待审核 AI 标签页面（GET /api/tags/pending）
+export interface PendingTagPage {
+  path: string;
+  title: string;
+  aiTags: string[];
+  existingTags: string[];
+}
+
+// FR-14-2 Prompt 文件元信息（GET /api/prompts）
+export interface PromptFile {
+  name: string;
+  label: string;
+  description: string;
+}
+
+// FR-14-2 试运行进度事件（POST /api/prompts/test-run，SSE）
+// 与后端 ProgressEvent 对齐：progress/page/done/error 四类事件复用同一接口
+export interface PromptTestRunEvent {
+  step: string;
+  status: 'running' | 'done' | 'error';
+  message: string;
+  data?: {
+    path?: string;
+    title?: string;
+    cached?: boolean;
+  };
+}
+
 // 图谱数据（GET /api/graph）
 export interface GraphData {
   nodes: string[];
@@ -232,6 +274,8 @@ export interface ConfigData {
     model: string;
     apiKeyRef: string;
     apiKeySet: boolean;
+    // §真流式默认值（与后端 AppConfig.llm.stream 对齐）
+    stream: boolean;
   };
   budget: { maxSteps: number; tokenBudget: number };
   server: { host: string; port: number };
@@ -779,5 +823,200 @@ export interface QqUploadEvent {
     };
     rawPath?: string;
   };
+}
+
+// ===== URL 爬取相关类型（与后端 UrlCrawl* 对齐，type-sync-rule）=====
+
+// 爬取到的附件元信息：仅记录元数据不实际下载二进制，避免大文件消耗内存
+// - type: 附件分类（document/image/audio/video/other），用于前端图标差异化展示
+// - extension: 文件扩展名（小写、不含点），从 URL pathname 提取
+// - size: 附件字节数，未实际下载时为 undefined，前端显示"未获取"
+export interface UrlCrawlAttachment {
+  url: string;
+  type: 'document' | 'image' | 'audio' | 'video' | 'other';
+  extension: string;
+  size?: number;
+}
+
+// SSE 事件统一结构：路由层通过 send(type, event) 推送给前端
+// - type: 事件类型（progress/page_start/page_done/page_error/attachment/done/error）
+// - step: 当前阶段标识（init/fetch/parse/limit/done 等），便于前端阶段感知
+// - data: 类型化载荷，不同 type 携带不同字段
+export interface UrlCrawlEvent {
+  type: 'progress' | 'page_start' | 'page_done' | 'page_error' | 'page_skipped' | 'attachment' | 'done' | 'error';
+  step: string;
+  message: string;
+  data?: UrlCrawlEventData;
+}
+
+// SSE 事件 data 字段联合类型：按事件类型携带不同字段
+// 为什么用可选取交集而非判别联合：SSE 序列化为 JSON 后运行时无法区分判别联合，
+// 可选取交集让前端按 type 判断字段存在性更直白
+export interface UrlCrawlEventData {
+  // init 阶段：入口 URL、路径前缀、最大跳数
+  entryUrl?: string;
+  prefix?: string;
+  maxHops?: number;
+  // page_start/page_done/page_error 阶段：当前页面定位信息
+  url?: string;
+  depth?: number;
+  title?: string;
+  contentLength?: number;
+  attachmentCount?: number;
+  error?: string;
+  // attachment 事件：附件元信息
+  attachment?: UrlCrawlAttachment;
+  // done 阶段：汇总统计与合并 Markdown
+  pagesCrawled?: number;
+  totalAttachmentCount?: number;
+  combinedMarkdown?: string;
+  // 爬取耗时（ms），前端用于展示 "耗时 X.Xs"
+  elapsedMs?: number;
+  // 增量爬取跳过的页面数
+  pagesSkipped?: number;
+  pages?: Array<{ url: string; title: string; depth: number; contentLength: number; attachmentCount: number; markdown?: string }>;
+  attachments?: UrlCrawlAttachment[];
+}
+
+// URL 爬取页面摘要（done 事件 pages 数组项的精简结构，前端列表展示用）
+// markdown: 该页面对应的 Markdown 正文，用于勾选后拼接提交
+export interface UrlCrawlPageSummary {
+  url: string;
+  title: string;
+  depth: number;
+  contentLength: number;
+  attachmentCount: number;
+  markdown?: string;
+}
+
+// ===== 数据清洗子系统类型（与后端 PageQualityScore/DuplicatePair 等对齐）=====
+
+// 页面质量评分：包含路径、标题、总分、各维度分项、元数据、问题与建议
+export interface PageQualityScore {
+  path: string;
+  title: string;
+  qualityScore: number;
+  category: {
+    length: number;
+    links: number;
+    frontmatter: number;
+    citations: number;
+    duplicate: number;
+    freshness: number;
+  };
+  metadata: {
+    wordCount: number;
+    lineCount: number;
+    internalLinks: number;
+    inboundLinks: number;
+    lastModified: string;
+    hasFrontmatter: boolean;
+    isDraft: boolean;
+    fileSizeBytes: number;
+    hasBom: boolean;
+    encoding: 'utf-8' | 'gbk' | 'unknown';
+    directory: string;
+  };
+  issues: Array<{
+    code: string;
+    severity: 'info' | 'warning' | 'error';
+    detail: string;
+    suggestion?: string;
+  }>;
+  suggestions: Array<{
+    type: 'link_suggestion' | 'content_expand' | 'merge_duplicate' | 'summarize_large' | 'citation';
+    detail: string;
+    actionable: boolean;
+  }>;
+}
+
+// 重复对：两个页面的对比信息，含相似度、匹配类型与原因
+export interface DuplicatePair {
+  pageA: PageQualityScore;
+  pageB: PageQualityScore;
+  similarity: number;
+  matchType: 'exact' | 'near-duplicate' | 'semantic-similar';
+  reason: string;
+}
+
+// 去重结果：匹配对列表、扫描统计与重复分组
+export interface DeduplicateResult {
+  matches: DuplicatePair[];
+  scannedPages: number;
+  uniquePages: number;
+  duplicateGroups: Array<{
+    pages: string[];
+    representativePath: string;
+    totalWordsInGroup: number;
+  }>;
+}
+
+// Diff 结果（/api/data-clean/diff）：行级差异对比
+// 注意：前端已存在 SchemaDiffResponse.DiffLine，此处 DiffResult 复用同结构
+export interface DiffResult {
+  pathA: string;
+  pathB: string;
+  lines: DiffLine[];
+  summary: {
+    added: number;
+    removed: number;
+    unchanged: number;
+    // 相似度 = 2 * unchanged / (linesA + linesB)，与 Jaccard 一致
+    similarity: number;
+  };
+}
+
+// 合并结果：保留页、被合并页列表、应用更新数、链接替换数、归档结果与错误
+export interface MergeResult {
+  kept: string;
+  mergedFrom: string[];
+  updatesApplied: number;
+  linkReplacements?: number;
+  archiveResult?: { archived: string[]; errors: string[] };
+  errors: string[];
+  dryRun: boolean;
+}
+
+// 预检门禁结果：是否通过、扫描文件数、错误与警告列表、是否阻断
+export interface PrecheckResult {
+  passed: boolean;
+  scannedFiles: number;
+  errors: string[];
+  warnings: string[];
+  blocked: boolean;
+}
+
+// ===== 多模态输出类型（FR-09-2，与后端 MultimodalOutput 对齐）=====
+// type: 'mindmap' Mermaid 思维导图 | 'faq' Q&A 问答对 | 'timeline' 按 created 排序的事件
+//       'image' 图像生成 | 'ppt' Marp 幻灯片
+// content: 对应格式的原始文本（mindmap=Mermaid 语法，faq/timeline=Markdown）
+// imageUrl: image 模式下图片访问 URL（/api/files?path=...）
+// pptMarkdown: ppt 模式下 Marp Markdown 源码（与 content 互补，content 为渲染预览文本）
+export interface MultimodalOutput {
+  type: 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt';
+  content: string;
+  imageUrl?: string;
+  pptMarkdown?: string;
+}
+
+// ===== v3 视频生成异步任务结果（与后端 VideoTaskResult 对齐，type-sync-rule）=====
+// 为什么独立于 SSE 流式类型：视频生成是异步任务，前端轮询 GET /api/media/video/:taskId
+export interface VideoTaskResult {
+  taskId: string;
+  videoId: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  url?: string;
+  archivePath?: string;
+  error?: string;
+}
+
+// ===== 推荐页面类型（FR-16-1，与后端 RecommendedPage 对齐）=====
+// reason: 推荐理由（同目录/同标签: xxx/同作者: xxx），score: 匹配维度数量
+export interface RecommendedPage {
+  path: string;
+  title: string;
+  reasons: string[];
+  score: number;
 }
 

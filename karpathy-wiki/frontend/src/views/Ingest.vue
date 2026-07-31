@@ -1,19 +1,32 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
+import { ArrowDown, FolderOpened, UploadFilled } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
 import { consumeSSE } from '../utils/sse';
-import type { ConfigData, QqUploadEvent, DraftCompileEvent } from '../types';
+import type { ConfigData, QqUploadEvent, DraftCompileEvent, UrlCrawlEvent, UrlCrawlPageSummary, UrlCrawlAttachment } from '../types';
 
 // 使用函数类型写法替代类型字面量（S6598）
 const emit = defineEmits<(e: 'start') => void>();
 
 const store = useCompileStore();
 
-const activeTab = ref<'file' | 'folder' | 'url' | 'text' | 'qq'>('file');
+const activeTab = ref<'file' | 'folder' | 'url' | 'text' | 'bookmarks' | 'qq'>('file');
 const urlInput = ref('');
 const textInput = ref('');
+
+// FR-16-2 书签导入状态
+interface BookmarkParseResult {
+  ok: boolean;
+  totalBookmarks: number;
+  totalFolders: number;
+  combinedMarkdown: string;
+  rawPath: string;
+}
+const bookmarkResult = ref<BookmarkParseResult | null>(null);
+const bookmarkCompiling = ref(false);
 const selectedFile = ref<File | null>(null);
 // 文件夹模式：扫描得到的有效文件列表
 const folderFiles = ref<Array<{ name: string; file: File }>>([]);
@@ -43,7 +56,7 @@ let qqAbortController: AbortController | null = null;
 //   前端校验必须同步生效，否则会出现"配置 200 但前端截断到 20"的不一致问题
 // 为什么保留默认值：后端不可用时降级到本地默认值，不阻断主流程（fallback-rule）
 const ALLOWED_EXTS = ref<Set<string>>(new Set(['md', 'txt', 'pdf', 'html', 'json', 'docx', 'xlsx', 'pptx', 'doc', 'xls']));
-const MAX_BATCH_SIZE = ref<number>(20);
+const MAX_BATCH_SIZE = ref<number>(50);
 const MAX_FILE_SIZE_MB = ref<number>(10);
 
 // 从后端加载 batch 配置，更新前端校验限制
@@ -51,7 +64,7 @@ const MAX_FILE_SIZE_MB = ref<number>(10);
 //   每次进入页面都重新拉取最新配置，避免使用 stale 缓存值
 async function loadBatchConfig(): Promise<void> {
   try {
-    const res = await fetch('/api/config');
+    const res = await fetch(`${API_BASE}/config`);
     if (!res.ok) return;
     const cfg: ConfigData = await res.json();
     if (cfg.batch) {
@@ -69,10 +82,11 @@ onMounted(() => {
   loadBatchConfig();
 });
 
+// canSubmit 仅覆盖共用 submit-bar 的 file/folder/text 三种模式
+// URL 模式独立两段式流程（爬取 → 编译），由独立按钮触发，不参与 canSubmit 判断
 const canSubmit = computed(() => {
   if (activeTab.value === 'file') return !!selectedFile.value;
   if (activeTab.value === 'folder') return folderFiles.value.length > 0;
-  if (activeTab.value === 'url') return urlInput.value.trim().length > 0;
   return textInput.value.trim().length > 0;
 });
 
@@ -149,7 +163,7 @@ function clearFolderFiles() {
   folderFiles.value = [];
 }
 
-function buildPayload(): FormData | { type: 'url' | 'text'; content: string } | null {
+function buildPayload(): FormData | { type: 'text'; content: string } | null {
   if (activeTab.value === 'file') {
     if (!selectedFile.value) return null;
     const fd = new FormData();
@@ -165,11 +179,7 @@ function buildPayload(): FormData | { type: 'url' | 'text'; content: string } | 
     }
     return fd;
   }
-  if (activeTab.value === 'url') {
-    const content = urlInput.value.trim();
-    if (!content) return null;
-    return { type: 'url', content };
-  }
+  // URL 模式不走 buildPayload：两段式流程由 startUrlCrawl/startUrlCompile 独立处理
   const content = textInput.value.trim();
   if (!content) return null;
   return { type: 'text', content };
@@ -213,6 +223,8 @@ function resetInputs() {
   folderFiles.value = [];
   urlInput.value = '';
   textInput.value = '';
+  // URL 流程状态一并重置
+  resetUrlFlow();
 }
 
 // ============================================================
@@ -257,7 +269,7 @@ async function uploadQqFile() {
   fd.append('file', qqFile.value);
 
   try {
-    const res = await fetch('/api/qq-ingest/upload', {
+    const res = await fetch(`${API_BASE}/qq-ingest/upload`, {
       method: 'POST',
       body: fd,
       signal: qqAbortController.signal,
@@ -322,8 +334,7 @@ async function extractQqDrafts() {
   qqAbortController = new AbortController();
 
   try {
-    const res = await fetch(
-      `/api/qq-ingest/extract/${qqRawId.value}`,
+    const res = await fetch(`${API_BASE}/qq-ingest/extract/${qqRawId.value}`,
       { method: 'POST', signal: qqAbortController.signal },
     );
     if (!res.ok || !res.body) {
@@ -383,6 +394,299 @@ function goToDraftReview() {
   sessionStorage.setItem('karpathy:jumpMode', 'draft');
   globalThis.dispatchEvent(new CustomEvent('karpathy:navigate', { detail: 'browse' }));
 }
+
+// ============================================================
+// URL 爬取两段式流程
+// 阶段 1：crawl（BFS 爬取）→ 阶段 2：compile（用 combinedMarkdown 作为 text 编译）
+// 为什么独立于 compile store：爬取阶段走 /api/url-ingest/crawl 路由，不复用 /api/compile
+// 编译阶段才复用 store.prepareCompile({ type: 'text', content: combinedMarkdown })
+// ============================================================
+
+// URL 流程阶段：idle/crawling/crawled/error（编译由 store.isCompiling 接管）
+type UrlStage = 'idle' | 'crawling' | 'crawled' | 'error';
+const urlStage = ref<UrlStage>('idle');
+const urlProgress = ref<string>('');
+// 爬取完成后的摘要信息（done 事件携带）
+// 5.4.4 扩展 elapsedMs：用于在结果区域展示爬取耗时
+const urlCrawlResult = ref<{
+  pagesCrawled: number;
+  totalAttachmentCount: number;
+  pages: UrlCrawlPageSummary[];
+  attachments: UrlCrawlAttachment[];
+  elapsedMs?: number;
+} | null>(null);
+
+// 5.4.2 附件按类型分组展示：document/image/audio/video/other
+// 为什么用 computed 而非方法：依赖 urlCrawlResult.attachments，computed 自动响应更新
+const groupedAttachments = computed(() => {
+  const groups: Record<string, UrlCrawlAttachment[]> = {
+    document: [],
+    image: [],
+    audio: [],
+    video: [],
+    other: [],
+  };
+  if (!urlCrawlResult.value?.attachments) return groups;
+  for (const att of urlCrawlResult.value.attachments) {
+    const key = groups[att.type] ? att.type : 'other';
+    groups[key].push(att);
+  }
+  return groups;
+});
+
+// 附件分组中文标签
+const attachmentGroupLabels: Record<string, string> = {
+  document: '文档',
+  image: '图片',
+  audio: '音频',
+  video: '视频',
+  other: '其他',
+};
+
+// 格式化耗时：ms → "X.Xs" 或 "Xm Ys"
+function formatElapsed(ms?: number): string {
+  if (!ms || ms <= 0) return '';
+  if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`;
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}m ${s}s`;
+}
+// done 事件返回的合并 Markdown，编译阶段直接作为 text 输入
+const urlCombinedMarkdown = ref<string>('');
+let urlAbortController: AbortController | null = null;
+
+// 5.4.1 爬取预览：勾选的页面 URL 集合，默认全选
+// 为什么用 Set 而非数组：勾选状态查询用 Set O(1)，数组 O(n)
+const selectedPageUrls = ref<Set<string>>(new Set());
+const allPageUrls = computed(() => urlCrawlResult.value?.pages.map((p) => p.url) ?? []);
+const selectedPageCount = computed(() => selectedPageUrls.value.size);
+const isAllPagesSelected = computed(
+  () => allPageUrls.value.length > 0 && selectedPageUrls.value.size === allPageUrls.value.length,
+);
+
+function togglePageSelection(url: string) {
+  const next = new Set(selectedPageUrls.value);
+  if (next.has(url)) next.delete(url);
+  else next.add(url);
+  selectedPageUrls.value = next;
+}
+
+function toggleAllPages() {
+  if (isAllPagesSelected.value) {
+    selectedPageUrls.value = new Set();
+  } else {
+    selectedPageUrls.value = new Set(allPageUrls.value);
+  }
+}
+
+// 5.1.4 maxPages/maxHops 前端可配置：默认 null 表示使用后端 config 值
+// 为什么用 null 而非 0：null 在 JSON.stringify 时被忽略，0 会被后端当作"覆盖为 0"
+// 上限与后端 url-ingest.ts 对齐：maxPages≤500、maxHops≤10
+const urlMaxPages = ref<number | null>(null);
+const urlMaxHops = ref<number | null>(null);
+
+// 阶段 1：触发 URL 爬取（POST /api/url-ingest/crawl SSE）
+async function startUrlCrawl() {
+  const entryUrl = urlInput.value.trim();
+  if (!entryUrl) {
+    ElMessage.warning('请先输入要爬取的入口 URL');
+    return;
+  }
+  // 简单协议校验：与后端 URL_PATTERN 对齐，防止 javascript:/data: 等危险协议
+  if (!/^https?:\/\/[^\s]+$/i.test(entryUrl)) {
+    ElMessage.warning('URL 必须以 http:// 或 https:// 开头');
+    return;
+  }
+  // 阶段重置
+  urlStage.value = 'crawling';
+  urlProgress.value = '开始爬取…';
+  urlCrawlResult.value = null;
+  urlCombinedMarkdown.value = '';
+  urlAbortController = new AbortController();
+
+  try {
+    // 5.1.4 请求级覆盖：仅在用户显式输入时携带 maxPages/maxHops
+    const reqBody: { url: string; maxPages?: number; maxHops?: number } = { url: entryUrl };
+    if (urlMaxPages.value !== null && urlMaxPages.value > 0) {
+      reqBody.maxPages = Math.min(Math.floor(urlMaxPages.value), 500);
+    }
+    if (urlMaxHops.value !== null && urlMaxHops.value > 0) {
+      reqBody.maxHops = Math.min(Math.floor(urlMaxHops.value), 10);
+    }
+    const res = await fetch(`${API_BASE}/url-ingest/crawl`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+      signal: urlAbortController.signal,
+    });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    await consumeSSE(res, handleUrlCrawlEvent, urlAbortController.signal);
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') {
+      urlStage.value = 'idle';
+      urlProgress.value = '已取消';
+      return;
+    }
+    urlStage.value = 'error';
+    ElMessage.error('URL 爬取失败：' + (err as Error).message);
+  } finally {
+    urlAbortController = null;
+  }
+}
+
+// SSE 事件分发：progress/page_start/page_done/page_error/page_skipped/attachment/done/error
+function handleUrlCrawlEvent(eventType: string, data: UrlCrawlEvent) {
+  // progress/page_start/page_done/page_skipped/attachment 都会更新进度文本
+  if (eventType === 'progress' || eventType === 'page_start' || eventType === 'page_done' || eventType === 'page_skipped' || eventType === 'attachment') {
+    urlProgress.value = data.message ?? '';
+    return;
+  }
+  if (eventType === 'page_error') {
+    // 单页失败不阻断整体，仅记录到进度文本
+    urlProgress.value = data.message ?? '页面抓取失败';
+    return;
+  }
+  if (eventType === 'done') {
+    // done 事件携带汇总数据：pagesCrawled/totalAttachmentCount/combinedMarkdown/pages/attachments/elapsedMs/pagesSkipped
+    const d = data.data;
+    if (d?.combinedMarkdown) {
+      urlCombinedMarkdown.value = d.combinedMarkdown;
+      urlCrawlResult.value = {
+        pagesCrawled: d.pagesCrawled ?? 0,
+        totalAttachmentCount: d.totalAttachmentCount ?? 0,
+        pages: d.pages ?? [],
+        attachments: d.attachments ?? [],
+        elapsedMs: d.elapsedMs,
+      };
+      // 5.4.1 爬取预览：初始化勾选集合为全选
+      selectedPageUrls.value = new Set((d.pages ?? []).map((p) => p.url));
+      urlStage.value = 'crawled';
+      // 5.4.4 耗时显示 + 5.1.3 跳过页面数
+      const elapsedStr = formatElapsed(d.elapsedMs);
+      const skippedStr = d.pagesSkipped && d.pagesSkipped > 0 ? `，跳过 ${d.pagesSkipped} 个未变更` : '';
+      urlProgress.value = `爬取完成：${d.pagesCrawled ?? 0} 个页面，${d.totalAttachmentCount ?? 0} 个附件${skippedStr}${elapsedStr ? `，耗时 ${elapsedStr}` : ''}`;
+      ElMessage.success(`爬取完成：共 ${d.pagesCrawled ?? 0} 个页面，${d.totalAttachmentCount ?? 0} 个附件${skippedStr}${elapsedStr ? `，耗时 ${elapsedStr}` : ''}`);
+    } else {
+      urlStage.value = 'crawled';
+      urlProgress.value = data.message ?? '爬取完成';
+    }
+    return;
+  }
+  if (eventType === 'error') {
+    urlStage.value = 'error';
+    urlProgress.value = data.message ?? '爬取失败';
+    ElMessage.error(data.message ?? '爬取失败');
+  }
+}
+
+// 阶段 2：用合并后的 Markdown 触发编译
+// 为什么用 type:'text' 而非 type:'url'：爬取阶段已获取页面正文并合并为 Markdown，
+// 编译阶段直接以文本输入走 /api/compile 的 text 模式，避免后端再次抓取 URL
+// 5.4.1 爬取预览：仅编译被勾选的页面，未勾选的页面不进入编译
+
+// FR-16-2 书签文件上传处理
+async function handleBookmarkFile(file: UploadFile) {
+  bookmarkResult.value = null;
+  const raw = file.raw;
+  if (!raw) return;
+
+  const formData = new FormData();
+  formData.append('file', raw);
+
+  try {
+    const res = await fetch(`${API_BASE}/ingest/bookmarks`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json() as BookmarkParseResult;
+    bookmarkResult.value = data;
+    ElMessage.success(`已解析 ${data.totalBookmarks} 条书签`);
+  } catch (err) {
+    ElMessage.error('书签解析失败：' + (err as Error).message);
+  }
+}
+
+async function compileBookmarks() {
+  if (!bookmarkResult.value) return;
+  if (store.isCompiling || bookmarkCompiling.value) return;
+
+  bookmarkCompiling.value = true;
+  try {
+    // 复用 compile store 的 text 模式：将书签 Markdown 作为文本编译
+    store.prepareCompile({
+      type: 'text',
+      content: bookmarkResult.value.combinedMarkdown,
+    });
+    emit('start');
+  } finally {
+    bookmarkCompiling.value = false;
+  }
+}
+
+function startUrlCompile() {
+  if (!urlCrawlResult.value || urlCrawlResult.value.pages.length === 0) {
+    ElMessage.warning('没有可编译的内容，请先完成爬取');
+    return;
+  }
+  if (selectedPageUrls.value.size === 0) {
+    ElMessage.warning('请至少勾选一个页面进行编译');
+    return;
+  }
+  if (store.isCompiling || submitting.value) return;
+  // 5.4.1 基于勾选状态拼接 markdown
+  // 为什么不直接用 combinedMarkdown：用户可能取消勾选部分页面，需重新拼接
+  const selectedPages = urlCrawlResult.value.pages.filter((p) => selectedPageUrls.value.has(p.url));
+  const markdownParts: string[] = [];
+  for (const p of selectedPages) {
+    if (p.markdown) {
+      markdownParts.push(p.markdown);
+    }
+  }
+  // 兜底：若 pages 未携带 markdown 字段（旧后端兼容），回退到 combinedMarkdown
+  const finalMarkdown = markdownParts.length > 0 ? markdownParts.join('\n\n') : urlCombinedMarkdown.value;
+  if (!finalMarkdown) {
+    ElMessage.warning('没有可编译的内容，请先完成爬取');
+    return;
+  }
+  submitting.value = true;
+  try {
+    store.prepareCompile({ type: 'text', content: finalMarkdown });
+    emit('start');
+  } finally {
+    setTimeout(() => { submitting.value = false; }, 100);
+  }
+}
+
+// 取消爬取：通过 AbortController 中断 fetch 流
+function abortUrlCrawl() {
+  if (urlAbortController) {
+    urlAbortController.abort();
+  }
+}
+
+// 重置 URL 流程状态（切换 Tab 或重新输入时调用）
+function resetUrlFlow() {
+  urlStage.value = 'idle';
+  urlProgress.value = '';
+  urlCrawlResult.value = null;
+  urlCombinedMarkdown.value = '';
+  // 5.4.1 爬取预览：重置勾选状态
+  selectedPageUrls.value = new Set();
+}
+
+// URL 输入变更：已爬取或出错后修改 URL 时，重置流程状态以避免用旧结果编译
+function handleUrlInputChange() {
+  if (urlStage.value === 'crawled' || urlStage.value === 'error') {
+    resetUrlFlow();
+  }
+}
 </script>
 
 <template>
@@ -391,7 +695,6 @@ function goToDraftReview() {
     <div class="hero-section fade-up">
       <div class="hero-orb"></div>
       <div class="hero-right">
-        <span class="hero-tag">// INGEST PIPELINE</span>
         <h2 class="hero-title grad-text">投递第一篇资料</h2>
         <p class="hero-tip">
           上传文件、粘贴 URL 或直接贴文本，机器人会按 SCHEMA 编译为知识库页面
@@ -412,7 +715,7 @@ function goToDraftReview() {
             :accept="allowedExtsAccept"
           >
             <div class="upload-inner">
-              <div class="upload-icon">↓</div>
+              <el-icon class="upload-icon"><ArrowDown /></el-icon>
       <div class="upload-text">将文件拖到此处，或点击上传</div>
       <div class="upload-hint">SUPPORT: {{ allowedExtsText }}</div>
             </div>
@@ -431,7 +734,7 @@ function goToDraftReview() {
             @change="handleFolderChange"
           />
           <div class="folder-dropzone" @click="triggerFolderPick">
-            <div class="upload-icon">📁</div>
+            <el-icon class="upload-icon"><FolderOpened /></el-icon>
             <div class="upload-text">点击选取文件夹</div>
             <div class="upload-hint">
               将扫描子目录下所有 {{ allowedExtsText }} 文件（上限 {{ MAX_BATCH_SIZE }} 个，单文件 ≤ {{ MAX_FILE_SIZE_MB }}MB）
@@ -462,15 +765,172 @@ function goToDraftReview() {
         </el-tab-pane>
 
         <el-tab-pane label="URL 粘贴" name="url">
-          <el-input
-            v-model="urlInput"
-            placeholder="https://example.com/article"
-            clearable
-            size="large"
-          >
-            <template #prepend>URI</template>
-          </el-input>
-          <p class="input-hint">机器人会抓取该 URL 内容并编译</p>
+          <div class="url-flow">
+            <!-- 显著提示文本：用户操作前必须看到的功能特性与限制 -->
+            <div class="url-tip-banner">
+              <span class="url-tip-icon">i</span>
+              <p class="url-tip-text">
+                系统将从入口网页开始，自动查询同级路径或子路径下、最多三次跳转内的页面内容
+              </p>
+            </div>
+
+            <!-- 步骤 1：输入入口 URL 并爬取 -->
+            <div class="url-step">
+              <div class="url-step-head">
+                <span class="url-step-no">1</span>
+                <span class="url-step-title">输入入口 URL 并爬取</span>
+              </div>
+              <el-input
+                v-model="urlInput"
+                placeholder="http://www.example.com/content/index.html"
+                clearable
+                size="large"
+                :disabled="urlStage === 'crawling'"
+                @input="handleUrlInputChange"
+              >
+                <template #prepend>URI</template>
+              </el-input>
+              <!-- 5.1.4 高级参数：留空则使用后端 config 默认值（maxPages=50、maxHops=3） -->
+              <div class="url-params-row">
+                <div class="url-param-item">
+                  <label class="url-param-label">最大页数</label>
+                  <el-input-number
+                    v-model="urlMaxPages"
+                    :min="1"
+                    :max="500"
+                    :step="10"
+                    size="small"
+                    controls-position="right"
+                    placeholder="默认 50"
+                    :disabled="urlStage === 'crawling'"
+                  />
+                </div>
+                <div class="url-param-item">
+                  <label class="url-param-label">最大跳数</label>
+                  <el-input-number
+                    v-model="urlMaxHops"
+                    :min="1"
+                    :max="10"
+                    :step="1"
+                    size="small"
+                    controls-position="right"
+                    placeholder="默认 3"
+                    :disabled="urlStage === 'crawling'"
+                  />
+                </div>
+              </div>
+              <div class="url-action-row">
+                <el-button
+                  type="primary"
+                  :disabled="!urlInput.trim() || urlStage === 'crawling'"
+                  :loading="urlStage === 'crawling'"
+                  @click="startUrlCrawl"
+                >开始爬取</el-button>
+                <el-button
+                  v-if="urlStage === 'crawling'"
+                  size="small"
+                  type="danger"
+                  text
+                  @click="abortUrlCrawl"
+                >取消</el-button>
+              </div>
+            </div>
+
+            <!-- 步骤 2：爬取结果 + 触发编译 -->
+            <div v-if="urlStage === 'crawled' && urlCrawlResult" class="url-step">
+              <div class="url-step-head">
+                <span class="url-step-no">2</span>
+                <span class="url-step-title">爬取结果</span>
+              </div>
+              <div class="url-meta-card">
+                <div class="meta-row">
+                  <span class="meta-label">页面数</span>
+                  <span class="meta-value">{{ urlCrawlResult.pagesCrawled }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">附件数</span>
+                  <span class="meta-value">{{ urlCrawlResult.totalAttachmentCount }}</span>
+                </div>
+                <!-- 5.4.4 耗时显示 -->
+                <div v-if="urlCrawlResult.elapsedMs" class="meta-row">
+                  <span class="meta-label">耗时</span>
+                  <span class="meta-value">{{ formatElapsed(urlCrawlResult.elapsedMs) }}</span>
+                </div>
+              </div>
+              <!-- 已爬取页面列表（5.4.1 爬取预览：支持勾选式编译） -->
+              <div v-if="urlCrawlResult.pages.length > 0" class="url-pages-card">
+                <div class="url-pages-head">
+                  <p class="url-pages-title">已爬取页面（{{ selectedPageCount }}/{{ urlCrawlResult.pages.length }}）：</p>
+                  <el-button size="small" text @click="toggleAllPages">
+                    {{ isAllPagesSelected ? '取消全选' : '全选' }}
+                  </el-button>
+                </div>
+                <ul class="url-pages-list">
+                  <li
+                    v-for="(p, idx) in urlCrawlResult.pages"
+                    :key="idx"
+                    class="url-page-item"
+                    :class="{ 'url-page-unchecked': !selectedPageUrls.has(p.url) }"
+                  >
+                    <el-checkbox
+                      :model-value="selectedPageUrls.has(p.url)"
+                      @change="togglePageSelection(p.url)"
+                    />
+                    <code class="url-page-depth">[d={{ p.depth }}]</code>
+                    <span class="url-page-title">{{ p.title || p.url }}</span>
+                    <span class="url-page-stats">（{{ p.contentLength }} 字符，{{ p.attachmentCount }} 附件）</span>
+                  </li>
+                </ul>
+              </div>
+              <!-- 5.4.2 附件按类型分组展示 -->
+              <div v-if="urlCrawlResult.attachments.length > 0" class="url-attachments-card">
+                <p class="url-attachments-title">发现的附件（按类型分组）：</p>
+                <div
+                  v-for="(groupArr, groupKey) in groupedAttachments"
+                  :key="groupKey"
+                  v-show="groupArr.length > 0"
+                  class="url-att-group"
+                >
+                  <p class="url-att-group-title">
+                    {{ attachmentGroupLabels[groupKey] || groupKey }}
+                    <span class="url-att-group-count">（{{ groupArr.length }}）</span>
+                  </p>
+                  <ul class="url-attachments-list">
+                    <li v-for="(a, idx) in groupArr" :key="`${groupKey}-${idx}`" class="url-attachment-item">
+                      <code class="url-att-type">[{{ a.extension }}]</code>
+                      <code class="url-att-url">{{ a.url }}</code>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <div class="url-action-row">
+                <el-button
+                  type="primary"
+                  :disabled="!urlCombinedMarkdown || store.isCompiling || submitting || selectedPageCount === 0"
+                  :loading="store.isCompiling"
+                  @click="startUrlCompile"
+                >开始编译（{{ selectedPageCount }}/{{ urlCrawlResult.pages.length }}）</el-button>
+                <el-button @click="resetUrlFlow">重新爬取</el-button>
+              </div>
+            </div>
+
+            <!-- 实时进度消息 -->
+            <div v-if="urlProgress && urlStage !== 'idle'" class="url-progress">
+              <div class="qq-progress-head">
+                <span class="progress-dot" :class="urlStage"></span>
+                <span class="progress-text">{{ urlProgress }}</span>
+              </div>
+              <el-progress
+                :percentage="urlStage === 'crawled' ? 100 : 0"
+                :indeterminate="urlStage === 'crawling'"
+                :stroke-width="5"
+                :status="urlStage === 'crawled' ? 'success' : urlStage === 'error' ? 'exception' : ''"
+                :striped="urlStage === 'crawling'"
+                :striped-flow="urlStage === 'crawling'"
+                class="qq-progress-bar"
+              />
+            </div>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane label="文本粘贴" name="text">
@@ -482,6 +942,40 @@ function goToDraftReview() {
             resize="none"
           />
           <p class="input-hint">文本将作为原始资料直接进入提取流程</p>
+        </el-tab-pane>
+
+        <!-- FR-16-2 浏览器书签导入 -->
+        <el-tab-pane label="浏览器书签" name="bookmarks">
+          <div class="bookmark-upload">
+            <p class="input-hint">从 Chrome/Edge/Firefox 导出书签为 HTML 文件后上传。书签将被解析为 Markdown 并存入知识库。</p>
+            <el-upload
+              :auto-upload="false"
+              :limit="1"
+              accept=".html,.htm"
+              :on-change="handleBookmarkFile"
+              :show-file-list="false"
+              drag
+            >
+              <el-icon class="upload-icon"><UploadFilled /></el-icon>
+              <div class="upload-text">点击或拖拽书签 HTML 文件到此区域</div>
+            </el-upload>
+            <div v-if="bookmarkResult" class="bookmark-result">
+              <el-alert
+                :title="`已解析 ${bookmarkResult.totalBookmarks} 条书签（${bookmarkResult.totalFolders} 个文件夹）`"
+                type="success"
+                :closable="false"
+                show-icon
+              />
+              <el-button
+                type="primary"
+                :loading="bookmarkCompiling"
+                @click="compileBookmarks"
+                style="margin-top:12px"
+              >
+                开始编译
+              </el-button>
+            </div>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane label="QQ 聊天记录" name="qq">
@@ -499,13 +993,13 @@ function goToDraftReview() {
                 :on-change="handleQqFileChange"
                 :on-remove="handleQqFileRemove"
                 :before-upload="() => false"
-                accept=".txt,.json"
+                accept=".txt,.json,.html,.htm,.xlsx"
                 :disabled="qqStage === 'uploading' || qqStage === 'extracting'"
               >
                 <div class="upload-inner">
-                  <div class="upload-icon">↓</div>
+                  <el-icon class="upload-icon"><ArrowDown /></el-icon>
                   <div class="upload-text">将 QQ 导出文件拖到此处，或点击选择</div>
-                  <div class="upload-hint">SUPPORT: txt / json（QQ 导出的聊天记录）</div>
+                  <div class="upload-hint">SUPPORT: txt / json / html / xlsx（QQ 导出的聊天记录）</div>
                 </div>
               </el-upload>
               <div class="qq-action-row">
@@ -612,8 +1106,8 @@ function goToDraftReview() {
         </el-tab-pane>
       </el-tabs>
 
-      <!-- QQ Tab 自带操作按钮，其他 Tab 共用 submit-bar -->
-      <div v-if="activeTab !== 'qq'" class="submit-bar">
+      <!-- QQ / URL Tab 自带操作按钮，file/folder/text 共用 submit-bar -->
+      <div v-if="activeTab !== 'qq' && activeTab !== 'url'" class="submit-bar">
         <el-button
           type="primary"
           size="large"
@@ -1024,5 +1518,276 @@ function goToDraftReview() {
 
 .progress-dot.error {
   background: var(--neon-pink);
+}
+
+/* ============================================================
+ * URL 爬取两段式 Tab 样式
+ * - url-tip-banner: 显著提示横幅，使用 info 主题色突出显示
+ * - url-step: 步骤卡片，复用 qq-step 视觉风格保持一致
+ * - url-pages-card / url-attachments-card: 列表卡片
+ * ============================================================ */
+
+.url-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 4px 0;
+}
+
+/* 提示横幅：使用 cyan 主题色作为信息提示 */
+.url-tip-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  border: 1px solid var(--accent-cyan-a25, rgba(0, 245, 255, 0.25));
+  border-radius: var(--radius-card);
+  font-size: 13px;
+  color: var(--text-bright);
+  line-height: 1.6;
+}
+
+.url-tip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  background: var(--neon-cyan);
+  color: var(--bg-scene);
+  border-radius: 50%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  font-style: italic;
+  margin-top: 1px;
+}
+
+.url-tip-text {
+  margin: 0;
+  flex: 1;
+  font-family: var(--font-body);
+}
+
+/* 步骤卡片 */
+.url-step {
+  padding: 18px 20px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a15);
+  border-radius: var(--radius-card);
+}
+
+.url-step-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.url-step-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--accent-purple-a20);
+  border: 1px solid var(--accent-purple-a40);
+  border-radius: 50%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--neon-purple);
+}
+
+.url-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-bright);
+  font-family: var(--font-display);
+}
+
+.url-action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+/* 5.1.4 高级参数行：maxPages / maxHops 留空使用后端默认值 */
+.url-params-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--accent-cyan-a05);
+  border: 1px dashed var(--accent-cyan-a20);
+  border-radius: 8px;
+}
+
+.url-param-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.url-param-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* 爬取结果卡片 */
+.url-meta-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--accent-cyan-a08);
+  border: 1px solid var(--accent-cyan-a20);
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+
+.url-pages-card,
+.url-attachments-card {
+  padding: 12px 16px;
+  background: var(--accent-purple-a05);
+  border: 1px solid var(--accent-purple-a15);
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+
+.url-pages-title,
+.url-attachments-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--neon-purple);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.url-pages-list,
+.url-attachments-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.url-page-item,
+.url-attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+/* 5.4.1 爬取预览：未勾选页面降低视觉优先级 */
+.url-page-item.url-page-unchecked {
+  opacity: 0.5;
+}
+
+.url-pages-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.url-page-depth {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+  flex-shrink: 0;
+}
+
+.url-page-title {
+  color: var(--text-base);
+  flex: 1;
+  word-break: break-all;
+}
+
+.url-page-stats {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.url-att-type {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-magenta);
+  flex-shrink: 0;
+}
+
+.url-att-url {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-base);
+  word-break: break-all;
+  flex: 1;
+}
+
+/* 5.4.2 附件分组样式 */
+.url-att-group {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 3px solid var(--accent-cyan-a30);
+  border-radius: 4px;
+}
+
+.url-att-group:last-child {
+  margin-bottom: 0;
+}
+
+.url-att-group-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.url-att-group-count {
+  color: var(--text-dim);
+  font-weight: normal;
+  margin-left: 4px;
+}
+
+/* URL 进度条复用 QQ 进度条视觉风格 */
+.url-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--accent-purple-a08);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-base);
+  font-family: var(--font-mono);
+}
+
+/* URL 阶段对应的进度点颜色 */
+.progress-dot.crawling {
+  background: var(--neon-cyan);
+  animation: neon-pulse 1.2s ease-in-out infinite;
+}
+
+.progress-dot.crawled {
+  background: var(--neon-magenta);
 }
 </style>

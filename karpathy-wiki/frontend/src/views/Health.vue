@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { ref, onMounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Warning, CircleCheck, Tools, MagicStick } from '@element-plus/icons-vue';
+import { Warning, CircleCheck, Tools, MagicStick, Check, Lightning } from '@element-plus/icons-vue';
 import type { HealthReport, FixRequest, FixProgressEvent, BatchFixRequest, BatchFixProgressEvent, BatchDoneEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 import { useHealthStore } from '../stores/health';
@@ -47,7 +48,7 @@ async function runCheck() {
   report.value = null;
   batchSummary.value = null; // 重新体检时清除旧汇总
   try {
-    const res = await fetch('/api/health-check', { method: 'POST' });
+    const res = await fetch(`${API_BASE}/health-check`, { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     report.value = await res.json();
   } catch (err) {
@@ -104,7 +105,7 @@ async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: str
   const payload: FixRequest = { issueType, target };
 
   try {
-    const res = await fetch('/api/health-check/fix', {
+    const res = await fetch(`${API_BASE}/health-check/fix`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -241,7 +242,7 @@ async function batchFix(scope: FixScope) {
   const payload: BatchFixRequest = { items: collected.items, issueKeys: collected.issueKeys };
 
   try {
-    const res = await fetch('/api/health-check/fix/batch', {
+    const res = await fetch(`${API_BASE}/health-check/fix/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -285,7 +286,6 @@ onMounted(() => {
 
       <div class="health-head">
         <div class="head-text">
-          <span class="head-tag">// SYSTEM DIAGNOSTIC</span>
           <h2 class="head-title grad-text">知识库体检</h2>
           <p class="head-tip">检测孤立页面、断链与过期内容</p>
         </div>
@@ -345,7 +345,7 @@ onMounted(() => {
       <!-- 批量修复结果汇总：修复完成后持久展示，重新体检时清除 -->
       <div v-if="batchSummary" class="batch-summary">
         <div class="batch-summary-head">
-          <span class="batch-summary-icon">✓</span>
+          <el-icon class="batch-summary-icon"><Check /></el-icon>
           <span class="batch-summary-title">上次修复汇总</span>
         </div>
         <div class="batch-summary-body">
@@ -477,7 +477,7 @@ onMounted(() => {
         <!-- 修复进度日志 -->
         <div v-if="fixLogs.length > 0" class="fix-log-section">
           <div class="section-head">
-            <span class="section-icon icon-fix">⚡</span>
+            <el-icon class="section-icon icon-fix"><Lightning /></el-icon>
             <span class="section-title">修复进度</span>
             <el-button size="small" text class="clear-logs-btn" @click="clearLogs">清除日志</el-button>
           </div>

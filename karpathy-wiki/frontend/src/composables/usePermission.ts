@@ -46,10 +46,11 @@ export function usePermission() {
     return authStore.hasAllPermissions(perms);
   }
 
-  // 过滤菜单项：传入菜单 key 列表，返回当前用户可见的菜单
-  // 为什么返回新数组：避免外部修改原数组
-  function filterVisibleMenus<T extends { key: AuthPermission }>(menus: T[]): T[] {
-    return menus.filter((m) => canView(m.key));
+  // 过滤菜单项：按菜单项的 permission 字段过滤当前用户可见的菜单
+  // 为什么用 permission 而非 key：key 是视图标识（ViewName），permission 才是权限点（AuthPermission）
+  // 两者解耦：多个视图可共享同一权限点（如 cleanup 和 dataclean 都需 cleanup 权限）
+  function filterVisibleMenus<T extends { permission: AuthPermission }>(menus: T[]): T[] {
+    return menus.filter((m) => canView(m.permission));
   }
 
   return {

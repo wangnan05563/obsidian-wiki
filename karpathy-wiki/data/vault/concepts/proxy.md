@@ -24,6 +24,7 @@ tags: [proxy, network, communication]
 ## 相关概念
 
 - [[proxy-test-1]] — Proxy 功能的基础测试概念
+- [[proxy-test-2]] — 代理服务连接与转发能力验证
 - [[network-test]] — 网络测试相关方法
 
 ---

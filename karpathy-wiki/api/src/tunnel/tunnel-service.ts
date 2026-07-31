@@ -403,6 +403,23 @@ class TailscaleProvider extends TunnelProvider {
   // status 缓存：getter 同步返回，后台异步刷新避免 execFileSync 阻塞事件循环
   private cachedStatus: 'running' | 'stopped' = 'stopped';
   private statusTimer: NodeJS.Timeout | null = null;
+  // 路径前缀（规范化后 /xxx/ 形式，空串表示根路径模式-旧行为）
+  private readonly pathPrefix: string;
+
+  constructor(localPort: number, binaryPath: string, pathPrefix: string = '') {
+    super(localPort, binaryPath);
+    this.pathPrefix = TailscaleProvider._normalizePathPrefix(pathPrefix);
+  }
+
+  // 规范化路径前缀为 /xxx/ 形式，空字符串表示根路径模式（保持旧行为）
+  // 为什么单独静态方法：构造函数和外部调用都需复用同一规范化逻辑
+  private static _normalizePathPrefix(prefix: string): string {
+    if (!prefix) return '';
+    let p = prefix.trim();
+    if (!p.startsWith('/')) p = '/' + p;
+    if (!p.endsWith('/')) p = p + '/';
+    return p;
+  }
 
   binaryName(): string {
     return 'tailscale.exe';
@@ -480,7 +497,13 @@ class TailscaleProvider extends TunnelProvider {
 
     // Popen 非阻塞读取：首次启用会输出授权链接后不退出，等待用户浏览器授权
     const binary = this.detectedBinary!;
-    const args = ['funnel', '--bg', '--yes', `http://127.0.0.1:${this.localPort}`];
+    // 构造 funnel 命令：路径区分模式用 --set-path，根路径模式用默认行为
+    // --set-path 是追加模式，不会覆盖其他应用的路径配置，实现多应用共存
+    const args = ['funnel', '--bg', '--yes'];
+    if (this.pathPrefix) {
+      args.push('--set-path', this.pathPrefix);
+    }
+    args.push(`http://127.0.0.1:${this.localPort}`);
     this.proc = spawn(binary, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -538,7 +561,7 @@ class TailscaleProvider extends TunnelProvider {
         }
         // 检测成功标志
         if (/Funnel started|listening on/i.test(text)) {
-          this.publicUrl = `https://${dnsName}`;
+          this.publicUrl = `https://${dnsName}${this.pathPrefix}`;
           cleanup();
           resolve();
           return;
@@ -558,7 +581,7 @@ class TailscaleProvider extends TunnelProvider {
         cleanup();
         if (code === 0) {
           // 进程退出码 0 可能是配置成功后正常退出
-          this.publicUrl = `https://${dnsName}`;
+          this.publicUrl = `https://${dnsName}${this.pathPrefix}`;
           resolve();
         } else {
           reject(new Error(`Tailscale Funnel 进程退出，code=${code}`));
@@ -582,9 +605,22 @@ class TailscaleProvider extends TunnelProvider {
     return [];
   }
 
-  // 覆写 stop：异步执行 tailscale funnel off，不等待结果避免阻塞事件循环
+  // 覆写 stop：路径模式下不调用 funnel off（避免关闭其他应用的 Funnel 路径）
+  // 根路径模式（旧行为）：异步执行 tailscale funnel off，不等待结果避免阻塞事件循环
   // 为什么用 spawn fire-and-forget：stop 在 SIGINT 钩子中调用，阻塞会导致退出延迟
   stop(): void {
+    if (this.pathPrefix) {
+      // 路径区分模式：Tailscale 无移除单个路径的命令，停止后路径配置保留
+      // 重新启动应用后 --set-path 幂等更新配置自动恢复
+      if (this.statusTimer) {
+        clearInterval(this.statusTimer);
+        this.statusTimer = null;
+      }
+      this.cachedStatus = 'stopped';
+      this.publicUrl = null;
+      this.exited = true;
+      return;
+    }
     if (this.detectedBinary) {
       // unref() 让子进程不阻止 Node.js 退出
       spawn(this.detectedBinary, ['funnel', 'off'], {
@@ -609,6 +645,7 @@ class TailscaleProvider extends TunnelProvider {
   }
 
   // 异步刷新 status 缓存：用 execAsync 非阻塞查询 funnel status --json
+  // 路径区分模式：通过检查 Handlers 中是否存在自己的路径前缀确认当前应用 Funnel 配置
   private async refreshStatus(): Promise<void> {
     if (!this.detectedBinary) {
       this.cachedStatus = 'stopped';
@@ -622,16 +659,42 @@ class TailscaleProvider extends TunnelProvider {
         this.cachedStatus = 'stopped';
         return;
       }
+      let host: string | null = null;
       for (const [endpoint, enabled] of Object.entries(allowFunnel)) {
         if (!enabled) continue;
-        const host = endpoint.split(':')[0].replace(/\.$/, '');
-        if (host.toLowerCase().endsWith('.ts.net')) {
-          this.publicUrl = `https://${host}`;
-          this.cachedStatus = 'running';
-          return;
+        const h = endpoint.split(':')[0].replace(/\.$/, '');
+        if (h.toLowerCase().endsWith('.ts.net')) {
+          host = h;
+          break;
         }
       }
-      this.cachedStatus = 'stopped';
+      if (!host) {
+        this.cachedStatus = 'stopped';
+        return;
+      }
+      // 路径区分模式：检查 Handlers 中是否存在自己的路径前缀
+      if (this.pathPrefix) {
+        const web = data.Web as Record<string, unknown> | undefined;
+        let handlers: Record<string, unknown> | undefined;
+        if (web && typeof web === 'object') {
+          for (const cfg of Object.values(web)) {
+            if (cfg && typeof cfg === 'object' && 'Handlers' in (cfg as Record<string, unknown>)) {
+              handlers = (cfg as Record<string, unknown>).Handlers as Record<string, unknown>;
+              break;
+            }
+          }
+        }
+        if (!handlers || !(this.pathPrefix in handlers)) {
+          this.cachedStatus = 'stopped';
+          return;
+        }
+        this.publicUrl = `https://${host}${this.pathPrefix}`;
+        this.cachedStatus = 'running';
+        return;
+      }
+      // 根路径模式（旧行为）：URL 不含路径前缀
+      this.publicUrl = `https://${host}`;
+      this.cachedStatus = 'running';
     } catch {
       this.publicUrl = null;
       this.cachedStatus = 'stopped';
@@ -756,7 +819,8 @@ export class TunnelService {
       this.currentConfig.cpolarAuthtoken !== config.cpolarAuthtoken ||
       this.currentConfig.tunnelMode !== config.tunnelMode ||
       this.currentConfig.tunnelId !== config.tunnelId ||
-      this.currentConfig.hostname !== config.hostname;
+      this.currentConfig.hostname !== config.hostname ||
+      this.currentConfig.pathPrefix !== config.pathPrefix;
 
     if (configChanged) {
       if (this.provider) {
@@ -813,7 +877,7 @@ function createProvider(config: TunnelConfig, localPort: number): TunnelProvider
     case 'cpolar':
       return new CpolarProvider(localPort, config.binaryPath, config.cpolarAuthtoken);
     case 'tailscale':
-      return new TailscaleProvider(localPort, config.binaryPath);
+      return new TailscaleProvider(localPort, config.binaryPath, config.pathPrefix);
     default:
       throw new Error(`不支持的 provider: ${config.provider}`);
   }

@@ -9,15 +9,26 @@
 
 import type { ToolsConfig } from '../types.js';
 
+// 判断 MCP 服务器是否被其 triggerKeywords 命中。
+// 为什么提取：auto 模式下 lazy load 依赖触发关键词。
+// 命中规则：triggerKeywords 为空/undefined 视为始终命中（保持原 auto 模式语义向后兼容）；
+// 否则任一关键词（不区分大小写）出现在问题中即视为命中。
+export function isMcpServerTriggered(question: string, server: { triggerKeywords?: string[] }): boolean {
+  const kws = server.triggerKeywords;
+  if (!kws || kws.length === 0) return true;
+  const lowerQ = question.toLowerCase();
+  return kws.some((kw) => lowerQ.includes(kw.toLowerCase()));
+}
+
 // auto 模式：收集所有启用工具名。
 // 提取为独立函数降低 routeTools 认知复杂度（S3776）。
-// MCP 工具：服务器级别启用即注入其所有工具（具体工具列表由 mcp-client 发现），
+// MCP 工具：服务器级别启用 + 触发关键词命中才注入（具体工具列表由 mcp-client 发现），
 // 此处只返回服务器名前缀，registry 在加载时展开为具体工具名。
 // CLI 工具：enabled 即注入。
-function collectAutoModeTools(config: ToolsConfig): string[] {
+function collectAutoModeTools(question: string, config: ToolsConfig): string[] {
   const toolNames: string[] = [];
   for (const server of config.mcpServers) {
-    if (server.enabled) {
+    if (server.enabled && isMcpServerTriggered(question, server)) {
       toolNames.push(`mcp__${server.name}`);
     }
   }
@@ -58,7 +69,7 @@ function collectKeywordModeTools(question: string, config: ToolsConfig): string[
 // config: 工具配置
 export function routeTools(question: string, config: ToolsConfig | undefined): string[] {
   if (!config) return [];
-  if (config.routerMode === 'auto') return collectAutoModeTools(config);
+  if (config.routerMode === 'auto') return collectAutoModeTools(question, config);
   return collectKeywordModeTools(question, config);
 }
 

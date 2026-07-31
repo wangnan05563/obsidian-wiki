@@ -1,33 +1,17 @@
-﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 
 // 注册图谱数据路由。
 //   GET /api/graph   返回双向链接图数据 { nodes, edges }
 // 节点 = 页面相对路径，边 = [[页面名]] 引用关系。
-// § graph 也依赖 buildLinkGraph，加缓存避免重复计算。
-const GRAPH_CACHE_TTL_MS = 30 * 1000; // 30秒
-
-interface GraphResult {
-  nodes: string[];
-  edges: Array<{ from: string; to: string }>;
-}
-
-let _graphCache: GraphResult | null = null;
-let _graphCachedAt = 0;
+// § link graph 缓存已下沉到 VaultService.buildLinkGraph，此处不再独立缓存。
+//   /api/graph 与 /api/stats 共享同一份缓存，避免双倍重算。
+// § 只读 GET 限流 300 req/min（P1-4），与 files/stats/schema 同档位，提升前端图谱渲染体验
 
 export function registerGraphRoute(app: FastifyInstance, vault: VaultService) {
-  app.get('/api/graph', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const now = Date.now();
-    // 检查缓存
-    if (_graphCache && (now - _graphCachedAt) < GRAPH_CACHE_TTL_MS) {
-      return reply.send(_graphCache);
-    }
-
+  app.get('/api/graph', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const graph = await vault.buildLinkGraph();
-      // 写入缓存
-      _graphCache = graph;
-      _graphCachedAt = now;
       return reply.send(graph);
     } catch (err: unknown) {
       return reply.code(500).send({

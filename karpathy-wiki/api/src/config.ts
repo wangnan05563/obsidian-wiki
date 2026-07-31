@@ -1,8 +1,12 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { AppConfig, ToolsConfig, QqConfig } from './types.js';
+import type { AppConfig, ToolsConfig, QqConfig, UrlCrawlConfig, SkillPreset } from './types.js';
+import { DEFAULT_CRAWL_CONFIG } from './utils/url-crawl.js';
+// 路径解析统一走 runtime.ts，兼容开发模式（api/config.json）与 SEA 模式（exe/config.json）
+// 为什么移除 fileURLToPath + import.meta.url：SEA 模式下 __filename 指向构建时 bundle.cjs，
+// 用户机器不存在，派生的 API_SRC_DIR 不可用，导致 config.json 加载失败
+import { getResourcePath } from './utils/runtime.js';
 
 // 配置文件名。路径解析见 getConfigPath()
 const CONFIG_FILENAME = 'config.json';
@@ -16,11 +20,9 @@ const DEFAULT_BATCH_FALLBACK = {
   maxFileSizeMb: 10,
 };
 
-// 通过 import.meta.url 获取 api 源码目录，与 CWD 解耦
-// 为什么需要：开发模式 CWD 可能是项目根（pnpm --filter），打包模式 CWD 可能是 exe 同级目录，
-// 两者读取的 config.json 不同，导致配置"丢失"假象。统一以源码定位 api/config.json 作为权威路径
-const API_SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const API_CONFIG_PATH = path.resolve(API_SRC_DIR, '..', CONFIG_FILENAME);
+// config.json 权威路径（开发模式：api/config.json，SEA 模式：exe/config.json）
+// 为什么用 getResourcePath：内部基于 IS_SEA 标志统一解析，与 CWD 解耦
+const API_CONFIG_PATH = getResourcePath(CONFIG_FILENAME);
 
 // 默认配置（NPR-05-7 默认值清单）。
 // vaultPath 默认 '../data/vault'（相对 api，指向 karpathy-wiki/data/vault），
@@ -34,6 +36,9 @@ function defaultConfig(): AppConfig {
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       model: 'glm-4-plus',
       apiKeyRef: 'GLM_KEY',
+      // §真流式默认值：false 保持向后兼容，前端可在 Query 页面切换并发送 body.stream=true
+      // 为什么不默认 true：避免老用户升级后行为突变（流式可能触发某些 LLM 的限流）
+      stream: false,
     },
     budget: { maxSteps: 20, tokenBudget: 50000 },
     server: { host: 'localhost', port: 3000 },
@@ -45,6 +50,9 @@ function defaultConfig(): AppConfig {
       cpolarAuthtoken: '',
       binaryPath: '',
       autoStart: false,
+      // Tailscale path prefix: /wiki/ for multi-app coexistence on same ts.net host.
+      // Empty string = root path mode (legacy behavior).
+      pathPrefix: '/wiki/',
       // Named Tunnel 默认 quick 模式（开箱即用），named 需三步向导配置后自动切换
       tunnelMode: 'quick',
       tunnelName: '',
@@ -54,9 +62,11 @@ function defaultConfig(): AppConfig {
       certFile: '',
     },
     // 默认启用 info 级日志 + 请求级日志钩子
+    // logFilePath 默认空串：未配置时不落盘，仅 stdout 输出；配置后双写 stdout + 文件
     logging: {
       level: 'info',
       enableRequestLog: true,
+      logFilePath: '',
     },
     // §5.2 联网搜索默认配置：tavily 作为默认 provider，apiKey 留空待用户填写
     // 为什么需要默认值：避免 config.json 缺失 webSearch 字段时 query workflow 走"未配置"分支
@@ -120,26 +130,95 @@ function defaultConfig(): AppConfig {
       extract_base_url: '',
       extract_token_budget: 50000,
     },
+    // URL 爬取子系统默认配置（5.x 优化完整字段）
+    // 为什么需要默认值：避免 config.json 缺失 urlCrawl 字段时 url-ingest 路由走"未配置"分支
+    // maxHops 默认 3：需求约束"最多三次跳转"，0=入口页本身，3=第三跳可达
+    // timeoutMs 默认 10000：与 qq-extract-workflow fetch 超时一致，防止网络挂起阻塞 SSE
+    // maxPages 默认 50：单次爬取页面数上限，防止网站地图巨大时失控
+    // userAgent 默认 KarpathyWikiBot/1.0：标识机器人身份，遵循爬虫规范
+    // allowedAttachmentTypes 默认覆盖文档/图片/音视频常见格式，可按需扩展
+    // 5.1.1 followRobotsTxt 默认 true：合规性要求
+    // 5.1.2 concurrency 默认 1：串行模式，避免对目标站点压力过大
+    // 5.2.1 excludeTemplateElements 默认 true：移除 header/footer/nav/aside 模板噪声
+    // 5.2.2 renderJs 默认 false：Playwright 依赖较重，默认关闭
+    // 5.2.3 contentAttachmentTypes：仅文档/音视频视为内容附件，装饰图片排除
+    // 5.3.1 retryAttempts 默认 1：单次重试足以应对瞬时网络抖动
+    // 5.2.5 enableAttachmentDedup 默认 true：跨页面同 URL 附件仅记录一次
+    // 5.3.3 logging.enabled 默认 false：日志持久化默认关闭，按需开启
+    // 5.3.4 connectTimeoutMs/readTimeoutMs 默认 0：回退到 timeoutMs
+    // 5.5.3 copyrightNotice：版权声明默认文本
+    // 5.4.3 preserveOnCancel 默认 true：取消后保留已爬取结果
+    urlCrawl: {
+      maxHops: 3,
+      timeoutMs: 10000,
+      maxPages: 50,
+      userAgent: 'KarpathyWikiBot/1.0',
+      allowedAttachmentTypes: [
+        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+        'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg',
+        'mp4', 'webm', 'mp3', 'wav', 'ogg',
+      ],
+      followRobotsTxt: true,
+      crawlDelayMs: 0,
+      concurrency: 1,
+      excludeTemplateElements: true,
+      renderJs: false,
+      contentAttachmentTypes: [
+        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+        'mp4', 'webm', 'mp3', 'wav', 'ogg',
+      ],
+      retryAttempts: 1,
+      retryBackoffMs: 500,
+      enableAttachmentDedup: true,
+      logging: { enabled: false, logFilePath: '../data/url-crawl.log' },
+      connectTimeoutMs: 0,
+      readTimeoutMs: 0,
+      copyrightNotice: '本文内容来源于互联网公开资源，仅用于个人知识管理，如有侵权请联系删除',
+      preserveOnCancel: true,
+      // 5.1.3 增量爬取：默认 false，仅高频复访站点开启
+      incrementalCrawl: false,
+      incrementalStatePath: '../data/url-crawl-state.json',
+      // 5.3.2 断点续爬：默认 false，与 incrementalCrawl 共享状态文件
+      resumeCrawl: false,
+    },
+    // FR-13-2 OCR 默认配置：undefined 表示未配置，resolveOcrConfig 会回退到 llm 配置
+    // 为什么不设默认值：OCR 模型需用户显式配置支持视觉的模型（如 agnes-2.1-flash），
+    // 不应自动使用主 LLM（如 deepseek-chat 不支持视觉）
+    ocr: undefined,
+    // FR-09-3 Podcast 默认配置：undefined 表示未配置，podcast workflow 仅生成脚本不合成音频
+    // 为什么不设默认值：TTS 需用户显式配置 provider/apiKey/voice，不应自动启用
+    podcast: undefined,
+    // v3 媒体生成默认配置：Agnes API 公开参数（baseUrl/model/size）给默认值
+    // API key 复用 llm.apiKeys.agnes 或 process.env[AGNES_API_KEY]
+    // 为什么不像 ocr/podcast 用 undefined：media 的 baseUrl/model 是非敏感公开参数，
+    // 提供默认值让用户只需配置 API key 即可使用图像/视频生成
+    media: {
+      agnes: {
+        baseUrl: 'https://apihub.agnes-ai.com/v1',
+        apiKeyRef: 'AGNES_API_KEY',
+        imageModel: 'agnes-image-2.1-flash',
+        videoModel: 'agnes-video-v2.0',
+        defaultImageSize: '1024x768',
+        defaultImageRatio: '16:9',
+        defaultVideoSize: '1280x720',
+        defaultVideoSeconds: 5,
+      },
+    },
   };
 }
 
 // 解析 config.json 实际路径，供 tunnel 路由等落盘复用。
 // 查找顺序（与 CWD 解耦）：
-//   1. exe 同级 config.json（pkg 打包模式：与 exe 同目录，便于用户编辑）
-//   2. api/config.json（开发模式 + tsx 模式：源码目录下，所有启动方式读同一文件）
-//   3. 找不到时返回 api/config.json 作为写入目标（保持向后兼容）
-// 为什么这样设计：避免 CWD 切换导致读写不同文件，造成配置"丢失"假象
+//   1. 权威路径（SEA: exe/config.json，开发: api/config.json，由 getResourcePath 统一解析）
+//   2. CWD/config.json（兼容用户从任意目录启动的场景）
+//   3. 找不到时返回权威路径作为写入目标（保持向后兼容）
+// 为什么不用 process.pkg 检测：SEA 模式下 process.pkg 不存在（仅传统 pkg 有），
+// 改用 runtime.ts 的 IS_SEA 标志统一识别打包模式
 export function getConfigPath(): string | null {
-  const candidates: string[] = [];
-
-  // pkg 打包模式：process.pkg 存在时，配置文件与 exe 同级
-  const isPackaged = !!(process as NodeJS.Process & { pkg?: unknown }).pkg;
-  if (isPackaged) {
-    candidates.push(path.resolve(process.cwd(), CONFIG_FILENAME));
-  }
-
-  // 开发模式权威路径：api/config.json（基于 import.meta.url 定位）
-  candidates.push(API_CONFIG_PATH);
+  const candidates: string[] = [
+    API_CONFIG_PATH,
+    path.resolve(process.cwd(), CONFIG_FILENAME),
+  ];
 
   for (const p of candidates) {
     try {
@@ -149,7 +228,7 @@ export function getConfigPath(): string | null {
       // 尝试下一个候选路径
     }
   }
-  // 候选路径都不存在时，返回 api/config.json 作为写入目标（创建新配置文件）
+  // 候选路径都不存在时，返回权威路径作为写入目标（创建新配置文件）
   return API_CONFIG_PATH;
 }
 
@@ -233,14 +312,36 @@ export async function loadConfig(): Promise<AppConfig> {
     // QQ 导入子系统配置合并：parsed.qq 可选，未配置时用默认值
     // 为什么独立合并：qq 是嵌套对象（noise_rules/privacy_patterns），浅合并会丢失下层字段
     // 为什么用条件合并而非展开：parsed.qq.noise_rules 可能部分启用，需保留默认全开基础上覆盖
-    qq: parsed.qq
+    // 为什么加 defaults.qq 守卫：defaultConfig() 实际总返回 qq 非空，
+    // 但 TS 推断 AppConfig.qq 为可选（QqConfig | undefined），守卫后可省略 ?. 且无需 ! 断言（BR-028-1/2）
+    qq: parsed.qq && defaults.qq
       ? {
           ...defaults.qq,
           ...parsed.qq,
-          noise_rules: { ...defaults.qq?.noise_rules, ...parsed.qq.noise_rules },
-          privacy_patterns: { ...defaults.qq?.privacy_patterns, ...parsed.qq.privacy_patterns },
+          noise_rules: { ...defaults.qq.noise_rules, ...parsed.qq.noise_rules },
+          privacy_patterns: { ...defaults.qq.privacy_patterns, ...parsed.qq.privacy_patterns },
         }
       : defaults.qq,
+    // URL 爬取子系统配置合并：parsed.urlCrawl 可选，未配置时用默认值
+    // 为什么独立合并：urlCrawl 含数组字段（allowedAttachmentTypes），浅合并会丢失默认值
+    urlCrawl: parsed.urlCrawl
+      ? { ...defaults.urlCrawl, ...parsed.urlCrawl }
+      : defaults.urlCrawl,
+    // FR-13-2 OCR 配置合并：parsed.ocr 可选，未配置时为 undefined（resolveOcrConfig 会回退到 llm）
+    ocr: parsed.ocr
+      ? { ...defaults.ocr, ...parsed.ocr }
+      : defaults.ocr,
+    // FR-09-3 Podcast 配置合并：parsed.podcast 可选，未配置时为 undefined
+    podcast: parsed.podcast
+      ? { ...defaults.podcast, ...parsed.podcast }
+      : defaults.podcast,
+    // v3 媒体生成配置合并：parsed.media 可选，未配置时用默认值
+    // 为什么独立合并：media.agnes 是嵌套对象，浅合并会让用户部分配置覆盖整个默认段
+    media: parsed.media && defaults.media
+      ? {
+          agnes: { ...defaults.media.agnes, ...parsed.media.agnes },
+        }
+      : defaults.media,
   };
 
   // 写入缓存
@@ -296,7 +397,8 @@ export async function saveAiConfig(updates: {
 
   // provider 变更时执行 key 迁移：保存当前 apiKey 到 apiKeys[旧provider]
   // 为什么条件判断：provider 未变时迁移会污染表（同 provider 覆盖自身无意义）
-  if (providerChanged && current.llm.apiKey) {
+  // 为什么加 !apiKeys[oldProvider] 守卫：保留用户之前手动设置的旧 key，避免切换时丢失
+  if (providerChanged && current.llm.apiKey && !apiKeys[oldProvider]) {
     apiKeys[oldProvider] = current.llm.apiKey;
   }
 
@@ -469,6 +571,31 @@ export async function saveBudgetConfig(updates: {
   return merged;
 }
 
+// FR-12 保存 AI 伙伴预设（skills + activeSkill）到 config.json
+// 为什么独立函数：skills 与 llm 配置逻辑解耦，避免 saveAiConfig 膨胀
+export async function saveSkillsConfig(
+  skills?: SkillPreset[],
+  activeSkill?: string,
+): Promise<AppConfig> {
+  const current = await loadConfig();
+  const merged: AppConfig = {
+    ...current,
+  };
+  if (skills !== undefined) {
+    merged.skills = skills;
+  }
+  if (activeSkill !== undefined) {
+    merged.activeSkill = activeSkill;
+  }
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
 // 保存健康检查配置（staleDays）到 config.json。
 // 为什么需要：用户需要根据知识库更新频率调整"过期页面"判定阈值。
 export async function saveHealthCheckConfig(updates: {
@@ -522,18 +649,21 @@ export async function saveBatchConfig(updates: {
   return merged;
 }
 
-// 保存日志配置（level/enableRequestLog）到 config.json。
+// 保存日志配置（level/enableRequestLog/logFilePath）到 config.json。
 // 为什么需要：调试时需要切换 debug 级别或开关请求级日志，重启服务才生效太繁琐。
 // 注意：level 变更需重启 Fastify 实例才能完全生效（pino logger 在启动时创建），
 //   但 enableRequestLog 可热更新（路由钩子运行时读取）。
+// logFilePath 语义（与 apiKey 一致）：undefined=不修改，空串=清除（禁用落盘），非空=新路径
 export async function saveLoggingConfig(updates: {
   level?: string;
   enableRequestLog?: boolean;
+  logFilePath?: string;
 }): Promise<AppConfig> {
   const current = await loadConfig();
   const baseLogging = current.logging ?? {
     level: 'info',
     enableRequestLog: true,
+    logFilePath: '',
   };
   const merged: AppConfig = {
     ...current,
@@ -541,6 +671,7 @@ export async function saveLoggingConfig(updates: {
       ...baseLogging,
       ...updates.level === undefined ? {} : { level: updates.level },
       ...updates.enableRequestLog === undefined ? {} : { enableRequestLog: updates.enableRequestLog },
+      ...updates.logFilePath === undefined ? {} : { logFilePath: updates.logFilePath },
     },
   };
 
@@ -640,6 +771,45 @@ export async function saveQqConfig(updates: {
       ...updates.extract_model === undefined ? {} : { extract_model: updates.extract_model },
       ...updates.extract_base_url === undefined ? {} : { extract_base_url: updates.extract_base_url },
       ...updates.extract_token_budget === undefined ? {} : { extract_token_budget: updates.extract_token_budget },
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存 URL 爬取子系统配置（maxHops/timeoutMs/maxPages/userAgent/allowedAttachmentTypes）到 config.json。
+// 为什么需要：用户需根据业务场景调整爬取深度、超时、附件白名单等参数，无需手动编辑 config.json。
+// 注意：maxHops=0 表示仅爬入口页（不跳转），数值合法但需前端提示用户含义。
+export async function saveUrlCrawlConfig(updates: Partial<UrlCrawlConfig>): Promise<AppConfig> {
+  const current = await loadConfig();
+  // 为什么复用 DEFAULT_CRAWL_CONFIG：BR-028 配置合并规范要求默认值单点维护
+  const currentUrlCrawl = current.urlCrawl ?? {};
+  const baseUrlCrawl: Required<UrlCrawlConfig> = {
+    ...DEFAULT_CRAWL_CONFIG,
+    ...currentUrlCrawl,
+    logging: {
+      enabled: currentUrlCrawl.logging?.enabled ?? DEFAULT_CRAWL_CONFIG.logging.enabled,
+      logFilePath: currentUrlCrawl.logging?.logFilePath ?? DEFAULT_CRAWL_CONFIG.logging.logFilePath,
+    },
+  };
+  // 合并用户更新（仅覆盖显式提供的字段）
+  const merged: AppConfig = {
+    ...current,
+    urlCrawl: {
+      ...baseUrlCrawl,
+      ...updates,
+      // logging 嵌套对象特殊处理：类型守卫防止 null/非对象导致 TypeError（BR-028-2）
+      logging: updates.logging && typeof updates.logging === 'object'
+        ? {
+            enabled: updates.logging.enabled ?? baseUrlCrawl.logging.enabled,
+            logFilePath: updates.logging.logFilePath ?? baseUrlCrawl.logging.logFilePath,
+          }
+        : baseUrlCrawl.logging,
     },
   };
 

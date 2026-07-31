@@ -1,33 +1,22 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey, getProviderKeyStatus } from '../config.js';
+import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey, getProviderKeyStatus, saveSkillsConfig } from '../config.js';
+import { getResourcePath } from '../utils/runtime.js';
 import type { EngineAdapter, LlmPreset } from '../types.js';
 
 // 模块加载时一次性读取 LLM 预设列表，避免每次请求都读盘。
 // 为什么外置到 llm-presets.json：厂商预设（baseUrl/model/apiKeyRef）会随厂商更新迭代，
 //   抽到独立文件后用户/运维可直接编辑 llm-presets.json 增删预设，无需改源码。
-// 路径解析与 config.ts 的 getConfigPath 同模式：
-//   1. 基于 import.meta.url 派生（与 CWD 解耦，开发模式 CWD 可能是项目根或子包目录）
-//   2. pnpm --filter 启动时符号链接可能导致 import.meta.url 指向非预期位置，故提供多候选路径 fallback
-//   3. pkg 打包模式 fallback 到 CWD
+// 路径解析统一走 runtime.ts 的 getResourcePath：
+//   开发模式：api/llm-presets.json
+//   SEA 打包模式：exe 同级目录/llm-presets.json
+// 多候选 fallback 保留 CWD 兜底，应对 pnpm --filter 符号链接等边缘场景
 function resolvePresetsPath(): string {
-  // 本文件源码位置 api/src/routes/ai.ts，回退两级到 api/llm-presets.json
-  const srcDir = path.dirname(fileURLToPath(import.meta.url));
-  // pkg 打包模式：与 exe 同级
-  const isPackaged = !!(process as NodeJS.Process & { pkg?: unknown }).pkg;
-
-  // 候选路径列表（按优先级），单次初始化避免多次 push（S7778）：
-  // 1. 源码位置回退两级
-  // 2. 开发模式 CWD fallback：pnpm --filter 启动时 import.meta.url 可能解析到符号链接，
-  //    此时尝试从 CWD 出发查找（CWD 可能是 api/ 或项目根）
-  // 3. pkg 打包模式：与 exe 同级（条件包含）
   const candidates: string[] = [
-    path.resolve(srcDir, '../..', 'llm-presets.json'),
+    getResourcePath('llm-presets.json'),
     path.resolve(process.cwd(), 'llm-presets.json'),
     path.resolve(process.cwd(), 'api', 'llm-presets.json'),
-    ...(isPackaged ? [path.resolve(process.cwd(), 'llm-presets.json')] : []),
   ];
 
   for (const p of candidates) {
@@ -68,6 +57,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   // 脱敏策略：返回 ****xxxx 格式，前端回传此值视为未修改。
   // providerKeyStatus：按 provider 索引的 key 配置状态表，前端切换预设时展示各 provider 是否已配置 key。
   //   为什么需要：用户切换预设时需感知目标 provider 是否已配置过 key，避免重复输入。
+  // FR-12 skills/activeSkill：AI 伙伴预设列表与当前激活项
   app.get('/api/ai/config', async (_request, reply) => {
     const config = await loadConfig();
     const apiKey = getEffectiveApiKey(config);
@@ -81,6 +71,9 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       apiKeyMasked: maskedKey,
       apiKeySet: Boolean(apiKey),
       providerKeyStatus: getProviderKeyStatus(config),
+      // FR-12 AI 伙伴预设
+      skills: config.skills ?? [],
+      activeSkill: config.activeSkill ?? '',
     });
   });
 
@@ -105,6 +98,12 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
       model?: string;
       apiKey?: string;
       apiKeyRef?: string;
+      // FR-12 AI 伙伴预设
+      activeSkill?: string;
+      skills?: import('../types.js').SkillPreset[];
+      systemPrompt?: string;
+      scope?: import('../types.js').SkillPreset['scope'];
+      outputFormat?: string;
     };
 
     if (!body) {
@@ -137,15 +136,35 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
     try {
       const merged = await saveAiConfig(updates);
       const effectiveKey = getEffectiveApiKey(merged);
+
+      // FR-12 skills 持久化与热加载：如果请求含 skills，直接写入 config.json 并更新内存
+      if (body.skills !== undefined || body.activeSkill !== undefined) {
+        const cfg = await saveSkillsConfig(body.skills, body.activeSkill);
+        merged.skills = cfg.skills;
+        merged.activeSkill = cfg.activeSkill;
+      }
+
       // 落盘后同步 adapter 运行时实例，避免切换预设后 baseUrl/model 不匹配导致 400
-      // 为什么需要：adapter 在启动时创建，不重新读取 config.json，需手动同步
       if (adapter && typeof adapter.updateConfig === 'function') {
-        adapter.updateConfig({
+        const skillUpdates: Record<string, unknown> = {
           provider: merged.llm.provider,
           baseUrl: merged.llm.baseUrl,
           model: merged.llm.model,
           apiKey: effectiveKey,
-        });
+        };
+        // FR-12: 切换 AI 伙伴时同步更新 adapter
+        if (body.activeSkill !== undefined) {
+          skillUpdates.activeSkill = body.activeSkill || '';
+          const activePreset = merged.skills?.find((s) => s.id === body.activeSkill);
+          skillUpdates.systemPrompt = activePreset?.systemPrompt ?? '';
+          skillUpdates.scope = activePreset?.scope ?? 'all';
+          skillUpdates.outputFormat = activePreset?.outputFormat ?? '';
+          // 伙伴预设中指定了 model 时覆盖全局 model
+          if (activePreset?.model) {
+            skillUpdates.model = activePreset.model;
+          }
+        }
+        adapter.updateConfig(skillUpdates as Parameters<typeof adapter.updateConfig>[0]);
       }
       return reply.send({
         ok: true,
@@ -157,6 +176,9 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
           apiKeyMasked: maskApiKey(effectiveKey),
           apiKeySet: Boolean(effectiveKey),
           providerKeyStatus: getProviderKeyStatus(merged),
+          // FR-12
+          skills: merged.skills ?? [],
+          activeSkill: merged.activeSkill ?? '',
         },
       });
     } catch (err) {

@@ -1,14 +1,14 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { AuthConfig, LoginRequest, CreateUserRequest, UpdateUserRequest } from '../auth/types.js';
 import { findUserByUsername, findUserById, listUsers, createUser, updateUser, deleteUser, updateLastLogin, initUserStore } from '../auth/user-store.js';
 import { verifyPassword, getSessionSecret } from '../auth/password.js';
 import { createSession, destroySession, destroyUserSessions, startSessionCleanup } from '../auth/session.js';
 import { getRolePermissions } from '../auth/rbac.js';
 import { initAuditLog, writeAuditLog, createAuditEntry, readAuditLog } from '../auth/audit-log.js';
-import { setupAuthMiddleware, requireAuth, requireAdmin, audit } from '../middleware/auth.js';
+import { setupAuthMiddleware, requireAuth, requireAdmin, audit, DEFAULT_PUBLIC_PATHS } from '../middleware/auth.js';
 import { invalidateRoleCache } from '../auth/permission-cache.js';
+import { getDataDir } from '../utils/runtime.js';
 
 // 认证路由模块
 // 提供：登录、登出、当前用户、权限列表、用户管理（管理员）、审计日志（管理员）
@@ -26,9 +26,6 @@ let sessionSecret = '';
 let permissionCacheTtlMs = 5 * 60 * 1000;
 let auditLogPath = '';
 
-// 路径解析：相对 api 源码目录（与 config.ts 的 vaultPath 解析一致）
-const dirname = path.dirname(fileURLToPath(import.meta.url));
-
 // 初始化认证模块（在 index.ts 启动时调用一次）
 // 为什么单独导出：路由注册前需要先初始化 user-store、audit-log、中间件
 export async function initAuthModule(config: AuthConfig, vaultPath: string): Promise<void> {
@@ -37,11 +34,12 @@ export async function initAuthModule(config: AuthConfig, vaultPath: string): Pro
   permissionCacheTtlMs = config.permissionCacheTtlSec * 1000;
 
   // 解析 users.json / audit.log 的绝对路径
-  // config 中路径是相对 api 目录（如 '../data/users.json'），需基于 api 源码目录解析
-  // 为什么不用 CWD：开发模式 CWD 可能是项目根（pnpm --filter），打包模式 CWD 可能是 exe 同级
-  const apiDir = path.resolve(dirname, '..');
-  const usersFileAbs = path.resolve(apiDir, config.usersFilePath);
-  auditLogPath = path.resolve(apiDir, config.auditLogPath);
+  // config 中路径形如 '../data/users.json'，实际文件位于 data/ 目录下
+  // 用 getDataDir() 统一定位 data/ 目录，兼容开发模式（karpathy-wiki/data/）与 SEA 模式（exe/data/）
+  // 为什么取 basename：config 路径含 ../data/ 前缀，只需文件名部分拼接到 dataDir
+  const dataDir = getDataDir();
+  const usersFileAbs = path.join(dataDir, path.basename(config.usersFilePath));
+  auditLogPath = path.join(dataDir, path.basename(config.auditLogPath));
 
   // 初始化用户存储（首次启动创建默认用户）
   await initUserStore(usersFileAbs, config.pbkdf2Iterations);
@@ -64,11 +62,12 @@ export function registerAuthRoute(app: FastifyInstance): void {
   // 为什么 /api/auth/me 不在 publicPaths：放公开列表会导致全局 preHandler 跳过 token 解析，
   // currentUser 永远为 null，authGuard 必然返回 401，已登录用户也无法获取自身信息。
   // 正确行为：/api/auth/me 走正常 token 解析流程，未登录时 authGuard 返回 401，前端据此跳转登录页。
+  // 为什么复用 DEFAULT_PUBLIC_PATHS：避免字面量重复导致漂移，单一源真相（BR-048）
   setupAuthMiddleware(app, {
     enabled: authConfig.enabled,
     sessionSecret,
     permissionCacheTtlMs,
-    publicPaths: ['/api/auth/login', '/health'],
+    publicPaths: [...DEFAULT_PUBLIC_PATHS],
   });
 
   // preHandler 守卫包装：requireAuth/requireAdmin 返回 async 函数，直接传引用触发 SonarQube S6544
@@ -98,11 +97,12 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const dummySalt = 'AAAAAAAAAAAAAAAAAAAAAA=='; // 固定假盐，base64 编码
     const salt = user?.salt ?? dummySalt;
     const expectedHash = user?.passwordHash ?? 'dummyhash==';
-    const passwordOk = user
-      ? verifyPassword(body.password, salt, expectedHash, authConfig!.pbkdf2Iterations)
-      : false;
+    // 为什么无论用户是否存在都 await verifyPassword：保持响应时间一致
+    // 异步 pbkdf2 不再阻塞事件循环，但响应时间仍包含一次完整哈希耗时
+    const passwordOk = await verifyPassword(body.password, salt, expectedHash, authConfig!.pbkdf2Iterations);
+    const passwordValid = user !== null && passwordOk;
 
-    if (!user || !passwordOk) {
+    if (!user || !passwordValid) {
       // 记录审计日志：登录失败
       writeAuditLog(
         createAuditEntry({
@@ -178,7 +178,9 @@ export function registerAuthRoute(app: FastifyInstance): void {
   // ===== 已登录接口 =====
 
   // GET /api/auth/me：当前用户信息
-  // 为什么放公开列表：未登录时返回 401，前端据此跳转登录页
+  // 为什么不放公开列表：放公开列表会导致全局 preHandler 跳过 token 解析，
+  // currentUser 永远为 null，authGuard 必然返回 401，已登录用户也无法获取自身信息。
+  // 正确行为：走正常 token 解析流程，未登录时 authGuard 返回 401，前端据此跳转登录页。
   app.get('/api/auth/me', { preHandler: authGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
     const session = request.currentUser!;
     const user = await findUserById(session.userId);

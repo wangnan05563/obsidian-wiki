@@ -56,7 +56,26 @@ foreach ($procId in $webPids) {
 }
 
 if ($apiPids.Count -eq 0 -and $webPids.Count -eq 0) {
-    Write-Log "无残留进程需要清理" -Level SKIP -Step "1/4"
+    Write-Log "端口扫描无残留进程" -Level SKIP -Step "1/4"
+}
+
+# 命令行匹配兜底清理：捕获未绑定端口但仍占用资源的 tsx watch / vite 残留进程
+# 为什么需要：多个 tsx watch 进程竞争同一端口时，均未成功 LISTENING，
+# 端口扫描（Get-PidOnPort）返回空但进程仍在运行，新进程启动后立即被抢占导致 exit -1
+# 匹配模式覆盖三种调用路径：pnpm run dev:api / node tsx/dist/cli.mjs / node vite/bin/vite.js
+$strayProcs = Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -and $_.CommandLine -like "*$Root*" -and (
+        $_.CommandLine -like "*dev:api*" -or
+        $_.CommandLine -like "*dev:web*" -or
+        $_.CommandLine -match "tsx.*src/index\.ts" -or
+        $_.CommandLine -match "vite.*bin/vite"
+    )
+}
+foreach ($p in $strayProcs) {
+    try { taskkill /F /T /PID $p.ProcessId 2>&1 | Out-Null } catch { }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "已清理残留进程 (PID $($p.ProcessId), $($p.Name))" -Level OK -Step "1/4"
+    }
 }
 
 Start-Sleep -Seconds 1

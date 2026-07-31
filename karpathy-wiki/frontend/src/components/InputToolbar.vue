@@ -46,34 +46,34 @@ function handleSelect(tool: Tool) {
         : (tool.disabled ? tool.disabledReason || '暂未实现' : undefined)"
       :disabled="tool.disabled"
       @click="handleSelect(tool)">
-      <!-- 快速 ⚡：闪电图标 -->
+      <!-- 快速：闪电图标 -->
       <svg v-if="tool.key === 'fast'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
         <path d="M13 2L4 14h7l-2 8 9-12h-7l2-8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
       </svg>
-      <!-- 帮我写作 ✍：笔与纸 -->
+      <!-- 帮我写作：笔与纸 -->
       <svg v-else-if="tool.key === 'write'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
         <path d="M3 21l3-3 11-11 3 3-11 11-3 3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
         <path d="M14 7l3 3" stroke="currentColor" stroke-width="1.5"/>
       </svg>
-      <!-- PPT 生成 📊：幻灯片框架 -->
+      <!-- PPT 生成：幻灯片框架 -->
       <svg v-else-if="tool.key === 'ppt'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
         <rect x="3" y="4" width="18" height="13" rx="1" stroke="currentColor" stroke-width="1.8"/>
         <line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" stroke-width="1.5"/>
         <line x1="9" y1="20" x2="15" y2="20" stroke="currentColor" stroke-width="1.5"/>
         <line x1="12" y1="17" x2="12" y2="20" stroke="currentColor" stroke-width="1.5"/>
       </svg>
-      <!-- 图像生成 🎨：画板调色 -->
+      <!-- 图像生成：画板调色 -->
       <svg v-else-if="tool.key === 'image'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
         <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/>
         <circle cx="8.5" cy="8.5" r="1.8" stroke="currentColor" stroke-width="1.5"/>
         <path d="M3 16l5-5 4 4 4-4 5 5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
-      <!-- 视频生成 🎬：播放按钮 -->
+      <!-- 视频生成：播放按钮 -->
       <svg v-else-if="tool.key === 'video'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
         <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
         <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
-      <!-- 翻译 🌐：地球 + 对话框 -->
+      <!-- 翻译：地球 + 对话框 -->
       <svg v-else-if="tool.key === 'translate'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
         <path d="M4 5h9l-1 4M8 3v2c0 4-3 7-6 8M5 9c2 2 5 3 8 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         <path d="M12 20l4-9 4 9M14 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>

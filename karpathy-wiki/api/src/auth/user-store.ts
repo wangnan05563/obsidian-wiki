@@ -55,7 +55,7 @@ async function createDefaultUsers(): Promise<UserRecord[]> {
   return Promise.all(
     DEFAULT_USERS.map(async (u) => {
       const salt = generateSalt();
-      const passwordHash = hashPassword(u.password, salt, pbkdf2Iterations);
+      const passwordHash = await hashPassword(u.password, salt, pbkdf2Iterations);
       return {
         id: crypto.randomUUID(),
         username: u.username,
@@ -110,9 +110,12 @@ export async function findUserById(id: string): Promise<UserRecord | null> {
   return users.find((u) => u.id === id) ?? null;
 }
 
-// 列出所有用户（脱敏后，用于管理员查看）
+// 列出所有用户（完整记录，含密码哈希）
+// 为什么不在 user-store 层脱敏：routes/auth.ts 的 GET /api/auth/users 已做脱敏，
+//   在 store 层再脱敏会导致返回类型与 UserRecord[] 不匹配（缺 passwordHash/salt），
+//   且重复脱敏增加维护成本。store 层保持原始数据，脱敏由调用方决定
 export async function listUsers(): Promise<UserRecord[]> {
-  return loadUsers();
+  return await loadUsers();
 }
 
 // 创建新用户
@@ -128,7 +131,7 @@ export async function createUser(params: {
   }
   const now = new Date().toISOString();
   const salt = generateSalt();
-  const passwordHash = hashPassword(params.password, salt, pbkdf2Iterations);
+  const passwordHash = await hashPassword(params.password, salt, pbkdf2Iterations);
   const newUser: UserRecord = {
     id: crypto.randomUUID(),
     username: params.username,
@@ -169,7 +172,7 @@ export async function updateUser(
   // 修改密码时重新生成盐并哈希
   if (updates.password) {
     user.salt = generateSalt();
-    user.passwordHash = hashPassword(updates.password, user.salt, pbkdf2Iterations);
+    user.passwordHash = await hashPassword(updates.password, user.salt, pbkdf2Iterations);
   }
 
   if (updates.role) user.role = updates.role;

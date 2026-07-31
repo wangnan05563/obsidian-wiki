@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { ref, nextTick, watch, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Promotion, Close, Minus, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
@@ -72,10 +73,11 @@ async function sendQuestion(question: string) {
   const history = store.messages.map((m) => ({ role: m.role, content: m.content }));
 
   try {
-    const response = await fetch('/api/query', {
+    const response = await fetch(`${API_BASE}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, history }),
+      // §真流式：复用主问答的 streamMode 偏好，与 Query 页面行为一致
+      body: JSON.stringify({ question, history, stream: store.streamMode }),
       signal: abortController.signal,
     });
 
@@ -101,6 +103,12 @@ function handleSubmit() {
   store.submitQuestion(q);
   inputQuestion.value = '';
   void sendQuestion(q);
+}
+
+// 删除单条消息：用户点击工具栏删除按钮时调用
+// FloatingChat 简化版无 conversationsStore 持久化，仅内存删除
+function handleRemoveMessage(idx: number) {
+  store.removeMessage(idx);
 }
 
 // 停止生成：调用 abortController 中断 SSE 流，store 会在 catch 中自然 finalize
@@ -229,39 +237,43 @@ onBeforeUnmount(() => {
               <div v-if="msg.role === 'user'" class="user-avatar">U</div>
               <RobotAvatar v-else :size="32" :floating="false" />
             </div>
-            <div class="msg-bubble" :class="msg.role">
-              <!-- 思考过程：复用 ThinkingBlock 保持与 Query.vue 一致的可折叠交互 -->
-              <ThinkingBlock
-                v-if="msg.thinking && msg.thinking.length > 0"
-                :steps="msg.thinking"
-              />
-              <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
-              <!-- 消息操作工具栏：复用 MessageToolbar（含复制/朗读/重新生成/反馈） -->
+            <div class="msg-content-wrapper" :class="msg.role">
+              <div class="msg-bubble" :class="msg.role">
+                <!-- 思考过程：复用 ThinkingBlock 保持与 Query.vue 一致的可折叠交互 -->
+                <ThinkingBlock
+                  v-if="msg.thinking && msg.thinking.length > 0"
+                  :steps="msg.thinking"
+                />
+                <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
+                <!-- 联想追问 -->
+                <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
+                  <span class="followups-label">猜猜你想问：</span>
+                  <div class="followups-track">
+                    <span
+                      v-for="(f, i) in msg.followups"
+                      :key="i"
+                      class="followup-chip"
+                      @click="inputQuestion = f"
+                    >{{ f }}</span>
+                  </div>
+                </div>
+                <!-- 参考资料列表：复用 RefsList 完整渲染（含来源徽章、点击跳转） -->
+                <RefsList
+                  v-if="normalizeRefs(msg.refs).length > 0"
+                  :refs="normalizeRefs(msg.refs)"
+                />
+                <!-- 消息时间戳：右下角小字，不抢占主要内容视觉 -->
+                <div v-if="msg.createdAt" class="msg-timestamp">{{ formatTime(msg.createdAt) }}</div>
+              </div>
+              <!-- 消息操作工具栏：气泡外部下方显示，复用 MessageToolbar（含复制/朗读/重新生成/反馈/删除） -->
               <MessageToolbar
-                v-if="msg.role === 'assistant'"
+                :role="msg.role"
                 :content="msg.content"
                 :msg-id="msg.id"
+                :created-at="msg.createdAt"
                 :can-regenerate="!store.isLoading"
+                @remove="handleRemoveMessage(idx)"
               />
-              <!-- 联想追问 -->
-              <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
-                <span class="followups-label">猜猜你想问：</span>
-                <div class="followups-track">
-                  <span
-                    v-for="(f, i) in msg.followups"
-                    :key="i"
-                    class="followup-chip"
-                    @click="inputQuestion = f"
-                  >{{ f }}</span>
-                </div>
-              </div>
-              <!-- 参考资料列表：复用 RefsList 完整渲染（含来源徽章、点击跳转） -->
-              <RefsList
-                v-if="normalizeRefs(msg.refs).length > 0"
-                :refs="normalizeRefs(msg.refs)"
-              />
-              <!-- 消息时间戳：右下角小字，不抢占主要内容视觉 -->
-              <div v-if="msg.createdAt" class="msg-timestamp">{{ formatTime(msg.createdAt) }}</div>
             </div>
           </div>
           <!-- 流式输出中的 assistant 消息 -->
@@ -517,6 +529,24 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
+/* 内容包装器：气泡 + 工具栏垂直排列，让工具栏显示在气泡外部下方
+   为什么需要 wrapper：msg-row 是 flex 横向布局（avatar + bubble），
+   不用 wrapper 的话工具栏会被当作 flex 第三项横向排列 */
+.msg-content-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 80%;
+}
+.msg-content-wrapper.user {
+  align-items: flex-end;
+  /* §用户气泡宽度恢复 100%：撑满可用宽度，高度通过 padding/line-height 收窄减少占用空间 */
+  max-width: 100%;
+}
+.msg-content-wrapper.assistant {
+  align-items: flex-start;
+}
+
 .user-avatar {
   width: 32px;
   height: 32px;
@@ -531,8 +561,8 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
 }
 
+/* max-width 由父级 .msg-content-wrapper 控制，气泡自身撑满父级即可 */
 .msg-bubble {
-  max-width: 80%;
   padding: 10px 14px;
   border-radius: 14px;
   font-size: 13px;
@@ -542,6 +572,8 @@ onBeforeUnmount(() => {
 }
 
 .msg-bubble.assistant {
+  /* §AI 气泡撑满 wrapper：与 Query.vue 一致，width: 100% 让气泡跟随 wrapper 宽度自适应屏幕 */
+  width: 100%;
   background: var(--accent-cyan-a10);
   border: 1px solid var(--accent-cyan-a20);
   border-top-left-radius: 4px;
@@ -561,7 +593,23 @@ onBeforeUnmount(() => {
 .msg-bubble.user {
   background: var(--grad-fire);
   border-top-right-radius: 4px;
+  /* 跨主题可读：强制白色 + 强阴影确保任意主题下用户文字清晰可读 */
   color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  /* §高度收窄：进一步减小 padding/line-height/font-size，与 Query.vue 保持一致 */
+  padding: 2px 12px;
+  line-height: 1.2;
+  font-size: 13px;
+}
+
+/* §修复：用户气泡内的 .msg-content.markdown-body 会被全局 style.css 中
+   .markdown-body { color: var(--text-base) } 覆盖，必须用 :deep 强制白色 */
+.msg-bubble.user :deep(.msg-content),
+.msg-bubble.user :deep(.markdown-body),
+.msg-bubble.user :deep(.markdown-body p),
+.msg-bubble.user :deep(.markdown-body strong) {
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 .msg-bubble.streaming {
@@ -672,8 +720,10 @@ onBeforeUnmount(() => {
   border-color: var(--neon-cyan);
 }
 
-/* hover 父气泡时显现 MessageToolbar（仿 Query.vue 触发规则） */
-.msg-bubble.assistant:hover :deep(.msg-toolbar) {
+/* hover 包装器（气泡+工具栏）时显现 MessageToolbar
+   为什么用 wrapper：工具栏已移到气泡外部，用 wrapper 作为 hover 触发域，
+   鼠标在气泡与工具栏间移动时保持显示 */
+.msg-content-wrapper:hover :deep(.msg-toolbar) {
   opacity: 1;
   pointer-events: auto;
 }

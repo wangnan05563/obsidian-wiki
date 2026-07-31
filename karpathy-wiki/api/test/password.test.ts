@@ -10,6 +10,7 @@ import {
 
 // 密码哈希与 Token 安全测试
 // 覆盖点：盐生成、哈希确定性、恒定时间比较、Token HMAC 签名验证、密钥引用
+// 注意：hashPassword/verifyPassword 为异步函数（pbkdf2Async），测试用例需使用 async/await
 
 describe('password 模块', () => {
   describe('generateSalt', () => {
@@ -29,82 +30,82 @@ describe('password 模块', () => {
   });
 
   describe('hashPassword', () => {
-    it('相同密码 + 盐 + 迭代次数应产生相同哈希（确定性）', () => {
+    it('相同密码 + 盐 + 迭代次数应产生相同哈希（确定性）', async () => {
       const salt = generateSalt();
-      const h1 = hashPassword('password123', salt, 100000);
-      const h2 = hashPassword('password123', salt, 100000);
+      const h1 = await hashPassword('password123', salt, 100000);
+      const h2 = await hashPassword('password123', salt, 100000);
       expect(h1).toBe(h2);
     });
 
-    it('不同密码应产生不同哈希', () => {
+    it('不同密码应产生不同哈希', async () => {
       const salt = generateSalt();
-      const h1 = hashPassword('password123', salt);
-      const h2 = hashPassword('password456', salt);
+      const h1 = await hashPassword('password123', salt);
+      const h2 = await hashPassword('password456', salt);
       expect(h1).not.toBe(h2);
     });
 
-    it('不同盐应产生不同哈希', () => {
+    it('不同盐应产生不同哈希', async () => {
       const s1 = generateSalt();
       const s2 = generateSalt();
-      const h1 = hashPassword('password123', s1);
-      const h2 = hashPassword('password123', s2);
+      const h1 = await hashPassword('password123', s1);
+      const h2 = await hashPassword('password123', s2);
       expect(h1).not.toBe(h2);
     });
 
-    it('不同迭代次数应产生不同哈希', () => {
+    it('不同迭代次数应产生不同哈希', async () => {
       const salt = generateSalt();
-      const h1 = hashPassword('password123', salt, 100000);
-      const h2 = hashPassword('password123', salt, 50000);
+      const h1 = await hashPassword('password123', salt, 100000);
+      const h2 = await hashPassword('password123', salt, 50000);
       expect(h1).not.toBe(h2);
     });
 
-    it('默认迭代次数应为 100000', () => {
+    it('默认迭代次数应为 100000', async () => {
       const salt = generateSalt();
-      const h1 = hashPassword('test', salt);
-      const h2 = hashPassword('test', salt, 100000);
+      const h1 = await hashPassword('test', salt);
+      const h2 = await hashPassword('test', salt, 100000);
       expect(h1).toBe(h2);
     });
 
-    it('哈希结果应可解码为 64 字节', () => {
+    it('哈希结果应可解码为 64 字节', async () => {
       const salt = generateSalt();
-      const hash = hashPassword('test', salt);
+      const hash = await hashPassword('test', salt);
       const decoded = Buffer.from(hash, 'base64');
       expect(decoded.length).toBe(64);
     });
   });
 
   describe('verifyPassword', () => {
-    it('正确密码应返回 true', () => {
+    it('正确密码应返回 true', async () => {
       const salt = generateSalt();
-      const hash = hashPassword('correctPassword', salt);
-      expect(verifyPassword('correctPassword', salt, hash)).toBe(true);
+      const hash = await hashPassword('correctPassword', salt);
+      expect(await verifyPassword('correctPassword', salt, hash)).toBe(true);
     });
 
-    it('错误密码应返回 false', () => {
+    it('错误密码应返回 false', async () => {
       const salt = generateSalt();
-      const hash = hashPassword('correctPassword', salt);
-      expect(verifyPassword('wrongPassword', salt, hash)).toBe(false);
+      const hash = await hashPassword('correctPassword', salt);
+      expect(await verifyPassword('wrongPassword', salt, hash)).toBe(false);
     });
 
-    it('错误盐应返回 false', () => {
+    it('错误盐应返回 false', async () => {
       const salt = generateSalt();
       const wrongSalt = generateSalt();
-      const hash = hashPassword('password', salt);
-      expect(verifyPassword('password', wrongSalt, hash)).toBe(false);
+      const hash = await hashPassword('password', salt);
+      expect(await verifyPassword('password', wrongSalt, hash)).toBe(false);
     });
 
-    it('长度不同的哈希应返回 false 而非抛错', () => {
+    it('长度不同的哈希应返回 false 而非抛错', async () => {
       const salt = generateSalt();
-      const hash = hashPassword('password', salt);
+      const hash = await hashPassword('password', salt);
       // 篡改哈希长度
       const tamperedHash = hash.slice(0, 10);
-      expect(verifyPassword('password', salt, tamperedHash)).toBe(false);
+      expect(await verifyPassword('password', salt, tamperedHash)).toBe(false);
     });
 
-    it('迭代次数必须匹配，否则返回 false', () => {
+    it('迭代次数必须匹配，否则返回 false', async () => {
       const salt = generateSalt();
-      const hash = hashPassword('password', salt, 100000);
-      expect(verifyPassword('password', salt, hash, 50000)).toBe(false);
+      const hash = await hashPassword('password', salt, 100000);
+      expect(await verifyPassword('password', salt, hash, 50000)).toBe(false);
     });
   });
 

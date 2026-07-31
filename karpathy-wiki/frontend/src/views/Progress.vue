@@ -1,11 +1,55 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { onMounted, onBeforeUnmount, computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Loading, Check, Close } from '@element-plus/icons-vue';
+import { Loading, Check, Close, Lightning } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
 import { consumeSSE } from '../utils/sse';
 import BatchProgressBar from '../components/BatchProgressBar.vue';
-import type { IngestPayload, TimelineItem, RunSummary } from '../types';
+import SingleFileProgressBar from '../components/SingleFileProgressBar.vue';
+import type { IngestPayload, TimelineItem, RunSummary, LlmPreset } from '../types';
+
+// LLM Provider 快捷切换：编译失败时无需跳转 Config 页面即可切换
+// 为什么在 Progress.vue 提供：LLM 服务故障时用户最常做的操作就是切换 provider 重试，
+// 跳转 Config 页面切换后再返回 Progress 流程割裂，快捷切换提升体验
+const llmPresets = ref<LlmPreset[]>([]);
+const switchingProvider = ref(false);
+
+async function loadLlmPresets() {
+  try {
+    const res = await fetch(`${API_BASE}/ai/presets`);
+    if (!res.ok) return;
+    const data = await res.json() as { presets?: LlmPreset[] } | LlmPreset[];
+    llmPresets.value = Array.isArray(data) ? data : (data.presets ?? []);
+  } catch {
+    // 预设加载失败不阻断编译流程
+  }
+}
+
+async function quickSwitchProvider(preset: LlmPreset) {
+  if (switchingProvider.value) return;
+  switchingProvider.value = true;
+  try {
+    const res = await fetch(`${API_BASE}/ai/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: preset.provider,
+        baseUrl: preset.baseUrl,
+        model: preset.model,
+        apiKeyRef: preset.apiKeyRef,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    ElMessage.success(`已切换到 ${preset.label}，可重新编译`);
+    // 切换后清除错误状态，让用户能重新点击"重新投递"
+    store.errorMessage = '';
+  } catch (err) {
+    ElMessage.error('切换 provider 失败：' + (err as Error).message);
+  } finally {
+    switchingProvider.value = false;
+  }
+}
 
 // 使用函数类型写法替代类型字面量（S6598）
 const emit = defineEmits<(e: 'restart') => void>();
@@ -39,7 +83,9 @@ async function startCompile(payload: IngestPayload) {
   abortController = new AbortController();
   try {
     // 批量模式调用 /api/compile/batch，单文件模式调用 /api/compile
-    const endpoint = store.isBatchMode ? '/api/compile/batch' : '/api/compile';
+    // 为什么用 API_BASE 拼接：vite.config.ts 的 base 为 '/wiki/'，API_BASE='/wiki/api'，
+    // 仅 '/api/compile' 会绕过 vite proxy 的 '/wiki/api' 规则导致 dev 模式 404
+    const endpoint = store.isBatchMode ? `${API_BASE}/compile/batch` : `${API_BASE}/compile`;
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: isFormData ? {} : { 'Content-Type': 'application/json' },
@@ -67,12 +113,19 @@ async function startCompile(payload: IngestPayload) {
 }
 
 async function startResume(runId: string) {
+  // §优化方案3：resume 前保留已恢复的 stageTimings/compileStartedAt，避免 reset 清空
+  // 为什么需要保留：后端 resume 从断点继续，已完成阶段的耗时不会重新产生，
+  //   若不保留则切回后 stage-timings 面板为空，无法体现完整耗时分布
+  const preservedTimings = { ...store.stageTimings };
+  const preservedStartedAt = store.compileStartedAt;
   store.reset();
+  store.stageTimings = preservedTimings;
+  store.compileStartedAt = preservedStartedAt;
   // 直接修改：compile store 未暴露 startCompile action，此字段是简单状态
   store.isCompiling = true;
   abortController = new AbortController();
   try {
-    const response = await fetch(`/api/compile/resume/${runId}`, {
+    const response = await fetch(`${API_BASE}/compile/resume/${runId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: abortController.signal
@@ -97,15 +150,17 @@ async function startResume(runId: string) {
 
 // SSE 流消费委托给 utils/sse.ts 的通用 consumeSSE，降低本函数认知复杂度（S3776）
 // compile store 使用 handleEvent 统一入口分发事件
+// §优化方案3：每次事件处理后同步持久化，确保切走页面时 localStorage 是最新状态
 function handleSSE(eventType: string, parsed: any) {
   store.handleEvent(eventType, parsed);
+  store.persistState();
 }
 
 async function consumeCompileSSE(response: Response) {
   await consumeSSE(response, handleSSE);
 }
 
-// 用户主动取消编译：触发 abortController 中止 SSE 流，并通过 store.cancelCompile 标记取消态
+// 用户主动取消编译（批量模式）：触发 abortController 中止 SSE 流，并通过 store.cancelCompile 标记取消态
 // 为什么不在 BatchProgressBar 内部直接 abort：abortController 是 Progress.vue 的局部变量，
 //   子组件无法访问；通过 emit 事件委托父组件处理是 Vue 单向数据流的惯用模式
 function handleBatchCancel() {
@@ -114,7 +169,29 @@ function handleBatchCancel() {
   ElMessage.info('已取消批量编译');
 }
 
+// §优化方案1：用户主动取消编译（单文件模式）
+// 与 handleBatchCancel 分离：文案与日志语义不同，避免误导用户
+function handleSingleCancel() {
+  abortController?.abort();
+  store.cancelCompile();
+  // 单文件取消后清除持久化状态，避免切回时误恢复
+  store.clearPersistedState();
+  ElMessage.info('已取消编译');
+}
+
 onMounted(() => {
+  // 加载 LLM 预设列表：编译失败时供用户快捷切换 provider
+  loadLlmPresets();
+  // §优化方案3：先尝试从 localStorage 恢复上次的编译状态
+  // 为什么在 onMounted 最前面：恢复的 pendingPayload/isDone 等会影响后续 startCompile 判断，
+  //   必须在判断之前完成恢复
+  const needResume = store.loadPersistedState();
+  // §done 态恢复后清除 localStorage：用户已看到结果，下次刷新不需要再恢复
+  // 为什么不清除 running 态：running 态需要 resume 接续，localStorage 是 resume 的数据源
+  // 为什么不清除 error/cancelled 态：保留让用户切走再切回仍能看到失败原因，避免"消失了"的困惑
+  if (store.isDone && !needResume) {
+    store.clearPersistedState();
+  }
   // 批量模式优先检测 pendingBatchPayload，否则检测单文件 pendingPayload
   // 守卫逻辑（注意是 isCompiling 而非 !isCompiling）：
   //   - 首次从 Ingest 切入：prepareBatchCompile/prepareCompile 已设置 isCompiling=true 表示"应该开始编译"，
@@ -128,6 +205,10 @@ onMounted(() => {
     startCompile(store.pendingBatchPayload);
   } else if (store.pendingPayload && !store.isDone && store.isCompiling && !store.isCancelled) {
     startCompile(store.pendingPayload);
+  } else if (needResume && store.currentRunId) {
+    // §优化方案3：切走时正在编译且记录了 runId → 调用 resume 接口恢复未完成的编译
+    // 为什么独立分支：startCompile 会重置状态从头开始，与 resume 语义冲突
+    startResume(store.currentRunId);
   } else {
     store.loadRuns();
   }
@@ -162,6 +243,13 @@ function runStatusLabel(status: string): string {
 
 onBeforeUnmount(() => {
   abortController?.abort();
+  // §优化方案3：切走时若仍在编译中，先持久化当前状态再中止
+  // 为什么 persistState 在 abortCompile 之前：abortCompile 会复位 isCompiling，
+  //   persistState 内部判断 isBatchMode 才跳过，单文件模式依赖 isCompiling 标识"需恢复"
+  //   实际持久化的 isCompiling 字段来自 state.isCompiling，与 store 当前值同步即可
+  if (store.isCompiling && !store.isBatchMode) {
+    store.persistState();
+  }
   // 通知 store 编译已中止：让 isCompiling 复位，避免切回时 onMounted 误判为"正在编译"
   // 而跳过 startCompile 重入，导致进度条卡死
   store.abortCompile();
@@ -190,7 +278,6 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       <!-- 不对称头部：机器人 + 状态文字 -->
       <div class="progress-head">
 <div class="head-text">
-          <span class="head-tag">// COMPILE ENGINE</span>
           <h2 class="head-title">
             <span v-if="store.isCompiling" class="grad-text">机器人正在编译…</span>
             <span v-else-if="store.isDone" class="grad-text">编译完成</span>
@@ -266,8 +353,13 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
         </div>
       </div>
 
-      <!-- 单文件模式时间线 -->
-      <el-timeline v-else-if="store.timeline.length > 0" class="timeline">
+      <!-- 单文件模式：可视化进度条 + 详细时间线 -->
+      <div v-else-if="!store.isBatchMode" class="single-view">
+        <!-- §优化方案1：可视化进度条组件，展示百分比/总耗时/各阶段耗时明细 -->
+        <SingleFileProgressBar @cancel="handleSingleCancel" />
+
+        <!-- 详细时间线：保留原 timeline 作为步骤历史，与进度条互补 -->
+        <el-timeline v-if="store.timeline.length > 0" class="timeline">
         <el-timeline-item
           v-for="(item, idx) in store.timeline"
           :key="idx"
@@ -293,15 +385,11 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           </div>
         </el-timeline-item>
       </el-timeline>
-
-      <div v-else class="empty-progress">
-        <span class="empty-dots">● ● ●</span>
-        <p>等待编译开始…</p>
       </div>
 
       <!-- 缓存命中提示 -->
       <div v-if="store.isDone && store.result?.cached" class="cache-hit-banner">
-        <span class="cache-icon">⚡</span>
+        <el-icon class="cache-icon"><Lightning /></el-icon>
         <span class="cache-text">内容已编译过（缓存命中），已跳过本次编译</span>
       </div>
       <div v-if="store.isDone && store.result" class="done-section">
@@ -344,6 +432,19 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
         <el-button type="primary" size="large" @click="handleRestart">
           重新投递
         </el-button>
+        <!-- LLM Provider 快捷切换：编译失败（特别是 5xx/超时）时无需跳转 Config 页面 -->
+        <div v-if="llmPresets.length > 0" class="quick-switch-provider">
+          <span class="quick-switch-label">快捷切换 LLM：</span>
+          <el-button
+            v-for="preset in llmPresets"
+            :key="preset.key"
+            size="small"
+            :loading="switchingProvider"
+            @click="quickSwitchProvider(preset)"
+          >
+            {{ preset.label }}
+          </el-button>
+        </div>
       </div>
 
       <!-- 历史编译任务列表 -->
@@ -560,6 +661,13 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   animation: neon-pulse 1.5s ease-in-out infinite;
 }
 
+/* §优化方案1：单文件模式容器，包裹进度条 + 时间线 */
+.single-view {
+  margin-top: 12px;
+  position: relative;
+  z-index: 1;
+}
+
 .done-section {
   margin-top: 28px;
 }
@@ -623,7 +731,23 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 .restart-bar {
   margin-top: 24px;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* LLM Provider 快捷切换：编译失败时无需跳转 Config 页面 */
+.quick-switch-provider {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 8px;
+}
+
+.quick-switch-label {
+  font-size: 13px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
 }
 
 /* 缓存命中提示 */

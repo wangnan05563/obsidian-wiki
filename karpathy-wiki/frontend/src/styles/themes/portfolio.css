@@ -75,6 +75,10 @@
   --graph-concepts-border: #a08c5a;
   --graph-comparisons-border: #3d3d3d;
   --graph-queries-border: #e0c884;
+  --graph-qa: #8b6f47;
+  --graph-solutions: #6b8e23;
+  --graph-qa-border: #a08c5a;
+  --graph-solutions-border: #8bb04a;
   --graph-edge: rgba(201, 169, 97, 0.35);
   --graph-edge-highlight: #c9a961;
   --graph-label: #1a1a1a;
@@ -344,4 +348,18 @@
 [data-theme="portfolio"] ::selection {
   background: rgba(201, 169, 97, 0.3);
   color: var(--text-bright);
+}
+
+/* User bubble contrast fix: portfolio 主题的 --grad-fire 是 #1a1a1a → #c9a961
+   深黑到金色的渐变，而 --text-bright 也是 #1a1a1a 深色，会导致深色文字
+   叠加深色渐变左半部分完全看不清。强制白色 + 阴影确保可读性
+   必须同时覆盖 .msg-bubble 内的 .markdown-body 文本（全局 style.css 强制 color: var(--text-base)
+   会覆盖 .msg-bubble 自身的 color 继承），所以选择器链必须深入到 .markdown-body p */
+[data-theme="portfolio"] .msg-bubble.user,
+[data-theme="portfolio"] .msg-bubble.user .markdown-body,
+[data-theme="portfolio"] .msg-bubble.user .markdown-body p,
+[data-theme="portfolio"] .msg-bubble.user .markdown-body strong,
+[data-theme="portfolio"] .msg-bubble.user .msg-content {
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }

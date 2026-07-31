@@ -28,3 +28,4 @@ tags: [test, batch-compile, automated-pipeline]
 ## 测试文档
 
 - [[Batch Compile Test 19]] — 用于验证简短内容的编译与实体提取能力
+- [[entities/test-document-11]] — 批次编译测试第 11 号测试文档

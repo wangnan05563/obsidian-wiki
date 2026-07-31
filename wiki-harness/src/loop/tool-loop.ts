@@ -2,9 +2,11 @@ import type {
   RunContext,
   RunResult,
   StepResult,
+  StepEvent,
   BudgetConfig,
   RetryConfig,
   Message,
+  ToolCall,
   ToolDefinition,
 } from '../types.js';
 import type { LLMAdapter } from '../llm/llm-adapter.js';
@@ -141,6 +143,122 @@ export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunR
         step: ctx.step + 1,
         tokenUsed: ctx.tokenUsed,
       };
+    }
+
+    await hooks.afterStep(ctx, ctx.step, stepResult);
+    ctx.step++;
+  }
+}
+
+// §真流式 runLoop：与 runLoop 平行，差异在 LLM 调用走 chatStream
+//   每个 delta 即时 yield，工具调用生命周期事件化（tool_call/tool_result）
+//   为什么不修改 runLoop 而新增函数：保持非流式分支稳定，降低回归风险
+//   约束：工具执行仍是非流式（工具内部逻辑不感知流式），仅 LLM 输出是流式
+export async function* runLoopStream(ctx: RunContext, config: LoopConfig): AsyncGenerator<StepEvent> {
+  const hooks = config.hooks;
+
+  while (true) {
+    // 预算检查：步数或 token 耗尽即终止
+    if (!checkBudget(ctx.step, ctx.tokenUsed, config.budget)) {
+      yield {
+        type: 'error',
+        message: 'Budget exceeded',
+        step: ctx.step,
+      };
+      return;
+    }
+
+    await hooks.beforeStep(ctx, ctx.step);
+
+    const stepResult: StepResult = {
+      step: ctx.step,
+      toolCalls: [],
+      toolResults: [],
+      tokenUsed: 0,
+    };
+
+    try {
+      // §流式累积：chatStream 逐 chunk yield delta，最后可能 yield 一次完整 tool_calls
+      //   这里用 for-await 消费，delta 即时转发给上层，tool_calls 在流结束后处理
+      let assistantContent = '';
+      let toolCalls: ToolCall[] | undefined;
+
+      for await (const chunk of config.llm.chatStream(ctx.messages, config.tools)) {
+        if (chunk.delta) {
+          assistantContent += chunk.delta;
+          yield { type: 'delta', text: chunk.delta };
+        }
+        if (chunk.tool_calls && chunk.tool_calls.length > 0) {
+          toolCalls = chunk.tool_calls;
+        }
+      }
+
+      // 构造 assistant 消息并入栈（与非流式分支保持一致）
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: assistantContent,
+        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      };
+      ctx.messages.push(assistantMessage);
+
+      // token 估算：流式无 usage 字段，用字符数粗略估
+      const stepTokens = config.llm.countTokens([assistantMessage]);
+      ctx.tokenUsed += stepTokens;
+      stepResult.tokenUsed = stepTokens;
+
+      // 无 tool_calls 表示 LLM 任务完成
+      if (!toolCalls || toolCalls.length === 0) {
+        await hooks.afterStep(ctx, ctx.step, stepResult);
+        yield {
+          type: 'done',
+          finalContent: assistantContent,
+          step: ctx.step + 1,
+          tokenUsed: ctx.tokenUsed,
+        };
+        return;
+      }
+
+      stepResult.toolCalls = toolCalls;
+
+      // 逐个执行工具调用，每个工具 yield 生命周期事件
+      for (const toolCall of toolCalls) {
+        yield { type: 'tool_call', step: ctx.step, toolCall };
+
+        const tool = config.tools.find(t => t.name === toolCall.function.name);
+        let result: unknown;
+        if (!tool) {
+          result = { error: `Tool not found: ${toolCall.function.name}` };
+        } else {
+          try {
+            const args = JSON.parse(toolCall.function.arguments || '{}');
+            result = await tool.handler(args, ctx);
+          } catch (err) {
+            result = { error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+        stepResult.toolResults.push(result);
+
+        // 工具结果截断：与非流式分支一致
+        const resultStr = JSON.stringify(result);
+        const truncatedContent = resultStr.length > MAX_TOOL_RESULT_LENGTH
+          ? resultStr.slice(0, MAX_TOOL_RESULT_LENGTH) + '\n...[truncated]'
+          : resultStr;
+        ctx.messages.push({
+          role: 'tool',
+          content: truncatedContent,
+          tool_call_id: toolCall.id,
+        });
+
+        yield { type: 'tool_result', step: ctx.step, toolCall, result };
+      }
+    } catch (err) {
+      await hooks.afterStep(ctx, ctx.step, stepResult);
+      yield {
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+        step: ctx.step,
+      };
+      return;
     }
 
     await hooks.afterStep(ctx, ctx.step, stepResult);

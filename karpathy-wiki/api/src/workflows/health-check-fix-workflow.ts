@@ -1,17 +1,14 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { ToolDefinition, HarnessConfig, StepResult } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
 import type { FixInput, FixProgressEvent } from '../types.js';
+import { getPromptPath } from '../utils/runtime.js';
 
 // 加载 fix prompt 单点存储（M-3 prompt 等价性）
-// esbuild 打包时通过 --define 替换 import.meta.url 为 CJS 等价表达式
-import { fileURLToPath } from 'node:url';
-const __dirname_resolved = path.dirname(fileURLToPath(import.meta.url));
+// 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
 async function loadFixPrompt(): Promise<string> {
-  const promptPath = path.resolve(__dirname_resolved, '..', 'prompts', 'health-check-fix.md');
-  return fs.readFile(promptPath, 'utf8');
+  return fs.readFile(getPromptPath('health-check-fix.md'), 'utf8');
 }
 
 // JSON Schema 简写

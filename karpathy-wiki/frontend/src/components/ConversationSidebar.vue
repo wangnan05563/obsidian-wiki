@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
+import { Top, Edit, Delete, ArrowLeft, Plus } from '@element-plus/icons-vue';
 import { useConversationsStore } from '../stores/conversations';
 import type { ConversationRecord } from '../types';
 
-// F-3.11 三态：'expanded'(280px) / 'collapsed'(60px,仅图标) / 'hidden'(0,完全隐藏)
-// 父组件 Query.vue 传 state 字符串替代原 collapsed boolean
-type SidebarState = 'expanded' | 'collapsed' | 'hidden';
+// F-3.11 二态：'expanded'(280px) / 'hidden'(0,完全隐藏)
+// 父组件 Query.vue 传 state 字符串，二态切换一步折叠到位
+type SidebarState = 'expanded' | 'hidden';
 const props = defineProps<{ state: SidebarState }>();
 const emit = defineEmits<{
   toggle: [];
@@ -86,18 +87,20 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
 </script>
 
 <template>
-  <!-- F-3.11 三态：expanded 显示完整侧栏 / collapsed 仅图标 / hidden 完全隐藏（父组件显示浮动按钮） -->
+  <!-- F-3.11 二态：expanded 显示完整侧栏 / hidden 完全隐藏（父组件显示浮动按钮） -->
   <aside
     class="conversation-sidebar"
     :class="{
       expanded: state === 'expanded',
-      collapsed: state === 'collapsed',
       hidden: state === 'hidden'
     }"
   >
-    <!-- 展开态：完整 header + 列表 -->
+    <!-- 展开态：新对话按钮 + 搜索框 + 历史对话列表 -->
     <div class="sidebar-header" v-if="state === 'expanded'">
-      <button class="new-btn" @click="emit('newSession')">+ 新对话</button>
+      <button class="new-btn" @click="emit('newSession')">
+        <el-icon><Plus /></el-icon>
+        <span>新对话</span>
+      </button>
       <input class="search-input" v-model="store.searchKeyword"
         placeholder="搜索对话..." />
     </div>
@@ -106,7 +109,9 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
         class="conversation-item"
         :class="{ active: conv.id === store.currentConversationId }"
         @click="emit('select', conv.id)">
-        <span class="pin-icon" v-if="conv.isPinned" @click="(e) => handlePin(e, conv.id)">📌</span>
+        <span class="pin-icon" v-if="conv.isPinned" @click="(e) => handlePin(e, conv.id)">
+          <el-icon><Top /></el-icon>
+        </span>
         <div class="conv-info">
           <div class="conv-title">{{ conv.title }}</div>
           <div class="conv-time">{{ formatTime(conv.updatedAt) }}</div>
@@ -114,8 +119,12 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
         <!-- F-3.3 hover 操作按钮：重命名 / 删除（默认隐藏，hover conversation-item 时显现）
              @click.stop 阻止冒泡，避免点击操作按钮触发 select 切换会话 -->
         <div class="conv-actions" @click.stop>
-          <button class="conv-action-btn rename-btn" title="重命名" @click="(e) => handleRename(e, conv)">✏</button>
-          <button class="conv-action-btn delete-btn" title="删除" @click="(e) => handleDelete(e, conv)">🗑</button>
+          <button class="conv-action-btn rename-btn" title="重命名" @click="(e) => handleRename(e, conv)">
+            <el-icon><Edit /></el-icon>
+          </button>
+          <button class="conv-action-btn delete-btn" title="删除" @click="(e) => handleDelete(e, conv)">
+            <el-icon><Delete /></el-icon>
+          </button>
         </div>
       </div>
       <div class="empty-hint" v-if="sortedConversations.length === 0">
@@ -123,26 +132,20 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
       </div>
     </div>
 
-    <!-- F-3.11 折叠态：仅显示一个垂直 + 按钮，点击新建对话
-         为什么折叠态保留新建按钮：SRS 验收点"折叠态仍可新建对话" -->
-    <div class="collapsed-bar" v-if="state === 'collapsed'">
-      <button class="collapsed-new-btn" title="新建对话" @click="emit('newSession')">+</button>
-    </div>
-
-    <!-- F-3.11 切换按钮：expanded(◀) / collapsed(▶) / hidden 时父组件显示浮动按钮 -->
+    <!-- 切换按钮：expanded(◀ 折叠) / hidden 时父组件显示浮动展开按钮 -->
     <button
       v-if="state !== 'hidden'"
       class="collapse-btn"
-      :title="state === 'expanded' ? '折叠（Ctrl+B）' : '隐藏（Ctrl+B）'"
+      title="折叠（Ctrl+B）"
       @click="emit('toggle')"
     >
-      {{ state === 'expanded' ? '◀' : '▶' }}
+      <el-icon><ArrowLeft /></el-icon>
     </button>
   </aside>
 </template>
 
 <style scoped>
-/* F-3.11 三态侧栏基础样式：所有状态共用，差异在 width（按 .expanded / .collapsed / .hidden 修饰符覆盖） */
+/* F-3.11 二态侧栏基础样式：所有状态共用，差异在 width（按 .expanded / .hidden 修饰符覆盖） */
 .conversation-sidebar {
   flex-shrink: 0;
   display: flex;
@@ -158,11 +161,7 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
 .conversation-sidebar.expanded {
   width: 280px;
 }
-/* 折叠态：60px，仅显示中央 + 按钮 */
-.conversation-sidebar.collapsed {
-  width: 60px;
-}
-/* 隐藏态：完全收起，宽度 0，主区域自适应 */
+/* 隐藏态：完全收起，宽度 0，主区域自适应放大 */
 .conversation-sidebar.hidden {
   width: 0;
   border-right: 0;
@@ -292,35 +291,6 @@ async function handleDelete(e: Event, conv: ConversationRecord) {
   color: var(--text-soft, #888);
   font-size: 12px;
   padding: 20px;
-}
-
-/* F-3.11 折叠态中央 + 按钮：垂直居中，新建对话 */
-.collapsed-bar {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px 0;
-}
-.collapsed-new-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid var(--neon-cyan, #00f5ff);
-  background: var(--accent-cyan-a15, rgba(0, 245, 255, 0.15));
-  color: var(--neon-cyan, #00f5ff);
-  cursor: pointer;
-  font-size: 20px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-}
-.collapsed-new-btn:hover {
-  background: var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
-  transform: scale(1.05);
-  box-shadow: 0 0 12px var(--accent-cyan-a40, rgba(0, 245, 255, 0.4));
 }
 
 .collapse-btn {

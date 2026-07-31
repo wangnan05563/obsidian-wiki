@@ -17,18 +17,16 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import matter from 'gray-matter';
 import type { VaultService } from '../vault/vault-service.js';
 import type { AppConfig, QaPair, QqSolution, ProgressEvent } from '../types.js';
 import { getEffectiveApiKey } from '../config.js';
 import { redactExtractOutput } from './preprocess/qq-preprocess.js';
+import { getPromptPath } from '../utils/runtime.js';
 
-// prompt 模板路径：api/src/prompts/qq-extract.md
-// 为什么用 import.meta.url 而非相对路径：与 compile-workflow.loadCompilePrompt 同模式，
-// 与 CWD 解耦，避免 pnpm --filter 启动时符号链接导致路径解析错误
-const __dirname_resolved = path.dirname(fileURLToPath(import.meta.url));
-const PROMPT_PATH = path.resolve(__dirname_resolved, '..', 'prompts', 'qq-extract.md');
+// prompt 模板路径：api/src/prompts/qq-extract.md（开发模式）或 exe/prompts/qq-extract.md（SEA 模式）
+// 路径解析统一走 runtime.ts，与 CWD 解耦，兼容 SEA 打包模式
+const PROMPT_PATH = getPromptPath('qq-extract.md');
 
 // prompt 模板缓存：避免每个 chunk 都读盘
 // 为什么是模块级缓存：prompt 在进程生命周期内不变，重复读盘是浪费

@@ -221,6 +221,136 @@ def test_qq_upload_and_preview():
     return raw_id
 
 
+def test_qq_upload_html_format():
+    """测试 POST /api/qq-ingest/upload 上传 HTML 格式（qq-chat-exporter 导出格式之一）"""
+    try:
+        # 模拟 qq-chat-exporter 导出的 HTML 格式：含 script/style 干扰块 + 时间戳行
+        html_content = """<!DOCTYPE html>
+<html><head><title>HTML测试群 聊天记录</title>
+<script>alert('x')</script>
+<style>.msg { color: red; }</style>
+</head><body>
+<div class="message">
+  <span class="time">2026-07-20 14:30:15</span>
+  <span class="sender">张三</span>
+  <span class="content">如何部署？</span>
+</div>
+<div class="message">
+  <span class="time">2026-07-20 14:30:20</span>
+  <span class="sender">李四</span>
+  <span class="content">用 docker compose up</span>
+</div>
+</body></html>"""
+        body, boundary = build_multipart("html-test.html", html_content, content_type="text/html")
+        req = urllib.request.Request(
+            f"{API_BASE}/api/qq-ingest/upload",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            sse_text = resp.read().decode("utf-8")
+            events = parse_sse_events(sse_text)
+            done_event = next((e for e in events if e["event"] == "done"), None)
+            ok = done_event is not None
+            if ok:
+                meta = done_event["data"].get("data", {}).get("meta", {})
+                # chatName 从 <title> 提取，应去 "聊天记录" 后缀
+                chat_name = meta.get("chatName", "")
+                filtered = meta.get("filteredCount", 0)
+                # 期望 chatName 为 "HTML测试群"，filteredCount 为 2（2 条真实消息）
+                ok = chat_name == "HTML测试群" and filtered == 2
+                detail = f"chatName={chat_name}, filteredCount={filtered}"
+            else:
+                detail = "未找到 done 事件"
+            record("POST /api/qq-ingest/upload HTML 上传", ok, detail)
+    except Exception as e:
+        record("POST /api/qq-ingest/upload HTML 上传", False, str(e))
+
+
+def test_qq_upload_excel_format():
+    """测试 POST /api/qq-ingest/upload 上传 Excel 格式（qq-chat-exporter 导出格式之一）
+
+    构造最小 xlsx ZIP 包：含 sharedStrings.xml + workbook.xml + sheet1.xml
+    复用单元测试中验证过的 ZIP 结构，确保与服务端 parseXlsxFormat 路径一致
+    """
+    try:
+        import io
+        import zipfile
+
+        # 共享字符串索引：0=时间, 1=发送人, 2=消息, 3=Excel测试群,
+        # 4=2026-07-20 14:30:15, 5=张三, 6=如何部署？,
+        # 7=2026-07-20 14:30:20, 8=李四, 9=用 docker compose up
+        shared_strings = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="10" uniqueCount="10">'
+            '<si><t>时间</t></si><si><t>发送人</t></si><si><t>消息</t></si>'
+            '<si><t>Excel测试群</t></si>'
+            '<si><t>2026-07-20 14:30:15</t></si><si><t>张三</t></si><si><t>如何部署？</t></si>'
+            '<si><t>2026-07-20 14:30:20</t></si><si><t>李四</t></si><si><t>用 docker compose up</t></si>'
+            '</sst>'
+        )
+        workbook = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheets><sheet name="Excel测试群" sheetId="1" r:id="rId1"/></sheets>'
+            '</workbook>'
+        )
+        # 表头行 + 2 条数据行（t="s" 表示共享字符串类型，<v> 是字符串索引）
+        sheet = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetData>'
+            '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row>'
+            '<row r="2"><c r="A2" t="s"><v>4</v></c><c r="B2" t="s"><v>5</v></c><c r="C2" t="s"><v>6</v></c></row>'
+            '<row r="3"><c r="A3" t="s"><v>7</v></c><c r="B3" t="s"><v>8</v></c><c r="C3" t="s"><v>9</v></c></row>'
+            '</sheetData>'
+            '</worksheet>'
+        )
+
+        # 构造 ZIP 字节流
+        # 为什么用 ZIP_STORED：服务端 parseZip 仅读取字节流不解压，与 ZIP_STORED（无压缩）兼容；
+        # ZIP_DEFLATED 会让 entries 中存的是压缩字节，XML 解析会失败
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_STORED) as zf:
+            zf.writestr("xl/sharedStrings.xml", shared_strings)
+            zf.writestr("xl/workbook.xml", workbook)
+            zf.writestr("xl/worksheets/sheet1.xml", sheet)
+        zip_bytes = zip_buf.getvalue()
+
+        # multipart 中 binary 字段需用 bytes 而非 str
+        boundary = "----vitestboundary" + str(int(time.time() * 1000))
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="excel-test.xlsx"\r\n'
+            f"Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n"
+        ).encode("utf-8") + zip_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{API_BASE}/api/qq-ingest/upload",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            sse_text = resp.read().decode("utf-8")
+            events = parse_sse_events(sse_text)
+            done_event = next((e for e in events if e["event"] == "done"), None)
+            ok = done_event is not None
+            if ok:
+                meta = done_event["data"].get("data", {}).get("meta", {})
+                chat_name = meta.get("chatName", "")
+                filtered = meta.get("filteredCount", 0)
+                # 期望 chatName 从 workbook sheet name 提取为 "Excel测试群"，filteredCount=2（表头跳过）
+                ok = chat_name == "Excel测试群" and filtered == 2
+                detail = f"chatName={chat_name}, filteredCount={filtered}"
+            else:
+                detail = "未找到 done 事件"
+            record("POST /api/qq-ingest/upload Excel 上传", ok, detail)
+    except Exception as e:
+        record("POST /api/qq-ingest/upload Excel 上传", False, str(e))
+
+
 def test_qq_drafts_endpoint():
     """测试 GET /api/qq-ingest/drafts"""
     try:
@@ -280,7 +410,8 @@ def test_qq_compile_batch_validation():
     except Exception as e:
         record("POST /api/qq-ingest/compile/batch 无效路径", False, str(e))
 
-    # 2. 空 drafts 列表应返回 400
+    # 2. 空 drafts 列表应自动扫描 drafts/ 目录并返回 200（路由设计：空=未指定=全量扫描）
+    #    仅当 drafts/ 目录也为空时才返回 400 "无可编译的 draft 文件"
     try:
         body = json.dumps({"drafts": []}).encode("utf-8")
         req = urllib.request.Request(
@@ -291,11 +422,15 @@ def test_qq_compile_batch_validation():
         )
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
-                record("POST /api/qq-ingest/compile/batch 空列表", False, f"应返回 400 但实际 {resp.status}")
+                # 当前 drafts/ 目录有数据，应自动扫描并返回 200 SSE 流
+                record("POST /api/qq-ingest/compile/batch 空列表自动扫描", resp.status == 200,
+                       f"状态码={resp.status}（空列表=未指定，自动扫描全部）")
         except urllib.error.HTTPError as e:
-            record("POST /api/qq-ingest/compile/batch 空列表", e.code == 400, f"状态码={e.code}")
+            # 仅当 drafts/ 目录为空时才会 400
+            record("POST /api/qq-ingest/compile/batch 空列表自动扫描", e.code == 400,
+                   f"状态码={e.code}（drafts 目录可能为空）")
     except Exception as e:
-        record("POST /api/qq-ingest/compile/batch 空列表", False, str(e))
+        record("POST /api/qq-ingest/compile/batch 空列表自动扫描", False, str(e))
 
 
 def test_qq_path_traversal_protection():
@@ -412,6 +547,9 @@ def main():
     print("--- 后端 API 测试 ---")
     test_qq_config_endpoints()
     raw_id = test_qq_upload_and_preview()
+    # HTML / Excel 格式导入测试（qq-chat-exporter 工程支持的导出格式）
+    test_qq_upload_html_format()
+    test_qq_upload_excel_format()
     test_qq_drafts_endpoint()
     test_qq_extract_sse(raw_id)
     test_qq_compile_batch_validation()

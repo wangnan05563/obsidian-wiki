@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { API_BASE } from '../utils/apiBase';
+import { ref, onMounted, computed, markRaw } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { StatsData } from '../types';
+import { Aim, Connection, CaretTop, Star, Download, Reading, ChatRound, Monitor, Clock } from '@element-plus/icons-vue';
+import type { StatsData, RunSummary } from '../types';
+import { useCompileStore } from '../stores/compile';
 
 // 使用函数类型写法替代类型字面量（S6598）
-const emit = defineEmits<(e: 'navigate', view: 'ingest' | 'browse' | 'query' | 'health') => void>();
+const emit = defineEmits<(e: 'navigate', view: 'ingest' | 'browse' | 'query' | 'health' | 'progress') => void>();
 
 const stats = ref<StatsData | null>(null);
 const loading = ref(false);
 const initializing = ref(false);
+
+// FR-14-3 运行历史：复用 compile store 的 runs 数据
+const compileStore = useCompileStore();
+const recentRuns = computed(() => compileStore.runs.slice(0, 8));
+const runsLoading = ref(false);
 
 const DIR_LABELS: Record<string, string> = {
   entities: '实体',
@@ -17,12 +25,18 @@ const DIR_LABELS: Record<string, string> = {
   queries: '问答',
 };
 
+const STATUS_LABELS: Record<RunSummary['status'], string> = {
+  done: '成功',
+  failed: '失败',
+  running: '运行中',
+};
+
 const hasContent = computed(() => (stats.value?.totalPages ?? 0) > 0);
 
 async function loadStats() {
   loading.value = true;
   try {
-    const res = await fetch('/api/stats');
+    const res = await fetch(`${API_BASE}/stats`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     stats.value = await res.json();
   } catch (err) {
@@ -32,10 +46,22 @@ async function loadStats() {
   }
 }
 
+// FR-14-3 加载运行历史（复用 compile store）
+async function loadRuns() {
+  runsLoading.value = true;
+  try {
+    await compileStore.loadRuns();
+  } catch (err) {
+    ElMessage.error('加载运行历史失败：' + (err as Error).message);
+  } finally {
+    runsLoading.value = false;
+  }
+}
+
 async function initVault() {
   initializing.value = true;
   try {
-    const res = await fetch('/api/vault/init', { method: 'POST' });
+    const res = await fetch(`${API_BASE}/vault/init`, { method: 'POST' });
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || `HTTP ${res.status}`);
@@ -49,8 +75,23 @@ async function initVault() {
   }
 }
 
+// 相对时间格式化：将 ISO 时间戳转为 "3 分钟前" 等友好展示
+// 为什么不引入第三方库：Dashboard 是轻量级首页，零依赖原则
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return '刚刚';
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} 天前`;
+  return iso.slice(0, 10);
+}
+
 onMounted(() => {
   loadStats();
+  loadRuns();
 });
 </script>
 
@@ -59,7 +100,6 @@ onMounted(() => {
     <!-- 不对称英雄区：左侧机器人 + 右侧标题，破格倾斜 -->
     <div class="glass-card welcome-card fade-up">
       <div class="welcome-right">
-        <span class="welcome-tag">// KNOWLEDGE ENGINE</span>
         <h2 class="welcome-title grad-text">Karpathy AI 知识库</h2>
         <p class="welcome-tip">
           投递资料自动编译为结构化 Wiki 页面，基于页面内容智能问答
@@ -76,16 +116,16 @@ onMounted(() => {
     <div class="stats-row">
       <div
         v-for="(card, idx) in [
-          { icon: '◈', num: stats?.totalPages ?? 0, label: '总页面数', grad: 'grad-fire' },
-          { icon: '⬡', num: stats?.totalLinks ?? 0, label: '双向链接', grad: 'grad-cool' },
-          { icon: '▲', num: stats?.dirCounts?.entities ?? 0, label: '实体页', grad: 'grad-neon' },
-          { icon: '✦', num: stats?.dirCounts?.concepts ?? 0, label: '概念页', grad: 'grad-aurora' },
+          { icon: markRaw(Aim), num: stats?.totalPages ?? 0, label: '总页面数', grad: 'grad-fire' },
+          { icon: markRaw(Connection), num: stats?.totalLinks ?? 0, label: '双向链接', grad: 'grad-cool' },
+          { icon: markRaw(CaretTop), num: stats?.dirCounts?.entities ?? 0, label: '实体页', grad: 'grad-neon' },
+          { icon: markRaw(Star), num: stats?.dirCounts?.concepts ?? 0, label: '概念页', grad: 'grad-aurora' },
         ]"
         :key="idx"
         class="glass-card stat-card hover-3d fade-up"
         :style="{ animationDelay: (idx * 0.1) + 's' }"
       >
-        <div class="stat-icon" :class="card.grad">{{ card.icon }}</div>
+        <div class="stat-icon" :class="card.grad"><el-icon><component :is="card.icon" /></el-icon></div>
       <div class="stat-num grad-text">{{ card.num }}</div>
       <div class="stat-label">{{ card.label }}</div>
       </div>
@@ -118,16 +158,16 @@ onMounted(() => {
         <div class="shortcut-grid">
           <div
             v-for="(sc, idx) in [
-              { icon: '↓', label: '投递资料', view: 'ingest' },
-              { icon: '◎', label: '浏览知识库', view: 'browse' },
-              { icon: '✧', label: '智能问答', view: 'query' },
-              { icon: '◎', label: '知识库体检', view: 'health' },
+              { icon: markRaw(Download), label: '投递资料', view: 'ingest' },
+              { icon: markRaw(Reading), label: '浏览知识库', view: 'browse' },
+              { icon: markRaw(ChatRound), label: '智能问答', view: 'query' },
+              { icon: markRaw(Monitor), label: '知识库体检', view: 'health' },
             ]"
             :key="idx"
             class="shortcut-item hover-3d"
             @click="emit('navigate', sc.view as 'ingest' | 'browse' | 'query' | 'health')"
           >
-            <span class="shortcut-icon">{{ sc.icon }}</span>
+            <span class="shortcut-icon"><el-icon><component :is="sc.icon" /></el-icon></span>
             <span class="shortcut-label">{{ sc.label }}</span>
           </div>
         </div>
@@ -140,6 +180,44 @@ onMounted(() => {
         <span class="title-bracket">[</span> 最近操作 <span class="title-bracket">]</span>
       </h3>
       <pre class="recent-log">{{ stats.recentLog }}</pre>
+    </div>
+
+    <!-- FR-14-3 运行历史：Dashboard 可视化列表 -->
+    <div v-if="recentRuns.length > 0" class="glass-card section-card fade-up">
+      <h3 class="section-title">
+        <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
+      </h3>
+      <div class="run-list">
+        <div
+          v-for="run in recentRuns"
+          :key="run.runId"
+          class="run-item"
+          @click="emit('navigate', 'progress')"
+        >
+          <span class="run-status-badge" :class="'status-' + run.status">
+            {{ STATUS_LABELS[run.status] }}
+          </span>
+          <span class="run-id" :title="run.runId">{{ run.runId.slice(0, 8) }}</span>
+          <span class="run-stats">
+            <span class="run-stat"><el-icon><Clock /></el-icon>{{ run.step }} 步</span>
+            <span class="run-stat">{{ run.tokenUsed }} tokens</span>
+          </span>
+          <span class="run-time">{{ timeAgo(run.startedAt) }}</span>
+        </div>
+      </div>
+      <div v-if="compileStore.runs.length > 8" class="run-more">
+        <el-button text size="small" @click="emit('navigate', 'progress')">
+          查看全部 {{ compileStore.runs.length }} 条记录
+        </el-button>
+      </div>
+    </div>
+
+    <!-- 历史为空时不展示（仅当已加载且知识库有内容时） -->
+    <div v-else-if="hasContent && !runsLoading" class="glass-card section-card fade-up">
+      <h3 class="section-title">
+        <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
+      </h3>
+      <p class="run-empty">暂无运行记录，投递资料开始编译后将会在此显示</p>
     </div>
 
     <!-- 空状态引导 -->
@@ -428,6 +506,104 @@ onMounted(() => {
 .guide-actions {
   display: flex;
   gap: 14px;
+}
+
+/* FR-14-3 运行历史列表样式 */
+.run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--accent-purple-a06, rgba(176, 38, 255, 0.06));
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.run-item:hover {
+  background: var(--accent-purple-a12, rgba(176, 38, 255, 0.12));
+  border-color: var(--accent-purple-a20, rgba(176, 38, 255, 0.2));
+}
+
+.run-status-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  letter-spacing: 0.5px;
+}
+
+.status-done {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.status-failed {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.status-running {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.run-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-soft);
+  flex-shrink: 0;
+}
+
+.run-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+}
+
+.run-stat {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.run-stat .el-icon {
+  font-size: 13px;
+}
+
+.run-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.run-more {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.run-empty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  padding: 16px 0;
 }
 
 @media (max-width: 900px) {

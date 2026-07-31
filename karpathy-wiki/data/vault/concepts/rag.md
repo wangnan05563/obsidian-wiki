@@ -1,45 +1,27 @@
 ---
-title: RAG（检索增强生成）
+title: RAG (Retrieval-Augmented Generation)
 type: concept
-created: 2024-12-01
-updated: 2025-04-21
-source: raw/input-1783483802520.md
-tags: [rag, retrieval-augmented-generation, llm, information-retrieval]
+created: 2024-11-22
+updated: 2024-11-22
+source: wiki-batch-1784833360965-2-file3.md
+tags: [LLM, Retrieval, Generation, AI]
 ---
 
-# RAG（检索增强生成）
+# RAG (Retrieval-Augmented Generation)
 
-**RAG**（Retrieval-Augmented Generation，检索增强生成）是一种结合信息检索与文本生成的技术范式，旨在让 [[LLM|大语言模型]] 在生成回答时能够引用外部知识库中的最新、最相关信息，从而提升生成内容的准确性、时效性和可溯源性。
+## 简介
+检索增强生成（Retrieval-Augmented Generation, RAG）是一种结合信息检索和文本生成的 AI 技术架构。它通过在生成回答之前先从外部知识库中检索相关文档，来增强大语言模型（LLM）的输出质量和准确性。
 
 ## 核心流程
-
-RAG 系统通常包含以下四个步骤：
-
-1. **索引（Indexing）** — 将文档切分为固定大小的文本块（chunking），并生成向量嵌入（embedding）存储到向量数据库中。
-2. **检索（Retrieval）** — 用户查询到来时，将其转换为向量，在向量数据库中执行相似度搜索，选出 Top-K 最相关文本块。
-3. **增强（Augmentation）** — 将检索到的文本块与原始用户查询拼接为增强提示（augmented prompt）。
-4. **生成（Generation）** — 将增强提示送入 [[LLM|大语言模型]]，由其生成最终回答。
-
-## 关键组件
-
-| 组件 | 说明 |
-|------|------|
-| 向量数据库 | 存储文档嵌入，支持高效相似度检索 |
-| 嵌入模型 | 将文本转化为[[dense-model|稠密]]向量（如 text-embedding-3-small） |
-| 检索策略 | 包括 Top-K、MMR（最大边际相关性）等 |
-| 大语言模型 | 基于增强提示生成回答（如 GPT-4、Claude、[[mixture-of-experts|MoE]] 架构的 Mixtral 8x7B） |
+1. **索引 (Indexing)**：将知识库中的文档进行预处理和向量化，建立索引结构。
+2. **检索 (Retrieval)**：当用户提出问题时，系统从索引中检索出与问题最相关的 Top-K 个文档片段。
+3. **增强生成 (Augmented Generation)**：将检索到的相关文档作为上下文，连同用户问题一起输入给 LLM，由 LLM 基于这些信息生成最终回答。
 
 ## 优势
-
-- **知识时效性**：无需重新训练模型即可引入最新信息
-- **可溯源**：生成结果可追溯到原始文档，提升可信度
-- **降低幻觉**：通过外部知识约束模型输出，减少捏造内容
-- **领域适配**：可快速将通用 LLM 适配到特定领域知识库
+- **减少幻觉**：通过提供真实的外部参考文档，降低 LLM 编造信息的可能性。
+- **知识更新**：无需重新训练模型即可通过更新知识库来提供最新的信息。
+- **可追溯性**：生成的回答可以追溯到具体的来源文档，提高可信度。
 
 ## 相关概念
-
-- [[embedding|嵌入]] — 将文本映射为向量的技术
-- [[llm|大语言模型]] — RAG 中的生成引擎
-- [[vector-database|向量数据库]] — RAG 的核心存储基础设施
-- [[dense-model|稠密模型]] — 嵌入模型所依赖的稠密参数架构
-- [[mixture-of-experts|混合专家模型（MoE）]] — 现代 LLM 广泛采用的稀疏激活架构
+- [[LLM]]：RAG 的核心生成组件。
+- [[向量数据库]]：常用于存储和检索嵌入向量。

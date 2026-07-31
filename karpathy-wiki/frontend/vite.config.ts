@@ -3,12 +3,21 @@ import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
   plugins: [vue()],
+  // Tailscale Funnel 路径区分模式：前端构建资源挂在 /wiki/ 前缀下
+  // Tailscale Funnel --set-path /wiki/ 在 Funnel 层注册路径前缀，转发时自动剥离前缀
+  // 浏览器请求 https://host/wiki/api/xxx → Funnel 剥离 /wiki/ → 后端收到 /api/xxx
+  base: '/wiki/',
   server: {
     port: 5173,
+    // 同时监听 IPv4 0.0.0.0 与 IPv6 [::]，避免 localhost 仅解析为 [::1] 时
+    // Playwright/Chromium 用 IPv4 127.0.0.1 连接被拒（net::ERR_CONNECTION_REFUSED）
+    host: true,
     proxy: {
-      '/api': {
+      // 路径区分模式下前端 fetch 路径以 /wiki/api 开头，rewrite 去掉 /wiki 前缀转发到后端
+      '/wiki/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/wiki/, ''),
         // 批量编译 + SSE 流式响应：禁用超时，避免长耗时请求连接被中断导致 "Failed to fetch"
         timeout: 0,
         proxyTimeout: 0,

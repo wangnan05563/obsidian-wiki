@@ -1,16 +1,17 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import AdmZip from 'adm-zip';
 import matter from 'gray-matter';
 import type { SkillMeta, SkillDetail, SkillImportResult } from '../types.js';
+// 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
+// 为什么移除 fileURLToPath + import.meta.url：SEA 模式下 __filename 指向构建时 bundle.cjs，
+// 用户机器不存在，派生的 SKILL_SRC_DIR 不可用，导致技能存储路径解析失败
+import { getDataDir } from '../utils/runtime.js';
 
-// 技能存储根目录：karpathy-wiki/data/skills/
-// 为什么基于 import.meta.url 解析：与 config.ts 路径解析策略一致，避免 CWD 依赖（CODING-001）
-// 本文件位于 api/src/skill/skill-service.ts，回退三级到 karpathy-wiki/data/skills/
-const SKILL_SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const SKILLS_ROOT = path.resolve(SKILL_SRC_DIR, '..', '..', '..', 'data', 'skills');
+// 技能存储根目录：karpathy-wiki/data/skills/（开发模式）或 exe/data/skills/（SEA 模式）
+// 为什么用 getDataDir：runtime.ts 统一解析 data 目录，与 CWD 解耦
+const SKILLS_ROOT = path.resolve(getDataDir(), 'skills');
 
 // 技能 ID 白名单正则：仅允许小写字母、数字、连字符、下划线
 // 为什么需要：防止路径穿越攻击（如 "../etc/passwd" 作为 skillId），CODING-005 输入白名单
@@ -442,10 +443,11 @@ export async function deleteSkill(skillId: string): Promise<boolean> {
 
   // Windows 上 fs.rm/rmSync 偶发不删除目录但不抛异常（文件句柄占用），
   // 使用 child_process 执行 rd 命令（Windows 原生删除），确保可靠删除
-  const { execSync } = await import('node:child_process');
+  // 为什么用 execFileSync 而非 execSync：避免字符串拼接命令注入风险（BR-051-2）
+  const { execFileSync } = await import('node:child_process');
   try {
-    // /s 递归删除子目录，/q 静默模式，路径用双引号包裹支持空格
-    execSync(`rd /s /q "${skillDir}"`, { stdio: 'pipe' });
+    // /s 递归删除子目录，/q 静默模式，路径作为独立参数传递
+    execFileSync('rd', ['/s', '/q', skillDir], { stdio: 'pipe' });
   } catch (e) {
     console.error('[skill] rd command failed:', e instanceof Error ? e.message : String(e));
     // rd 失败时回退到 rmSync 重试

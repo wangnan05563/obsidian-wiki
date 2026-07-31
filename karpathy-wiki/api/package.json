@@ -10,6 +10,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@fastify/compress": "^7.0.0",
     "@fastify/cors": "^9.0.0",
     "@fastify/helmet": "^11.0.0",
     "@fastify/multipart": "^8.1.0",
@@ -17,8 +18,11 @@
     "@fastify/static": "^7.0.0",
     "@wiki/harness": "file:../../wiki-harness",
     "adm-zip": "^0.6.0",
+    "chokidar": "^5.0.0",
     "fastify": "^4.26.0",
-    "gray-matter": "^4.0.3"
+    "gray-matter": "^4.0.3",
+    "pdf-parse": "1.1.1",
+    "undici": "^8.9.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",

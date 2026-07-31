@@ -6,6 +6,8 @@
 
 import crypto from 'node:crypto';
 import type { QqConfig, QqPreprocessResult } from '../../types.js';
+// 复用 office-convert 的 zip 解压与 entity 解码，避免在本模块重复实现
+import { parseZip, decodeXmlEntities } from '../../utils/office-convert.js';
 // ============================================================================
 // 常量定义
 // ============================================================================
@@ -74,7 +76,141 @@ interface PreprocessOutput {
 // 为什么用正则而非 split：时间戳格式固定，正则一次性提取 ts/speaker/email 更可靠
 const TXT_LINE_PATTERN = /^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+([^<]+)(?:<([^>]+)>)?$/;
 
+// ============================================================================
+// QQChatExporter V5+ 格式解析（第三方导出工具，字段式块状结构）
+// 与 QQ 自带消息管理器的"时间戳+昵称"单行格式不同，QQChatExporter 采用
+// "发送者:\n时间:\n内容:\n[可选字段:]" 的多行字段式结构，需独立解析器
+// ============================================================================
+
+// 检测是否为 QQChatExporter 格式
+// 为什么需要独立检测：QQChatExporter 的字段式结构与自带导出器格式完全不同，
+//   混用 parseTxtFormat 的单行正则会全部失配，导致消息数为 0
+function isQqChatExporterFormat(rawText: string): boolean {
+  // V5+ 文件头标识行（最可靠的特征）
+  if (/^\[QQChatExporter\s/i.test(rawText.trim())) return true;
+  // 兜底：同时含"聊天名称:"头字段与"时间:"消息字段（无文件头标识的变体）
+  // 冒号支持英文 : 与中文 ：（QQChatExporter 部分版本/系统用中文冒号）
+  const hasChatName = /^聊天名称[:：]\s*\S/m.test(rawText);
+  const hasTimeField = /^时间[:：]\s*\d{4}-\d{2}-\d{2}/m.test(rawText);
+  return hasChatName && hasTimeField;
+}
+
+// QQChatExporter V5+ 字段名集合（遇到这些字段行不视为发送者名）
+// 为什么需要：发送者行格式为"昵称:"，与字段行"时间:"/"内容:"结构相同，
+//   必须用已知字段名排除，否则会把字段行误识别为发送者
+const QQCE_FIELD_NAMES = new Set([
+  '时间', '内容', '提及', '回复', '资源', // 消息块字段
+  '聊天名称', '聊天类型', '导出时间', '消息总数', '时间范围', // 文件头字段
+]);
+
+// 解析 QQChatExporter V5+ 格式
+// 策略：用"时间: YYYY-MM-DD HH:MM:SS"行作为消息锚点（格式固定唯一），
+//   向上找最近的"昵称:"行作为发送者，向下找"内容:"行作为正文
+// 为什么用时间行作锚点而非状态机：时间行格式唯一不会与昵称/内容混淆，
+//   状态机方案在遇到含冒号的正文或文件头标识行时易误判
+function parseQqChatExporterFormat(rawText: string): { chatName: string; messages: NormalizedMessage[] } {
+  const lines = rawText.split(/\r?\n/);
+  const messages: NormalizedMessage[] = [];
+  let chatName = 'unknown-chat';
+
+  // 1. 从文件头提取 chatName（"聊天名称: xxx"）
+  for (const line of lines) {
+    const m = /^聊天名称[:：]\s*(.+)$/.exec(line.trim());
+    if (m) {
+      chatName = m[1].trim();
+      break;
+    }
+  }
+
+  // 2. 用"时间:"行作为消息锚点逐条解析
+  // 字段名后冒号支持英文 : 与中文 ：；时间戳内部冒号固定英文
+  const TIME_PATTERN = /^时间[:：]\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/;
+  const CONTENT_PATTERN = /^内容[:：]\s*(.*)$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const timeMatch = TIME_PATTERN.exec(lines[i].trim());
+    if (!timeMatch) continue;
+
+    const ts = timeMatch[1];
+
+    // 向上找发送者：最近的非空行，应为"昵称:" 格式（冒号结尾，无值）
+    let speaker = 'unknown';
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = lines[j].trim();
+      if (!prev) continue; // 跳过空行
+      const speakerMatch = /^(.+?)[:：]\s*$/.exec(prev);
+      if (speakerMatch) {
+        const name = speakerMatch[1].trim();
+        if (!QQCE_FIELD_NAMES.has(name)) {
+          speaker = name;
+        }
+      }
+      break; // 只看时间行上方最近的非空行
+    }
+
+    // 向下找内容："内容:" 行开始，后续非字段行作为内容续行（支持多行消息）
+    let content = '';
+    let contentStarted = false;
+    for (let j = i + 1; j < lines.length; j++) {
+      const nextTrimmed = lines[j].trim();
+      if (!nextTrimmed) break; // 空行结束消息
+
+      const contentMatch = CONTENT_PATTERN.exec(nextTrimmed);
+      if (contentMatch && !contentStarted) {
+        content = contentMatch[1];
+        contentStarted = true;
+        continue;
+      }
+
+      // 已知字段行（提及/回复/资源等）：跳过
+      const fieldMatch = /^([^:：]+?)[:：]\s*(.*)$/.exec(nextTrimmed);
+      if (fieldMatch && QQCE_FIELD_NAMES.has(fieldMatch[1].trim())) {
+        // 资源字段后跟缩进详情行（"  - image: xxx"），一并跳过
+        if (fieldMatch[1].trim() === '资源') {
+          while (j + 1 < lines.length && /^\s+-\s/.test(lines[j + 1])) {
+            j++;
+          }
+        }
+        continue;
+      }
+
+      // 已开始收集内容且当前行非字段行：视为内容续行（多行消息）
+      if (contentStarted) {
+        // 检测下一个消息的发送者行（"昵称:" 空值），避免吞入下一条
+        const nextSpeakerMatch = /^(.+?)[:：]\s*$/.exec(nextTrimmed);
+        if (nextSpeakerMatch && !QQCE_FIELD_NAMES.has(nextSpeakerMatch[1].trim())) {
+          break;
+        }
+        content += '\n' + nextTrimmed;
+        continue;
+      }
+
+      // 未开始收集内容就遇到非字段行：停止（通常是下一条消息的发送者）
+      break;
+    }
+
+    // 仅保留有内容的消息（纯图片/纯系统消息 content 为空，由噪声过滤统一处理）
+    if (content.trim()) {
+      messages.push({
+        ts: normalizeTimestamp(ts),
+        speaker,
+        content,
+        type: 'text',
+      });
+    }
+  }
+
+  return { chatName, messages };
+}
+
 function parseTxtFormat(rawText: string): { chatName: string; messages: NormalizedMessage[] } {
+  // 优先检测 QQChatExporter V5+ 格式（字段式块状结构），命中则用专用解析器
+  // 为什么在 parseTxtFormat 内分发：主函数 preprocessQqChat 将非 JSON 文本统一回退到此，
+  //   在此分发可避免改动主函数控制流，且语义上"TXT 格式有多种变体，由 parseTxtFormat 负责识别"
+  if (isQqChatExporterFormat(rawText)) {
+    return parseQqChatExporterFormat(rawText);
+  }
+
   const lines = rawText.split(/\r?\n/);
   const messages: NormalizedMessage[] = [];
   let chatName = 'unknown-chat';
@@ -186,6 +322,228 @@ function normalizeTimestamp(raw: string): string {
   }
   // "2026-07-20 14:30:15" → "2026-07-20T14:30:15Z"
   return trimmed.replace(/\s+/, 'T') + 'Z';
+}
+
+// ============================================================================
+// HTML 格式解析（qq-chat-exporter 等工具的 HTML 导出）
+// ============================================================================
+
+// 解析 qq-chat-exporter 等工具导出的 HTML 格式
+// 为什么不依赖具体 HTML 模板：QQ 导出工具的 HTML 模板可能变化，
+//   用"剥离标签 → 按时间戳切分"的通用策略保持兼容性
+function parseHtmlFormat(rawText: string): { chatName: string; messages: NormalizedMessage[] } {
+  // 1. 移除 script/style/注释块（避免 JS/CSS 干扰文本提取）
+  const cleaned = rawText
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  // 2. 从 <title> 提取 chatName 兜底
+  // 为什么复用 tryParseChatName：QQ 导出 HTML 的 title 通常是 "群名 聊天记录" 格式，
+  //   与 TXT 首行格式一致，复用同一解析逻辑保持 chatName 风格统一
+  let chatName = 'unknown-chat';
+  const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(cleaned);
+  if (titleMatch && titleMatch[1].trim()) {
+    const titleName = tryParseChatName(titleMatch[1].trim());
+    chatName = titleName ?? titleMatch[1].trim();
+  }
+
+  // 3. 剥离所有标签：块级元素结尾换行（让不同消息天然分行），其他标签直接移除
+  // 为什么不解析 DOM：避免引入 cheerio/jsdom 依赖，纯文本提取对消息结构足够
+  // 为什么 span 等内联元素结尾不换行：内联元素通常是时间戳/发言人/内容的容器，
+  //   若每个都换行会让时间戳行缺 speaker，破坏后续 speaker 提取；合并到同一行可保留
+  //   "时间戳 speaker content" 的可识别结构
+  const textOnly = cleaned
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|li|article|section|ul|ol|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, '');
+  const decoded = decodeXmlEntities(textOnly);
+
+  // 4. 按时间戳切分消息：时间戳行后到下个时间戳前的所有行作为一条消息
+  // 为什么不直接复用 parseTxtFormat：HTML 剥离后时间戳可能独占一行（无 speaker），
+  //   不匹配 TXT_LINE_PATTERN 的 "时间戳 + 空格 + speaker<email>" 完整格式；
+  //   用宽松策略：检测含时间戳的行作为消息起点，时间戳后的非空文本依次为 speaker/content
+  const lines = decoded.split(/\r?\n/);
+  const messages: NormalizedMessage[] = [];
+  let currentMsg: NormalizedMessage | null = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const tsMatch = /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/.exec(trimmed);
+    if (tsMatch) {
+      // 新消息开始：先保存上一条
+      if (currentMsg) messages.push(currentMsg);
+      const ts = tsMatch[1].replace(/\s+/, 'T') + 'Z';
+      // 时间戳后的剩余文本：可能是 "张三<email>" 或 "张三 如何部署？" 或空
+      const after = trimmed.slice(tsMatch.index + tsMatch[0].length).trim();
+      const speakerMatch = /^([^<]+)(?:<([^>]+)>)?/.exec(after);
+      const speaker = speakerMatch && speakerMatch[1].trim() ? speakerMatch[1].trim() : 'unknown';
+      // 时间戳行剩余非 speaker 部分（通常为空，因 span 间换行）作为初始 content
+      const initialContent = speakerMatch ? after.slice(speakerMatch[0].length).trim() : '';
+      currentMsg = {
+        ts,
+        speaker,
+        content: initialContent,
+        type: 'text',
+      };
+    } else if (currentMsg) {
+      // 非时间戳行：追加到当前消息 content（已有内容用 \n 连接，与 TXT 模式一致）
+      currentMsg.content = currentMsg.content
+        ? currentMsg.content + '\n' + trimmed
+        : trimmed;
+    }
+    // 时间戳前的行（无 currentMsg）跳过：通常是页面导航/标题
+  }
+  if (currentMsg) messages.push(currentMsg);
+
+  // 5. 若按时间戳切分无结果（页面结构特殊），回退到 TXT 解析（容错兜底）
+  if (messages.length === 0) {
+    return parseTxtFormat(decoded);
+  }
+  return { chatName, messages };
+}
+
+// ============================================================================
+// Excel(.xlsx) 格式解析（qq-chat-exporter 等工具的 Excel 导出）
+// ============================================================================
+
+// 列字母转数字（A=0, B=1, ..., AA=26）
+function colToNumber(colStr: string): number {
+  let num = 0;
+  for (const ch of colStr) {
+    num = num * 26 + (ch.charCodeAt(0) - 65);
+  }
+  return num;
+}
+
+// 解析 xlsx：ZIP 包内含 sharedStrings.xml + worksheets/sheet1.xml
+// 表头识别 [时间/发送人/消息]，未识别时按 [timestamp, speaker, content] 顺序假设
+async function parseXlsxFormat(buffer: Buffer): Promise<{ chatName: string; messages: NormalizedMessage[] }> {
+  const entries = await parseZip(buffer);
+
+  // 1. 读取共享字符串表（xlsx 中字符串统一存于此，单元格内只存索引）
+  const stringCache = new Map<number, string>();
+  const ssBuffer = entries.get('xl/sharedStrings.xml');
+  if (ssBuffer) {
+    const ssXml = ssBuffer.toString('utf8');
+    const siRegex = /<si>([\s\S]*?)<\/si>/g;
+    let siMatch: RegExpExecArray | null;
+    let idx = 0;
+    while ((siMatch = siRegex.exec(ssXml)) !== null) {
+      // 单个 si 可能含多个 <t>（富文本格式），拼接所有 <t> 内容
+      const textParts = siMatch[1].match(/<t[^>]*>([^<]*)<\/t>/g) || [];
+      let text = '';
+      for (const t of textParts) {
+        const m = t.match(/>([^<]*)</);
+        if (m && m[1] !== undefined) text += m[1];
+      }
+      stringCache.set(idx++, decodeXmlEntities(text));
+    }
+  }
+
+  // 2. 读取工作簿 sheet 列表，第一个 sheet 名称作为 chatName 兜底
+  const wbBuffer = entries.get('xl/workbook.xml');
+  if (!wbBuffer) {
+    throw new Error('xlsx 文件缺少 xl/workbook.xml，可能不是标准 Excel 格式');
+  }
+  const wbXml = wbBuffer.toString('utf8');
+  const sheetMatch = /<sheet [^>]*name="([^"]*)"/.exec(wbXml);
+  const chatName = sheetMatch ? sheetMatch[1] : 'unknown-chat';
+
+  // 3. 读取第一个 sheet（QQ 导出通常单 sheet）
+  const sheetBuf = entries.get('xl/worksheets/sheet1.xml');
+  if (!sheetBuf) {
+    return { chatName, messages: [] };
+  }
+  const sheetXml = sheetBuf.toString('utf8');
+
+  // 4. 解析所有单元格，按行号分组
+  // 为什么分两步匹配：单正则中 `(?:t="...")?` 是可选组，非贪婪前缀会让它被跳过
+  //   导致 t="s" 被当作普通属性吞掉、cellType 永远 undefined；分两步确保 t 属性能被捕获
+  const rows = new Map<number, Array<{ col: number; value: string }>>();
+  const cellRegex = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+  let cellMatch: RegExpExecArray | null;
+  while ((cellMatch = cellRegex.exec(sheetXml)) !== null) {
+    const attrs = cellMatch[1];
+    const cellContent = cellMatch[2];
+
+    // 从属性串中分别提取 r="A1" 与 t="s"
+    const rMatch = /\br="([A-Z]+)(\d+)"/.exec(attrs);
+    if (!rMatch) continue;
+    const colStr = rMatch[1];
+    const rowNum = parseInt(rMatch[2]);
+    const tMatch = /\bt="([^"]*)"/.exec(attrs);
+    const cellType = tMatch ? tMatch[1] : undefined;
+    const colNum = colToNumber(colStr);
+
+    let value = '';
+    const vMatch = cellContent.match(/<v>([^<]*)<\/v>/);
+    if (vMatch && vMatch[1] !== undefined) {
+      if (cellType === 's') {
+        // 共享字符串：用索引从 stringCache 取
+        value = stringCache.get(parseInt(vMatch[1])) ?? vMatch[1];
+      } else {
+        value = vMatch[1];
+      }
+    } else {
+      // 内联字符串（t="inlineStr" 或无 v 标签的纯文本）
+      const inlineTMatch = cellContent.match(/<t[^>]*>([^<]*)<\/t>/);
+      if (inlineTMatch && inlineTMatch[1] !== undefined) {
+        value = decodeXmlEntities(inlineTMatch[1]);
+      }
+    }
+
+    if (!rows.has(rowNum)) rows.set(rowNum, []);
+    rows.get(rowNum)!.push({ col: colNum, value });
+  }
+
+  // 5. 按行号排序，构造 NormalizedMessage[]
+  const sortedRows = [...rows.entries()].sort((a, b) => a[0] - b[0]);
+  const messages: NormalizedMessage[] = [];
+
+  // 表头识别：扫描第一行寻找"时间/发送人/消息"等关键词
+  const colMap: { ts?: number; speaker?: number; content?: number } = {};
+  let headerSkipped = false;
+
+  if (sortedRows.length > 0) {
+    const firstRow = sortedRows[0][1].sort((a, b) => a.col - b.col);
+    firstRow.forEach((cell, idx) => {
+      const v = cell.value.trim();
+      if (/^(时间|timestamp|time|date|日期)$/i.test(v)) colMap.ts = idx;
+      else if (/^(发送人|发言人|speaker|sender|user|昵称|name|名称)$/i.test(v)) colMap.speaker = idx;
+      else if (/^(消息|内容|content|message|text|正文)$/i.test(v)) colMap.content = idx;
+    });
+    // 表头若识别到至少一列，跳过表头行
+    if (colMap.ts !== undefined || colMap.speaker !== undefined || colMap.content !== undefined) {
+      headerSkipped = true;
+    }
+  }
+
+  // 默认列序：[timestamp, speaker, content]
+  if (colMap.ts === undefined) colMap.ts = 0;
+  if (colMap.speaker === undefined) colMap.speaker = 1;
+  if (colMap.content === undefined) colMap.content = 2;
+
+  for (let i = headerSkipped ? 1 : 0; i < sortedRows.length; i++) {
+    const cells = sortedRows[i][1].sort((a, b) => a.col - b.col);
+    const ts = cells[colMap.ts]?.value?.trim();
+    const speaker = cells[colMap.speaker]?.value?.trim();
+    const content = cells[colMap.content]?.value?.trim();
+
+    // 全空行跳过，避免噪声
+    if (!ts && !speaker && !content) continue;
+
+    messages.push({
+      ts: normalizeTimestamp(ts || '1970-01-01 00:00:00'),
+      speaker: speaker || 'unknown',
+      content: content || '',
+      type: 'text',
+    });
+  }
+
+  return { chatName, messages };
 }
 
 // ============================================================================
@@ -341,30 +699,53 @@ export interface PreprocessOutputData {
 
 // 预清洗主入口：解析 → 过滤 → 脱敏 → 分块 → 构造输出
 // 参数：
-//   rawText: 原始文件内容（.txt 或 .json 文本）
-//   fileName: 原始文件名（用于 chatName 兜底）
+//   input: 原始文件内容（.txt/.json/.html 文本字符串，或 .xlsx 二进制 Buffer）
+//   fileName: 原始文件名（用于 chatName 兜底与格式分发）
 //   config: QQ 子系统配置
 // 返回：PreprocessOutputData（含 result/jsonContent/rawFileName，由路由层负责落盘）
+// 为什么 input 支持 Buffer | string：xlsx 是二进制 ZIP，不能 toString('utf8')，
+//   必须以 Buffer 形式传入 parseZip；其他格式仍是字符串
 export async function preprocessQqChat(
-  rawText: string,
+  input: Buffer | string,
   fileName: string,
   config: QqConfig,
 ): Promise<PreprocessOutputData> {
-  // 1. 格式检测与解析
+  // 1. 格式检测与解析：按文件后缀优先分发，避免二进制格式被误当文本
+  const lowerName = fileName.toLowerCase();
   let chatName: string;
   let messages: NormalizedMessage[];
   try {
-    // 优先尝试 JSON 解析（qq-chat-exporter 格式）
-    const trimmed = rawText.trim();
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      const result = parseJsonFormat(rawText);
+    if (lowerName.endsWith('.xlsx')) {
+      // xlsx 二进制格式：必须从 Buffer 解析（string 传入时编码会损坏 ZIP 头）
+      const buffer = typeof input === 'string' ? Buffer.from(input, 'binary') : input;
+      const result = await parseXlsxFormat(buffer);
+      chatName = result.chatName;
+      messages = result.messages;
+    } else if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
+      // HTML 格式：剥离标签后复用 TXT 解析路径
+      const rawText = typeof input === 'string' ? input : input.toString('utf8');
+      const result = parseHtmlFormat(rawText);
       chatName = result.chatName;
       messages = result.messages;
     } else {
-      throw new Error('非 JSON 格式，回退到 TXT 解析');
+      // JSON / TXT 自动检测：JSON 失败时回退 TXT
+      const rawText = typeof input === 'string' ? input : input.toString('utf8');
+      const trimmed = rawText.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        const result = parseJsonFormat(rawText);
+        chatName = result.chatName;
+        messages = result.messages;
+      } else {
+        throw new Error('非 JSON 格式，回退到 TXT 解析');
+      }
     }
-  } catch {
+  } catch (err) {
+    // 仅对文本格式回退到 TXT：xlsx/html 解析失败应直接抛错，避免误判
+    if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
+      throw err;
+    }
     // JSON 解析失败，回退到 TXT 格式（QQ 自带消息管理器）
+    const rawText = typeof input === 'string' ? input : input.toString('utf8');
     const result = parseTxtFormat(rawText);
     chatName = result.chatName;
     messages = result.messages;
@@ -372,7 +753,7 @@ export async function preprocessQqChat(
 
   // 兜底：若解析后 chatName 仍为 unknown，使用文件名（去扩展名）
   if (chatName === 'unknown-chat') {
-    chatName = fileName.replace(/\.(txt|json)$/i, '');
+    chatName = fileName.replace(/\.(txt|json|html?|xlsx)$/i, '');
   }
 
   const originalCount = messages.length;

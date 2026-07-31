@@ -5,22 +5,23 @@ import { searchPages } from '../search-util.js';
 import { createWebSearchTool } from '../tools/web-search.js';
 
 // 注册全文检索路由。
-//   GET /api/search?q=关键词&source=&status=  全文检索 + frontmatter 过滤
+//   GET /api/search?q=关键词&source=&status=&type=  全文检索 + frontmatter 过滤
 //
-// source/status 按页面 frontmatter 字段过滤（AC-10），可与 q 组合使用。
-// 当仅提供 source/status 而无 q 时，返回所有匹配过滤条件的页面。
+// source/status/type 按页面 frontmatter 字段过滤（AC-10 / FR-15-3），可与 q 组合使用。
+// 当仅提供 source/status/type 而无 q 时，返回所有匹配过滤条件的页面。
 export function registerSearchRoute(app: FastifyInstance, vault: VaultService) {
   app.get('/api/search', async (request: FastifyRequest, reply: FastifyReply) => {
-    const query = request.query as { q?: string; source?: string; status?: string };
-    const hasFilter = query.source || query.status;
+    const query = request.query as { q?: string; source?: string; status?: string; type?: string };
+    const hasFilter = query.source || query.status || query.type;
     if (!query.q?.trim() && !hasFilter) {
-      return reply.code(400).send({ error: '缺少 q 参数或过滤条件（source/status）' });
+      return reply.code(400).send({ error: '缺少 q 参数或过滤条件（source/status/type）' });
     }
 
     try {
       const hits = await searchPages(vault, query.q || '', 20, {
         source: query.source,
         status: query.status,
+        type: query.type,
       });
       return reply.send({ hits, total: hits.length });
     } catch (err: unknown) {

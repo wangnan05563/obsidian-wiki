@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useModelStore } from '../stores/model';
@@ -36,7 +37,7 @@ async function handleChange(key: string) {
   //（先更新 UI 再发请求），失败后 UI 仍是新值但后端未生效，需手动回滚
   // 通过读取后端 /api/ai/config 验证是否真的生效
   try {
-    const res = await fetch('/api/ai/config');
+    const res = await fetch(`${API_BASE}/ai/config`);
     if (res.ok) {
       const cfg = await res.json() as { model?: string };
       const preset = store.presets.find(p => p.key === key);

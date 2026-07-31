@@ -2,7 +2,7 @@
 title: Batch Compile Testing
 type: concept
 created: 2025-04-21
-updated: 2025-04-17
+updated: 2025-04-21
 source: raw/wiki-batch-1784719195367-19-test-20.md
 tags: [testing, batch-processing, compilation, wiki]
 ---
@@ -26,3 +26,7 @@ tags: [testing, batch-processing, compilation, wiki]
 - [[Batch Compile Test 19]] — 批次编译测试中的第19个测试文档，用于验证简短内容场景下的编译能力
 - [[Test Document 20]] is one of the test documents used in this process
 - The compilation process relies on [[LLM]] to extract entities and determine page types
+- [[test-document-16]] — 第16号批量编译测试实体文档
+- [[test-document-17]] — 第17号批量编译测试实体文档，用于验证 Markdown 解析与实体提取流程
+- [[test-document-18]] — 第18号批量编译测试实体文档
+- [[test-document-20]] — 第20号批量编译测试实体文档

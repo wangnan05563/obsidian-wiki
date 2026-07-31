@@ -1,12 +1,16 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { ref, computed, reactive, onMounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Check, Close } from '@element-plus/icons-vue';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
-import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData } from '../types';
+import MarkdownRenderer from '../components/MarkdownRenderer.vue';
+import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData, PromptFile, PromptTestRunEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 import { STORAGE_KEYS, presetStorageKey } from '../constants/storageKeys';
+import { consumeSSE } from '../utils/sse';
 
-const activeTab = ref<'schema' | 'config' | 'ai' | 'theme' | 'tools' | 'qq'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai' | 'theme' | 'tools' | 'qq' | 'prompts'>('schema');
 const config = ref<ConfigData | null>(null);
 const schemaContent = ref<string>('');
 const schemaBuffer = ref<string>('');
@@ -33,7 +37,7 @@ const showDiff = ref(false);
 async function loadSchema() {
   loadingSchema.value = true;
   try {
-    const res = await fetch('/api/schema');
+    const res = await fetch(`${API_BASE}/schema`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: SchemaContent = await res.json();
     schemaContent.value = data.content;
@@ -49,7 +53,7 @@ async function loadSchema() {
 async function loadHistory() {
   loadingHistory.value = true;
   try {
-    const res = await fetch('/api/schema/history');
+    const res = await fetch(`${API_BASE}/schema/history`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     commits.value = data.commits ?? [];
@@ -67,7 +71,7 @@ async function loadDiff() {
   loadingDiff.value = true;
   showDiff.value = true;
   try {
-    const res = await fetch(`/api/schema/diff?from=${encodeURIComponent(selectedFrom.value)}`);
+    const res = await fetch(`${API_BASE}/schema/diff?from=${encodeURIComponent(selectedFrom.value)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     diffLines.value = data.lines ?? [];
@@ -83,7 +87,7 @@ async function loadDiff() {
 async function saveSchema() {
   savingSchema.value = true;
   try {
-    const res = await fetch('/api/schema', {
+    const res = await fetch(`${API_BASE}/schema`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: schemaBuffer.value }),
@@ -121,7 +125,7 @@ function diffLinePrefix(type: string): string {
 async function loadConfig() {
   loadingConfig.value = true;
   try {
-    const res = await fetch('/api/config');
+    const res = await fetch(`${API_BASE}/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     config.value = await res.json();
   } catch (err) {
@@ -143,7 +147,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 async function reloadConfig() {
   reloading.value = true;
   try {
-    const res = await fetch('/api/config/reload', {
+    const res = await fetch(`${API_BASE}/config/reload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -238,7 +242,7 @@ function clearAllPresetCache(): void {
 async function loadAiConfig() {
   loadingAi.value = true;
   try {
-    const res = await fetch('/api/ai/config');
+    const res = await fetch(`${API_BASE}/ai/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: AiConfig = await res.json();
     aiConfig.value = data;
@@ -262,7 +266,7 @@ async function loadAiConfig() {
 // 加载 LLM 预设列表
 async function loadPresets() {
   try {
-    const res = await fetch('/api/ai/presets');
+    const res = await fetch(`${API_BASE}/ai/presets`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     aiPresets.value = data.presets ?? [];
@@ -288,7 +292,7 @@ async function applyPreset(preset: LlmPreset) {
 
   // 后台同步到后端 config.json（不传 apiKey，保留现有 key；携带 apiKeyRef 同步环境变量名）
   try {
-    const res = await fetch('/api/ai/config', {
+    const res = await fetch(`${API_BASE}/ai/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -327,7 +331,7 @@ async function saveAiConfig() {
 
   savingAi.value = true;
   try {
-    const res = await fetch('/api/ai/config', {
+    const res = await fetch(`${API_BASE}/ai/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -380,7 +384,7 @@ async function resetAiConfig() {
 
   resettingAi.value = true;
   try {
-    const res = await fetch('/api/ai/reset-config', { method: 'POST' });
+    const res = await fetch(`${API_BASE}/ai/reset-config`, { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.ok) {
@@ -413,7 +417,7 @@ async function testConnection() {
   testingAi.value = true;
   aiTestResult.value = null;
   try {
-    const res = await fetch('/api/ai/test-connection', {
+    const res = await fetch(`${API_BASE}/ai/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -446,12 +450,7 @@ const testResultText = computed(() => {
   return r.ok ? `连接成功（模型: ${r.model || '未知'}）` : r.detail;
 });
 
-// 测试结果图标：成功/失败返回不同字符，避免 S3923（两分支返回相同值）
-const testResultIcon = computed(() => {
-  const r = aiTestResult.value;
-  if (!r) return '';
-  return r.ok ? '✓' : '✗';
-});
+// 测试结果图标已迁移至模板内 el-icon（Check/Close），原 testResultIcon computed 已废弃删除
 
 // ===== 联网搜索配置 =====
 // §5.2 webSearch 配置状态：与 LLM 配置独立，用户可单独启用/禁用联网搜索
@@ -478,7 +477,7 @@ const WEB_SEARCH_PROVIDERS: Array<{ value: 'tavily' | 'bing'; label: string; api
 async function loadWebSearchConfig() {
   loadingWebSearch.value = true;
   try {
-    const res = await fetch('/api/ai/web-search');
+    const res = await fetch(`${API_BASE}/ai/web-search`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.enabled) {
@@ -504,7 +503,7 @@ async function loadWebSearchConfig() {
 async function saveWebSearchConfig() {
   savingWebSearch.value = true;
   try {
-    const res = await fetch('/api/ai/web-search', {
+    const res = await fetch(`${API_BASE}/ai/web-search`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -554,7 +553,7 @@ const savingHealthCheck = ref(false);
 // 批量编译表单（allowedExtensions 逗号分隔输入 + maxBatchSize + maxFileSizeMb）
 const batchForm = ref({
   allowedExtensionsText: 'md, txt, pdf, html, json',
-  maxBatchSize: 20,
+  maxBatchSize: 50,
   maxFileSizeMb: 10,
 });
 const savingBatch = ref(false);
@@ -590,7 +589,7 @@ async function saveBudget() {
   }
   savingBudget.value = true;
   try {
-    const res = await fetch('/api/config/budget', {
+    const res = await fetch(`${API_BASE}/config/budget`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -624,7 +623,7 @@ async function saveHealthCheck() {
   }
   savingHealthCheck.value = true;
   try {
-    const res = await fetch('/api/config/health-check', {
+    const res = await fetch(`${API_BASE}/config/health-check`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ staleDays: healthCheckForm.value.staleDays }),
@@ -667,7 +666,7 @@ async function saveBatch() {
   }
   savingBatch.value = true;
   try {
-    const res = await fetch('/api/config/batch', {
+    const res = await fetch(`${API_BASE}/config/batch`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -706,7 +705,7 @@ async function saveLogging() {
   }
   savingLogging.value = true;
   try {
-    const res = await fetch('/api/config/logging', {
+    const res = await fetch(`${API_BASE}/config/logging`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -817,7 +816,7 @@ function removeScene(idx: number): void {
 async function loadToolsConfig(): Promise<void> {
   loadingTools.value = true;
   try {
-    const res = await fetch('/api/tools/config');
+    const res = await fetch(`${API_BASE}/tools/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: ToolsConfig = await res.json();
     // 深拷贝避免编辑过程污染原对象
@@ -879,7 +878,7 @@ async function saveToolsConfig(): Promise<void> {
 
   savingTools.value = true;
   try {
-    const res = await fetch('/api/tools/config', {
+    const res = await fetch(`${API_BASE}/tools/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(toolsForm.value),
@@ -905,7 +904,7 @@ async function testCliTool(idx: number): Promise<void> {
   testingCli.value = true;
   cliTestResult.value = null;
   try {
-    const res = await fetch('/api/tools/test-cli', {
+    const res = await fetch(`${API_BASE}/tools/test-cli`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1094,7 +1093,7 @@ watch(() => qqConfig, () => {
 async function loadQqConfig() {
   loadingQqConfig.value = true;
   try {
-    const res = await fetch('/api/qq-ingest/config');
+    const res = await fetch(`${API_BASE}/qq-ingest/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const qq = data.qq as QqConfigData;
@@ -1142,7 +1141,7 @@ async function saveQqConfigForm() {
 
   savingQqConfig.value = true;
   try {
-    const res = await fetch('/api/qq-ingest/config', {
+    const res = await fetch(`${API_BASE}/qq-ingest/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ qq: qqConfig }),
@@ -1179,6 +1178,190 @@ function resetQqConfig() {
     .catch(() => { /* 用户取消 */ });
 }
 
+// ============================================================
+// FR-14-2 Prompt IDE：编辑 prompts/*.md + 即时预览 + 试运行
+// AC-14-4: 编辑 prompts/compile.md 等并即时预览渲染结果
+// AC-14-5: 输入测试资料，执行 compile 一次，查看输出
+// ============================================================
+
+const promptFiles = ref<PromptFile[]>([]);
+const currentPromptName = ref<string>('');
+const promptContent = ref<string>('');
+// 保存时的原始内容：用于脏检测（编辑器内容与已保存内容对比）
+const promptContentSaved = ref<string>('');
+const loadingPrompts = ref(false);
+const savingPrompt = ref(false);
+
+// 试运行状态
+const testInput = ref<string>('');
+const testRunning = ref(false);
+const testEvents = ref<PromptTestRunEvent[]>([]);
+const testPages = ref<Array<{ path: string; title: string }>>([]);
+const testError = ref<string | null>(null);
+let testAbortController: AbortController | null = null;
+
+// 当前选中的 prompt 元信息（用于显示 label/description）
+const currentPromptMeta = computed<PromptFile | null>(() =>
+  promptFiles.value.find((p) => p.name === currentPromptName.value) ?? null,
+);
+
+// 编辑器内容是否脏（未保存）
+const promptDirty = computed(() => promptContent.value !== promptContentSaved.value);
+
+// 加载 prompt 文件列表
+async function loadPromptList(): Promise<void> {
+  loadingPrompts.value = true;
+  try {
+    const res = await fetch(`${API_BASE}/prompts`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    promptFiles.value = data.prompts ?? [];
+    // 默认选中第一个 prompt（compile.md 优先，便于试运行）
+    if (promptFiles.value.length > 0 && !currentPromptName.value) {
+      const compile = promptFiles.value.find((p) => p.name === 'compile.md');
+      await selectPrompt(compile?.name ?? promptFiles.value[0].name);
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('加载 prompt 列表失败', err));
+    promptFiles.value = [];
+  } finally {
+    loadingPrompts.value = false;
+  }
+}
+
+// 切换选中的 prompt 文件
+async function selectPrompt(name: string): Promise<void> {
+  if (testRunning.value) {
+    ElMessage.warning('试运行进行中，请先停止再切换 prompt');
+    return;
+  }
+  if (promptDirty.value) {
+    try {
+      await ElMessageBox.confirm('当前 prompt 有未保存的修改，确定放弃？', '未保存更改', { type: 'warning' });
+    } catch { return; }
+  }
+  currentPromptName.value = name;
+  try {
+    const res = await fetch(`${API_BASE}/prompts/${encodeURIComponent(name)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    promptContent.value = data.content ?? '';
+    promptContentSaved.value = data.content ?? '';
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('加载 prompt 内容失败', err));
+    promptContent.value = '';
+    promptContentSaved.value = '';
+  }
+}
+
+// 保存当前编辑的 prompt 文件
+async function savePrompt(): Promise<void> {
+  if (!currentPromptName.value) return;
+  savingPrompt.value = true;
+  try {
+    const res = await fetch(`${API_BASE}/prompts/${encodeURIComponent(currentPromptName.value)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: promptContent.value }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    promptContentSaved.value = promptContent.value;
+    ElMessage.success('Prompt 已保存，下次 compile/query 将使用新内容');
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存 prompt 失败', err));
+  } finally {
+    savingPrompt.value = false;
+  }
+}
+
+// 试运行：用编辑器中的 prompt 执行 compile，SSE 流式接收结果
+async function runTest(): Promise<void> {
+  if (!currentPromptName.value) return;
+  if (currentPromptName.value !== 'compile.md') {
+    ElMessage.warning('当前仅支持 compile.md 的试运行');
+    return;
+  }
+  if (!testInput.value.trim()) {
+    ElMessage.warning('请输入测试资料');
+    return;
+  }
+  if (promptDirty.value) {
+    ElMessage.warning('请先保存 prompt 修改后再试运行（试运行读取已保存的 prompt 文件）');
+    return;
+  }
+
+  // 重置状态
+  testEvents.value = [];
+  testPages.value = [];
+  testError.value = null;
+  testRunning.value = true;
+  testAbortController = new AbortController();
+
+  try {
+    const res = await fetch(`${API_BASE}/prompts/test-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        promptName: currentPromptName.value,
+        promptContent: promptContent.value,
+        testInput: testInput.value,
+      }),
+      signal: testAbortController.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    // 消费 SSE 流：按事件类型路由到对应状态
+    await consumeSSE(
+      res,
+      (eventType: string, parsed: PromptTestRunEvent) => {
+        if (eventType === 'progress' || eventType === 'page' || eventType === 'done') {
+          testEvents.value.push(parsed);
+          // 收集生成的页面
+          if (eventType === 'page' && parsed.data?.path && parsed.data?.title) {
+            testPages.value.push({
+              path: parsed.data.path,
+              title: parsed.data.title,
+            });
+          }
+        } else if (eventType === 'error') {
+          testError.value = parsed.message || '试运行出错';
+          testEvents.value.push(parsed);
+        }
+      },
+      testAbortController.signal,
+    );
+    if (!testError.value) {
+      ElMessage.success(`试运行完成，共生成 ${testPages.value.length} 个页面`);
+    }
+  } catch (err: unknown) {
+    // AbortError 是用户主动停止的正常路径，不显示错误
+    if ((err as Error).name === 'AbortError') return;
+    testError.value = (err as Error).message;
+    ElMessage.error(apiErrorMessage('试运行失败', err));
+  } finally {
+    testRunning.value = false;
+    testAbortController = null;
+  }
+}
+
+// 停止试运行
+function stopTest(): void {
+  if (testAbortController) {
+    testAbortController.abort();
+    testRunning.value = false;
+  }
+}
+
+// 清空试运行结果
+function clearTestResult(): void {
+  testEvents.value = [];
+  testPages.value = [];
+  testError.value = null;
+}
+
 onMounted(async () => {
   loadSchema();
   // loadConfig 完成后同步派生 4 个高级表单的初始值
@@ -1193,6 +1376,9 @@ onMounted(async () => {
   loadWebSearchConfig();
   loadToolsConfig();
   loadQqConfig();
+  // FR-14-2 Prompt IDE：加载 prompt 文件列表，与其它配置并行加载
+  // 为什么放在 onMounted 而非 watch activeTab：避免切换 tab 时首次加载延迟，影响用户体验
+  loadPromptList();
 });
 </script>
 
@@ -1204,7 +1390,6 @@ onMounted(async () => {
 
       <div class="config-head">
         <div class="head-text">
-          <span class="head-tag">// CONTROL PANEL</span>
           <h2 class="head-title grad-text">配置中心</h2>
           <p class="head-tip">编辑页面规范 SCHEMA.md 与查看系统配置</p>
         </div>
@@ -1617,7 +1802,7 @@ onMounted(async () => {
 
               <!-- 测试结果 -->
               <div v-if="aiTestResult" class="test-result" :class="{ ok: aiTestResult.ok, fail: !aiTestResult.ok }">
-                <span class="result-icon">{{ testResultIcon }}</span>
+                <el-icon class="result-icon"><component :is="aiTestResult.ok ? Check : Close" /></el-icon>
                 <span class="result-text">{{ testResultText }}</span>
               </div>
 
@@ -2089,6 +2274,136 @@ onMounted(async () => {
               >保存 QQ 配置</el-button>
             </div>
           </section>
+        </el-tab-pane>
+
+        <!-- FR-14-2 Prompt IDE：编辑 prompts/*.md + 即时预览 + 试运行 -->
+        <!-- AC-14-4: 编辑 prompts/compile.md 等并即时预览渲染结果 -->
+        <!-- AC-14-5: 输入测试资料，执行 compile 一次，查看输出 -->
+        <el-tab-pane label="Prompt IDE" name="prompts">
+          <div class="prompt-ide-section">
+            <!-- 左侧：prompt 文件列表 -->
+            <div class="prompt-list-container">
+              <div class="section-header">
+                <span class="section-desc">// Prompt 文件列表</span>
+              </div>
+              <div v-if="loadingPrompts" class="section-loading">// 加载中…</div>
+              <div v-else-if="promptFiles.length === 0" class="section-empty">
+                暂无可用 prompt 文件
+              </div>
+              <div v-else class="prompt-list">
+                <div
+                  v-for="file in promptFiles"
+                  :key="file.name"
+                  class="prompt-item"
+                  :class="{ active: currentPromptName === file.name }"
+                  @click="selectPrompt(file.name)"
+                >
+                  <div class="prompt-label">{{ file.label }}</div>
+                  <div class="prompt-desc">{{ file.description }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 中间：编辑器 -->
+            <div class="prompt-editor-container">
+              <div class="action-bar">
+                <div class="prompt-meta">
+                  <h3 class="prompt-title">{{ currentPromptMeta?.label || '未选择' }}</h3>
+                  <p class="prompt-desc">{{ currentPromptMeta?.description || '请从左侧选择一个 prompt 文件' }}</p>
+                </div>
+                <div class="actions">
+                  <span v-if="promptDirty" class="dirty-indicator">CHANGED</span>
+                  <el-button
+                    size="small"
+                    class="neon-btn"
+                    :loading="savingPrompt"
+                    @click="savePrompt"
+                    :disabled="!currentPromptName || !promptDirty"
+                  >保存</el-button>
+                </div>
+              </div>
+
+              <div v-if="!currentPromptName" class="editor-placeholder">
+                请从左侧选择一个 prompt 文件进行编辑
+              </div>
+              <el-input
+                v-else
+                v-model="promptContent"
+                type="textarea"
+                :rows="16"
+                resize="none"
+                class="schema-editor"
+                placeholder="prompt 内容"
+              />
+            </div>
+
+            <!-- 右侧：预览 -->
+            <div class="prompt-preview-container">
+              <div class="action-bar">
+                <span class="section-desc">// 预览</span>
+              </div>
+              <div class="preview-content">
+                <MarkdownRenderer :content="promptContent" />
+              </div>
+            </div>
+
+            <!-- 底部：试运行 -->
+            <div class="test-run-section">
+              <div class="section-header">
+                <span class="section-desc">// 试运行（仅 compile.md）</span>
+                <div class="test-actions">
+                  <el-button
+                    size="small"
+                    class="neon-btn"
+                    @click="clearTestResult"
+                    :disabled="testEvents.length === 0 && testPages.length === 0 && !testError"
+                  >清空结果</el-button>
+                  <el-button
+                    size="small"
+                    class="neon-btn-primary"
+                    :loading="testRunning"
+                    @click="testRunning ? stopTest() : runTest()"
+                    :disabled="!currentPromptName || currentPromptName !== 'compile.md'"
+                  >{{ testRunning ? '停止' : '开始试运行' }}</el-button>
+                </div>
+              </div>
+
+              <el-input
+                v-model="testInput"
+                type="textarea"
+                :rows="4"
+                resize="none"
+                class="test-input"
+                placeholder="输入测试资料（将作为原始内容传入 compile）"
+                :disabled="testRunning"
+              />
+
+              <div class="test-results">
+                <div v-if="testError" class="test-error">{{ testError }}</div>
+                <div v-else-if="testRunning" class="test-running">运行中...</div>
+                <div v-else-if="testEvents.length === 0 && testPages.length === 0" class="test-empty">
+                  试运行结果将显示在这里
+                </div>
+                <div v-else>
+                  <div class="test-events">
+                    <div v-for="(event, idx) in testEvents" :key="idx" class="event-item">
+                      <div class="event-step">{{ event.step }}</div>
+                      <div class="event-message">{{ event.message }}</div>
+                    </div>
+                  </div>
+
+                  <div v-if="testPages.length > 0" class="test-pages">
+                    <div class="pages-title">生成页面：</div>
+                    <div class="pages-list">
+                      <div v-for="page in testPages" :key="page.path" class="page-item">
+                        {{ page.title }} ({{ page.path }})
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </el-tab-pane>
       </el-tabs>
     </div>
@@ -3256,5 +3571,242 @@ onMounted(async () => {
 .pattern-input.pattern-invalid :deep(.el-input__inner) {
   border-color: var(--accent-pink-a50) !important;
   box-shadow: 0 0 4px var(--accent-pink-a30) !important;
+}
+
+/* ============================================================
+   FR-14-2 Prompt IDE 样式
+   为什么用 CSS 变量：遵循项目硬约束（主题切换适配）
+   布局：左列表 + 中编辑器 + 右预览 三栏 grid，底部试运行跨三列
+   ============================================================ */
+
+.prompt-ide-section {
+  display: grid;
+  grid-template-columns: 240px 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.prompt-list-container,
+.prompt-editor-container,
+.prompt-preview-container {
+  background: var(--bg-card);
+  border: var(--border-glass);
+  border-radius: var(--radius-input);
+  padding: 14px 16px;
+  backdrop-filter: var(--blur);
+  min-height: 420px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.prompt-list-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.test-run-section {
+  grid-column: 1 / -1;
+  background: var(--bg-card);
+  border: var(--border-glass);
+  border-radius: var(--radius-input);
+  padding: 14px 16px;
+  backdrop-filter: var(--blur);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-glass);
+}
+
+.section-loading,
+.section-empty {
+  padding: 24px 8px;
+  color: var(--text-soft);
+  font-size: 13px;
+  text-align: center;
+}
+
+.prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-input);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.prompt-item:hover {
+  background: var(--accent-cyan-a10);
+  border-color: var(--accent-cyan-a30);
+}
+
+.prompt-item.active {
+  background: var(--accent-purple-a20);
+  border-color: var(--accent-purple-a50);
+}
+
+.prompt-item .prompt-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-base);
+  margin-bottom: 4px;
+}
+
+.prompt-item .prompt-desc {
+  font-size: 11px;
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+.prompt-editor-container .action-bar,
+.prompt-preview-container .action-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-glass);
+}
+
+.prompt-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.prompt-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin: 0 0 4px 0;
+}
+
+.prompt-editor-container .prompt-desc,
+.prompt-preview-container .prompt-desc {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.editor-placeholder {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.preview-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-base);
+  overflow-y: auto;
+  max-height: 500px;
+}
+
+.test-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.test-input {
+  margin-bottom: 12px;
+}
+
+.test-results {
+  min-height: 80px;
+  padding: 12px;
+  background: var(--bg-scene);
+  border-radius: var(--radius-input);
+  border: var(--border-glass);
+  font-size: 13px;
+}
+
+.test-error {
+  color: var(--neon-pink);
+  padding: 8px;
+  background: var(--accent-pink-a10);
+  border-radius: var(--radius-input);
+}
+
+.test-running {
+  color: var(--neon-cyan);
+  padding: 8px;
+}
+
+.test-empty {
+  color: var(--text-soft);
+  text-align: center;
+  padding: 16px;
+}
+
+.test-events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.event-item {
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border-left: 3px solid var(--accent-cyan-a50);
+  border-radius: var(--radius-input);
+  font-size: 12px;
+}
+
+.event-step {
+  font-weight: 600;
+  color: var(--text-base);
+  margin-bottom: 2px;
+}
+
+.event-message {
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+.test-pages {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-glass);
+}
+
+.pages-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-base);
+  margin-bottom: 6px;
+}
+
+.pages-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-item {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+  background: var(--bg-card);
+  border-radius: var(--radius-input);
 }
 </style>

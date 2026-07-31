@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { API_BASE } from '../utils/apiBase';
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CleanupBody, CleanupResult, CleanupStorageStatus, CleanupTarget } from '../types';
@@ -76,7 +77,7 @@ function confirmText(title: string): string {
 async function loadStatus() {
   loadingStatus.value = true;
   try {
-    const res = await fetch('/api/cleanup/status');
+    const res = await fetch(`${API_BASE}/cleanup/status`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     status.value = await res.json();
   } catch (err) {
@@ -112,7 +113,7 @@ async function handleCleanup(key: keyof typeof forms) {
       // 仅 run_logs/raw_archive 按 days 清理，其他两类与时间无关
       ...(card.showDays ? { days: form.days } : {}),
     };
-    const res = await fetch('/api/cleanup', {
+    const res = await fetch(`${API_BASE}/cleanup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -151,7 +152,6 @@ onMounted(() => {
 
       <div class="cleanup-head">
         <div class="head-text">
-          <span class="head-tag">// SYSTEM CLEANUP</span>
           <h2 class="head-title grad-text">系统清理</h2>
           <p class="head-tip">缓存清理 · 运行状态 · 运行日志 · 原始资料</p>
         </div>

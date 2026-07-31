@@ -55,7 +55,7 @@ describe('user-store 模块', () => {
       await initUserStore(usersPath, 100000);
       const admin = await findUserByUsername('admin');
       expect(admin).not.toBeNull();
-      expect(verifyPassword('admin123', admin!.salt, admin!.passwordHash, 100000)).toBe(true);
+      expect(await verifyPassword('admin123', admin!.salt, admin!.passwordHash, 100000)).toBe(true);
     });
 
     it('文件存在时应加载已有用户不创建默认', async () => {
@@ -152,7 +152,7 @@ describe('user-store 模块', () => {
         password: 'mypassword',
         role: 'user',
       });
-      const ok = verifyPassword('mypassword', user.salt, user.passwordHash, 100000);
+      const ok = await verifyPassword('mypassword', user.salt, user.passwordHash, 100000);
       expect(ok).toBe(true);
     });
 
@@ -187,7 +187,7 @@ describe('user-store 模块', () => {
       const updated = await updateUser(user!.id, { password: 'newpassword' });
       expect(updated.salt).not.toBe(oldSalt);
       expect(updated.passwordHash).not.toBe(oldHash);
-      expect(verifyPassword('newpassword', updated.salt, updated.passwordHash, 100000)).toBe(true);
+      expect(await verifyPassword('newpassword', updated.salt, updated.passwordHash, 100000)).toBe(true);
     });
 
     it('应更新角色', async () => {

@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.0",
+    "@marp-team/marpit": "^3.2.2",
     "element-plus": "^2.6.0",
     "markdown-it": "^14.1.0",
+    "mermaid": "^11.16.0",
     "pinia": "^2.1.0",
     "vis-data": "^8.0.4",
     "vis-network": "^10.1.0",

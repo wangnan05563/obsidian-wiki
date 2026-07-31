@@ -3,7 +3,7 @@
 // 为什么独立成模块：消除三处重复实现，并通过对象映射降低认知复杂度（S3776）
 
 import { ElMessage } from 'element-plus';
-import type { ThinkingStep } from '../types';
+import type { ThinkingStep, MultimodalOutput } from '../types';
 
 // Query SSE 事件处理器签名：接收已 JSON.parse 的数据，调用 store 对应方法
 type QueryEventHandler = (parsed: any, store: any) => void;
@@ -14,18 +14,46 @@ const QUERY_EVENT_HANDLERS: Record<string, QueryEventHandler> = {
   answer: (parsed, store) => store.appendAnswer(parsed.text || ''),
   refs: (parsed, store) => store.setRefs(parsed.refs || [], parsed.webRefs || []),
   thinking: (parsed, store) => {
-    // 补 ts 字段供前端排序，与后端 ThinkingChunk 对齐
+    // ts 字段优先用后端提供的（query-workflow 中在 yield 时补齐），
+    // 后端未传时降级到前端接收时间（保持类型必填约束）
     const step: ThinkingStep = {
       phase: parsed.phase,
       message: parsed.message,
       tool: parsed.tool,
       args: parsed.args,
-      ts: new Date().toISOString(),
+      ts: parsed.ts || new Date().toISOString(),
     };
     store.appendThinking(step);
   },
   progress: (parsed, store) => store.setProgress(parsed.step, parsed.count),
   followups: (parsed, store) => store.setFollowups(parsed.followups || []),
+  // FR-09-2 多模态输出：mindmap/faq/timeline 结构化输出，渲染为独立卡片
+  // 为什么独立事件：与 answer 解耦，前端按 type 分别渲染（mindmap 用 mermaid.js，faq/timeline 用 markdown）
+  multimodal: (parsed, store) => {
+    const payload: MultimodalOutput = {
+      type: parsed.type,
+      content: parsed.content || '',
+    };
+    store.setMultimodal(payload);
+  },
+  // v3 图像生成结果：在 done 之前到达，store.setImage 暂存，finalizeAnswer 时附加到消息
+  // 为什么独立事件：image 与 multimodal 结构不同（含 url/alt/archivePath），需独立处理器
+  image: (parsed, store) => {
+    store.setImage({
+      url: parsed.url || '',
+      alt: parsed.alt || '',
+      archivePath: parsed.archivePath,
+    });
+  },
+  // v3 PPT 生成结果：Marp Markdown 源码，前端用 @marp-team/marp-core 渲染为幻灯片
+  // 为什么独立事件：ppt 与 multimodal 结构不同（含 markdown/title/archivePath），需独立处理器
+  ppt: (parsed, store) => {
+    store.setPpt({
+      markdown: parsed.markdown || '',
+      title: parsed.title || '',
+      archivePath: parsed.archivePath || '',
+    });
+  },
   done: (parsed, store) => store.finalizeAnswer(parsed.sessionId, parsed.messageIndex),
   error: (parsed, store) => {
     store.handleError(parsed.message || '问答出错');
@@ -70,6 +98,9 @@ export function processQuerySSEEvents(events: string[], store: any): void {
 
 // 从 Response 读取并消费 SSE 流，逐事件分发到 store
 // 封装 reader/decoder/buffer 的样板代码，避免各页面重复实现
+// 主动取消（signal.abort）时不抛 AbortError，正常返回让调用方在 finally 中处理停止态
+// 为什么不抛 AbortError：调用方需要在 catch 中区分"用户停止"和"真实错误"，
+// 抛 AbortError 会让调用方走错误处理分支，污染 errorMessage 状态
 export async function consumeQuerySSE(response: Response, store: any, signal?: AbortSignal): Promise<void> {
   if (!response.body) throw new Error('Response body is empty');
   const reader = response.body.getReader();
@@ -89,6 +120,10 @@ export async function consumeQuerySSE(response: Response, store: any, signal?: A
     if (store.isLoading && store.streamingAnswer) {
       store.finalizeAnswer();
     }
+  } catch (err: unknown) {
+    // AbortError 是主动取消的正常路径，吞掉避免污染调用方错误处理
+    if ((err as Error).name === 'AbortError') return;
+    throw err;
   } finally {
     // 主动取消时释放 reader
     if (signal?.aborted) {

@@ -65,6 +65,7 @@ const TEST_CONFIG: AppConfig = {
     credentialsFile: '',
     hostname: '',
     certFile: '',
+    pathPrefix: '/wiki/',
   },
   qq: TEST_QQ_CONFIG,
 };

@@ -49,6 +49,9 @@ data/vault/.harness/
 data/conversations/
 # 技能导入运行时数据（用户上传的 .skill/.md 解压后存储，含外部资源不提交）
 data/skills/
+# 5.1.3 URL 爬取增量状态文件（运行时生成，含站点 URL 与 ETag，不入版本控制）
+data/url-crawl-state.json
+data/url-crawl.log
 
 # ---------- 运行时日志与 PID 文件 ----------
 logs/*.pid

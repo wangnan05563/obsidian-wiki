@@ -105,6 +105,23 @@ export interface LLMResponse {
 }
 
 export interface LLMChunk {
+  // LLM 文本增量（可为空字符串，如纯 tool_call chunk）
   delta: string;
+  // 工具调用：流式中 tool_calls 是分片累积，chatStream 实现需在流结束时 yield 一次完整数组
+  // 未定义表示本 chunk 无 tool_calls；空数组表示流结束且无工具调用
   tool_calls?: ToolCall[];
 }
+
+// §真流式事件：runLoopStream 把 LLM token 与工具调用生命周期事件化
+// 为什么用 discriminated union：消费端可基于 type 做穷尽性分支，避免漏处理
+export type StepEvent =
+  // LLM 文本增量：前端直接追加到 streamingAnswer
+  | { type: 'delta'; text: string }
+  // 工具调用开始：前端可展示 thinking "调用工具 X"
+  | { type: 'tool_call'; step: number; toolCall: ToolCall }
+  // 工具调用结束：前端可展示 thinking "工具 X 返回 Y"
+  | { type: 'tool_result'; step: number; toolCall: ToolCall; result: unknown }
+  // 任务完成：finalContent 是完整答案
+  | { type: 'done'; finalContent: string; step: number; tokenUsed: number }
+  // 异常：消费端应中断流
+  | { type: 'error'; message: string; step: number };

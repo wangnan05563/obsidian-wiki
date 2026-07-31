@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { env } from 'node:process';
+import { promisify } from 'node:util';
+import process from 'node:process';
 
 // 密码哈希与验证模块
 // 为什么用 PBKDF2 而非 bcrypt：Node.js 内置 crypto 即可，无需额外依赖
@@ -13,23 +14,28 @@ const SALT_BYTES = 16;
 const KEY_BYTES = 64;
 const DIGEST = 'sha512';
 
+// 异步 PBKDF2：避免 pbkdf2Sync 阻塞 Node.js 事件循环
+// 为什么必须异步：100k 迭代约耗时 80ms，同步会阻塞所有并发请求（含其他路由）
+const pbkdf2Async = promisify(crypto.pbkdf2);
+
 // 生成密码盐（16 字节随机数，base64 编码）
 export function generateSalt(): string {
   return crypto.randomBytes(SALT_BYTES).toString('base64');
 }
 
-// 哈希密码：PBKDF2-SHA512
+// 哈希密码：PBKDF2-SHA512（异步版本）
 // 为什么 base64：JSON 友好，避免二进制存储问题
-export function hashPassword(password: string, salt: string, iterations: number = DEFAULT_ITERATIONS): string {
+// 为什么 async：pbkdf2Sync 阻塞事件循环，并发登录会序列化执行
+export async function hashPassword(password: string, salt: string, iterations: number = DEFAULT_ITERATIONS): Promise<string> {
   const saltBuffer = Buffer.from(salt, 'base64');
-  const derived = crypto.pbkdf2Sync(password, saltBuffer, iterations, KEY_BYTES, DIGEST);
+  const derived = await pbkdf2Async(password, saltBuffer, iterations, KEY_BYTES, DIGEST);
   return derived.toString('base64');
 }
 
 // 验证密码：使用恒定时间比较防止时序攻击
 // 为什么不用 ===：字符串比较会短路，可通过响应时间推断前缀正确性
-export function verifyPassword(password: string, salt: string, expectedHash: string, iterations: number = DEFAULT_ITERATIONS): boolean {
-  const actualHash = hashPassword(password, salt, iterations);
+export async function verifyPassword(password: string, salt: string, expectedHash: string, iterations: number = DEFAULT_ITERATIONS): Promise<boolean> {
+  const actualHash = await hashPassword(password, salt, iterations);
   // timingSafeEqual 长度不同会抛错，先做长度校验
   const a = Buffer.from(actualHash, 'base64');
   const b = Buffer.from(expectedHash, 'base64');
@@ -64,7 +70,7 @@ export function verifySessionToken(token: string, secret: string): boolean {
 // 从环境变量读取会话密钥（与 llm.apiKeyRef 一致的引用模式）
 // 为什么回退到随机值：开发模式下未配置环境变量也能启动，但重启后会话失效
 export function getSessionSecret(secretRef: string): string {
-  const envSecret = env[secretRef];
+  const envSecret = process.env[secretRef];
   if (envSecret && envSecret.length >= 16) return envSecret;
   // 开发模式回退：生成临时密钥（重启后所有会话失效，需重新登录）
   // 为什么 console.warn：让开发者知道需要配置环境变量

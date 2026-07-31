@@ -75,6 +75,10 @@
   --graph-concepts-border: #5fffaa;
   --graph-comparisons-border: #818cf8;
   --graph-queries-border: #3de8ff;
+  --graph-qa: #ffaa00;
+  --graph-solutions: #a855f7;
+  --graph-qa-border: #ffbb44;
+  --graph-solutions-border: #c084fc;
   --graph-edge: rgba(0, 255, 136, 0.4);
   --graph-edge-highlight: #ff0080;
   --graph-label: #ffffff;

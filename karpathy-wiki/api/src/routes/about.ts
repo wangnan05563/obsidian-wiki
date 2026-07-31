@@ -1,9 +1,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
-import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { getResourcePath } from '../utils/runtime.js';
 
 // 关于页面路由：提供系统元信息与版本检查。
 // 参考 17_xianyu 项目 about 模块设计，适配本项目 Fastify + 无外网发布的场景。
@@ -14,10 +13,10 @@ import { fileURLToPath } from 'node:url';
 //   - 不发起外网请求，避免 SSRF 风险（参考闲鱼项目风险表 10.1）
 //   - 版本号从 api/package.json 读取，构建日期取 package.json 修改时间
 //   - Git SHA 通过 git rev-parse 获取，无 git 环境时返回 unknown
-//   - check-update 后端 5 分钟缓存，避免前端高频调用
+//   - check-update 后端 5 分钟缓存，避免前端高频调用造成不必要计算
 
-const dirname = path.dirname(fileURLToPath(import.meta.url));
-const PACKAGE_JSON_PATH = path.resolve(dirname, '..', '..', 'package.json');
+// 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
+const PACKAGE_JSON_PATH = getResourcePath('package.json');
 
 // 5 分钟缓存：与闲鱼项目一致，避免前端轮询造成不必要计算
 const CHECK_UPDATE_CACHE_TTL_MS = 5 * 60 * 1000;
