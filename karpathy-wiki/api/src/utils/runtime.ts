@@ -1,4 +1,4 @@
-// 运行时路径解析工具
+﻿// 运行时路径解析工具
 // 解决 SEA（Single Executable Application）模式下 import.meta.url 指向构建时 bundle.cjs
 // 而非 exe 路径的问题，统一开发模式与打包模式的资源路径解析。
 //
@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 // 为什么用 declare：TypeScript ESM 模式不认识 __filename，需声明类型避免编译报错
 declare const __filename: string | undefined;
 const cjsFilename = typeof __filename !== 'undefined' ? __filename : undefined;
-export const IS_SEA = cjsFilename ? !fs.existsSync(cjsFilename) : false;
+export const IS_SEA = cjsFilename === process.execPath || (cjsFilename ? !fs.existsSync(cjsFilename) : false);
 
 // 源码目录
 // 开发模式：各文件自己的源码目录（如 api/src/routes/、api/src/workflows/）
@@ -85,3 +85,4 @@ export function getDataDir(): string {
   if (IS_SEA) return path.join(SRC_DIR, 'data');
   return path.resolve(getApiDir(), '..', 'data');
 }
+
