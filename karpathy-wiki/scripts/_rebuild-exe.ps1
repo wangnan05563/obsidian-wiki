@@ -1,0 +1,2 @@
+﻿Remove-Item "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\dist\karpathy-wiki" -Recurse -Force -ErrorAction SilentlyContinue
+& "D:\code\nodejs24\node.exe" "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\node_modules\@yao-pkg\pkg\lib-es5\bin.js" "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\.build\bundle.cjs" --sea --output "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\dist\karpathy-wiki\karpathy-wiki.exe" --options "max-old-space-size=512"
