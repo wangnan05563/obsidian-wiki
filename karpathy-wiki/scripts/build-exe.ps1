@@ -195,7 +195,7 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
     #   跳过可避免已知类型问题阻塞打包
     Push-Location (Join-Path $repoRoot "frontend")
     try {
-        & npx vite build --base=/
+        & npx vite build --base=/wiki/
     } finally {
         Pop-Location
     }
@@ -601,3 +601,4 @@ Write-Host "  首次运行前："
 Write-Host "  1. 编辑 config.json 确认模型配置"
 Write-Host "  2. 复制 .env.example 为 .env，填入 API Key"
 Write-Host "========================================" -ForegroundColor Green
+
