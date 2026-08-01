@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Writable } from 'node:stream';
@@ -442,27 +442,38 @@ registerDataCleanRoute(app, vault);
     }
   }
   if (spaRoot) {
-    await app.register(fastifyStatic, {
-      root: spaRoot,
-      prefix: '/',
-      wildcard: false,  // 关闭通配符，手动处理 SPA fallback
+    // /wiki/* route: handle Tailscale Funnel prefix
+    app.get('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
+      const suffix = request.url.replace(/^\/wiki/, '');
+      if (suffix.startsWith('/api')) {
+        // Forward API request internally using inject
+        const res = await app.inject({
+          method: request.method as any,
+          url: suffix,
+          headers: request.headers,
+          body: request.body,
+          query: request.query,
+          params: request.params,
+        });
+        return reply.status(res.statusCode).send(res.body);
+      }
+      if (suffix === '' || suffix === '/') {
+        return reply.sendFile('index.html');
+      }
+      try {
+        return reply.sendFile(suffix.slice(1));
+      } catch {
+        return reply.sendFile('index.html');
+      }
     });
-    // Tailscale Funnel 路径区分模式：直接访问后端时请求路径可能带 /wiki/ 前缀
-    // 为什么 decorate:false：避免重复装饰 reply.sendFile（第一次注册时已装饰）
-    await app.register(fastifyStatic, {
-      root: spaRoot,
-      prefix: '/wiki/',
-      wildcard: false,
-      decorateReply: false,
-    });
-    // SPA fallback：所有未匹配�?GET 请求返回 index.html（Vue Router history 模式�?
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false });
     app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/wiki/api')) {
+      if (req.method === 'GET' && !req.url.startsWith('/api')) {
         return reply.sendFile('index.html');
       }
       return reply.code(404).send({ error: 'Not Found' });
     });
-    console.log(`[SPA] 静态资源托管：${spaRoot} (支持 /wiki/ 前缀)`);
+    console.log('[SPA] served from ' + spaRoot);
   } else {
     console.log('[SPA] No SPA artifacts found, API-only mode (dev mode served by Vite)');
   }
