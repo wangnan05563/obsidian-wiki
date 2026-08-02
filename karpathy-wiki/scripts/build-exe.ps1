@@ -195,7 +195,7 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
     #   跳过可避免已知类型问题阻塞打包
     Push-Location (Join-Path $repoRoot "frontend")
     try {
-        & npx vite build --base=/wiki/
+        & npx vite build --base=/
     } finally {
         Pop-Location
     }
