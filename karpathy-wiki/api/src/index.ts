@@ -462,10 +462,15 @@ registerDataCleanRoute(app, vault);
           query: request.query,
           params: request.params,
         });
-        // Forward Content-Type header so JSON responses aren't treated as plain text
-        const ct = res.headers['content-type'] || 'application/json';
-        reply.header('Content-Type', ct);
-        return reply.status(res.statusCode).send(res.body);
+        // Parse body as JSON to preserve content-type (reply.send(obj) sets application/json)
+        // If parsing fails, send as raw string
+        let responseBody: string | object = res.body;
+        try {
+          responseBody = JSON.parse(res.body as string);
+        } catch {
+          // Not JSON, send as-is
+        }
+        return reply.status(res.statusCode).header('Content-Type', res.headers['content-type'] || 'application/json').send(responseBody);
       }
       if (suffix === '' || suffix === '/') {
         return reply.sendFile('index.html');
