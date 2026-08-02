@@ -443,7 +443,9 @@ registerDataCleanRoute(app, vault);
   }
   if (spaRoot) {
     // /wiki/* route: handle Tailscale Funnel prefix
-    app.get('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
+    // 为什么用 app.all 而非 app.get：POST/PUT/DELETE 请求也需通过 inject 转发，
+    // 否则非 GET 请求落入 notFoundHandler 直接返回 404（登录 HTTP 404 的根因）
+    app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
       const suffix = request.url.replace(/^\/wiki/, '');
       if (suffix.startsWith('/api')) {
         // Forward API request internally using inject
