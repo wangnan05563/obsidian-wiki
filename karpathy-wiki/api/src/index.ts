@@ -445,7 +445,7 @@ registerDataCleanRoute(app, vault);
     // 注册单个 fastifyStatic 实例（prefix=/wiki/），服务 Tailscale Funnel 路径
     // vite.config.ts base='/wiki/' 使产物路径为 /wiki/assets/... /wiki/api/...
     // Funnel 剥除 /wiki/ 后，浏览器实际请求 /assets/... 直接命中本静态服务
-    await app.register(fastifyStatic, { root: spaRoot, prefix: '/wiki/', wildcard: false });
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false });
     // /wiki/* route: handle Tailscale Funnel prefix + SPA fallback
     // POST/PUT/DELETE 等非 GET 请求需通过 inject 转发到内部 API
     app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
