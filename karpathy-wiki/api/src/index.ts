@@ -462,6 +462,9 @@ registerDataCleanRoute(app, vault);
           query: request.query,
           params: request.params,
         });
+        // Forward Content-Type header so JSON responses aren't treated as plain text
+        const ct = res.headers['content-type'] || 'application/json';
+        reply.header('Content-Type', ct);
         return reply.status(res.statusCode).send(res.body);
       }
       if (suffix === '' || suffix === '/') {
