@@ -442,9 +442,12 @@ registerDataCleanRoute(app, vault);
     }
   }
   if (spaRoot) {
-    // /wiki/* route: handle Tailscale Funnel prefix
-    // 为什么用 app.all 而非 app.get：POST/PUT/DELETE 请求也需通过 inject 转发，
-    // 否则非 GET 请求落入 notFoundHandler 直接返回 404（登录 HTTP 404 的根因）
+    // 先注册静态文件服务（/ 和 /wiki/ 两个前缀），确保 Tailscale Funnel 模式下
+    // /wiki/assets/... 等路径能直接命中静态文件，无需经过 SPA handler
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false });
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/wiki/', wildcard: false });
+    // /wiki/* route: handle Tailscale Funnel prefix + SPA fallback
+    // POST/PUT/DELETE 等非 GET 请求需通过 inject 转发到内部 API
     app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
       const suffix = request.url.replace(/^\/wiki/, '');
       if (suffix.startsWith('/api')) {
@@ -462,13 +465,9 @@ registerDataCleanRoute(app, vault);
       if (suffix === '' || suffix === '/') {
         return reply.sendFile('index.html');
       }
-      try {
-        return reply.sendFile(suffix.slice(1));
-      } catch {
-        return reply.sendFile('index.html');
-      }
+      // 静态文件已由上方 fastifyStatic 处理，此处仅作 SPA 路由回退
+      return reply.sendFile('index.html');
     });
-    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false });
     app.setNotFoundHandler((req, reply) => {
       if (req.method === 'GET' && !req.url.startsWith('/api')) {
         return reply.sendFile('index.html');

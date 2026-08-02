@@ -181,10 +181,10 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
     Write-Ok "SPA 已存在且 -SkipSPA 已指定，跳过构建"
 } else {
     # 构建前端：vite.config.ts 中 outDir 指向 api/public
-    # 为什么加 --base=/：vite 默认 base='/wiki/'（Tailscale Funnel 模式），
+    # 为什么加 ：vite 默认 base='/wiki/'（Tailscale Funnel 模式），
     #   exe 本地运行时不经过 Funnel 剥离前缀，前端 API 请求若带 /wiki/ 前缀会 404。
-    #   --base=/ 覆盖默认值，让 fetch 路径为 /api/xxx 直接命中后端路由。
-    # 为什么用等号形式 --base=/ 而非空格形式 --base /：
+    #    覆盖默认值，让 fetch 路径为 /api/xxx 直接命中后端路由。
+    # 为什么用等号形式  而非空格形式 --base /：
     #   PowerShell 传参时 --base / 被拆分为两个独立 token "--base" 和 "/"，
     #   commander.js 在 Windows 上把单独的 "/" 当作 Windows 风格选项前缀（如 /help），
     #   不会将其作为 --base 的值消费，导致 vite 回退到 config 中的默认 base='/wiki/'，
@@ -195,7 +195,7 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
     #   跳过可避免已知类型问题阻塞打包
     Push-Location (Join-Path $repoRoot "frontend")
     try {
-        & npx vite build --base=/
+        & npx vite build 
     } finally {
         Pop-Location
     }
