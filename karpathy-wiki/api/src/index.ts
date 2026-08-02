@@ -442,10 +442,12 @@ registerDataCleanRoute(app, vault);
     }
   }
   if (spaRoot) {
-    // 注册单个 fastifyStatic 实例（prefix=/wiki/），服务 Tailscale Funnel 路径
-    // vite.config.ts base='/wiki/' 使产物路径为 /wiki/assets/... /wiki/api/...
-    // Funnel 剥除 /wiki/ 后，浏览器实际请求 /assets/... 直接命中本静态服务
-    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false });
+    // fastifyStatic 注册两次以同时服务 / 和 /wiki/ 前缀：
+    // 1. prefix='/'：服务 /assets/... /favicon.svg 等（Funnel 剥除 /wiki/ 后的请求）
+    // 2. prefix='/wiki/'：服务 /wiki/assets/... 等（浏览器直接请求 /wiki/ 路径时）
+    // decorateReply:false 避免第二次注册时重复添加 sendFile decorator
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false, decorateReply: false });
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/wiki/', wildcard: false });
     // /wiki/* route: handle Tailscale Funnel prefix + SPA fallback
     // POST/PUT/DELETE 等非 GET 请求需通过 inject 转发到内部 API
     app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -465,7 +467,7 @@ registerDataCleanRoute(app, vault);
       if (suffix === '' || suffix === '/') {
         return reply.sendFile('index.html');
       }
-      // 静态文件（/wiki/assets/...）已由上方 fastifyStatic 处理，此处仅作 SPA 路由回退
+      // 静态文件（/wiki/assets/...）已由上方 fastifyStatic(prefix='/wiki/') 处理，此处仅作 SPA 路由回退
       return reply.sendFile('index.html');
     });
     app.setNotFoundHandler((req, reply) => {
