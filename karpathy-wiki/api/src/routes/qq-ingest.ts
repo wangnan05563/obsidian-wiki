@@ -458,7 +458,7 @@ export function registerQqIngestRoute(
   // 为什么独立端点而非复用 /api/config：qq 字段结构复杂且可选，独立端点便于前端按需拉取
   // 缺失时返回默认值，确保前端表单始终有可编辑内容
   // ==========================================================================
-  app.get('/api/qq-ingest/config', async (request, reply) => {
+  app.get('/api/qq-ingest/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (request, reply) => {
     try {
       // config.qq 可能缺失（首次使用），用默认值兜底
       const qq: QqConfig = config.qq ?? {

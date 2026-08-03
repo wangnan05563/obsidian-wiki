@@ -81,7 +81,7 @@ export function registerPromptsRoute(
 ) {
   // 列出所有可用 prompt 文件
   // 为什么返回 meta 而非纯文件名：前端需展示中文描述，元信息集中管理避免漂移
-  app.get('/api/prompts', async (request, reply) => {
+  app.get('/api/prompts', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (request, reply) => {
     try {
       const files = await fs.readdir(PROMPTS_DIR);
       const prompts = files

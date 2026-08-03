@@ -20,7 +20,7 @@ import type { HarnessAdapter } from '../engine/harness-adapter.js';
 //   PUT  /api/config/logging          保存日志配置（level 需重启，enableRequestLog 可热更新）
 // 配置中心前端展示与编辑入口，落盘 + 同步 adapter 运行时实例，避免双轨不一致。
 export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapter) {
-  app.get('/api/config', async (_request, reply) => {
+  app.get('/api/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
     const config = await loadConfig();
     // 脱敏：apiKeyRef 是环境变量名（非 Key 本身），可展示；实际 Key 不返回
     return reply.send({
