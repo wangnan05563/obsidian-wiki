@@ -58,7 +58,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   // providerKeyStatus：按 provider 索引的 key 配置状态表，前端切换预设时展示各 provider 是否已配置 key。
   //   为什么需要：用户切换预设时需感知目标 provider 是否已配置过 key，避免重复输入。
   // FR-12 skills/activeSkill：AI 伙伴预设列表与当前激活项
-  app.get('/api/ai/config', async (_request, reply) => {
+  app.get('/api/ai/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
     const config = await loadConfig();
     const apiKey = getEffectiveApiKey(config);
     const maskedKey = maskApiKey(apiKey);
@@ -78,7 +78,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   });
 
   // GET /api/ai/presets：返回 LLM 预设列表，供前端渲染快捷选择按钮。
-  app.get('/api/ai/presets', async (_request, reply) => {
+  app.get('/api/ai/presets', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
     return reply.send({ presets: LLM_PRESETS });
   });
 
@@ -296,7 +296,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
 
   // §5.2 GET /api/ai/web-search：读取联网搜索配置，API Key 脱敏。
   // 为什么需要：前端 Config 页面需要展示当前配置状态，决定是否启用 web_search 工具。
-  app.get('/api/ai/web-search', async (_request, reply) => {
+  app.get('/api/ai/web-search', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
     const config = await loadConfig();
     const ws = config.webSearch;
     if (!ws) {

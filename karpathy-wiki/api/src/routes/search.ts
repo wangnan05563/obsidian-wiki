@@ -10,7 +10,7 @@ import { createWebSearchTool } from '../tools/web-search.js';
 // source/status/type 按页面 frontmatter 字段过滤（AC-10 / FR-15-3），可与 q 组合使用。
 // 当仅提供 source/status/type 而无 q 时，返回所有匹配过滤条件的页面。
 export function registerSearchRoute(app: FastifyInstance, vault: VaultService) {
-  app.get('/api/search', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/search', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { q?: string; source?: string; status?: string; type?: string };
     const hasFilter = query.source || query.status || query.type;
     if (!query.q?.trim() && !hasFilter) {

@@ -457,7 +457,7 @@ registerDataCleanRoute(app, vault);
         const res = await app.inject({
           method: request.method as any,
           url: suffix,
-          headers: request.headers,
+          headers: Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.toLowerCase() !== 'accept-encoding')),
           body: request.body,
           query: request.query,
           params: request.params,

@@ -17,7 +17,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
   // GET /api/tools/config：返回当前工具配置。
   // 直接返回 ToolsConfig 对象（非 { tools: ... } 包装），与前端 Config.vue 期望对齐（BR-026-1）。
   // 无敏感字段需脱敏（MCP env 可能含 API Key，但本接口仅后端调用，前端 Config 页面需展示）。
-  app.get('/api/tools/config', async (_request, reply) => {
+  app.get('/api/tools/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
     const config = await loadConfig();
     const toolsConfig: ToolsConfig = config.tools ?? {
       mcpServers: [],
@@ -61,7 +61,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
 
   // GET /api/tools/list：列出已配置的扩展工具概览。
   // 前端 Config 页面用此接口展示当前配置状态（不触发 MCP 连接）。
-  app.get('/api/tools/list', async (_request, reply) => {
+  app.get('/api/tools/list', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
     const config = await loadConfig();
     const overview = listConfiguredTools(config.tools);
     return reply.send(overview);
