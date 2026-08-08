@@ -1,8 +1,9 @@
 import { API_BASE } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { UserInfo, LoginRequest, LoginResponse, CreateUserRequest, UpdateUserRequest, AuthPermission, AuthRole } from '../types';
+import type { UserInfo, LoginRequest, LoginResponse, RegisterRequest, CreateUserRequest, UpdateUserRequest, AuthPermission, AuthRole } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
+import { unlock as unlockVault, lock as lockVault, restoreKeyFromSession } from '../services/localVault';
 
 // 认证状态管理 store
 // 职责：
@@ -107,9 +108,50 @@ export const useAuthStore = defineStore('auth', () => {
         token.value = data.token;
         user.value = data.user;
         saveToken(data.token);
+        // FR-RM-07：用登录密码派生本地加密密钥（失败不影响登录，仅本地加密不可用）
+        try {
+          await unlockVault(params.password);
+        } catch {
+          // 忽略
+        }
         return true;
       }
       error.value = '登录响应缺少 token 或用户信息';
+      return false;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err);
+      return false;
+    }
+  }
+
+  // 自助注册（公开接口，无需 token）
+  // 成功后自动登录（后端返回 token + user），与 login 行为一致
+  async function register(params: RegisterRequest): Promise<boolean> {
+    error.value = '';
+    try {
+      const res = await fetch(`${API_BASE}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await res.json() as LoginResponse & { error?: string };
+      if (!res.ok || !data.ok) {
+        error.value = data.error ?? `注册失败（HTTP ${res.status}）`;
+        return false;
+      }
+      if (data.token && data.user) {
+        token.value = data.token;
+        user.value = data.user;
+        saveToken(data.token);
+        // FR-RM-07：用注册密码派生本地加密密钥
+        try {
+          await unlockVault(params.password);
+        } catch {
+          // 忽略
+        }
+        return true;
+      }
+      error.value = '注册响应缺少 token 或用户信息';
       return false;
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err);
@@ -129,6 +171,8 @@ export const useAuthStore = defineStore('auth', () => {
       // 后端不可用也清除本地状态
     } finally {
       clearAuth();
+      // FR-RM-07：清除内存 / sessionStorage 中的本地加密密钥
+      lockVault();
     }
   }
 
@@ -142,6 +186,12 @@ export const useAuthStore = defineStore('auth', () => {
   // 恢复会话：从 localStorage 读取 token，向后端验证并恢复用户信息
   // 为什么需要：刷新页面后 Pinia state 丢失，需从后端恢复
   async function restoreSession(): Promise<boolean> {
+    // 同标签页刷新：尝试从 sessionStorage 恢复本地加密密钥（否则关闭标签页后需重新登录解锁）
+    try {
+      await restoreKeyFromSession();
+    } catch {
+      // 忽略
+    }
     if (!token.value) {
       initialized.value = true;
       return false;
@@ -237,6 +287,7 @@ export const useAuthStore = defineStore('auth', () => {
     authFetch,
     // 认证方法
     login,
+    register,
     logout,
     restoreSession,
     clearAuth,

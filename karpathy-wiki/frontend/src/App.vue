@@ -16,6 +16,7 @@ import Cleanup from './views/Cleanup.vue';
 import About from './views/About.vue';
 import Help from './views/Help.vue';
 import Login from './views/Login.vue';
+import Register from './views/Register.vue';
 import Users from './views/Users.vue';
 import Skill from './views/Skill.vue';
 import DataClean from './views/DataClean.vue';
@@ -32,6 +33,10 @@ const authStore = useAuthStore();
 const { isLoggedIn, isAdmin, canView, filterVisibleMenus } = usePermission();
 const currentView = ref<ViewName>('dashboard');
 
+// 未登录时的认证界面模式：login / register 互切
+// 注册成功后 authStore 自动写入 token + user，isLoggedIn 变 true，自动进入主应用
+const authMode = ref<'login' | 'register'>('login');
+
 // 菜单项配置：key 对应 ViewName，icon 对应 NavIcons 组件 name，label 为显示文
 // 抽取为常量避template 中两处（展开/折叠）重复硬编码
 // 新增 users 菜单：仅管理员可见（通过 filterVisibleMenus 过滤
@@ -43,7 +48,10 @@ const menuItems: Array<{ key: ViewName; icon: string; label: string; permission:
   { key: 'query', icon: 'query', label: '知识问答', permission: 'query' },
   { key: 'graph', icon: 'graph', label: '图谱', permission: 'graph' },
   { key: 'health', icon: 'health', label: '体检', permission: 'health' },
-  { key: 'config', icon: 'config', label: '配置', permission: 'config' },
+  // 配置菜单向所有登录用户开放：其中的「朗读设置」「界面主题」为个人偏好（按用户隔离、本地存储），
+  // 所有用户都可查看/修改；SCHEMA/系统配置/AI 服务/工具/MCP/Prompt 等敏感配置在 Config.vue 内
+  // 通过 isAdmin 二次拦截，仅管理员可见可改。菜单可见性用全员都有的 'dashboard' 权限承载。
+  { key: 'config', icon: 'config', label: '配置', permission: 'dashboard' },
   { key: 'tunnel', icon: 'tunnel', label: '内网穿透', permission: 'tunnel' },
   { key: 'cleanup', icon: 'cleanup', label: '系统清理', permission: 'cleanup' },
   { key: 'users', icon: 'about', label: '用户管理', permission: 'users' },
@@ -94,7 +102,7 @@ function go(view: ViewName) {
   currentView.value = view;
 }
 
-function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health' | 'progress') {
+function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health' | 'progress' | 'graph' | 'help') {
   go(view);
 }
 
@@ -118,6 +126,8 @@ function handleNavigateEvent(e: Event) {
 async function handleLogout() {
   await authStore.logout();
   currentView.value = 'dashboard';
+  // 回到登录态默认展示登录页（而非注册页）
+  authMode.value = 'login';
 }
 
 onMounted(() => {
@@ -160,9 +170,16 @@ onBeforeUnmount(() => {
   <div class="bg-layer noise"></div>
   <div class="bg-layer orbs parallax" :style="{ transform: `translateY(${scrollY * 0.25}px)` }"></div>
 
-  <!-- 未登录守卫：仅显示登录页，隐藏主导航与内容区
+  <!-- 未登录守卫：仅显示登录/注册页，隐藏主导航与内容区
        为什v-if 而非 router：本项目为单视图 SPA，用 v-if 守卫更简洁且避免引入 vue-router -->
-  <Login v-if="!isLoggedIn" />
+  <Login
+    v-if="!isLoggedIn && authMode === 'login'"
+    @switch-to-register="authMode = 'register'"
+  />
+  <Register
+    v-else-if="!isLoggedIn"
+    @switch-to-login="authMode = 'login'"
+  />
 
   <!-- 已登录后才渲染主应用-->
   <!-- 为什么改为 row 布局：导航挪到左侧形成侧边栏，content 占据剩余水平空间，垂直视野最大化 -->

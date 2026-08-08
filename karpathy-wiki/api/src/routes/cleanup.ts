@@ -7,6 +7,7 @@ import type {
   CleanupStorageStatus,
 } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // 系统清理路由。
 //   GET  /api/cleanup/status   查询 4 类对象存储状态
@@ -16,7 +17,7 @@ import type { VaultService } from '../vault/vault-service.js';
 //   - compile_cache : .harness/compile-cache.json（增量编译缓存，整文件删除）
 //   - run_state     : .harness/state/*.json（断点续传状态文件）
 //   - run_logs      : .harness/logs/*.log（按 days 清理旧日志）
-//   - raw_archive   : vault/raw/input-*.md（按 days 清理原始资料）
+//   - raw_archive   : vault/raw/ 下内部临时前缀文件（wiki-batch-*/wiki-compile-*/input-*，按 days 清理原始资料）
 //
 // 安全机制（参考闲鱼项目）：
 //   - dry_run 预览模式，true 时仅列出将删除项不实际执行
@@ -32,7 +33,7 @@ function bytesToMb(bytes: number): number {
   return Math.round((bytes / BYTES_PER_MB) * 100) / 100;
 }
 
-export function registerCleanupRoute(app: FastifyInstance, vault: VaultService): void {
+export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, guards: IsolationGuards = createIsolationGuards()): void {
   const vaultPath = vault.getVaultPath();
   // .harness 与 vault 同级（与 index.ts stateDir 计算一致）
   const harnessDir = path.resolve(vaultPath, '..', '.harness');
@@ -113,8 +114,8 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService):
       const stateStat = await statDir(stateDir, /\.json$/);
       // 运行日志
       const logsStat = await statDir(logsDir, /\.log$/);
-      // 原始资料存档
-      const rawStat = await statDir(rawDir, /^input-.*\.md$/);
+      // 原始资料存档（仅清理内部临时前缀文件，避免误删用户命名的源文件）
+      const rawStat = await statDir(rawDir, /^(wiki-batch-|wiki-compile-|input-).*/);
 
       const status: CleanupStorageStatus = {
         compileCache: {
@@ -148,7 +149,7 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService):
 
   // ===== POST /api/cleanup =====
 
-  app.post('/api/cleanup', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/cleanup', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = (request.body ?? {}) as Partial<CleanupRequest>;
     const target = body.target || 'all';
     // 后端钳制 days 下限，防止 0 或负值导致删除全部
@@ -239,7 +240,7 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService):
 
     // 原始资料存档清理（按 days）
     async function cleanupRawArchive(): Promise<void> {
-      const files = await listFiles(rawDir, /^input-.*\.md$/);
+      const files = await listFiles(rawDir, /^(wiki-batch-|wiki-compile-|input-).*/);
       if (files.length === 0) {
         if (dryRun) result.cleaned.push('[预览] 无原始资料存档');
         return;

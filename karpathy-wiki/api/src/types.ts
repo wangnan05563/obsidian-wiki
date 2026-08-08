@@ -1,6 +1,11 @@
 // 业务层类型定义。
 // EngineAdapter 是阶段切换抽象点（V1.3 仅 HarnessAdapter，但接口保留为后续替换预留）。
 
+// 上下文记忆治理模块配置类型（语义压缩/清理/重组/容量淘汰）
+// 具体接口定义在引擎内，这里统一 re-export 供 AppConfig 引用
+import type { ContextGovernorConfig } from './engine/context-governor.js';
+export type { ContextGovernorConfig } from './engine/context-governor.js';
+
 // RBAC 权限模块类型 re-export 便于外部统一从 types.ts 导入
 // AuthConfig 本文件内 AppConfig 引用需 import type，其余类型仅 re-export 不在文件内使用
 import type { AuthConfig } from './auth/types.js';
@@ -56,6 +61,10 @@ export interface CompileInput {
   content: string;
   // 存档到 raw/ 的相对路径（可选，未提供时由 vault 自动生成）
   rawPath?: string;
+  // 用户上传时的原始文件名（可选）。file 类型由路由层传入，用于 raw/ 存档时
+  // 保留原名（去掉内部 wiki-batch-/wiki-compile- 前缀），避免用户无法识别。
+  // 缺省时回退到 content 的 basename。
+  originalName?: string;
 }
 
 // 批量编译配置：所有参数从 config.json 读取，禁止硬编码
@@ -83,6 +92,10 @@ export interface ProgressEvent {
 export interface QueryInput {
   question: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  // 线程隔离键：携带后由后端从本地记忆注入历史上下文，并在本地持久化该线程的会话与记忆。
+  // 不携带时回退为前端透传 history（向后兼容），且后端自动创建新线程。
+  // 与 §会话/线程隔离边界 对应：所有会话与记忆均按 threadId 命名空间隔离。
+  threadId?: string;
   // §5.2 模式切换：'web' 联网搜索 / 'deep' 深度思考 / '' 默认
   mode?: string;
   // 是否启用联网搜索工具
@@ -110,6 +123,19 @@ export interface QueryInput {
   // - 'followups' 启用追问建议生成（默认开启，middlewares 不含时关闭）
   // - 'stream' 启用真流式（覆盖 stream=false）
   middlewares?: string[];
+  // ── BYOK：按用户隔离的 per-request 配置覆盖项 ──
+  // 设计动机（需求：AI 服务 / 搜索引擎 / 工具配置按用户隔离，各用户独立额度、互不抢占限流）：
+  //   前端在「配置」页按当前登录用户保存各自的 API 信息（存浏览器 IndexedDB，密钥不落服务端磁盘），
+  //   每次问答请求随 body 携带，后端以其覆盖服务端共享配置，再由 harness 用该用户自己的密钥调 LLM/搜索。
+  //   密钥仅经此请求体一次性下发，后端不持久化；软件升级/重装不影响用户本地配置。
+  // llmConfig：覆盖 harnessConfig.llm（provider/baseUrl/model/apiKey）。
+  //   缺失或 apiKey 为空 → 后端拒绝（强制每用户各自配置，不允许服务端共享默认密钥兜底）。
+  llmConfig?: { provider: string; baseUrl: string; model: string; apiKey: string };
+  // searchConfig：覆盖 webSearchConfig（provider/apiKey/maxResults）；缺 apiKey 时回退服务端配置。
+  searchConfig?: { provider: 'tavily' | 'bing'; apiKey: string; maxResults?: number };
+  // toolsConfig：用户维度工具集（MCP/CLI/场景路由）。始终下发，整体替换服务端共享工具配置，
+  //   避免某用户沿用服务端共享 MCP/CLI（即"各用户调用自己配置"的隔离要求）。
+  toolsConfig?: ToolsConfig;
 }
 
 // 思考步骤：与前端 ThinkingStep 类型对齐
@@ -294,6 +320,19 @@ export interface AppConfig {
   // v3 媒体生成配置：Agnes Image/Video API 参数
   // 为什么可选：保留向后兼容，老配置文件无此字段时使用 defaultConfig 提供的默认值
   media?: MediaConfig;
+  // 会话持久化配置（对应「问答会话本地存储 + 线程隔离 + 本地记忆」需求）
+  // 默认 threadsPersist/conversationsPersist 均为 false：服务端不落盘会话（SRS 核心需求「会话不存服务端、仅本地维护」）。
+  // 背景：本应用已引入多用户注册，服务端落盘会话会违反「注册用户间数据隔离 + 会话不上服务端」要求；
+  //   会话历史唯一权威源为前端 IndexedDB（含 ownerId 隔离），Query 始终携带完整 history 兜底连续性。
+  // threadsPersist=false：ThreadMemoryStore 不写 data/threads/，getHistoryContext 恒返回 []。
+  // conversationsPersist=false：/api/conversations 路由族不注册，服务端不暴露任何会话 CRUD 端点（FR-RM-04/FR-RM-08）。
+  // 如需开启（单用户本地优先调试）可在 config.json 的 sessionPersistence 显式设 true。
+  // 为什么可选：保留向后兼容，老配置文件无此字段时由 defaultConfig 提供默认值（均为 false）。
+  sessionPersistence?: { threadsPersist?: boolean; conversationsPersist?: boolean };
+  // 上下文记忆治理配置（对应「上下文窗口受限场景下的对话历史主动管理」需求）
+  // 默认开启：在把线程记忆注入 LLM 前，自动做语义压缩/清理/重组/容量淘汰。
+  // 为什么可选：保留向后兼容，老配置文件无此字段时由 defaultConfig 提供默认值（开启）。
+  contextGovernor?: ContextGovernorConfig;
 }
 
 
@@ -663,7 +702,7 @@ export interface CleanupStorageStatus {
     sizeMb: number;
     oldest: string | null;
   };
-  // 原始资料存档：vault/raw/input-*.md
+  // 原始资料存档：vault/raw/ 下内部临时前缀文件（wiki-batch-*/wiki-compile-*/input-*）
   rawArchive: {
     fileCount: number;
     sizeMb: number;

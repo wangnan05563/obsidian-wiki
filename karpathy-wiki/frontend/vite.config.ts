@@ -3,6 +3,10 @@ import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
   plugins: [vue()],
+  // 让 .ts/.vue 优先于可能残留的 .js 产物（clean-js.ps1 清理对象），避免陈旧编译产物遮蔽 .ts 源码
+  resolve: {
+    extensions: ['.mjs', '.ts', '.tsx', '.js', '.mjs', '.jsx', '.vue', '.json'],
+  },
   // Tailscale Funnel 路径区分模式：前端构建资源挂在 /wiki/ 前缀下
   // Tailscale Funnel --set-path /wiki/ 在 Funnel 层注册路径前缀，转发时自动剥离前缀
   // 浏览器请求 https://host/wiki/api/xxx → Funnel 剥离 /wiki/ → 后端收到 /api/xxx

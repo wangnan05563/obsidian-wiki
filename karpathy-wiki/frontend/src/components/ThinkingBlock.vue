@@ -3,9 +3,18 @@ import { ref, computed } from 'vue';
 import { ChatRound, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
 import type { ThinkingStep } from '../types';
 
-const props = defineProps<{ steps: ThinkingStep[] }>();
+const props = withDefaults(defineProps<{ steps: ThinkingStep[]; live?: boolean }>(), {
+  live: false,
+});
 // 默认折叠：减少视觉噪音，用户主动展开查看思考细节
-const expanded = ref(false);
+// live=true（流式生成中）时强制展开，让用户实时看到思考过程；生成结束自动折叠回摘要
+const userExpanded = ref(false);
+const expanded = computed(() => props.live || userExpanded.value);
+function toggle() {
+  // 流式阶段不允许手动折叠，避免与实时更新冲突；结束后用户可自由展开/折叠
+  if (props.live) return;
+  userExpanded.value = !userExpanded.value;
+}
 
 // 折叠态摘要：已思考 N 步 · 搜索 N 次 · 阅读 N 页 · 耗时 X.Xs
 // v2 优化：新增耗时统计，体现多输出模式可观测性
@@ -45,8 +54,8 @@ function stepDuration(idx: number, ts?: string): string {
 </script>
 
 <template>
-  <div class="thinking-block" :class="{ collapsed: !expanded }">
-    <div class="thinking-header" @click="expanded = !expanded">
+  <div class="thinking-block" :class="{ collapsed: !expanded, live: props.live }">
+    <div class="thinking-header" @click="toggle">
       <el-icon class="thinking-icon"><ChatRound /></el-icon>
       <span class="thinking-summary">{{ summary }}</span>
       <el-icon class="toggle"><component :is="expanded ? ArrowDown : ArrowRight" /></el-icon>
@@ -75,6 +84,11 @@ function stepDuration(idx: number, ts?: string): string {
   background: var(--accent-purple-a04, rgba(176, 38, 255, 0.04));
   border-left: 2px solid var(--neon-purple, #b226ff);
   border-radius: 0 6px 6px 0;
+}
+/* 流式生成中：提亮背景 + 脉冲边框，让用户明确感知"正在思考" */
+.thinking-block.live {
+  background: var(--accent-purple-a08, rgba(176, 38, 255, 0.08));
+  border-left-color: var(--neon-purple, #b226ff);
 }
 .thinking-header {
   cursor: pointer;

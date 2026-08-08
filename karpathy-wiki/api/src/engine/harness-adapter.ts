@@ -10,6 +10,9 @@ import { generatePodcast } from '../workflows/podcast-workflow.js';
 // v3 媒体生成：视频生成异步任务委托给 media-generation-workflow
 import { generateVideo, pollVideoTask } from '../workflows/media-generation-workflow.js';
 
+// BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
+import { applyPerRequestOverride } from './byok-override.js';
+
 // HarnessAdapter：阶段 3 默认实现。
 // healthCheck 绕过 harness 直接走确定性逻辑（M-2），compile/query 通过工作流调用 harness。
 export class HarnessAdapter implements EngineAdapter {
@@ -118,9 +121,16 @@ export class HarnessAdapter implements EngineAdapter {
     const effectiveInput: QueryInput = input.stream === undefined
       ? { ...input, stream: this.appConfig?.llm.stream ?? false }
       : input;
-    yield* queryWorkflow(this.harnessConfig, this.vault, effectiveInput, {
-      webSearchConfig: this.webSearchConfig,
-      toolsConfig: this.toolsConfig,
+    // ── BYOK per-user 覆盖：以请求携带的用户配置覆盖服务端共享配置 ──
+    // 实现"各用户独立额度、互不抢占限流"，密钥不落服务端磁盘（见 applyPerRequestOverride）。
+    const merged = applyPerRequestOverride(this.harnessConfig, this.webSearchConfig, this.toolsConfig, {
+      llmConfig: input.llmConfig,
+      searchConfig: input.searchConfig,
+      toolsConfig: input.toolsConfig,
+    });
+    yield* queryWorkflow(merged.harnessConfig, this.vault, effectiveInput, {
+      webSearchConfig: merged.webSearchConfig,
+      toolsConfig: merged.toolsConfig,
       // FR-12 AI 伙伴预设：传递 scope 限定与额外 system prompt
       scopeFilter: this.activeScope === 'all' || !this.activeScope ? undefined : this.activeScope,
       systemPrompt: this.activeSystemPrompt,

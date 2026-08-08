@@ -17,7 +17,7 @@ function makeUser(role: 'admin' | 'user' | 'guest'): UserInfo {
     updatedAt: '2025-01-01T00:00:00.000Z',
     permissions: role === 'admin'
       ? ['dashboard', 'ingest', 'progress', 'browse', 'query', 'graph', 'health', 'config', 'tunnel', 'cleanup', 'help', 'about', 'users']
-      : ['browse', 'query', 'graph', 'help', 'about'],
+      : ['dashboard', 'browse', 'query', 'graph', 'help', 'about'],
   };
 }
 
@@ -261,10 +261,10 @@ describe('auth store', () => {
       expect(store.hasPermission('users')).toBe(true);
     });
 
-    it('普通用户 hasPermission dashboard 应为 false', () => {
+    it('普通用户 hasPermission dashboard 应为 true（仪表盘已开放给所有用户）', () => {
       const store = useAuthStore();
       store.user = makeUser('user');
-      expect(store.hasPermission('dashboard')).toBe(false);
+      expect(store.hasPermission('dashboard')).toBe(true);
       expect(store.hasPermission('browse')).toBe(true);
     });
 
@@ -272,14 +272,18 @@ describe('auth store', () => {
       const store = useAuthStore();
       store.user = makeUser('user');
       expect(store.hasAnyPermission(['browse', 'dashboard'])).toBe(true);
-      expect(store.hasAnyPermission(['dashboard', 'users'])).toBe(false);
+      // dashboard 已开放，故 [dashboard, users] 命中 dashboard 返回 true
+      expect(store.hasAnyPermission(['dashboard', 'users'])).toBe(true);
     });
 
     it('hasAllPermissions (AND) 全部匹配返回 true', () => {
       const store = useAuthStore();
       store.user = makeUser('user');
       expect(store.hasAllPermissions(['browse', 'query'])).toBe(true);
-      expect(store.hasAllPermissions(['browse', 'dashboard'])).toBe(false);
+      // dashboard 已开放，普通用户同时拥有 browse 与 dashboard
+      expect(store.hasAllPermissions(['browse', 'dashboard'])).toBe(true);
+      // 缺少 users 权限，AND 返回 false
+      expect(store.hasAllPermissions(['browse', 'users'])).toBe(false);
     });
   });
 

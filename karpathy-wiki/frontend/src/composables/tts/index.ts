@@ -2,9 +2,10 @@ import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
 import type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 import { createBrowserTTSProvider } from './browserTtsProvider';
 import { createDoubaoTTSProvider } from './doubaoTtsProvider';
+import { createEdgeTTSProvider } from './edgeTtsProvider';
 
 /** Provider 类型标识 */
-export type TTSProviderType = 'browser' | 'doubao';
+export type TTSProviderType = 'edge' | 'browser' | 'doubao';
 
 /** 桥接接口：provider 实现可选择性暴露 state ref 让 useTTS watch */
 export interface StateAwareProvider extends TTSProvider {
@@ -15,7 +16,7 @@ export interface StateAwareProvider extends TTSProvider {
 export interface UseTTSReturn {
   state: Ref<TTSState>;
   rate: Ref<number>;
-  speak: (text: string, lang?: string) => void;
+  speak: (text: string, options?: TTSSpeakOptions) => void;
   pause: () => void;
   resume: () => void;
   stop: () => void;
@@ -26,24 +27,24 @@ export interface UseTTSReturn {
   setProvider: (type: TTSProviderType) => void;
 }
 
-// 解析用户偏好的 provider：localStorage > 默认 browser
-// 为什么 localStorage 而非 store：TTS 偏好是 UI 状态，store 引入会与业务耦合
+// 解析用户偏好的 provider：localStorage > 默认 edge（微软神经网络语音，更拟人化）
+// 为什么默认 edge 而非 browser：浏览器原生 Web Speech API 中文音色机械不自然，
+// Edge TTS 提供与 Azure 同源的神经网络音色，免费、无 API Key、音质自然
 function resolveProviderType(): TTSProviderType {
   try {
     const raw = localStorage.getItem('tts.provider');
-    if (raw === 'doubao' || raw === 'browser') return raw;
+    if (raw === 'edge' || raw === 'doubao' || raw === 'browser') return raw;
   } catch {
     // 忽略 localStorage 访问异常
   }
-  return 'browser';
+  return 'edge';
 }
 
-// 创建 provider 实例：按类型分发。browser 已实现 state 暴露；doubao 通过 audio 事件异步更新
-// 这里统一返回 StateAwareProvider 供桥接逻辑使用
+// 创建 provider 实例：按类型分发。edge 为默认（微软神经网络语音）；browser 为降级方案
 function createProvider(type: TTSProviderType): StateAwareProvider {
-  return (
-    type === 'doubao' ? createDoubaoTTSProvider() : createBrowserTTSProvider()
-  ) as StateAwareProvider;
+  if (type === 'edge') return createEdgeTTSProvider() as StateAwareProvider;
+  if (type === 'doubao') return createDoubaoTTSProvider() as StateAwareProvider;
+  return createBrowserTTSProvider() as StateAwareProvider;
 }
 
 /**
@@ -104,8 +105,11 @@ export function useTTS(): UseTTSReturn {
   return {
     state,
     rate,
-    speak(text: string, lang = 'zh-CN') {
-      currentProvider.speak(text, { lang, rate: rate.value });
+    speak(
+      text: string,
+      options?: { lang?: string; rate?: number; voice?: string; style?: string; volume?: number; pitch?: number },
+    ) {
+      currentProvider.speak(text, options ?? { lang: 'zh-CN', rate: rate.value });
     },
     pause() {
       currentProvider.pause();
@@ -132,3 +136,4 @@ export function useTTS(): UseTTSReturn {
 export type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 export { createBrowserTTSProvider } from './browserTtsProvider';
 export { createDoubaoTTSProvider } from './doubaoTtsProvider';
+export { createEdgeTTSProvider } from './edgeTtsProvider';

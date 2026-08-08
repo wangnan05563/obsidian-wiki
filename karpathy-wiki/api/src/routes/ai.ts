@@ -4,6 +4,8 @@ import path from 'node:path';
 import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey, getProviderKeyStatus, saveSkillsConfig } from '../config.js';
 import { getResourcePath } from '../utils/runtime.js';
 import type { EngineAdapter, LlmPreset } from '../types.js';
+import type { IsolationGuards } from '../middleware/auth.js';
+import { createIsolationGuards } from '../middleware/auth.js';
 
 // 模块加载时一次性读取 LLM 预设列表，避免每次请求都读盘。
 // 为什么外置到 llm-presets.json：厂商预设（baseUrl/model/apiKeyRef）会随厂商更新迭代，
@@ -51,14 +53,18 @@ function formatHttpError(status: number, errText: string): string {
 //   POST /api/ai/test-connection  测试 LLM 连接（OpenAI 兼容协议）
 //   GET  /api/ai/web-search       读取联网搜索配置
 //   PUT  /api/ai/web-search       保存联网搜索配置 + 同步 adapter 运行时
-export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
+export function registerAiRoute(
+  app: FastifyInstance,
+  adapter?: EngineAdapter,
+  guards: IsolationGuards = createIsolationGuards(),
+) {
 
   // GET /api/ai/config：返回当前 AI 配置，API Key 脱敏。
   // 脱敏策略：返回 ****xxxx 格式，前端回传此值视为未修改。
   // providerKeyStatus：按 provider 索引的 key 配置状态表，前端切换预设时展示各 provider 是否已配置 key。
   //   为什么需要：用户切换预设时需感知目标 provider 是否已配置过 key，避免重复输入。
   // FR-12 skills/activeSkill：AI 伙伴预设列表与当前激活项
-  app.get('/api/ai/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
+  app.get('/api/ai/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
     const config = await loadConfig();
     const apiKey = getEffectiveApiKey(config);
     const maskedKey = maskApiKey(apiKey);
@@ -78,7 +84,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   });
 
   // GET /api/ai/presets：返回 LLM 预设列表，供前端渲染快捷选择按钮。
-  app.get('/api/ai/presets', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
+  app.get('/api/ai/presets', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
     return reply.send({ presets: LLM_PRESETS });
   });
 
@@ -91,7 +97,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   //   - 请求体可携带 apiKeyRef（新 provider 对应的环境变量名）
   //   - saveAiConfig 内部检测 provider 变化时自动迁移 apiKey 到 apiKeys[旧provider] 并恢复 apiKeys[新provider]
   //   - 响应附带 providerKeyStatus 让前端即时展示各 provider 配置状态
-  app.put('/api/ai/config', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/ai/config', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       provider?: string;
       baseUrl?: string;
@@ -190,7 +196,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   // POST /api/ai/reset-config：恢复 LLM 配置到出厂默认值。
   // 为什么需要：用户误改配置后可一键恢复，避免手动编辑 config.json。
   // 仅重置 llm 字段，其他配置保持不变；同步 adapter 运行时实例。
-  app.post('/api/ai/reset-config', async (_request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/ai/reset-config', { preHandler: guards.requireAdmin }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const merged = await resetAiConfig();
       const effectiveKey = getEffectiveApiKey(merged);
@@ -223,7 +229,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
 
   // POST /api/ai/test-connection：测试 LLM 连接是否可用。
   // 使用 OpenAI 兼容协议发送最小化请求（max_tokens=5），超时 15s。
-  app.post('/api/ai/test-connection', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/ai/test-connection', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       baseUrl?: string;
       model?: string;
@@ -296,7 +302,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
 
   // §5.2 GET /api/ai/web-search：读取联网搜索配置，API Key 脱敏。
   // 为什么需要：前端 Config 页面需要展示当前配置状态，决定是否启用 web_search 工具。
-  app.get('/api/ai/web-search', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
+  app.get('/api/ai/web-search', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
     const config = await loadConfig();
     const ws = config.webSearch;
     if (!ws) {
@@ -317,7 +323,7 @@ export function registerAiRoute(app: FastifyInstance, adapter?: EngineAdapter) {
   // §5.2 PUT /api/ai/web-search：保存联网搜索配置并同步 adapter 运行时。
   // 为什么需要同步 adapter：query workflow 通过 adapter.webSearchConfig 读取配置，
   // 落盘后必须同步内存实例，否则需重启服务才生效。
-  app.put('/api/ai/web-search', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/ai/web-search', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       provider?: 'tavily' | 'bing';
       apiKey?: string;

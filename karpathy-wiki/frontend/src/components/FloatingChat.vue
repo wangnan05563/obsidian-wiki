@@ -8,6 +8,8 @@ import ThinkingBlock from './ThinkingBlock.vue';
 import MessageToolbar from './MessageToolbar.vue';
 import RefsList from './RefsList.vue';
 import { useQueryStore } from '../stores/query';
+import { useConversationsStore, getLastActiveConversationId } from '../stores/conversations';
+import { useChatAutoScroll } from '../composables/useChatAutoScroll';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
 import { consumeQuerySSE } from '../utils/sse';
@@ -19,6 +21,9 @@ import type { ChatMessage, Reference } from '../types';
 //   设计取舍：相比 Query.vue 完整功能，FloatingChat 是轻量级浮窗，仅保留核心问答流。
 //   复用 ThinkingBlock / MessageToolbar / RefsList 以保持与主问答页一致的交互体验。
 const store = useQueryStore();
+// FR-RM-09：FloatingChat 与 Query 共享同一 useQueryStore 单例，但此前不参与持久化，
+// 刷新后状态丢失。引入 conversationsStore 补齐「落盘 + 续答」能力，使悬浮窗也能断点续答。
+const conversationsStore = useConversationsStore();
 const props = defineProps<{ inQueryPage?: boolean }>();
 
 // 面板展开状态持久化：用户刷新页面后保留偏好
@@ -55,29 +60,47 @@ function formatTime(iso?: string): string {
   return `${hh}:${mm}`;
 }
 
-function scrollToBottom() {
-  nextTick(() => {
-    if (chatBodyRef.value) {
-      chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight;
-    }
-  });
-}
-
+// 自动贴底滚动（流式输出场景）：逐 token 滚动输出 + 自动下拉展示。
+// 新消息（用户问题 / 完成答案）强制贴底；流式令牌尊重用户上滑暂停，避免与用户争夺滚动位置。
+const { scrollToBottom } = useChatAutoScroll(chatBodyRef, () => store.isLoading);
+watch(() => store.messages.length, () => scrollToBottom(true));
 watch(
-  () => [store.messages.length, store.streamingAnswer, store.currentThinking.length],
-  scrollToBottom,
+  () => [store.streamingAnswer, store.currentThinking.length],
+  () => scrollToBottom(),
+);
+
+// FR-RM-09 断点续答：流式过程中 streamingAnswer 变化即触发防抖落盘，使刷新/切页后状态不丢失。
+// 组件卸载（切页）时此 watch 自动停止；但切页期间后台流完成时会通过 sendQuestion 的 finally
+// 落盘完整答案，且刷新前防抖已落盘「用户问题 + streaming 标记」，重载据此自动续答。
+watch(
+  () => store.streamingAnswer,
+  () => {
+    if (store.isLoading) schedulePersistInProgress();
+  },
 );
 
 async function sendQuestion(question: string) {
   abortController = new AbortController();
-  const history = store.messages.map((m) => ({ role: m.role, content: m.content }));
+  // 线程隔离：已有线程时把 threadId 交给后端，由后端从本地记忆注入上下文；
+  // 不再重复发送前端 history。无线程时回退旧行为发送 history。
+  const activeThreadId = store.currentThreadId;
+  const history = activeThreadId
+    ? undefined
+    : store.messages.map((m) => ({ role: m.role, content: m.content }));
+
+  const body: Record<string, unknown> = { question, stream: store.streamMode };
+  if (activeThreadId) {
+    body.threadId = activeThreadId;
+  } else if (history && history.length > 0) {
+    body.history = history;
+  }
 
   try {
     const response = await fetch(`${API_BASE}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // §真流式：复用主问答的 streamMode 偏好，与 Query 页面行为一致
-      body: JSON.stringify({ question, history, stream: store.streamMode }),
+      body: JSON.stringify(body),
       signal: abortController.signal,
     });
 
@@ -101,6 +124,8 @@ function handleSubmit() {
   const q = inputQuestion.value.trim();
   if (!q || store.isLoading) return;
   store.submitQuestion(q);
+  // FR-RM-09：立即落盘用户问题，确保新会话在首个 token 到达前也能在刷新后恢复
+  void conversationsStore.persistConversation(store.messagesWithStreaming());
   inputQuestion.value = '';
   void sendQuestion(q);
 }
@@ -129,7 +154,70 @@ function handleKeydown(e: KeyboardEvent) {
 
 function handleNewSession() {
   store.reset();
+  // FR-RM-09：清空当前会话作用域，使下次落盘创建全新会话，避免覆盖上一段已持久化对话
+  conversationsStore.startNewConversation();
   inputQuestion.value = '';
+}
+
+// FR-RM-09 断点续答（与 Query.vue 一致）：流式过程中持续落盘中间态，使刷新/切页后状态不丢失。
+// 实现：组件内防抖 watch 在 streamingAnswer 变化时落盘；切页/卸载前由 pagehide 最佳努力落盘一次；
+// 重载后若上次会话末尾为 streaming 则自动续答（重新生成完整回答替换占位）。
+let persistDebounceTimer: number | null = null;
+function schedulePersistInProgress() {
+  if (persistDebounceTimer !== null) clearTimeout(persistDebounceTimer);
+  persistDebounceTimer = window.setTimeout(() => {
+    persistDebounceTimer = null;
+    // 仅当仍处于生成中才落盘（避免完成后重复写）
+    if (store.isLoading) {
+      void conversationsStore.persistConversation(store.messagesWithStreaming());
+    }
+  }, 1500);
+}
+
+// 切页/卸载前最佳努力落盘一次中间态（刷新或关闭标签页时触发 pagehide）
+function flushPersistOnHide() {
+  if (store.isLoading) {
+    void conversationsStore.persistConversation(store.messagesWithStreaming());
+  }
+}
+
+// FR-RM-09 续答：重载后若上次会话最后一条为「生成中(streaming)」，重新发起同一问题补全回答。
+// 实现：移除持久化的 streaming 占位（messagesWithStreaming 写入的中间态），复用最后一条用户问题重发。
+// 说明：真·从断点续写不可行（LLM 无服务端流式检查点），故采用「重新生成完整回答」替换占位，符合用户选择。
+function resumeLastAnswer() {
+  const msgs = store.messages;
+  if (!msgs.length) return;
+  // 移除末尾 streaming 占位，避免与续答生成的新回答重复
+  const last = msgs[msgs.length - 1];
+  if (last.role === 'assistant' && last.status === 'streaming') {
+    store.removeMessage(msgs.length - 1);
+  }
+  // 取最后一条用户问题作为续答输入
+  let question: string | undefined;
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      question = store.messages[i].content;
+      break;
+    }
+  }
+  if (!question) return;
+  void sendQuestion(question);
+}
+
+// FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
+// 切页后 SPA 重挂载且后台仍有活跃流（store.isLoading）时直接跳过，避免打断/重复续答。
+async function maybeResumeOnLoad() {
+  if (store.isLoading) return;
+  const lastId = getLastActiveConversationId();
+  if (!lastId) return;
+  const rec = conversationsStore.conversations.find((c) => c.id === lastId);
+  if (!rec) return;
+  await conversationsStore.selectConversation(lastId);
+  const msgs = store.messages;
+  const last = msgs[msgs.length - 1];
+  if (last && last.role === 'assistant' && last.status === 'streaming') {
+    resumeLastAnswer();
+  }
 }
 
 // 统一展开/关闭入口：同时持久化到 localStorage
@@ -158,13 +246,30 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   globalThis.addEventListener('keydown', handleGlobalKeydown);
+  // FR-RM-09：加载本地会话列表 + 断点续答（重载后恢复上次活跃会话并在需要时自动续答）。
+  // FloatingChat 与 Query 互斥挂载，刷新后若首屏落在非 Query 页，必须由本组件完成恢复。
+  try {
+    await conversationsStore.loadConversations();
+  } catch {
+    // IndexedDB 不可用时静默降级，仅内存态
+  }
+  try {
+    await maybeResumeOnLoad();
+  } catch {
+    // 续答失败不阻断首屏加载
+  }
+  // FR-RM-09：注册 pagehide 最佳努力落盘（刷新/关闭标签页时持久化中间态）
+  window.addEventListener('pagehide', flushPersistOnHide);
 });
 
 onBeforeUnmount(() => {
-  abortController?.abort();
+  // FR-RM-09：切页（切到 Query 页）不再中断 SSE 流——后台继续生成（用户选择「后台继续生成」）。
+  // 仅卸载 keydown / pagehide 监听，避免内存泄漏；流本身由模块级 abortController 独立存活
+  // （组件实例销毁后闭包仍持有旧 abortController，后台继续写入共享 store，待流自然结束）。
   globalThis.removeEventListener('keydown', handleGlobalKeydown);
+  window.removeEventListener('pagehide', flushPersistOnHide);
 });
 </script>
 
@@ -272,6 +377,7 @@ onBeforeUnmount(() => {
                 :msg-id="msg.id"
                 :created-at="msg.createdAt"
                 :can-regenerate="!store.isLoading"
+                :can-edit="false"
                 @remove="handleRemoveMessage(idx)"
               />
             </div>
@@ -286,6 +392,7 @@ onBeforeUnmount(() => {
               <ThinkingBlock
                 v-if="store.currentThinking.length > 0"
                 :steps="store.currentThinking"
+                :live="store.isLoading"
               />
               <!-- 首字节前 loading dots：让用户感知"正在思考" -->
               <div
@@ -548,12 +655,12 @@ onBeforeUnmount(() => {
 }
 
 .user-avatar {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: var(--grad-fire);
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -596,9 +703,9 @@ onBeforeUnmount(() => {
   /* 跨主题可读：强制白色 + 强阴影确保任意主题下用户文字清晰可读 */
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
-  /* §高度收窄：进一步减小 padding/line-height/font-size，与 Query.vue 保持一致 */
+  /* §高度收窄：与 Query.vue 保持一致，减小 line-height 让多行问题更贴文字 */
   padding: 2px 12px;
-  line-height: 1.2;
+  line-height: 1.1;
   font-size: 13px;
 }
 

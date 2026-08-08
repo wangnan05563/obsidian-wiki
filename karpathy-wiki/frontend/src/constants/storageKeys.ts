@@ -28,6 +28,12 @@ export const STORAGE_KEYS = {
   STREAM_MODE: 'streamMode',
   /** 中间件多选偏好持久化（query store），用户启用的 query workflow 功能模块列表 */
   MIDDLEWARES: 'middlewares',
+  /** 多模态输出单值模式持久化（Query.vue），思维导图/FAQ/时间线/图像/PPT 选择，跨刷新保留 */
+  OUTPUT_MODE: 'outputMode',
+  /** 当前选中的 AI 伙伴（skill）持久化（Query.vue），含"文献综述"等预设，跨刷新保留 */
+  ACTIVE_SKILL: 'activeSkill',
+  /** FR-RM-09 断点续答：上次活跃的会话 id，跨刷新保留，重载后据此自动恢复并续答 */
+  LAST_ACTIVE_CONVERSATION: 'lastActiveConversation',
 } as const;
 
 /** 按预设派生 localStorage 完整键名（如 llmPresetConfig:openai） */

@@ -117,6 +117,38 @@ defineProps<{
       <circle cx="12" cy="7.5" r="1" fill="currentColor" stroke="none" />
       <path d="M12 10 L12 17" stroke-width="2" />
     </template>
+
+    <!-- 点赞（向上大拇指）：采用 MIT 许可的 Lucide 线条几何，沿用 currentColor + stroke 风格
+         thumb 在左、fist 在右的标准竖起大拇指；下方腕部与拳头由两条分离路径构成 -->
+    <template v-else-if="name === 'thumb-up'">
+      <path d="M7 10v12" />
+      <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+    </template>
+
+    <!-- 点踩（向下大拇指）：由 thumb-up 旋转 180° 得到，thumb 朝下、fist 在左，完全对称 -->
+    <template v-else-if="name === 'thumb-down'">
+      <g transform="rotate(180 12 12)">
+        <path d="M7 10v12" />
+        <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+      </g>
+    </template>
+
+    <!-- 归档（archive）：采用 MIT 许可的 Lucide 线条几何，沿用 currentColor + stroke 风格
+         箱体外形 + 顶盖横线 + 向上箭头，语义为"存入归档"，与 thumb 图标同源保持一致 -->
+    <template v-else-if="name === 'archive'">
+      <path d="m2 4 2 14h16l2-14" />
+      <path d="M2 4h20" />
+      <path d="M12 11v6" />
+      <path d="m9 14 3-3 3 3" />
+    </template>
+
+    <!-- 置顶大头针（pushpin）：0° 时针头垂直向下 = 已置顶态；
+         由父层 .pin-rot 旋转 180° 得到针头朝上 = 未置顶态，点击切换时平滑翻转 -->
+    <template v-else-if="name === 'pin'">
+      <circle cx="12" cy="6" r="3.4" />
+      <path d="M12 9.4 L12 19" />
+      <path d="M8.8 19 L15.2 19" stroke-width="1.8" />
+    </template>
   </svg>
 </template>
 

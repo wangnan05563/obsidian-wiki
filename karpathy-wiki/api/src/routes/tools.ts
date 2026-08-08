@@ -12,8 +12,9 @@ import { loadConfig, saveToolsConfig } from '../config.js';
 import type { ToolsConfig, CliToolEntry, EngineAdapter } from '../types.js';
 import { listConfiguredTools } from '../tools/registry.js';
 import { executeCliTool } from '../tools/cli-executor.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
-export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter) {
+export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter, guards: IsolationGuards = createIsolationGuards()) {
   // GET /api/tools/config：返回当前工具配置。
   // 直接返回 ToolsConfig 对象（非 { tools: ... } 包装），与前端 Config.vue 期望对齐（BR-026-1）。
   // 无敏感字段需脱敏（MCP env 可能含 API Key，但本接口仅后端调用，前端 Config 页面需展示）。
@@ -31,7 +32,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
   // PUT /api/tools/config：保存工具配置。
   // 为什么整体替换而非部分更新：工具配置项（mcpServers/cliTools/scenes）是数组，
   // 部分更新数组语义复杂（增删改索引），整体替换更清晰且前端管理方便。
-  app.put('/api/tools/config', async (request: FastifyRequest, reply) => {
+  app.put('/api/tools/config', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply) => {
     const body = request.body as {
       mcpServers?: ToolsConfig['mcpServers'];
       cliTools?: ToolsConfig['cliTools'];
@@ -70,7 +71,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
   // POST /api/tools/test-cli：测试 CLI 工具执行。
   // 为什么需要：用户在 Config 页面配置 CLI 工具后需验证是否能正常执行。
   // 安全：执行时仍受白名单 + 参数校验 + 超时约束。
-  app.post('/api/tools/test-cli', async (request: FastifyRequest, reply) => {
+  app.post('/api/tools/test-cli', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply) => {
     const body = request.body as {
       command: string;
       argsTemplate?: string;

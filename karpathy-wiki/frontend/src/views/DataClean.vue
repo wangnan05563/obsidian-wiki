@@ -322,8 +322,8 @@ onMounted(() => loadPages());
             <span class="block-bracket">]</span>
           </h3>
           <el-radio-group v-model="dedupViewMode" size="small">
-            <el-radio-button label="pairs">配对视图 ({{ duplicates.length }})</el-radio-button>
-            <el-radio-button label="groups">分组视图 ({{ duplicateGroups.length }})</el-radio-button>
+            <el-radio-button value="pairs">配对视图 ({{ duplicates.length }})</el-radio-button>
+            <el-radio-button value="groups">分组视图 ({{ duplicateGroups.length }})</el-radio-button>
           </el-radio-group>
         </div>
 

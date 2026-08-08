@@ -18,10 +18,12 @@ export interface TTSSpeakOptions {
   lang?: string;
   /** 语速倍率，0.5 - 2.0，clamp 由 provider 负责 */
   rate?: number;
-  /** 音量 0 - 1 */
+  /** 音量偏移（百分点，-30 ~ +30，0 为默认 +0%） */
   volume?: number;
-  /** 音调 0 - 2 */
+  /** 音调偏移（赫兹，-10 ~ +10，0 为默认 +0Hz） */
   pitch?: number;
+  /** 说话风格（Edge TTS neural 专属，如 narration-relaxed / chat），空串表示标准 */
+  style?: string;
   /** provider 特定参数（如豆包 voice_id / model），透传给具体实现 */
   voice?: string;
 }

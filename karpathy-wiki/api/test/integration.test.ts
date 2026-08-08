@@ -22,8 +22,8 @@ import { requirePermission } from '../src/middleware/auth.js';
 // 集成测试：验证不同角色（admin/user/guest）的权限边界
 // 覆盖需求：
 //   1. 管理员角色：拥有系统所有功能模块的访问和操作权限
-//   2. 普通用户角色：仅拥有知识浏览、知识图谱查看、知识库问答三个菜单
-//   3. 游客角色：仅拥有知识浏览、知识图谱查看、知识库问答三个菜单
+//   2. 普通用户角色：仪表盘 + 知识浏览、知识图谱查看、知识库问答、帮助文档、关于（dashboard 已对全员开放）
+//   3. 游客角色：与普通用户权限一致（dashboard 已对全员开放）
 //   4. 防止权限越权访问
 //   5. 权限缓存机制
 //   6. 审计日志记录
@@ -108,14 +108,14 @@ describe('集成测试：RBAC 权限边界', () => {
     });
   });
 
-  describe('需求 2：普通用户仅拥有 browse/query/graph 三菜单', () => {
-    it('普通用户权限列表应为 [browse, query, graph, help, about]', () => {
+  describe('需求 2：普通用户权限（含已开放的仪表盘）', () => {
+    it('普通用户权限列表应为 [dashboard, browse, query, graph, help, about]（仪表盘已开放）', () => {
       const perms = getRolePermissions('user');
-      expect(perms).toEqual(['browse', 'query', 'graph', 'help', 'about']);
+      expect(perms).toEqual(['dashboard', 'browse', 'query', 'graph', 'help', 'about']);
     });
 
-    it('普通用户对受保护菜单无访问权', () => {
-      const protectedMenus = ['dashboard', 'ingest', 'progress', 'health', 'config', 'tunnel', 'cleanup', 'users'] as const;
+    it('普通用户对受保护菜单（除已开放的仪表盘外）无访问权', () => {
+      const protectedMenus = ['ingest', 'progress', 'health', 'config', 'tunnel', 'cleanup', 'users'] as const;
       for (const p of protectedMenus) {
         expect(hasPermission('user', p)).toBe(false);
       }
@@ -127,7 +127,7 @@ describe('集成测试：RBAC 权限边界', () => {
       expect(hasPermission('user', 'graph')).toBe(true);
     });
 
-    it('普通用户会话通过 browse 守卫，被 dashboard 守卫拒绝', async () => {
+    it('普通用户会话通过 browse 守卫，也通过 dashboard 守卫（仪表盘已开放）', async () => {
       const session = createSession({ userId: 'u-user', username: 'user', role: 'user', secret: SECRET });
       // browse 通过
       const browseGuard = requirePermission('browse', 300000);
@@ -137,7 +137,7 @@ describe('集成测试：RBAC 权限边界', () => {
       const browseReply = createMockReply();
       await browseGuard(browseReq, browseReply);
       expect(browseReply._state.sent).toBe(false);
-      // dashboard 被拒
+      // dashboard 现在也通过（仪表盘已开放给所有用户）
       const dashGuard = requirePermission('dashboard', 300000);
       const dashReq = createMockRequest({
         currentUser: { userId: session.userId, username: session.username, role: session.role },
@@ -145,7 +145,7 @@ describe('集成测试：RBAC 权限边界', () => {
       });
       const dashReply = createMockReply();
       await dashGuard(dashReq, dashReply);
-      expect(dashReply._state.code).toBe(403);
+      expect(dashReply._state.sent).toBe(false);
     });
   });
 
@@ -190,7 +190,7 @@ describe('集成测试：RBAC 权限边界', () => {
       // 即使前端伪造 user.role = 'admin'，后端 checkPermission 仍基于静态表
       // 这里直接验证 checkPermission 不依赖会话角色而依赖 RBAC 静态表
       // 实际场景：前端伪造的 role 不会传给后端，后端从 session 校验后读取真实 role
-      expect(hasPermission('user', 'dashboard')).toBe(false);
+      expect(hasPermission('user', 'users')).toBe(false);
       expect(hasPermission('admin', 'dashboard')).toBe(true);
     });
 
@@ -204,12 +204,12 @@ describe('集成测试：RBAC 权限边界', () => {
     });
 
     it('权限缓存清除后重新检查应返回新结果', () => {
-      // 先缓存普通用户的结果
-      expect(checkPermission('user', 'dashboard')).toBe(false);
+      // 先缓存普通用户的结果（dashboard 现已开放）
+      expect(checkPermission('user', 'dashboard')).toBe(true);
       // 清除缓存
       invalidateRoleCache('user');
-      // 重新检查（RBAC 静态表仍是 false）
-      expect(checkPermission('user', 'dashboard')).toBe(false);
+      // 重新检查（RBAC 静态表仍是 true）
+      expect(checkPermission('user', 'dashboard')).toBe(true);
     });
   });
 
@@ -280,10 +280,11 @@ describe('集成测试：RBAC 权限边界', () => {
     });
 
     it('越权访问应记录 permission_denied 审计日志', async () => {
-      const guard = requirePermission('dashboard', 300000);
+      // dashboard 已对全员开放，改用普通用户无权访问的 config 验证越权审计
+      const guard = requirePermission('config', 300000);
       const req = createMockRequest({
         currentUser: { userId: 'u-user', username: 'user', role: 'user' },
-        url: '/api/dashboard',
+        url: '/api/config',
         method: 'GET',
         ip: '10.0.0.5',
       });
@@ -422,7 +423,8 @@ describe('集成测试：RBAC 权限边界', () => {
       });
       const validated = validateSession(session.token, SECRET);
       expect(hasPermission(validated!.role, 'browse')).toBe(true);
-      expect(hasPermission(validated!.role, 'dashboard')).toBe(false);
+      // 仪表盘已开放给所有用户（含游客）
+      expect(hasPermission(validated!.role, 'dashboard')).toBe(true);
     });
   });
 

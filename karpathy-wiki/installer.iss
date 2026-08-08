@@ -9,9 +9,10 @@ AppVersion={#MyAppVersion}
 AppPublisher=Karpathy-Wiki
 DefaultDirName={autopf}\KarpathyWiki
 DefaultGroupName=KarpathyWiki
-UninstallDisplayIcon={app}\karpathy-wiki.exe
+UninstallDisplayIcon={app}\app.ico
 OutputDir=dist
 OutputBaseFilename=KarpathyWiki-Setup-v{#MyAppVersion}
+SetupIconFile=assets\app.ico
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -23,9 +24,23 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"
 [Files]
-Source: "dist\karpathy-wiki\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; ---- 程序文件 / 资源：每次安装都覆盖（只读应用代码与资源，随版本更新）----
+; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "dist\karpathy-wiki\*" 通配。
+Source: "dist\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
+; 品牌图标：安装到 {app} 供快捷方式 / 卸载项引用（exe 图标另由 build-exe.ps1 用 rcedit 注入）
+Source: "assets\app.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+; ---- 用户数据（config.json / .env / vault / data）不再安装到 {app} ----
+; 原因：{app} 位于 Program Files，普通用户无写权限且卸载会被清除。
+; 改为由应用在首次运行时自动创建到 %LOCALAPPDATA%\KarpathyWiki（见 api/src/utils/runtime.ts），
+; 普通用户可写、不受卸载影响、多用户互不干扰。AI 服务设置持久化于该目录的 config.json。
 [Icons]
-Name: "{group}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"
-Name: "{commondesktop}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"; Tasks: desktopicon
+Name: "{group}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"; IconFilename: "{app}\app.ico"; IconIndex: 0
+Name: "{commondesktop}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"; Tasks: desktopicon; IconFilename: "{app}\app.ico"; IconIndex: 0
 [Run]
 Filename: "{app}\karpathy-wiki.exe"; Description: "启动 Karpathy-Wiki"; Flags: nowait postinstall skipifsilent

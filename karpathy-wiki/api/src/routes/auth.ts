@@ -1,13 +1,14 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
 import path from 'node:path';
-import type { AuthConfig, LoginRequest, CreateUserRequest, UpdateUserRequest } from '../auth/types.js';
-import { findUserByUsername, findUserById, listUsers, createUser, updateUser, deleteUser, updateLastLogin, initUserStore } from '../auth/user-store.js';
+import type { AuthConfig, LoginRequest, RegisterRequest, CreateUserRequest, UpdateUserRequest, UserRecord } from '../auth/types.js';
+import { findUserByUsername, findUserById, listUsers, createUser, updateUser, deleteUser, updateLastLogin, initUserStore, validateRegistrationInput } from '../auth/user-store.js';
 import { verifyPassword, getSessionSecret } from '../auth/password.js';
 import { createSession, destroySession, destroyUserSessions, startSessionCleanup } from '../auth/session.js';
 import { getRolePermissions } from '../auth/rbac.js';
 import { initAuditLog, writeAuditLog, createAuditEntry, readAuditLog } from '../auth/audit-log.js';
 import { setupAuthMiddleware, requireAuth, requireAdmin, audit, DEFAULT_PUBLIC_PATHS } from '../middleware/auth.js';
 import { invalidateRoleCache } from '../auth/permission-cache.js';
+import { checkAuthRateLimit, clientIpFromRequest } from '../auth/auth-rate-limit.js';
 import { getDataDir } from '../utils/runtime.js';
 
 // 认证路由模块
@@ -57,6 +58,9 @@ export function registerAuthRoute(app: FastifyInstance): void {
   if (!authConfig) {
     throw new Error('auth 模块未初始化，请先调用 initAuthModule');
   }
+  // 守卫后 authConfig 已确定非 null；闭包内 TS 无法保持对模块级 let 的收窄，
+  // 故捕获为 const 后在闭包中使用，避免冗余的非空断言（BR-028-1）。
+  const cfg = authConfig;
 
   // 注册认证中间件（全局 preHandler）
   // 为什么 /api/auth/me 不在 publicPaths：放公开列表会导致全局 preHandler 跳过 token 解析，
@@ -67,7 +71,9 @@ export function registerAuthRoute(app: FastifyInstance): void {
     enabled: authConfig.enabled,
     sessionSecret,
     permissionCacheTtlMs,
-    publicPaths: [...DEFAULT_PUBLIC_PATHS],
+    publicPaths: authConfig.publicPaths && authConfig.publicPaths.length > 0
+      ? authConfig.publicPaths
+      : [...DEFAULT_PUBLIC_PATHS],
   });
 
   // preHandler 守卫包装：requireAuth/requireAdmin 返回 async 函数，直接传引用触发 SonarQube S6544
@@ -86,9 +92,22 @@ export function registerAuthRoute(app: FastifyInstance): void {
   // 为什么不返回 token 在 cookie：本地优先应用，前端存储 token 更简单
   app.post('/api/auth/login', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as LoginRequest;
+    // 还原真实客户端 IP（隧道/反代场景取 X-Forwarded-For 首跳，否则回退 socket IP）
+    const clientIp = clientIpFromRequest(request);
     // 可选链合并 body nullish 守卫与字段访问（S6582）
     if (!body?.username || !body?.password) {
       return reply.code(400).send({ ok: false, message: '用户名和密码不能为空' });
+    }
+
+    // FR-RM-10 登录限流（复用同一框架）：单 IP 10 次/分钟、单用户名 5 次/分钟（防爆破）
+    const loginRl = checkAuthRateLimit({ ip: clientIp, username: body.username, kind: 'login' });
+    if (!loginRl.allowed) {
+      // BR-057-4 错误双日志：限流拒绝属潜在暴力破解/枚举，须留痕便于审计与溯源
+      request.log.warn({ ip: clientIp, username: body.username, kind: 'login' }, 'auth rate limit exceeded');
+      return reply
+        .code(429)
+        .header('Retry-After', String(loginRl.retryAfterSec))
+        .send({ ok: false, error: '登录请求过于频繁，请稍后再试', retryAfterSec: loginRl.retryAfterSec });
     }
 
     const user = await findUserByUsername(body.username);
@@ -99,7 +118,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const expectedHash = user?.passwordHash ?? 'dummyhash==';
     // 为什么无论用户是否存在都 await verifyPassword：保持响应时间一致
     // 异步 pbkdf2 不再阻塞事件循环，但响应时间仍包含一次完整哈希耗时
-    const passwordOk = await verifyPassword(body.password, salt, expectedHash, authConfig!.pbkdf2Iterations);
+    const passwordOk = await verifyPassword(body.password, salt, expectedHash, cfg.pbkdf2Iterations);
     const passwordValid = user !== null && passwordOk;
 
     if (!user || !passwordValid) {
@@ -110,7 +129,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
           username: body.username,
           action: 'login',
           resource: '/api/auth/login',
-          ip: request.ip,
+          ip: clientIp,
           result: 'fail',
           message: '用户名或密码错误',
         }),
@@ -127,7 +146,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
           username: user.username,
           action: 'login',
           resource: '/api/auth/login',
-          ip: request.ip,
+          ip: clientIp,
           result: 'fail',
           message: '账户已禁用',
         }),
@@ -141,7 +160,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
       username: user.username,
       role: user.role,
       secret: sessionSecret,
-      ttlMs: authConfig!.sessionTtlHours * 60 * 60 * 1000,
+      ttlMs: cfg.sessionTtlHours * 60 * 60 * 1000,
     });
 
     // 更新最后登录时间
@@ -152,10 +171,10 @@ export function registerAuthRoute(app: FastifyInstance): void {
       createAuditEntry({
         userId: user.id,
         username: user.username,
-        action: 'login',
-        resource: '/api/auth/login',
-        ip: request.ip,
-        result: 'success',
+          action: 'login',
+          resource: '/api/auth/login',
+          ip: clientIp,
+          result: 'success',
       }),
     );
 
@@ -171,6 +190,104 @@ export function registerAuthRoute(app: FastifyInstance): void {
         updatedAt: user.updatedAt,
         lastLoginAt: user.lastLoginAt,
         permissions: getRolePermissions(user.role),
+      },
+    });
+  });
+
+  // POST /api/auth/register：自助注册（公开）
+  // 简易机制：仅用户名 + 密码，默认角色 user（强制，忽略请求体 role，防权限提升）
+  // 成功后自动创建会话并返回 token（与 login 同构），实现「注册即登录」
+  //
+  // 设计要点（BR-057-5）：
+  //   - 双维度限流：单 IP 10/min + 单用户名探测 5/min（FR-RM-10），超限 429 + Retry-After；
+  //     真实客户端 IP 经 X-Forwarded-For 还原，避免隧道场景下 per-IP 限流坍缩为全站单桶。
+  //   - 恒定时间验证：用户名唯一性查库失败也走统一 409，不泄露用户名是否存在（枚举防护）。
+  //   - 角色强制：忽略请求体 role 字段，新建用户恒为 'user'，杜绝权限提升。
+  //   - 注册即登录：成功后直接签发会话 token，前端无需二次登录。
+  //   - 全链路审计：成功/失败/限流拒绝均写审计日志，便于安全溯源。
+  app.post('/api/auth/register', async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as RegisterRequest;
+    // 还原真实客户端 IP（隧道/反代场景取 X-Forwarded-For 首跳，否则回退 socket IP）
+    const clientIp = clientIpFromRequest(request);
+
+    // 1. 同步格式校验（不访问存储）
+    const validation = validateRegistrationInput(body);
+    if (!validation.ok) {
+      return reply.code(validation.status).send({ error: validation.error });
+    }
+    const username = body.username;
+
+    // FR-RM-10 注册限流：单 IP 10 次/分钟、单用户名探测 5 次/分钟（防批量撞库/枚举）
+    const rl = checkAuthRateLimit({ ip: clientIp, username, kind: 'register' });
+    if (!rl.allowed) {
+      // BR-057-4 错误双日志：限流拒绝属潜在批量撞库/枚举，须留痕便于审计与溯源
+      request.log.warn({ ip: clientIp, username, kind: 'register' }, 'auth rate limit exceeded');
+      return reply
+        .code(429)
+        .header('Retry-After', String(rl.retryAfterSec))
+        .send({ ok: false, error: '注册请求过于频繁，请稍后再试', retryAfterSec: rl.retryAfterSec });
+    }
+
+    // 2. 用户名唯一性校验（异步查库）
+    const existing = await findUserByUsername(username);
+    if (existing) {
+      writeAuditLog(
+        createAuditEntry({
+          userId: null,
+          username,
+          action: 'user_register',
+          resource: '/api/auth/register',
+          ip: clientIp,
+          result: 'fail',
+          message: '用户名已存在',
+        }),
+      );
+      return reply.code(409).send({ error: '用户名已存在' });
+    }
+
+    // 3. 创建用户（PBKDF2 哈希），角色强制为 user
+    // catch 分支已 return，故 try 后 newUser 必然已赋值，TS 流分析可收窄为 UserRecord，无需确定赋值断言
+    let newUser: UserRecord;
+    try {
+      newUser = await createUser({ username, password: body.password, role: 'user' });
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : '注册失败' });
+    }
+
+    // 4. 自动登录：创建会话并返回 token
+    const session = createSession({
+      userId: newUser.id,
+      username: newUser.username,
+      role: newUser.role,
+      secret: sessionSecret,
+      ttlMs: cfg.sessionTtlHours * 60 * 60 * 1000,
+    });
+    await updateLastLogin(newUser.id);
+
+    // 5. 审计日志：注册成功
+    writeAuditLog(
+      createAuditEntry({
+        userId: newUser.id,
+        username: newUser.username,
+          action: 'user_register',
+          resource: '/api/auth/register',
+          ip: clientIp,
+          result: 'success',
+      }),
+    );
+
+    return reply.send({
+      ok: true,
+      token: session.token,
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        role: newUser.role,
+        enabled: newUser.enabled,
+        createdAt: newUser.createdAt,
+        updatedAt: newUser.updatedAt,
+        lastLoginAt: newUser.lastLoginAt,
+        permissions: getRolePermissions(newUser.role),
       },
     });
   });

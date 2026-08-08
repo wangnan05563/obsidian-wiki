@@ -4,10 +4,11 @@ import { scanVault, archiveFiles, fixFrontmatter, mergeDuplicatePages, deleteFil
 import { deduplicatePages } from '../data-clean/dedup-engine.js';
 import { compareFiles, isValidVaultPath } from '../data-clean/diff-engine.js';
 import { SchedulerManager } from '../data-clean/scheduler-manager.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 let scheduler: SchedulerManager | null = null;
 
-export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService): void {
+export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService, guards: IsolationGuards = createIsolationGuards()): void {
   if (!scheduler) {
     scheduler = new SchedulerManager(vault.getVaultPath());
     void scheduler.load(); // Fire-and-forget initial load
@@ -22,7 +23,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.post('/api/data-clean/deduplicate', async (_req, reply) => {
+  app.post('/api/data-clean/deduplicate', { preHandler: guards.requireAdmin }, async (_req, reply) => {
     try {
       const result = await deduplicatePages(vault);
       return reply.send(result);
@@ -50,7 +51,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.post('/api/data-clean/archive', async (req, reply) => {
+  app.post('/api/data-clean/archive', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       const body = req.body as any;
       if (!Array.isArray(body?.files)) {
@@ -63,7 +64,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.delete('/api/data-clean/delete', async (req, reply) => {
+  app.delete('/api/data-clean/delete', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       const body = req.body as any;
       if (!Array.isArray(body?.files)) {
@@ -76,7 +77,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.put('/api/data-clean/fix-frontmatter', async (req, reply) => {
+  app.put('/api/data-clean/fix-frontmatter', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       const body = req.body as any;
       if (!Array.isArray(body?.paths)) {
@@ -89,7 +90,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.post('/api/data-clean/merge', async (req, reply) => {
+  app.post('/api/data-clean/merge', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       const body = req.body as any;
       if (!body.pageA || !body.pageB) {
@@ -128,7 +129,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.post('/api/data-clean/schedules', async (req, reply) => {
+  app.post('/api/data-clean/schedules', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       if (!scheduler) return reply.code(503).send({ error: 'Scheduler not initialized' });
       const body = req.body as any;
@@ -143,7 +144,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.put('/api/data-clean/schedules/:id', async (req, reply) => {
+  app.put('/api/data-clean/schedules/:id', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       if (!scheduler) return reply.code(503).send({ error: 'Scheduler not initialized' });
       const id = (req.params as any).id as string;
@@ -156,7 +157,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.delete('/api/data-clean/schedules/:id', async (req, reply) => {
+  app.delete('/api/data-clean/schedules/:id', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       if (!scheduler) return reply.code(503).send({ error: 'Scheduler not initialized' });
       const id = (req.params as any).id as string;
@@ -169,7 +170,7 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
     }
   });
 
-  app.post('/api/data-clean/schedules/:id/run', async (req, reply) => {
+  app.post('/api/data-clean/schedules/:id/run', { preHandler: guards.requireAdmin }, async (req, reply) => {
     try {
       if (!scheduler) return reply.code(503).send({ error: 'Scheduler not initialized' });
       const id = (req.params as any).id as string;

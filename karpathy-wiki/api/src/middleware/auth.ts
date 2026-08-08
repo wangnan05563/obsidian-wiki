@@ -30,10 +30,12 @@ export interface AuthMiddlewareConfig {
 
 // 默认公开路由（无需认证即可访问）
 // 为什么 /api/auth/login 公开：登录接口本身不需要 token
+// 为什么 /api/auth/register 公开：自助注册接口本身不需要 token
 // 为什么 /health 公开：Docker healthcheck 不带 token
 // 为什么导出：auth.ts 注册中间件时复用同一常量，避免字面量重复导致漂移（BR-048）
 export const DEFAULT_PUBLIC_PATHS = [
   '/api/auth/login',
+  '/api/auth/register',
   '/health',
 ] as const;
 
@@ -50,11 +52,17 @@ export function setupAuthMiddleware(app: FastifyInstance, config: AuthMiddleware
   // 装饰 request：默认无用户（未认证状态）
   app.decorateRequest('currentUser', null);
 
+  // 公开路径白名单：优先用 AuthConfig.publicPaths 覆盖，否则回退 DEFAULT_PUBLIC_PATHS 兜底常量。
+  // 单一来源 + 可配置，满足 auth-endpoint-classification「禁止硬编码端点路径」的硬约束。
+  const publicPaths = config.publicPaths && config.publicPaths.length > 0
+    ? config.publicPaths
+    : [...DEFAULT_PUBLIC_PATHS];
+
   // 全局 preHandler：解析 token + 注入 currentUser
   // 为什么用 preHandler 而非 onRequest：preHandler 在路由解析后执行，可读取路由配置
   app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
     // 1. 公开路由跳过认证
-    if (isPublicPath(request.url, config.publicPaths)) return;
+    if (isPublicPath(request.url, publicPaths)) return;
 
     // 2. 解析 Authorization 头
     const token = extractToken(request);
@@ -77,10 +85,12 @@ export function setupAuthMiddleware(app: FastifyInstance, config: AuthMiddleware
 }
 
 // 判断是否为公开路径
+// 精确匹配：避免 /health 误匹配 /health/xxx 等子路径（排查报告模块 1 MEDIUM）。
+// 当前公开端点（login/register/health）均无需要前缀放行的子路径，精确匹配即可收紧边界。
 function isPublicPath(url: string, publicPaths: string[]): boolean {
   // 取 pathname 部分（去除 query）
   const pathname = url.split('?')[0];
-  return publicPaths.some((p) => pathname === p || pathname.startsWith(p + '/'));
+  return publicPaths.includes(pathname);
 }
 
 // 从请求头提取 token
@@ -180,4 +190,49 @@ export function audit(params: {
       message,
     }),
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 隔离守卫工厂（权限隔离整改：BR-ISOLATION-01 / BR-ISOLATION-02）
+//
+// 背景：全局 preHandler 只「注入 currentUser」而「不拒绝」未认证请求；除 /api/auth/*
+// 外的大量写接口（会话/线程记忆/共享配置）零守卫，导致游客可越权读写删他人数据、
+// 篡改共享服务端密钥。本工厂为这些接口提供「auth 感知」的守卫。
+//
+// 关键不变量：当 auth 未启用（单租户 / 本地部署，enabled=false）时，守卫一律放行，
+// 严格保持既有的「关闭认证 = 全部管理员」部署形态，绝不破坏单租户可用性。
+// 仅当 auth.enabled === true 时才真正执行登录/管理员校验。
+// ─────────────────────────────────────────────────────────────────────────
+export interface IsolationGuardInput {
+  enabled?: boolean;
+  permissionCacheTtlSec?: number;
+}
+
+export interface IsolationGuards {
+  /** auth 是否启用；路由层可据此决定是否做 owner 归属校验。 */
+  enabled: boolean;
+  /** 要求已登录（auth 启用时），未登录返回 401。auth 关闭时放行。 */
+  requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  /** 要求管理员角色（auth 启用时），否则 401/403。auth 关闭时放行。 */
+  requireAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+}
+
+export function createIsolationGuards(auth?: IsolationGuardInput): IsolationGuards {
+  const enabled = auth?.enabled ?? false;
+  // AuthConfig.permissionCacheTtlSec 单位为秒，requireAdmin 内部需要毫秒
+  const ttlMs = (auth?.permissionCacheTtlSec ?? 300) * 1000;
+
+  const authGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!enabled) return; // 单租户：放行
+    if (!request.currentUser) {
+      reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
+    }
+  };
+
+  const adminGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!enabled) return; // 单租户：放行
+    await requireAdmin(ttlMs)(request, reply);
+  };
+
+  return { enabled, requireAuth: authGuard, requireAdmin: adminGuard };
 }

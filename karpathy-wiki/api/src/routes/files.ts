@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import matter from 'gray-matter';
 import type { VaultService } from '../vault/vault-service.js';
 import path from 'node:path';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // 注册文件管理路由。
 //   GET  /api/files/tree          获取 Vault 目录树
@@ -22,7 +23,7 @@ let filesPagesCache: { pages: unknown; cachedAt: number } | null = null;
 // 为什么独立常量：files/graph/stats/schema/tags-pending 共用同一档位，便于统一调整
 const READ_RATE_LIMIT = { max: 300, timeWindow: '1 minute' };
 
-export function registerFilesRoutes(app: FastifyInstance, vault: VaultService) {
+export function registerFilesRoutes(app: FastifyInstance, vault: VaultService, guards: IsolationGuards = createIsolationGuards()) {
   // 目录树：返回 Vault 内所有文件与目录的嵌套结构，供前端 el-tree 渲染。
   app.get('/api/files/tree', { config: { rateLimit: READ_RATE_LIMIT } }, async (_request, reply) => {
     const now = Date.now();
@@ -99,7 +100,7 @@ export function registerFilesRoutes(app: FastifyInstance, vault: VaultService) {
   });
 
   // 写文件：用户在编辑器中修改内容后保存。受 VaultService 白名单约束。
-  app.put('/api/files', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/files', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { path?: string };
     if (!query.path) {
       return reply.code(400).send({ error: '缺少 path 参数' });

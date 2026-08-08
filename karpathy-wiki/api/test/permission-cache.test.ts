@@ -30,16 +30,16 @@ describe('permission-cache 模块', () => {
       expect(checkPermission('user', 'browse')).toBe(true);
     });
 
-    it('普通用户对 dashboard 返回 false', () => {
-      expect(checkPermission('user', 'dashboard')).toBe(false);
+    it('普通用户对 dashboard 返回 true（仪表盘已开放给所有用户）', () => {
+      expect(checkPermission('user', 'dashboard')).toBe(true);
     });
 
     it('游客对 browse 返回 true', () => {
       expect(checkPermission('guest', 'browse')).toBe(true);
     });
 
-    it('游客对 dashboard 返回 false', () => {
-      expect(checkPermission('guest', 'dashboard')).toBe(false);
+    it('游客对 dashboard 返回 true（仪表盘已开放给所有用户）', () => {
+      expect(checkPermission('guest', 'dashboard')).toBe(true);
     });
   });
 
@@ -93,8 +93,13 @@ describe('permission-cache 模块', () => {
       expect(results).toEqual([true, true, true]);
     });
 
-    it('普通用户对混合权限返回部分 false', () => {
+    it('普通用户对混合权限返回全部 true（dashboard 已开放）', () => {
       const results = checkPermissions('user', ['browse', 'dashboard', 'query']);
+      expect(results).toEqual([true, true, true]);
+    });
+
+    it('普通用户对含 users 的混合权限返回部分 false', () => {
+      const results = checkPermissions('user', ['browse', 'users', 'query']);
       expect(results).toEqual([true, false, true]);
     });
 
@@ -177,8 +182,8 @@ describe('permission-cache 模块', () => {
       // 重新检查，结果应一致
       for (const p of perms) {
         const r = checkPermission('user', p);
-        // 仅 browse/query 为 true
-        if (p === 'browse' || p === 'query') {
+        // dashboard/browse/query 为 true（dashboard 已开放给所有用户）
+        if (p === 'dashboard' || p === 'browse' || p === 'query') {
           expect(r).toBe(true);
         } else {
           expect(r).toBe(false);

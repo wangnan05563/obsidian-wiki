@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Check, Close, CircleClose } from '@element-plus/icons-vue';
 import { consumeSSE } from '../utils/sse';
 import { useCompileStore } from '../stores/compile';
+import { usePermission } from '../composables/usePermission';
 import type {
   TreeNode,
   FileContent,
@@ -20,6 +21,8 @@ import type {
 //   Browse.vue 卸载会丢失局部 ref，切换走 SSE 流仍能继续运行；
 //   store 状态跨组件生命周期保留，切回页面后能继续看到进度信息
 const compileStore = useCompileStore();
+// 管理员判定：用于隐藏草稿审核 / AI 标签两个 Tab（需求：除管理员外只开放知识浏览 Tab）
+const { isAdmin } = usePermission();
 
 // 视图模式：knowledge=知识浏览，draft=草稿审核，tags=AI标签审核
 // 为什么独立 ref 而非路由：多模式共用 Browse 页面骨架，避免引入新菜单项
@@ -805,10 +808,12 @@ onMounted(async () => {
   // Ingest.vue 抽取完成后跳转过来时，通过 sessionStorage 传递目标模式
   // 为什么用 sessionStorage 而非 props：跨组件通信，避免 App.vue 中间层传递
   const jumpMode = sessionStorage.getItem('karpathy:jumpMode');
-  if (jumpMode === 'draft') {
+  // 需求：草稿审核 Tab 仅管理员可见；非管理员即便携带 jumpMode=draft 也不跳入，强制回知识浏览
+  if (jumpMode === 'draft' && isAdmin.value) {
     sessionStorage.removeItem('karpathy:jumpMode');
     switchMode('draft');
   } else {
+    if (jumpMode) sessionStorage.removeItem('karpathy:jumpMode');
     await loadTree();
   }
   // FR-11: 刷新后 knowledgeView 已从 localStorage 恢复为 kanban/calendar，
@@ -850,9 +855,9 @@ onMounted(async () => {
         </div>
         <!-- 模式切换：单选按钮组，避免新增菜单项 -->
         <el-radio-group v-model="mode" size="small" @change="switchMode">
-          <el-radio-button label="knowledge">知识浏览</el-radio-button>
-          <el-radio-button label="draft">草稿审核</el-radio-button>
-          <el-radio-button label="tags">AI 标签</el-radio-button>
+          <el-radio-button value="knowledge">知识浏览</el-radio-button>
+          <el-radio-button v-if="isAdmin" value="draft">草稿审核</el-radio-button>
+          <el-radio-button v-if="isAdmin" value="tags">AI 标签</el-radio-button>
         </el-radio-group>
         <el-button
           v-if="mode === 'knowledge'"
@@ -1218,9 +1223,9 @@ onMounted(async () => {
             <!-- FR-11 视图模式切换器（AC-11-1, AC-11-7） -->
             <div class="view-switcher">
               <el-radio-group v-model="knowledgeView" size="small">
-                <el-radio-button label="tree">目录</el-radio-button>
-                <el-radio-button label="kanban">看板</el-radio-button>
-                <el-radio-button label="calendar">日历</el-radio-button>
+                <el-radio-button value="tree">目录</el-radio-button>
+                <el-radio-button value="kanban">看板</el-radio-button>
+                <el-radio-button value="calendar">日历</el-radio-button>
               </el-radio-group>
             </div>
           </div>

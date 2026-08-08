@@ -9,6 +9,8 @@ import {
 } from '../config.js';
 import type { AppConfig } from '../types.js';
 import type { HarnessAdapter } from '../engine/harness-adapter.js';
+import type { IsolationGuards } from '../middleware/auth.js';
+import { createIsolationGuards } from '../middleware/auth.js';
 
 // 注册配置路由。
 //   GET  /api/config                  读取当前配置（API Key 字段脱敏）
@@ -19,8 +21,12 @@ import type { HarnessAdapter } from '../engine/harness-adapter.js';
 //   PUT  /api/config/batch            保存批量编译配置（需重启 multipart 限制才完全生效）
 //   PUT  /api/config/logging          保存日志配置（level 需重启，enableRequestLog 可热更新）
 // 配置中心前端展示与编辑入口，落盘 + 同步 adapter 运行时实例，避免双轨不一致。
-export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapter) {
-  app.get('/api/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
+export function registerConfigRoute(
+  app: FastifyInstance,
+  adapter: HarnessAdapter,
+  guards: IsolationGuards = createIsolationGuards(),
+) {
+  app.get('/api/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
     const config = await loadConfig();
     // 脱敏：apiKeyRef 是环境变量名（非 Key 本身），可展示；实际 Key 不返回
     return reply.send({
@@ -64,7 +70,7 @@ export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapte
 
   // §12.3-7 热加载：重读 config.json，将可热更新字段（model/maxSteps/tokenBudget/staleDays）
   // 即时同步到运行中的 adapter。adapter/vaultPath/server 涉及实例重建或端口绑定，需重启进程。
-  app.post('/api/config/reload', async (_request, reply) => {
+  app.post('/api/config/reload', { preHandler: guards.requireAdmin }, async (_request, reply) => {
     const fresh = await reloadConfig();
     adapter.updateConfig({
       model: fresh.llm.model,
@@ -86,7 +92,7 @@ export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapte
 
   // 保存运行参数（maxSteps/tokenBudget）到 config.json + 同步 adapter 运行时。
   // 为什么需要：用户在前端 Config.vue 调整 token 预算与步数上限后，需即时生效无需重启。
-  app.put('/api/config/budget', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/config/budget', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       maxSteps?: number;
       tokenBudget?: number;
@@ -123,7 +129,7 @@ export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapte
 
   // 保存健康检查配置（staleDays）到 config.json + 同步 adapter 运行时。
   // 为什么需要：用户根据知识库更新频率调整"过期页面"判定阈值后，需即时生效。
-  app.put('/api/config/health-check', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/config/health-check', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       staleDays?: number;
     };
@@ -153,7 +159,7 @@ export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapte
   // 保存批量编译配置（allowedExtensions/maxBatchSize/maxFileSizeMb）到 config.json。
   // 为什么不能热更新：multipart fileSize 限制在 Fastify 启动时注册，运行时不可变更。
   //   allowedExtensions/maxBatchSize 可热更新但为避免与 multipart 限制脱节，统一提示重启。
-  app.put('/api/config/batch', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/config/batch', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       allowedExtensions?: string[];
       maxBatchSize?: number;
@@ -194,7 +200,7 @@ export function registerConfigRoute(app: FastifyInstance, adapter: HarnessAdapte
   // 保存日志配置（level/enableRequestLog）到 config.json。
   // 为什么 level 需重启：pino logger 在 Fastify 启动时创建，运行时不可变更级别。
   //   enableRequestLog 可热更新（路由钩子运行时读取 config）。
-  app.put('/api/config/logging', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/config/logging', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       level?: string;
       enableRequestLog?: boolean;

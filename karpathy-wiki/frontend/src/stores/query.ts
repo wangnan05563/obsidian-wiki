@@ -105,6 +105,9 @@ export const useQueryStore = defineStore('query', () => {
   // 为什么独立于 currentMultimodal：image/ppt 通过独立 SSE 事件推送，结构不同，需独立字段
   const currentImage = ref<ChatMessage['image'] | null>(null);
   const currentPpt = ref<ChatMessage['ppt'] | null>(null);
+  // 当前问答线程隔离键：本轮会话所属的 threadId。
+  // 后端据此从本地记忆注入历史上下文并持久化会话/记忆；null 表示新会话（后端自动建线程）。
+  const currentThreadId = ref<string | null>(null);
   // v2: 多输出模式多选状态。默认从 localStorage 加载，缺失时全开
   // 与单选 outputMode 互不冲突：outputMode 控制多模态结构（mindmap/faq/timeline），
   // outputModes 控制流式阶段事件的可见性
@@ -252,7 +255,9 @@ export const useQueryStore = defineStore('query', () => {
     currentPpt.value = null;
   }
 
-  function finalizeAnswer(sessionId?: string, messageIndex?: number, followups?: string[]) {
+  function finalizeAnswer(sessionId?: string, messageIndex?: number, threadId?: string, followups?: string[]) {
+    // 记录本轮问答归属的线程（与 sessionId 同源，1 线程 1 会话），供后续续接记忆与归档
+    if (threadId) currentThreadId.value = threadId;
     if (streamingAnswer.value) {
       const finalFollowups = followups?.length ? followups : currentFollowups.value;
       messages.value.push({
@@ -265,6 +270,9 @@ export const useQueryStore = defineStore('query', () => {
         createdAt: new Date().toISOString(),
         sessionId,
         messageIndex,
+        threadId,
+        // FR-RM-09：正常完成标记为 complete（缺省亦视为 complete），供续答判定区分中间态
+        status: 'complete',
         // FR-09-2 多模态输出：附加 mindmap/faq/timeline 到消息，前端渲染为独立卡片
         multimodal: currentMultimodal.value ?? undefined,
         // v3 图像/PPT 生成结果附加到消息
@@ -276,6 +284,16 @@ export const useQueryStore = defineStore('query', () => {
     isLoading.value = false;
   }
 
+  // 开始一轮问答：清空上一轮暂存（streaming/thinking/refs…）并置 loading
+  // 为什么独立成方法：submitQuestion（首问）与 sendQuestion（含重新生成）都要在进入 SSE 前
+  // 立即标记 isLoading=true，否则重新生成时流式气泡（loading dots / 实时思考 / 流式答案）
+  // 因 isLoading 仍为 false 而完全不渲染，用户要等到 done 事件才看到结果（UX 缺陷）。
+  function beginStreaming() {
+    clearCurrentRound();
+    errorMessage.value = '';
+    isLoading.value = true;
+  }
+
   function submitQuestion(question: string) {
     messages.value.push({
       id: crypto.randomUUID(),
@@ -283,9 +301,7 @@ export const useQueryStore = defineStore('query', () => {
       content: question,
       createdAt: new Date().toISOString(),
     });
-    clearCurrentRound();
-    errorMessage.value = '';
-    isLoading.value = true;
+    beginStreaming();
   }
 
   function handleError(message: string) {
@@ -297,6 +313,8 @@ export const useQueryStore = defineStore('query', () => {
         content: `${streamingAnswer.value}\n\n[出错: ${message}]`,
         refs: currentRefs.value.length ? [...currentRefs.value] : undefined,
         createdAt: new Date().toISOString(),
+        // FR-RM-09：生成出错 → error，重载后不自动续答
+        status: 'error',
       });
     }
     clearCurrentRound();
@@ -306,7 +324,14 @@ export const useQueryStore = defineStore('query', () => {
   // 用户主动停止或超时停止：保留已收到的部分答案，不显示错误样式
   // 为什么独立于 handleError：停止是用户主动行为或保护性兜底，非错误，
   // 不应污染 errorMessage，消息尾部追加"[已停止]"让用户感知中断点
-  function stopLoading(reason: 'user' | 'timeout') {
+  // 'edit'：编辑重发场景下终止当前回复——仅清空本轮 + 解除 loading，不追加 [已停止]、
+  // 不弹提示，因为调用方（handleConfirmEdit）随后会丢弃该 user 消息及其后续并重发
+  function stopLoading(reason: 'user' | 'timeout' | 'edit') {
+    if (reason === 'edit') {
+      clearCurrentRound();
+      isLoading.value = false;
+      return;
+    }
     const suffix = reason === 'user' ? '[已停止]' : '[已超时]';
     if (streamingAnswer.value) {
       messages.value.push({
@@ -316,6 +341,8 @@ export const useQueryStore = defineStore('query', () => {
         refs: currentRefs.value.length ? [...currentRefs.value] : undefined,
         thinking: currentThinking.value.length ? [...currentThinking.value] : undefined,
         createdAt: new Date().toISOString(),
+        // FR-RM-09：用户/超时主动停止 → interrupted，重载后不自动续答
+        status: 'interrupted',
       });
     }
     clearCurrentRound();
@@ -327,6 +354,13 @@ export const useQueryStore = defineStore('query', () => {
     clearCurrentRound();
     errorMessage.value = '';
     isLoading.value = false;
+    // 新会话：清空线程隔离键，下次问答由后端自动创建新线程（记忆不串台）
+    currentThreadId.value = null;
+  }
+
+  // 设置当前线程隔离键（done 事件回写 / 切换历史会话时恢复）
+  function setThreadId(id: string | null) {
+    currentThreadId.value = id;
   }
 
   function markArchived(index: number) {
@@ -338,6 +372,26 @@ export const useQueryStore = defineStore('query', () => {
     clearCurrentRound();
     errorMessage.value = '';
     isLoading.value = false;
+  }
+
+  // FR-RM-09 断点续答：返回「可持久化」的消息快照。
+  // 为什么需要独立方法：流式过程中部分答案仅存在于内存 streamingAnswer（未进入 messages），
+  // 而 persistConversation 只落盘 messages。若直接持久化 messages，刷新/切页时正在生成的部分答案会丢失。
+  // 本方法在 isLoading && streamingAnswer 非空时，把当前部分答案作为一条 status:'streaming' 的
+  // assistant 占位消息追加到末尾，使持久化产物包含中间态；重载后据此判定「需续答」。
+  // 注意：该方法不修改 messages（纯派生），实时 UI 仍由 streamingAnswer 渲染，二者互不干扰。
+  function messagesWithStreaming(): ChatMessage[] {
+    const arr: ChatMessage[] = [...messages.value];
+    if (isLoading.value && streamingAnswer.value) {
+      arr.push({
+        id: undefined,
+        role: 'assistant',
+        content: streamingAnswer.value,
+        createdAt: new Date().toISOString(),
+        status: 'streaming',
+      });
+    }
+    return arr;
   }
 
   function removeMessagesFrom(index: number) {
@@ -371,6 +425,8 @@ export const useQueryStore = defineStore('query', () => {
     // v3 暴露图像/PPT 生成状态，供 Query.vue 在 streaming 阶段预览
     currentImage,
     currentPpt,
+    // 当前线程隔离键（供 Query.vue / FloatingChat.vue 发送 threadId 续接本地记忆）
+    currentThreadId,
     // v2: 暴露多输出模式状态与切换方法，供 Query.vue 多选控件使用
     outputModes,
     // §真流式暴露 streamMode 状态与切换方法，供 Query.vue 开关使用
@@ -389,6 +445,8 @@ export const useQueryStore = defineStore('query', () => {
     setPpt,
     finalizeAnswer,
     submitQuestion,
+    // 进入 SSE 前立即标记 loading，确保重新生成等路径也能即时显示流式 UI
+    beginStreaming,
     handleError,
     stopLoading,
     reset,
@@ -397,6 +455,9 @@ export const useQueryStore = defineStore('query', () => {
     removeMessagesFrom,
     removeMessage,
     setFeedback,
+    setThreadId,
+    // FR-RM-09 暴露 messagesWithStreaming 供 Query.vue 在流式过程中持久化中间态
+    messagesWithStreaming,
     // v2: 多输出模式切换
     toggleOutputMode,
     // §真流式切换

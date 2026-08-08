@@ -13,6 +13,7 @@ import type { VaultService } from '../vault/vault-service.js';
 import { createSSESender } from '../utils/sse.js';
 import { crawlUrl, DEFAULT_CRAWL_CONFIG } from '../utils/url-crawl.js';
 import { saveUrlCrawlConfig } from '../config.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // URL 格式校验正则：仅允许 http/https，防 javascript:/data:/file: 等危险协议
 // 为什么不直接用 new URL：构造函数不拦截协议，需显式白名单
@@ -24,6 +25,7 @@ export function registerUrlIngestRoute(
   adapter: EngineAdapter,
   vault: VaultService,
   config: AppConfig,
+  guards: IsolationGuards = createIsolationGuards(),
 ) {
   // ==========================================================================
   // POST /api/url-ingest/crawl
@@ -36,6 +38,7 @@ export function registerUrlIngestRoute(
   //   前端拿到 combinedMarkdown 后用 /api/compile 的 text 模式编译，保持职责单一
   // ==========================================================================
   app.post('/api/url-ingest/crawl', {
+    preHandler: guards.requireAdmin,
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = (request.body ?? {}) as {
@@ -139,7 +142,7 @@ export function registerUrlIngestRoute(
   // 更新 URL 爬取子系统配置（5.x 优化：支持全部字段）
   // 仅更新显式提供的字段，未提供字段保留原值（saveUrlCrawlConfig 内部条件合并）
   // ==========================================================================
-  app.put('/api/url-ingest/config', async (request, reply) => {
+  app.put('/api/url-ingest/config', { preHandler: guards.requireAdmin }, async (request, reply) => {
     const body = (request.body ?? {}) as Partial<UrlCrawlConfig> & { urlCrawl?: Partial<UrlCrawlConfig> };
     // 兼容两种请求格式：{ urlCrawl: UrlCrawlConfig }（前端 Config.vue）和 UrlCrawlConfig（直接传）
     const updates = body.urlCrawl ?? body;

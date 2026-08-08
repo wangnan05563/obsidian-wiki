@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { VaultService } from '../vault/vault-service.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -87,7 +88,7 @@ function parseDiffLines(diff: string): DiffLine[] {
 // 适用于 schema 内容查询、git 历史与 diff 三个 GET 端点
 const READ_RATE_LIMIT = { max: 300, timeWindow: '1 minute' };
 
-export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) {
+export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService, guards: IsolationGuards = createIsolationGuards()) {
   app.get('/api/schema', { config: { rateLimit: READ_RATE_LIMIT } }, async (_request, reply) => {
     try {
       const content = await vault.readFile('SCHEMA.md');
@@ -99,7 +100,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService) 
     }
   });
 
-  app.put('/api/schema', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/schema', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { content?: string };
     if (!body || typeof body.content !== 'string') {
       return reply.code(400).send({ error: '请求体须含 content 字段' });
