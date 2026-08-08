@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import { parseBookmarksHtml } from '../utils/bookmark-connector.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // FR-16-2 浏览器书签导入路由
 // 遵循 V3.1 §6.2 约束：仅用于 ingest（内容先 archiveRaw → compile），禁止跨源 RAG
@@ -10,8 +11,8 @@ import { parseBookmarksHtml } from '../utils/bookmark-connector.js';
 // 为什么分离"解析"与"compile"：遵循项目"compile 是 compile"原则，前端拿到 combinedMarkdown
 //   后复用 /api/compile 的 text 模式调用 compile，保持职责单一
 
-export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: string) {
-  app.post('/api/ingest/bookmarks', async (request: FastifyRequest, reply: FastifyReply) => {
+export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: string, guards: IsolationGuards = createIsolationGuards()) {
+  app.post('/api/ingest/bookmarks', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     // 文件大小限制：书签导出文件通常 100KB-10MB，20MB 上限足够
     const data = await request.file({ limits: { fileSize: 20 * 1024 * 1024 } });
     if (!data) {

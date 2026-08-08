@@ -3,7 +3,7 @@ title: PKM报文体系
 type: concept
 created: 2025-04-09
 updated: 2025-04-09
-source: raw/wiki-batch-1784715045163-3-12.______________________.md
+source: raw/12.______________________.md
 tags: [票据业务, 报文规范, PKM, XML]
 ---
 

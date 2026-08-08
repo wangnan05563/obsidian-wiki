@@ -11,6 +11,7 @@ import { withCompileLock } from '../compile-queue.js';
 import { preprocessQqChat, redactExtractOutput } from '../qq-ingest/preprocess/qq-preprocess.js';
 import { extractWorkflow } from '../qq-ingest/qq-extract-workflow.js';
 import { saveQqConfig } from '../config.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // rawId 校验正则：UUID v4 格式，防路径穿越
 const RAW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,6 +26,7 @@ export function registerQqIngestRoute(
   adapter: EngineAdapter,
   vault: VaultService,
   config: AppConfig,
+  guards: IsolationGuards = createIsolationGuards(),
 ) {
   const qqConfig = config.qq ?? {
     noise_rules: { 'NR-1': true, 'NR-2': true, 'NR-3': true, 'NR-4': true, 'NR-5': true, 'NR-6': true },
@@ -48,6 +50,7 @@ export function registerQqIngestRoute(
   // 上传 QQ 文件（.txt/.json），触发预清洗，返回 SSE 流（含进度与最终结果）
   // ==========================================================================
   app.post('/api/qq-ingest/upload', {
+    preHandler: guards.requireAdmin,
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const file = await request.file();
@@ -294,6 +297,7 @@ export function registerQqIngestRoute(
   // 上限：config.batch.maxBatchSize（默认 50），防滥用
   // ==========================================================================
   app.post('/api/qq-ingest/compile/batch', {
+    preHandler: guards.requireAdmin,
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = (request.body ?? {}) as { drafts?: string[] };
@@ -492,7 +496,7 @@ export function registerQqIngestRoute(
   // 仅更新显式提供的字段，未提供字段保留原值（saveQqConfig 内部条件合并）
   // 安全：privacy_patterns 是用户自定义正则，运行时由 qq-preprocess 编译，需 try/catch 防止正则错误
   // ==========================================================================
-  app.put('/api/qq-ingest/config', async (request, reply) => {
+  app.put('/api/qq-ingest/config', { preHandler: guards.requireAdmin }, async (request, reply) => {
     // 兼容两种请求格式：{ qq: QqConfig }（前端 Config.vue）和 QqConfig（直接传）
     // 为什么需要兼容：前端 saveQqConfigForm 发送 { qq: qqConfig }，但 API 约定可能变化
     const raw = (request.body ?? {}) as { qq?: Partial<QqConfig> } & Partial<QqConfig>;

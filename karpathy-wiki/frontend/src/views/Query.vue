@@ -14,13 +14,23 @@ import MessageToolbar from '../components/MessageToolbar.vue';
 import MultimodalOutputCard from '../components/MultimodalOutputCard.vue';
 import { useQueryStore, ALL_OUTPUT_MODES, OUTPUT_MODE_LABELS, type OutputMode, ALL_MIDDLEWARES, MIDDLEWARE_LABELS, type Middleware } from '../stores/query';
 import { useAuthStore } from '../stores/auth';
-import { useConversationsStore } from '../stores/conversations';
+import { useConversationsStore, getLastActiveConversationId } from '../stores/conversations';
 import { useModelStore } from '../stores/model';
 import { useAttachmentsStore } from '../stores/attachments';
+// 消息输入框个人偏好（按用户隔离）：字体大小 / 主题 / 快捷回复 / 历史偏好 / 回车发送 / 紧凑模式
+import { useInputBoxSettings } from '../stores/inputBoxSettings';
 import { dbGet, CHAT_STORES } from '../services/chatDb';
+// 按用户隔离配置（BYOK 代理）：每次请求携带当前用户的 AI/搜索/工具配置，
+// 后端用其覆盖服务端共享配置，密钥仅存客户端、不落服务端磁盘。
+import {
+  loadAiUserConfig,
+  loadSearchUserConfig,
+  loadToolsUserConfig,
+} from '../services/userConfig';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
 import { consumeQuerySSE } from '../utils/sse';
+import { useChatAutoScroll } from '../composables/useChatAutoScroll';
 import type { Attachment, Reference } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
 
@@ -115,12 +125,34 @@ const handleRefAnchorClick = (e: MouseEvent) => {
 const store = useQueryStore();
 const authStore = useAuthStore();
 const conversationsStore = useConversationsStore();
+// 输入框个人偏好 store（按用户隔离）：字体大小 / 主题 / 快捷回复 / 历史偏好 / 回车发送 / 紧凑模式
+const inputBoxStore = useInputBoxSettings();
+
+// 登录态变化（登录 / 登出 / 切换账户 / restoreSession 完成）后重新按 owner 隔离加载会话，
+// 避免挂载时 auth 尚未就绪导致侧栏停在未过滤快照（多账户隔离防御）。
+// 关键：先 resetSession() 作废上一账户的会话作用域（currentConversationId / scopedOwnerId），
+// 再 loadConversations()。否则上一账户的 currentConversationId 被下一账户复用，调 persistConversation
+// 时覆盖并改属上一用户的会话，造成「admin 历史消失 / 人人可见」的跨账户泄漏（FR-RM-06）。
+watch(
+  () => authStore.user?.id,
+  async () => {
+    try {
+      conversationsStore.resetSession();
+      await conversationsStore.loadConversations();
+    } catch {
+      // IndexedDB 不可用时静默降级
+    }
+    // 输入框偏好同样按用户隔离：账户切换 / 登出时先同步重置为默认，再按新 userId 异步加载
+    // （applyForUser 内部自带重置 + 竞态防护，阻断上一账户字体/主题/快捷回复残留到下一账户）
+    inputBoxStore.applyForUser(authStore.user?.id);
+  },
+);
 const modelStore = useModelStore();
 const attachmentsStore = useAttachmentsStore();
 
 // FR-12 AI 伙伴预设：从 /api/ai/config 加载 skills 列表与当前 activeSkill
 const skills = ref<Array<{ id: string; name: string; description?: string; enabled?: boolean }>>([]);
-const activeSkillId = ref('');
+const activeSkillId = ref(localStorage.getItem(STORAGE_KEYS.ACTIVE_SKILL) || '');
 
 async function loadSkills() {
   try {
@@ -128,7 +160,8 @@ async function loadSkills() {
     if (!res.ok) return;
     const cfg = await res.json() as { skills?: typeof skills.value; activeSkill?: string };
     skills.value = cfg.skills?.filter((s) => s.enabled) ?? [];
-    activeSkillId.value = cfg.activeSkill ?? '';
+    // 优先用后端保存的 activeSkill；后端无记录时回退本地 localStorage（保证刷新后保留选择）
+    activeSkillId.value = cfg.activeSkill ?? (localStorage.getItem(STORAGE_KEYS.ACTIVE_SKILL) || '');
   } catch { /* skills 加载失败不阻断主流程 */ }
 }
 
@@ -145,6 +178,11 @@ async function handleSkillChange(skillId: string) {
     } else {
       ElMessage.success('已切换到默认模式');
     }
+    // 持久化当前 AI 伙伴选择，跨刷新保留
+    try {
+      if (skillId) localStorage.setItem(STORAGE_KEYS.ACTIVE_SKILL, skillId);
+      else localStorage.removeItem(STORAGE_KEYS.ACTIVE_SKILL);
+    } catch { /* 写入失败静默降级 */ }
   } catch (err) {
     ElMessage.error('伙伴切换失败：' + (err as Error).message);
     // 回滚 UI
@@ -164,6 +202,9 @@ const searchProgressLabel = computed(() => {
 const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 let abortController: AbortController | null = null;
+// 编辑重发：正在编辑的消息索引与其草稿文本；editingIdx===idx 时该 user 气泡渲染为可编辑态
+const editingIdx = ref<number | null>(null);
+const editingText = ref('');
 
 // 问答超时机制：LLM 长时间无响应时自动中断，避免用户卡在"正在思考"
 // 为什么 120 秒：覆盖 MCP 扩展工具加载（最多 30s，已并行优化）+ LLM 首字节延迟（5-15s）
@@ -172,8 +213,11 @@ let abortController: AbortController | null = null;
 //   导致 AI 实际有回复但前端已超时中断，用户感知"AI 未回复信息"。
 const QUESTION_TIMEOUT_MS = 120_000;
 let questionTimeoutId: ReturnType<typeof setTimeout> | null = null;
-// 标记本次中断的原因，供 finally 分支区分用户停止 / 超时 / 正常完成
-let abortReason: 'user' | 'timeout' | null = null;
+// 标记本次中断的原因，供 finally 分支区分用户停止 / 超时 / 正常完成 / 编辑重发
+let abortReason: 'user' | 'timeout' | 'edit' | null = null;
+// 编辑重发：当前回复被终止后，需丢弃被编辑的 user 消息及其后续并重发的缓存
+let pendingResendQuestion: string | null = null;
+let pendingResendIdx: number | null = null;
 
 // F-3.11 二态侧栏：expanded(280px) / hidden(0,完全隐藏，仅浮动展开按钮)
 // 为什么改二态：原三态 expanded→collapsed→hidden 需点两次才能完全折叠，
@@ -221,7 +265,11 @@ const toolbarTools = [
 // 为什么独立于 activeMode：activeMode 控制 LLM 行为（web/deep），outputMode 控制输出结构化格式
 // 两者正交：用户可同时选 'deep' + 'mindmap' 深度思考并输出思维导图
 // v3 扩展：image 走 Agnes Image API 生成图像，ppt 走 LLM 生成 Marp Markdown
-const outputMode = ref<'normal' | 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt'>('normal');
+const outputMode = ref<'normal' | 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt'>(
+  (localStorage.getItem(STORAGE_KEYS.OUTPUT_MODE) as
+    | 'normal' | 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt'
+    | null) || 'normal',
+);
 const outputModeOptions = [
   { value: 'normal', label: '普通' },
   { value: 'mindmap', label: '思维导图' },
@@ -232,6 +280,10 @@ const outputModeOptions = [
 ] as const;
 function handleOutputModeChange(val: 'normal' | 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt') {
   outputMode.value = val;
+  // 持久化思维导图/FAQ 等多模态模式到 localStorage，跨刷新保留（避免"设置没保存"的观感）
+  try {
+    localStorage.setItem(STORAGE_KEYS.OUTPUT_MODE, val);
+  } catch { /* 写入失败静默降级 */ }
 }
 // v2: 多输出模式多选切换。点击复选框/下拉项时切换模式。
 // 为什么用 stopPropagation：避免 el-dropdown-item 默认行为与 checkbox 冲突（重复触发）
@@ -392,17 +444,13 @@ function handleRemoveAttachment(id: string) {
   pendingAttachmentIds.value = pendingAttachmentIds.value.filter(i => i !== id);
 }
 
-function scrollToBottom() {
-  nextTick(() => {
-    if (chatBodyRef.value) {
-      chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight;
-    }
-  });
-}
-
+// 自动贴底滚动（流式输出场景）：逐 token 滚动输出 + 自动下拉展示。
+// 新消息（用户问题 / 完成答案）强制贴底；流式令牌尊重用户上滑暂停，避免与用户争夺滚动位置。
+const { scrollToBottom } = useChatAutoScroll(chatBodyRef, () => store.isLoading);
+watch(() => store.messages.length, () => scrollToBottom(true));
 watch(
-  () => [store.messages.length, store.streamingAnswer, store.currentThinking.length],
-  scrollToBottom,
+  () => [store.streamingAnswer, store.currentThinking.length],
+  () => scrollToBottom(),
 );
 
 // Blob 转 dataURL（base64）：用于把附件内嵌到 SSE 请求体
@@ -453,7 +501,20 @@ function normalizeRefs(refs: string[] | Reference[] | undefined): Reference[] {
 async function sendQuestion(question: string) {
   abortController = new AbortController();
   abortReason = null;
-  const history = store.messages.map((m) => ({ role: m.role, content: m.content }));
+  // F-3.13 修复：立即标记 loading，让流式气泡（loading dots / 实时思考 / 流式答案）即时出现。
+  // 关键：重新生成路径（handleRegenerate）不走 submitQuestion，此前 isLoading 始终为 false，
+  // 导致流式块 v-if="streamingAnswer || isLoading" 不渲染、原回答已删除，用户要等 done 事件才看到结果。
+  store.beginStreaming();
+  // 线程隔离 + 本地记忆：已有 threadId 时，后端优先从本地记忆（data/threads/{id}/memory.json）
+  // 注入历史上下文（保证跨重启连贯），前端无需再重复发送 history；
+  // 无线程（新会话首问）时回退为前端透传完整 history（向后兼容，后端记忆为空时亦会回退）。
+  const activeThreadId = store.currentThreadId;
+  // 历史记录偏好（按用户隔离）：rely=依赖服务端线程记忆，绝不发送本地 history；
+  // send=新会话首问携带本地 history（默认）。
+  const history =
+    activeThreadId || inputBoxStore.settings.historyPreference === 'rely'
+      ? undefined
+      : store.messages.map((m) => ({ role: m.role, content: m.content }));
 
   // 启动超时定时器：到达阈值后自动 abort 并标记为 timeout
   // 为什么用 setTimeout 而非 AbortSignal.timeout：需要同时设置 abortReason 标记
@@ -471,7 +532,16 @@ async function sendQuestion(question: string) {
 
   // 构造请求体：F-3.4 工具栏 mode 字段统一传递到 SSE
   // 模型切换由 PUT /api/ai/config 统一处理，不在此处传 model
-  const body: Record<string, unknown> = { question, history };
+  const body: Record<string, unknown> = { question };
+  // 仅当无 threadId（新会话首问）时携带前端 history 作为上下文回退；
+  // 有 threadId 时后端从本地记忆注入，前端不再发送 history（避免重复上下文）
+  if (!activeThreadId && history && history.length > 0) {
+    body.history = history;
+  }
+  // 携带 threadId 供后端定位本地记忆与归档（后端在记忆非空时优先用记忆，否则回退 history）
+  if (activeThreadId) {
+    body.threadId = activeThreadId;
+  }
   if (activeMode.value) {
     body.mode = activeMode.value;
     // 联网搜索需要同时打开 webSearch 标志（向后端 query-workflow 传递）
@@ -498,6 +568,34 @@ async function sendQuestion(question: string) {
   // 与 outputModes 一致的策略：后端收到 undefined 时按各功能默认行为执行
   if (store.middlewares.length > 0 && store.middlewares.length < ALL_MIDDLEWARES.length) {
     body.middlewares = [...store.middlewares];
+  }
+
+  // ── BYOK per-user 配置注入 ──
+  // 每个用户携带自己配置的 AI 服务 / 搜索引擎 / 工具配置（含 API Key），
+  // 后端以这些覆盖项替换服务端共享配置，实现"各用户独立额度、互不抢占限流"。
+  // 密钥仅经此请求体一次性发给后端代理，后端不持久化到磁盘（参见 services/userConfig.ts）。
+  const uid = authStore.user?.id || 'guest';
+  const [aiCfg, searchCfg, toolsCfg] = await Promise.all([
+    loadAiUserConfig(uid),
+    loadSearchUserConfig(uid),
+    loadToolsUserConfig(uid),
+  ]);
+  // 仅当该用户已填 API Key 才下发 llmConfig（空密钥视为未配置，交由后端 400 拦截）
+  if (aiCfg && aiCfg.apiKey) {
+    body.llmConfig = aiCfg;
+  }
+  if (searchCfg && searchCfg.apiKey) {
+    body.searchConfig = searchCfg;
+  }
+  // 工具配置：仅当用户实际配置了工具（非默认空配置）才下发。
+  // 否则空对象会整体替换服务端共享 MCP/CLI，导致未配置工具的用户工具能力回退。
+  // 已配置工具的用户仍始终下发自身隔离配置（落实"各用户调用自己配置"）。
+  const hasOwnTools =
+    (toolsCfg.mcpServers?.length ?? 0) > 0 ||
+    (toolsCfg.cliTools?.length ?? 0) > 0 ||
+    (toolsCfg.scenes?.length ?? 0) > 0;
+  if (hasOwnTools) {
+    body.toolsConfig = toolsCfg;
   }
 
   try {
@@ -529,20 +627,35 @@ async function sendQuestion(question: string) {
       clearTimeout(questionTimeoutId);
       questionTimeoutId = null;
     }
-    // 处理主动停止/超时：store 此时仍为 isLoading=true 且未收到 done 事件
-    // 调用 stopLoading 保留已收到的部分答案，追加 [已停止]/[已超时] 标记
+    // 处理主动停止/超时/编辑重发：store 此时仍为 isLoading=true 且未收到 done 事件
+    // 调用 stopLoading 保留已收到的部分答案，追加 [已停止]/[已超时] 标记（edit 不追加、不提示）
     if (abortReason && store.isLoading) {
       store.stopLoading(abortReason);
       if (abortReason === 'user') {
         ElMessage.info('已停止回答');
-      } else {
+      } else if (abortReason === 'timeout') {
         ElMessage.warning(`问答超时（${QUESTION_TIMEOUT_MS / 1000}秒无响应），请检查网络或模型配置`);
       }
-      // 持久化停止后的部分答案到 IndexedDB
-      await conversationsStore.persistConversation(store.messages);
+      // 持久化停止后的部分答案到 IndexedDB（edit 场景不在此持久化，稍后重发时统一持久化）
+      if (abortReason !== 'edit') {
+        await conversationsStore.persistConversation(store.messages);
+      }
     }
     abortReason = null;
     abortController = null;
+    // 编辑重发：当前回复已终止，丢弃被编辑的 user 消息及其后续，重新触发思考
+    if (pendingResendQuestion !== null && pendingResendIdx !== null) {
+      const q = pendingResendQuestion;
+      const i = pendingResendIdx;
+      pendingResendQuestion = null;
+      pendingResendIdx = null;
+      if (i >= 0 && i < store.messages.length) {
+        store.removeMessagesFrom(i);
+        // 编辑重发：被编辑的 user 消息已被 removeMessagesFrom 丢弃，必须 submitQuestion 重新插入，否则对话里只剩悬空答案
+        store.submitQuestion(q);
+        void sendQuestion(q);
+      }
+    }
   }
 }
 
@@ -555,18 +668,92 @@ function handleStop() {
   abortController.abort();
 }
 
+// FR-RM-09 断点续答：流式过程中持续落盘中间态，使刷新/切页后状态不丢失。
+// 为什么组件内 watch：组件卸载（切页）时 watch 自动停止；但切页时后台流仍通过 sendQuestion 的
+// finally 在完成后落盘完整答案，且刷新前的防抖已落盘过「用户问题 + streaming 标记」，
+// 重载据此自动续答（重新生成），故组件内 watch 已满足需求，无需脱离组件生命周期。
+let persistDebounceTimer: number | null = null;
+function schedulePersistInProgress() {
+  if (persistDebounceTimer !== null) clearTimeout(persistDebounceTimer);
+  persistDebounceTimer = window.setTimeout(() => {
+    persistDebounceTimer = null;
+    // 仅当仍处于生成中才落盘（避免完成后重复写）
+    if (store.isLoading) {
+      void conversationsStore.persistConversation(store.messagesWithStreaming());
+    }
+  }, 1500);
+}
+
+// 切页/卸载前最佳努力落盘一次中间态（刷新或关闭标签页时触发 pagehide）
+function flushPersistOnHide() {
+  if (store.isLoading) {
+    void conversationsStore.persistConversation(store.messagesWithStreaming());
+  }
+}
+
+// FR-RM-09 续答：重载后若上次会话最后一条为「生成中(streaming)」，重新发起同一问题补全回答。
+// 实现：移除持久化的 streaming 占位（messagesWithStreaming 写入的中间态），复用最后一条用户问题重发。
+// 说明：真·从断点续写不可行（LLM 无服务端流式检查点），故采用「重新生成完整回答」替换占位，符合用户选择。
+function resumeLastAnswer() {
+  const msgs = store.messages;
+  if (!msgs.length) return;
+  // 移除末尾 streaming 占位，避免与续答生成的新回答重复
+  const last = msgs[msgs.length - 1];
+  if (last.role === 'assistant' && last.status === 'streaming') {
+    store.removeMessage(msgs.length - 1);
+  }
+  // 取最后一条用户问题作为续答输入
+  let question: string | undefined;
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      question = store.messages[i].content;
+      break;
+    }
+  }
+  if (!question) return;
+  void sendQuestion(question);
+}
+
+// FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
+// 切页后 SPA 重挂载且后台仍有活跃流（store.isLoading）时直接跳过，避免打断/重复续答。
+async function maybeResumeOnLoad() {
+  if (store.isLoading) return;
+  const lastId = getLastActiveConversationId();
+  if (!lastId) return;
+  const rec = conversationsStore.conversations.find((c) => c.id === lastId);
+  if (!rec) return;
+  await conversationsStore.selectConversation(lastId);
+  const msgs = store.messages;
+  const last = msgs[msgs.length - 1];
+  if (last && last.role === 'assistant' && last.status === 'streaming') {
+    resumeLastAnswer();
+  }
+}
+
 function handleSubmit() {
   const q = inputQuestion.value.trim();
   if (!q || store.isLoading) return;
   store.submitQuestion(q);
+  // FR-RM-09：立即落盘用户问题，确保新会话在首个 token 到达前也能在刷新后恢复
+  void conversationsStore.persistConversation(store.messagesWithStreaming());
   inputQuestion.value = '';
   void sendQuestion(q);
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.preventDefault();
-    handleSubmit();
+  // 回车发送偏好（按用户隔离）：enterSends=true 时 Enter 发送、Shift+Enter 换行；
+  // 否则保持默认 Ctrl/⌘+Enter 发送。输入法组合态（如中文拼音上屏）绝不触发发送。
+  if (e.isComposing) return;
+  if (inputBoxStore.settings.enterSends) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  } else {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handleSubmit();
+    }
   }
 }
 
@@ -576,19 +763,116 @@ function handleNewSession() {
   conversationsStore.startNewConversation();
 }
 
+// ── 输入框个人偏好（按用户隔离）UI 逻辑 ──
+// 占位符随"回车发送"偏好变化：开启时提示 Enter 发送 / Shift+Enter 换行，否则提示 Ctrl/⌘+Enter 发送
+const inputPlaceholder = computed(() =>
+  inputBoxStore.settings.enterSends
+    ? '输入问题，Enter 发送 / Shift+Enter 换行…'
+    : '输入问题，Ctrl+Enter 发送…',
+);
+
+// 快捷回复：点击填入输入框并聚焦
+function applyQuickReply(text: string) {
+  inputQuestion.value = text;
+  nextTick(() => {
+    const ta = document.querySelector<HTMLTextAreaElement>('.input-area textarea');
+    ta?.focus();
+  });
+}
+
+// 偏好设置对话框：本地草稿，打开时从 store 同步，保存时一次性持久化（避免滑块拖动频繁写盘）
+const ibSettingsVisible = ref(false);
+const draftFontSize = ref(14);
+const draftTheme = ref<'default' | 'sepia' | 'midnight'>('default');
+const draftCompact = ref(false);
+const draftEnterSends = ref(false);
+const draftHistoryPreference = ref<'send' | 'rely'>('send');
+const draftQuickReplies = ref<string[]>([]);
+const newQuickReply = ref('');
+
+function openIbSettings() {
+  const s = inputBoxStore.settings;
+  draftFontSize.value = s.fontSize;
+  draftTheme.value = s.inputTheme;
+  draftCompact.value = s.compact;
+  draftEnterSends.value = s.enterSends;
+  draftHistoryPreference.value = s.historyPreference;
+  draftQuickReplies.value = [...s.quickReplies];
+  newQuickReply.value = '';
+  ibSettingsVisible.value = true;
+}
+
+function addQuickReply() {
+  const t = newQuickReply.value.trim();
+  if (!t) return;
+  if (draftQuickReplies.value.includes(t)) {
+    newQuickReply.value = '';
+    return;
+  }
+  draftQuickReplies.value.push(t);
+  newQuickReply.value = '';
+}
+
+function removeQuickReply(i: number) {
+  draftQuickReplies.value.splice(i, 1);
+}
+
+async function saveIbSettings() {
+  await inputBoxStore.update({
+    fontSize: draftFontSize.value,
+    inputTheme: draftTheme.value,
+    compact: draftCompact.value,
+    enterSends: draftEnterSends.value,
+    historyPreference: draftHistoryPreference.value,
+    quickReplies: [...draftQuickReplies.value],
+  });
+  ibSettingsVisible.value = false;
+  ElMessage.success('输入框偏好已保存');
+}
+
+async function resetIbSettings() {
+  await inputBoxStore.resetToDefaults();
+  openIbSettings(); // 重新填充草稿为默认值
+  ElMessage.success('已恢复默认输入框偏好');
+}
+
 async function handleSelectConversation(id: string) {
   await conversationsStore.selectConversation(id);
 }
 
 async function archiveMessage(idx: number) {
   const msg = store.messages[idx];
-  if (!msg || !msg.sessionId || msg.messageIndex === undefined || msg.archived) return;
+  // §归档改为内容驱动：只要是非已归档的 assistant 消息即可归档（不再要求 sessionId/messageIndex）
+  if (!msg || msg.role !== 'assistant' || msg.archived) return;
+  // 关联问题：向后回溯到最近一条 user 消息（与 handleRegenerate 同逻辑）
+  let question = '';
+  for (let i = idx - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      question = store.messages[i].content;
+      break;
+    }
+  }
+  // refs 规整为字符串数组（msg.refs 可能是 Reference[] 或 string[]；Reference.path 可选，需兜底）
+  const refStrings: string[] = (msg.refs ?? [])
+    .map((r) => (typeof r === 'string' ? r : r.path))
+    .filter((r): r is string => !!r);
   // 为什么用 authFetch 而非裸 fetch：归档接口受认证保护，需带 Authorization 头
   // 否则 401 会被前端统一提示"归档失败，请检查后端服务"，掩盖真实原因
   try {
     const res = await authStore.authFetch(`${API_BASE}/query/archive`, {
       method: 'POST',
-      body: JSON.stringify({ sessionId: msg.sessionId, messageIndex: msg.messageIndex }),
+      // 内容驱动：直接把 question/answer/refs/ts 交给后端落盘 vault，
+      // 不再依赖服务端 session 持久化（threadsPersist=false 默认部署下也能归档）。
+      // threadId/sessionId/messageIndex 仍带上，供分组命名与旧客户端/threadsPersist=true 回退路径使用。
+      body: JSON.stringify({
+        threadId: msg.threadId ?? msg.sessionId,
+        sessionId: msg.sessionId,
+        messageIndex: msg.messageIndex,
+        question,
+        answer: msg.content,
+        refs: refStrings,
+        ts: msg.createdAt,
+      }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -648,6 +932,57 @@ function handleRemoveMessage(idx: number) {
   void conversationsStore.persistConversation(store.messages);
 }
 
+// 编辑 user 消息：将气泡切换为可编辑态，预填当前内容
+function handleEditMessage(idx: number) {
+  const msg = store.messages[idx];
+  if (!msg || msg.role !== 'user') return;
+  editingIdx.value = idx;
+  editingText.value = msg.content;
+  // 自动聚焦编辑框，提升重发效率
+  nextTick(() => {
+    const el = document.querySelector<HTMLTextAreaElement>('.msg-edit textarea');
+    el?.focus();
+  });
+}
+
+// 取消编辑：退出可编辑态，草稿清空（不改原消息）
+function handleCancelEdit() {
+  editingIdx.value = null;
+  editingText.value = '';
+}
+
+// 确认编辑并重发：终止当前 AI 回复（若正在生成），丢弃被编辑的 user 消息及其后续，重新触发思考
+// 竞态处理：AI 正在生成时不能直接 removeMessagesFrom（会与 sendQuestion 的流式状态交错），
+// 而是标记 pendingResend 并 abort 当前回复，待 sendQuestion 的 finally 清理后再丢弃+重发。
+async function handleConfirmEdit() {
+  const idx = editingIdx.value;
+  if (idx === null) return;
+  const original = store.messages[idx]?.content ?? '';
+  const newText = editingText.value.trim();
+  editingIdx.value = null;
+  editingText.value = '';
+  if (!newText) {
+    ElMessage.warning('内容不能为空');
+    return;
+  }
+  if (newText === original) return; // 未修改，直接退出编辑态，不重发
+  if (!store.isLoading) {
+    // 当前无 AI 回复在生成：直接丢弃 idx 起的全部消息（含本 user 消息），
+    // 先用 submitQuestion 把编辑后的 user 消息重新插入对话（否则 sendQuestion 不会添加 user 气泡），再触发流式重答
+    store.removeMessagesFrom(idx);
+    store.submitQuestion(newText);
+    // FR-RM-09：立即落盘编辑后的用户问题，确保刷新/切页后可恢复
+    void conversationsStore.persistConversation(store.messagesWithStreaming());
+    void sendQuestion(newText);
+    return;
+  }
+  // 正在生成：终止当前回复，待 finally 清理后再丢弃并重发
+  pendingResendQuestion = newText;
+  pendingResendIdx = idx;
+  abortReason = 'edit';
+  abortController?.abort();
+}
+
 // 工具栏高级设置面板：齿轮按钮点击展开/收起，集中展示输出相关非高频设置
 // 为什么用 mousedown 而非 click 关闭：click 事件在 element-plus 内部触发顺序不稳定，
 // mousedown 触发早于下拉/选择等组件内部的 click 监听，避免面板内点击被先关闭再打开
@@ -693,9 +1028,13 @@ function handleAdvancedOutsideClick(e: MouseEvent) {
   if (!advancedOpen.value) return;
   const target = e.target as Node | null;
   const targetEl = target as HTMLElement | null;
-  // el-popover 内容 teleport 到 body，先检查是否点击在 popover 内
-  // 为什么优先检查 popover：popover 内点击不关闭任何东西，让 checkbox 正常切换
-  if (targetEl?.closest('.multi-select-popover')) return;
+  // el-popover / el-select 的下拉面板均 teleport 到 body（不在 advancedPanelRef 内），
+  // 优先检查是否点击在这类弹层内：弹层内点击不关闭面板，让 checkbox / option 正常选中。
+  // 为什么用 .el-popper 统一覆盖：el-popover 内容是 .multi-select-popover（.el-popper 子类），
+  //   el-select 下拉是 .el-select__popper（同为 .el-popper），两者都 teleport 到 body；
+  //   若不豁免，点击"AI 伙伴 / 思维导图"等 el-select 选项时会被误判为面板外点击，
+  //   导致面板闪退并打断选择（表现为"设置保存未生效"）。
+  if (targetEl?.closest('.el-popper')) return;
   // 面板内点击：不关闭面板，但需要关闭已打开的 popover（点击 trigger 按钮除外，由 trigger 自己 toggle）
   if (advancedPanelRef.value?.contains(target)) {
     // 点击 trigger 按钮时让 @click 自己处理切换，不在此处关闭
@@ -712,13 +1051,31 @@ function handleAdvancedOutsideClick(e: MouseEvent) {
   middlewaresOpen.value = false;
 }
 
+// FR-RM-09：流式每收到分片即防抖落盘中间态（1.5s），保证刷新/切页时部分答案不丢失。
+// 组件卸载（切页）时此 watch 自动停止；但切页期间后台流完成时会通过 sendQuestion 的 finally 落盘完整答案，
+// 且刷新前防抖已落盘「用户问题 + streaming 标记」，重载据此自动续答，故组件内 watch 已足够。
+watch(
+  () => store.streamingAnswer,
+  () => {
+    if (store.isLoading) schedulePersistInProgress();
+  },
+);
+
 onMounted(async () => {
   // FR-12 加载 AI 伙伴列表
   loadSkills();
+  // 输入框偏好：首屏按当前登录用户加载（auth watch 仅在 id 变化时触发，挂载时若已登录不会触发，故此处补一次）
+  inputBoxStore.applyForUser(authStore.user?.id);
   try {
     await conversationsStore.loadConversations();
   } catch {
     // IndexedDB 不可用时静默降级，仅内存态
+  }
+  // FR-RM-09 断点续答：首屏恢复上次活跃会话并在需要时自动续答（后台仍有活跃流则跳过）
+  try {
+    await maybeResumeOnLoad();
+  } catch {
+    // 续答失败不阻断首屏加载
   }
   // F-3.2 注册图片点击事件委托：监听聊天区，捕获 v-html 中 img 的点击
   chatBodyRef.value?.addEventListener('click', handleImgClick);
@@ -730,10 +1087,13 @@ onMounted(async () => {
   globalThis.addEventListener('keydown', handleGlobalKeydown);
   // §高级设置面板：全局 mousedown 捕获阶段监听，外部点击关闭
   globalThis.addEventListener('mousedown', handleAdvancedOutsideClick, true);
+  // FR-RM-09：注册 pagehide 最佳努力落盘（刷新/关闭标签页时持久化中间态）
+  window.addEventListener('pagehide', flushPersistOnHide);
 });
 
 onBeforeUnmount(() => {
-  abortController?.abort();
+  // FR-RM-09：切页不再中断 SSE 流——后台继续生成（用户选择「后台继续生成」）。
+  // 仅卸载事件委托与 pagehide 监听，避免内存泄漏；流本身由模块级 abortController 独立存活。
   // F-3.2 / F-3.7 / F-3.8 卸载事件委托，避免内存泄漏
   chatBodyRef.value?.removeEventListener('click', handleImgClick);
   chatBodyRef.value?.removeEventListener('click', handleCodeCopyClick);
@@ -742,6 +1102,8 @@ onBeforeUnmount(() => {
   globalThis.removeEventListener('keydown', handleGlobalKeydown);
   // §高级设置面板：卸载全局监听
   globalThis.removeEventListener('mousedown', handleAdvancedOutsideClick, true);
+  // FR-RM-09：卸载 pagehide 监听
+  window.removeEventListener('pagehide', flushPersistOnHide);
 });
 </script>
 
@@ -785,9 +1147,25 @@ onBeforeUnmount(() => {
             <div v-if="msg.role === 'user'" class="msg-avatar">
               <div class="user-avatar">ME</div>
             </div>
-            <div class="msg-content-wrapper" :class="msg.role">
+            <div class="msg-content-wrapper" :class="[msg.role, (msg.role === 'user' && editingIdx === idx) ? 'editing' : '']">
       <div class="msg-bubble" :class="msg.role">
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
+              <!-- 编辑态：user 消息切换为可编辑 textarea + 确认/取消（终止当前回复后重发） -->
+              <div v-if="msg.role === 'user' && editingIdx === idx" class="msg-edit" @click.stop>
+                <el-input
+                  v-model="editingText"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 10 }"
+                  placeholder="编辑你的问题后重新发送…"
+                  @keydown.ctrl.enter="handleConfirmEdit"
+                  @keydown.esc="handleCancelEdit"
+                />
+                <div class="msg-edit-actions">
+                  <button class="edit-btn confirm" data-testid="confirm-edit" @click="handleConfirmEdit">确认发送</button>
+                  <button class="edit-btn cancel" data-testid="cancel-edit" @click="handleCancelEdit">取消</button>
+                </div>
+              </div>
+              <template v-else>
               <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
               <!-- FR-09-2 多模态输出卡片：在主答案之后、追问之前渲染 mindmap/faq/timeline -->
               <MultimodalOutputCard v-if="msg.multimodal" :output="msg.multimodal" />
@@ -818,26 +1196,24 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <RefsList v-if="normalizeRefs(msg.refs).length > 0" :refs="normalizeRefs(msg.refs)" />
-      <div v-if="msg.role === 'assistant' && msg.sessionId" class="msg-actions">
-                <el-button
-                  size="small"
-                  text
-                  :disabled="msg.archived"
-                  @click="archiveMessage(idx)"
-                >
-                  {{ msg.archived ? '已归档' : '归档' }}
-                </el-button>
-              </div>
+              </template>
             </div>
-              <!-- F-3.7 / F-3.13 工具栏：气泡外部下方显示，hover 气泡时淡入，避免挡住气泡内文字 -->
+              <!-- F-3.7 / F-3.13 工具栏：气泡外部下方显示，hover 气泡时淡入，避免挡住气泡内文字
+                   §归档按钮迁移：原气泡内 msg-actions 文字按钮已移除，统一收纳到下方悬停工具栏
+                   （MessageToolbar 的 archive 图标按钮），减少气泡内视觉噪音、与复制/重生成等操作同位 -->
               <MessageToolbar
+                v-if="!(msg.role === 'user' && editingIdx === idx)"
                 :role="msg.role"
                 :content="msg.content"
                 :msg-id="msg.id"
                 :created-at="msg.createdAt"
                 :can-regenerate="!store.isLoading"
+                :can-archive="msg.role === 'assistant'"
+                :archived="!!msg.archived"
                 @regenerate="handleRegenerate(idx)"
                 @remove="handleRemoveMessage(idx)"
+                @edit="handleEditMessage(idx)"
+                @archive="archiveMessage(idx)"
               />
             </div>
           </div>
@@ -846,7 +1222,7 @@ onBeforeUnmount(() => {
         <!-- 流式输出中的 assistant 答案 -->
         <div v-if="store.streamingAnswer || store.isLoading" class="msg-row assistant">
           <div class="msg-bubble assistant" :class="{ streaming: !!store.streamingAnswer, loading: store.isLoading && !store.streamingAnswer }">
-            <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" />
+            <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" :live="store.isLoading" />
             <div v-if="store.searchProgress" class="search-progress">
               {{ searchProgressLabel }}
               <span v-if="store.searchProgress.count">（{{ store.searchProgress.count }} 条）</span>
@@ -866,14 +1242,30 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 输入区：单行 textarea + 按钮行同行，缩小垂直间距 -->
-      <div class="input-area">
+      <!-- 输入区：单行 textarea + 按钮行同行，缩小垂直间距
+           输入框偏好（按用户隔离）通过 CSS 变量与 class 注入：字体大小 / 主题 / 紧凑模式 -->
+      <div
+        class="input-area"
+        :class="['ib-theme-' + inputBoxStore.settings.inputTheme, { 'ib-compact': inputBoxStore.settings.compact }]"
+        :style="{ '--input-font-size': inputBoxStore.settings.fontSize + 'px' }"
+      >
+        <!-- 快捷回复：用户个人预设，点击直接填入输入框（按用户隔离） -->
+        <div v-if="inputBoxStore.settings.quickReplies.length" class="quick-replies">
+          <button
+            v-for="(qr, qi) in inputBoxStore.settings.quickReplies"
+            :key="qi"
+            type="button"
+            class="quick-reply-chip"
+            :title="qr"
+            @click="applyQuickReply(qr)"
+          >{{ qr }}</button>
+        </div>
         <el-input
           v-model="inputQuestion"
           type="textarea"
           :rows="1"
           :autosize="{ minRows: 1, maxRows: 6 }"
-          placeholder="输入问题，Ctrl+Enter 发送…"
+          :placeholder="inputPlaceholder"
           resize="none"
           :disabled="store.isLoading"
           @keydown="handleKeydown"
@@ -912,6 +1304,23 @@ onBeforeUnmount(() => {
                   d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
                   stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"
                 />
+              </svg>
+            </button>
+            <!-- 输入框偏好入口：齿轮滑块图标，点击打开"输入框偏好设置"对话框
+                 为什么独立按钮：输入偏好（字体/主题/快捷回复/历史/回车发送）与输出相关高级设置正交，
+                 并入高级面板会混淆两类设置；独立入口更聚焦、易发现 -->
+            <button
+              type="button"
+              class="ib-settings-toggle"
+              title="输入框偏好"
+              aria-label="输入框偏好"
+              @click="openIbSettings"
+            >
+              <svg class="ib-settings-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M4 7h10M18 7h2M4 12h2M10 12h10M4 17h7M15 17h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                <circle cx="16" cy="7" r="2.2" stroke="currentColor" stroke-width="1.6"/>
+                <circle cx="8" cy="12" r="2.2" stroke="currentColor" stroke-width="1.6"/>
+                <circle cx="13" cy="17" r="2.2" stroke="currentColor" stroke-width="1.6"/>
               </svg>
             </button>
           </div>
@@ -1075,6 +1484,71 @@ onBeforeUnmount(() => {
           </div>
         </Transition>
       </div>
+      <!-- 输入框偏好设置对话框：按用户隔离的个人输入框设置（字体/主题/快捷回复/历史/回车发送/紧凑）
+           每次打开从当前用户 store 同步草稿，保存时一次性持久化到 'usercfg::inputbox::<userId>' 命名空间 -->
+      <el-dialog
+        v-model="ibSettingsVisible"
+        title="输入框偏好设置"
+        width="480px"
+        :close-on-click-modal="false"
+      >
+        <div class="ib-settings-body">
+          <div class="ib-field">
+            <label class="ib-label">输入框字体大小</label>
+            <div class="ib-slider-row">
+              <el-slider v-model="draftFontSize" :min="12" :max="22" :step="1" style="flex:1" />
+              <span class="ib-slider-value">{{ draftFontSize }}px</span>
+            </div>
+          </div>
+          <div class="ib-field">
+            <label class="ib-label">输入框主题</label>
+            <el-radio-group v-model="draftTheme">
+              <el-radio value="default">默认</el-radio>
+              <el-radio value="sepia">暖色</el-radio>
+              <el-radio value="midnight">暗色</el-radio>
+            </el-radio-group>
+          </div>
+          <div class="ib-field ib-inline">
+            <span class="ib-label">紧凑模式（缩小内边距与行高）</span>
+            <el-switch v-model="draftCompact" />
+          </div>
+          <div class="ib-field ib-inline">
+            <span class="ib-label">回车发送（关闭时 Ctrl/⌘+Enter 发送）</span>
+            <el-switch v-model="draftEnterSends" />
+          </div>
+          <div class="ib-field">
+            <label class="ib-label">历史记录偏好</label>
+            <el-radio-group v-model="draftHistoryPreference">
+              <el-radio value="send">发送时携带本地历史</el-radio>
+              <el-radio value="rely">依赖服务端线程记忆</el-radio>
+            </el-radio-group>
+          </div>
+          <div class="ib-field">
+            <label class="ib-label">快捷回复（点击填入输入框）</label>
+            <div class="ib-qr-list">
+              <div v-for="(qr, qi) in draftQuickReplies" :key="qi" class="ib-qr-item">
+                <span class="ib-qr-text" :title="qr">{{ qr }}</span>
+                <button type="button" class="ib-qr-del" title="删除" @click="removeQuickReply(qi)">×</button>
+              </div>
+              <div v-if="draftQuickReplies.length === 0" class="ib-qr-empty">暂无快捷回复</div>
+            </div>
+            <div class="ib-qr-add">
+              <el-input
+                v-model="newQuickReply"
+                size="small"
+                placeholder="输入快捷回复内容，回车添加"
+                @keyup.enter="addQuickReply"
+              />
+              <el-button size="small" type="primary" @click="addQuickReply">添加</el-button>
+            </div>
+          </div>
+        </div>
+        <template #footer>
+          <el-button @click="resetIbSettings">恢复默认</el-button>
+          <el-button @click="ibSettingsVisible = false">取消</el-button>
+          <el-button type="primary" @click="saveIbSettings">保存</el-button>
+        </template>
+      </el-dialog>
     </div>
     <!-- F-3.2 图片点击放大预览：通过事件委托捕获 v-html 中的 img 点击触发 -->
     <el-image-viewer
@@ -1315,13 +1789,30 @@ onBeforeUnmount(() => {
   max-width: 100%;
 }
 
+.msg-content-wrapper.editing {
+  /* 编辑态：user 编辑气泡撑满问答区宽度，给用户输入更宽的视野方便编辑
+     flex:1 1 100% 让 wrapper 在 .msg-row(flex 行) 中横向填满（减去头像）；
+     align-items:stretch 抵消 .msg-content-wrapper.user 的 flex-end，让内层气泡撑满宽度；
+     .msg-edit 已是 width:100% 自动跟随撑满 */
+  flex: 1 1 100%;
+  max-width: 100%;
+  align-items: stretch;
+}
+/* 编辑态气泡放宽上下内边距（原 user 气泡 padding 仅 2px 过窄），让 textarea 不贴边、输入更舒适 */
+.msg-content-wrapper.editing .msg-bubble.user {
+  padding: 10px 12px;
+}
+
+/* §用户头像收窄：从 36px 收到 30px，每条用户消息行减少约 6px 垂直占用，
+   累积为更多阅读回复内容的视野（气泡高度收窄的核心杠杆是头像高度，
+   因为 .msg-row 用 align-items: flex-start，行高 = max(头像, 气泡)） */
 .user-avatar {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: var(--grad-fire);
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -1368,9 +1859,10 @@ onBeforeUnmount(() => {
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
   box-shadow: 0 4px 20px var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
-  /* §高度收窄：进一步减小 padding/line-height/font-size，让用户气泡更紧凑，减少垂直占用 */
+  /* §高度收窄（续）：头像收到 30px 后，气泡自身再收紧行高 1.2→1.1，
+     多行用户问题（用户常输入多行）每行再省约 1.3px，单行气泡更贴文字 */
   padding: 2px 12px;
-  line-height: 1.2;
+  line-height: 1.1;
   font-size: 13px;
 }
 
@@ -1500,9 +1992,51 @@ onBeforeUnmount(() => {
   opacity: 1;
 }
 
-.msg-actions {
+/* 消息内联编辑态：user 气泡切换为可编辑 textarea + 确认/取消 */
+.msg-edit {
+  width: 100%;
+}
+.msg-edit :deep(.el-textarea__inner) {
+  background: var(--bg-input, #fff);
+  color: var(--text-bright, #f3e9ff);
+  border-color: var(--border-glass, var(--accent-cyan-a30, rgba(0, 245, 255, 0.3)));
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.msg-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
   margin-top: 8px;
-  text-align: right;
+}
+.edit-btn {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.edit-btn.confirm {
+  /* 与"取消"按钮保持一致的配色（幽灵按钮）：背景透明 + 柔和文字 + 淡青描边，
+     hover 时高亮青色，避免与取消按钮颜色不协调 */
+  background: transparent;
+  color: var(--text-soft, #888);
+  border-color: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+}
+.edit-btn.confirm:hover {
+  color: var(--neon-cyan, #00f5ff);
+  border-color: var(--neon-cyan, #00f5ff);
+}
+.edit-btn.cancel {
+  background: transparent;
+  color: var(--text-soft, #888);
+  border-color: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+}
+.edit-btn.cancel:hover {
+  color: var(--neon-cyan, #00f5ff);
+  border-color: var(--neon-cyan, #00f5ff);
 }
 
 /* 输入区：居中显示 + 主题适配浅色背景 + 毛玻璃
@@ -1539,6 +2073,28 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--text-base);
   border: none;
+  /* 输入框字体大小（按用户隔离偏好）：由 --input-font-size 注入，缺省回退 14px */
+  font-size: var(--input-font-size, 14px);
+  transition: font-size 0.15s ease;
+}
+/* 输入框主题（按用户隔离偏好）：sepia 暖色 / midnight 暗色，仅在输入框范围内微调视觉，
+   半透明背景适配全局明暗主题，不破坏整体一致性 */
+.input-area.ib-theme-sepia :deep(.el-textarea__inner) {
+  background: var(--ib-sepia-bg, rgba(255, 244, 224, 0.55));
+  color: var(--ib-sepia-text, #5b4636);
+  border: 1px solid var(--ib-sepia-border, rgba(180, 140, 80, 0.45));
+  border-radius: 8px;
+}
+.input-area.ib-theme-midnight :deep(.el-textarea__inner) {
+  background: var(--ib-midnight-bg, rgba(10, 14, 24, 0.72));
+  color: var(--ib-midnight-text, #d6e2ff);
+  border: 1px solid var(--ib-midnight-border, rgba(90, 130, 220, 0.5));
+  border-radius: 8px;
+}
+/* 紧凑模式（按用户隔离偏好）：缩小 textarea 内边距与行高 */
+.input-area.ib-compact :deep(.el-textarea__inner) {
+  padding: 2px 6px;
+  line-height: 1.35;
 }
 .input-area :deep(.el-textarea__inner)::placeholder {
   color: var(--text-dim);
@@ -1548,6 +2104,126 @@ onBeforeUnmount(() => {
 .input-area :deep(.el-textarea__inner)::selection {
   background: var(--accent-pink-a50, rgba(255, 0, 110, 0.5));
   color: var(--text-bright);
+}
+
+/* 快捷回复：用户个人预设 chips，点击填入输入框（按用户隔离） */
+.quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.quick-reply-chip {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.quick-reply-chip:hover {
+  background: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+}
+
+/* 输入框偏好入口按钮：与高级设置齿轮同款风格 */
+.ib-settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+.ib-settings-toggle:hover {
+  color: var(--neon-cyan, #00f5ff);
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
+}
+
+/* 输入框偏好设置对话框 */
+.ib-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ib-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ib-field.ib-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.ib-label {
+  font-size: 13px;
+  color: var(--text-base);
+}
+.ib-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ib-slider-value {
+  font-size: 13px;
+  color: var(--text-dim);
+  min-width: 38px;
+  text-align: right;
+}
+.ib-qr-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 28px;
+}
+.ib-qr-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 2px 4px 2px 10px;
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  border-radius: 999px;
+}
+.ib-qr-text {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-base);
+}
+.ib-qr-del {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.ib-qr-del:hover {
+  color: var(--accent-pink, #ff006e);
+}
+.ib-qr-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.ib-qr-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 /* 按钮行：左侧工具组 + 右侧发送按钮，同一行两端对齐 */
@@ -1856,12 +2532,17 @@ onBeforeUnmount(() => {
 }
 
 /* F-3.7 工具栏触发：hover 包装器（气泡+工具栏）时显现
-   为什么用 wrapper 而非 bubble：工具栏已移到气泡外部，hover bubble 时若工具栏不显示会导致鼠标移到工具栏时消失，
-   用 wrapper（含 bubble + toolbar）作为 hover 触发域，鼠标在两者间移动也能保持显示 */
-.msg-content-wrapper:hover .msg-toolbar {
-  opacity: 1;
-  pointer-events: auto;
+   必须用 :deep()：.msg-toolbar 属于子组件 MessageToolbar.vue（独立 data-v 作用域），
+   若不加 :deep，Vue 会把 Query.vue 的 data-v 强加在 .msg-toolbar 上，
+   与真实元素（带 MessageToolbar 的 data-v）不匹配，导致 hover 永远不显现——
+   表现为"复制/重新生成/编辑按钮看不见"。这是之前重建后功能消失的根因。 */
+.msg-content-wrapper:hover :deep(.msg-toolbar) {
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }
+/* 用户与 AI 气泡工具栏统一隐藏/悬停浮现：需求要求用户消息工具栏与 AI 一致，
+   默认透明不可点，仅当鼠标悬停所在消息的 .msg-content-wrapper 时才显现。
+   不再为 .user 单独加常显覆盖（此前强制 opacity:1 会与"悬停才浮现"需求冲突）。 */
 
 /* F-3.7 代码块复制按钮：hover wrapper 时显现，避免常态视觉噪音 */
 .markdown-body :deep(.code-copy-btn) {

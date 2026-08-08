@@ -77,6 +77,7 @@ export type AuditAction =
   | 'user_create'
   | 'user_update'
   | 'user_delete'
+  | 'user_register'
   | 'config_change';
 
 // 认证配置（嵌入 AppConfig.auth）
@@ -97,12 +98,23 @@ export interface AuthConfig {
   // JWT 签名密钥引用（环境变量名）
   // 为什么用 ref：与 llm.apiKeyRef 一致，避免密钥落盘 config.json
   sessionSecretRef: string;
+  // 公开路径（无需认证即可访问）白名单，覆盖 DEFAULT_PUBLIC_PATHS 兜底常量。
+  // 为什么可配：auth-endpoint-classification 规则要求端点路径单一来源、禁止硬编码，
+  // 运营可按部署形态扩展/收敛公开端点（如新增隧道健康检查路径）。
+  publicPaths?: string[];
 }
 
 // 登录请求体
 export interface LoginRequest {
   username: string;
   password: string;
+}
+
+// 自助注册请求体（公开接口，默认角色 user）
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  confirmPassword?: string;
 }
 
 // 登录响应

@@ -3,7 +3,7 @@ title: HUI 工程结构规范
 type: concept
 created: 2025-04-20
 updated: 2025-04-20
-source: raw/wiki-batch-1784698224568-0-HUI____________PDF__.md
+source: raw/HUI____________PDF__.md
 tags: [HUI, 工程结构, 目录规范, 前端]
 ---
 

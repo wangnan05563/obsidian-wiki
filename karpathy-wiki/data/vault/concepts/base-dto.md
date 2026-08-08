@@ -3,7 +3,7 @@ title: BaseDto
 type: concept
 created: 2025-01-20
 updated: 2025-01-20
-source: raw/wiki-batch-1784698527259-6-HUNDSUN__________V5.0-______.md
+source: raw/HUNDSUN__________V5.0-______.md
 tags: [恒生电子, DTO, 数据对象, 票据平台]
 ---
 

@@ -3,7 +3,7 @@ title: ECDS融合
 type: concept
 created: 2024-01-01
 updated: 2026-06-01
-source: raw/wiki-batch-1784703260588-0-ECDS__-________V2.X_.md
+source: raw/ECDS__-________V2.X_.md
 tags: [票据, 恒生电子, ECDS, 系统融合, 项目实施]
 ---
 

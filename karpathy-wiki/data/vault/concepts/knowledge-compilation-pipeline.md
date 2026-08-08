@@ -3,7 +3,7 @@ title: Knowledge Compilation Pipeline
 type: concept
 created: 2025-04-01
 updated: 2025-04-01
-source: raw/wiki-batch-1784718893249-0-test-1.md
+source: raw/test-1.md
 tags: [pipeline, compilation, knowledge-base]
 ---
 

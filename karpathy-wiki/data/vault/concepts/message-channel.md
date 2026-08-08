@@ -3,7 +3,7 @@ title: 消息通道
 type: concept
 created: 2025-01-20
 updated: 2025-01-20
-source: raw/wiki-batch-1784698573547-7-HUNDSUN__________V5.0-______.md
+source: raw/HUNDSUN__________V5.0-______-2.md
 tags: [HUNDSUN, 消息通道, TCP, HTTP, IBM MQ, 通讯]
 ---
 

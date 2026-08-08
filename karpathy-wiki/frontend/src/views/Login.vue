@@ -9,6 +9,11 @@ import CognitionIcon from '../components/CognitionIcon.vue';
 // 为什么不用 CSS filter 反色：会破坏 PNG 原画质感，两套图分别由同一渲染脚本生成，色彩精准
 const authStore = useAuthStore();
 const { currentTheme } = useTheme();
+const emit = defineEmits<{ (e: 'switch-to-register'): void }>();
+
+function goRegister() {
+  emit('switch-to-register');
+}
 
 const username = ref('');
 const password = ref('');
@@ -112,6 +117,11 @@ function handleKeydown(e: KeyboardEvent) {
           <code>admin/admin123</code>
           <code>user/user123</code>
           <code>guest/guest123</code>
+        </div>
+
+        <div class="login-switch">
+          还没有账号？
+          <a class="switch-link" @click="goRegister">去注册</a>
         </div>
       </div>
     </div>
@@ -298,5 +308,23 @@ function handleKeydown(e: KeyboardEvent) {
   background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   border-radius: 4px;
   color: var(--neon-cyan);
+}
+
+.login-switch {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.switch-link {
+  color: var(--neon-cyan);
+  cursor: pointer;
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.switch-link:hover {
+  text-decoration: underline;
 }
 </style>

@@ -15,7 +15,7 @@
 # 3. 构建 SPA（vite build → api/public）
 # 4. esbuild 打包后端 TS → CJS 单文件 bundle
 # 5. @yao-pkg/pkg 打包 → exe
-# 6. 复制外置资源（SPA + config.json + vault 默认结构）
+# 6. 复制外置资源（SPA + vault 默认结构）
 # 7. 制作安装包（Inno Setup）
 
 param(
@@ -292,6 +292,87 @@ if (-not (Test-Path $exePath)) {
 }
 Write-Ok "exe 生成完成：$exePath"
 
+# ============== 5.2 注入 exe 图标（pkg/SEA 默认无图标）==============
+# 为什么不用 rcedit：rcedit 5.x 是 Deno 编译的单文件二进制，在带杀毒软件(Defender/360/火绒)的
+#   真实 Windows 上首次运行要把运行时解包到临时目录，常被拦截/挂起，表现为"构建卡在第6步"。
+# 改用 PowerShell 直接 P/Invoke kernel32.dll 的 BeginUpdateResource/UpdateResource/EndUpdateResource
+#   把 .ico 写进 exe 的 RT_GROUP_ICON 资源表——纯系统调用，无外部 exe，杀软不拦截、不会卡死。
+# 仍由 Inno Setup 的 SetupIconFile + 快捷方式 IconFilename 保证安装包/桌面图标（双保险）。
+Write-Host "`n[6a] 注入 exe 图标..." -ForegroundColor Yellow
+$appIco = Join-Path $repoRoot "assets\app.ico"
+if (Test-Path $appIco) {
+    # 用 Windows 内核 API 直接注入图标资源（不依赖任何外部 exe）
+    function Set-ExeIcon {
+        param([string]$ExePath, [string]$IconPath)
+        $code = @'
+using System;
+using System.Runtime.InteropServices;
+public class IconInjector {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern IntPtr BeginUpdateResource(string pFileName, bool bDeleteExistingResources);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateResource(IntPtr hUpdate, IntPtr lpType, IntPtr lpName, ushort wLanguage, byte[] lpData, uint cbData);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool EndUpdateResource(IntPtr hUpdate, bool fDiscard);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetLastError();
+    public static void Inject(string exe, string ico) {
+        byte[] icon = System.IO.File.ReadAllBytes(ico);
+        ushort count = BitConverter.ToUInt16(icon, 4);
+        int off = 6;
+        var group = new System.Collections.Generic.List<byte>();
+        group.Add(0); group.Add(0);                                   // reserved
+        group.Add(1); group.Add(0);                                   // type = 1 (icon)
+        group.Add((byte)(count & 0xff)); group.Add((byte)((count >> 8) & 0xff)); // count
+        IntPtr h = BeginUpdateResource(exe, false);
+        if (h == IntPtr.Zero) throw new InvalidOperationException("BeginUpdateResource 失败: " + GetLastError());
+        ushort id = 1;
+        for (ushort i = 0; i < count; i++) {
+            int e = off + i * 16;
+            byte width = icon[e];
+            byte height = icon[e + 1];
+            byte colorCount = icon[e + 2];
+            byte reserved = icon[e + 3];
+            ushort planes = BitConverter.ToUInt16(icon, e + 4);
+            ushort bitCount = BitConverter.ToUInt16(icon, e + 6);
+            uint bytesInRes = BitConverter.ToUInt32(icon, e + 8);
+            uint imageOffset = BitConverter.ToUInt32(icon, e + 12);
+            byte[] img = new byte[bytesInRes];
+            Array.Copy(icon, (int)imageOffset, img, 0, (int)bytesInRes);
+            // RT_ICON = 3：每个图标图像一个资源，id 从 1 递增
+            if (!UpdateResource(h, new IntPtr(3), new IntPtr(id), 0, img, (uint)img.Length))
+                throw new InvalidOperationException("UpdateResource(icon " + id + ") 失败: " + GetLastError());
+            // GRPICONDIRENTRY（14 字节）：w,h,colorCount,reserved,planes,bitCount,bytesInRes,id(WORD)
+            group.Add(width); group.Add(height); group.Add(colorCount); group.Add(reserved);
+            group.Add((byte)(planes & 0xff)); group.Add((byte)((planes >> 8) & 0xff));
+            group.Add((byte)(bitCount & 0xff)); group.Add((byte)((bitCount >> 8) & 0xff));
+            group.Add((byte)(bytesInRes & 0xff)); group.Add((byte)((bytesInRes >> 8) & 0xff));
+            group.Add((byte)((bytesInRes >> 16) & 0xff)); group.Add((byte)((bytesInRes >> 24) & 0xff));
+            group.Add((byte)(id & 0xff)); group.Add((byte)((id >> 8) & 0xff));
+            id++;
+        }
+        // RT_GROUP_ICON = 14，组 id = 1（Windows 取最小 id 作为应用主图标）
+        if (!UpdateResource(h, new IntPtr(14), new IntPtr(1), 0, group.ToArray(), (uint)group.Count))
+            throw new InvalidOperationException("UpdateResource(group) 失败: " + GetLastError());
+        if (!EndUpdateResource(h, false))
+            throw new InvalidOperationException("EndUpdateResource 失败: " + GetLastError());
+    }
+}
+'@
+        Add-Type -TypeDefinition $code -Language CSharp -ErrorAction Stop
+        [IconInjector]::Inject($ExePath, $IconPath)
+    }
+    try {
+        Write-Step "通过 Windows API 注入图标到 exe（无需 rcedit）"
+        Set-ExeIcon -ExePath $exePath -IconPath $appIco
+        Write-Ok "exe 图标已注入"
+    } catch {
+        Write-Warn "exe 图标注入失败：$($_.Exception.Message)；exe 将使用默认图标，但安装包/快捷方式图标仍生效。"
+    }
+} else {
+    Write-Warn "assets\app.ico 不存在，跳过 exe 图标注入"
+}
+
 # ============== 6. 复制外置资源 ==============
 Write-Host "`n[7/8] 复制外置资源..." -ForegroundColor Yellow
 
@@ -306,51 +387,11 @@ if (Test-Path $spaSource) {
     Write-Warn "SPA 源目录不存在：$spaSource"
 }
 
-# 6.2 配置文件（config.json）
-# 为什么不直接 Copy-Item：开发环境 config.json 含明文 API Key（llm.apiKey / llm.apiKeys /
-#   webSearch.apiKey / media.agnes.apiKey），原样复制到安装包会泄露密钥。
-#   打包时必须清除所有敏感字段，用户通过 .env 注入 API Key。
-Write-Host "  [6.2] 复制配置文件（清除敏感字段）..."
-$configSource = Join-Path $repoRoot "api\config.json"
-$configTarget = Join-Path $pkgOutputDir "config.json"
-if (Test-Path $configSource) {
-    $configObj = Get-Content $configSource -Raw -Encoding UTF8 | ConvertFrom-Json
-    # 清除明文 API Key：保留 apiKeyRef（引用名）让用户通过 .env 填入实际值
-    if ($configObj.llm) {
-        $configObj.llm.PSObject.Properties.Remove('apiKey')
-        if ($configObj.llm.apiKeys) {
-            $configObj.llm.PSObject.Properties.Remove('apiKeys')
-        }
-    }
-    if ($configObj.webSearch) {
-        $configObj.webSearch.PSObject.Properties.Remove('apiKey')
-    }
-    if ($configObj.media -and $configObj.media.agnes) {
-        $configObj.media.agnes.PSObject.Properties.Remove('apiKey')
-    }
-    # 用 UTF-8 无 BOM 写入：避免 SEA exe 读取 JSON 时 BOM 导致解析失败
-    $jsonStr = $configObj | ConvertTo-Json -Depth 10
-    [System.IO.File]::WriteAllText($configTarget, $jsonStr, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Ok "config.json 已复制（已清除 llm.apiKey / apiKeys / webSearch.apiKey / media.agnes.apiKey）"
-} else {
-    # 生成默认配置
-    $defaultConfig = @{
-        vaultPath = "./vault"
-        adapter = "harness"
-        llm = @{
-            provider = "glm"
-            baseUrl = "https://open.bigmodel.cn/api/paas/v4"
-            model = "glm-4-plus"
-            apiKeyRef = "GLM_KEY"
-        }
-        budget = @{ maxSteps = 20; tokenBudget = 50000 }
-        server = @{ host = "127.0.0.1"; port = 3000 }
-        localOnly = $true
-        healthCheck = @{ staleDays = 30 }
-    }
-    $defaultConfig | ConvertTo-Json -Depth 5 | Set-Content $configTarget -Encoding UTF8
-    Write-Ok "已生成默认 config.json"
-}
+# 6.2 配置文件（config.json）：不再在此处复制/生成
+# 原因：SEA 模式下配置由应用在首次运行时自动生成到 %LOCALAPPDATA%\KarpathyWiki\config.json
+#   （见 api/src/config.ts 的 loadConfig 首次落盘逻辑），安装器也不再安装 config.json，
+#   因此 dist 下的 config.json 不会被读取，复制它既多余又可能误导（旧默认 host=127.0.0.1）。
+#   密钥通过用户数据目录的 .env 注入，构建产物不再包含任何 config.json。
 
 # 6.3 .env 模板（不含实际 Key，仅占位提示）
 Write-Host "  [6.3] 生成 .env 模板..."
@@ -535,9 +576,10 @@ AppVersion={#MyAppVersion}
 AppPublisher=Karpathy-Wiki
 DefaultDirName={autopf}\KarpathyWiki
 DefaultGroupName=KarpathyWiki
-UninstallDisplayIcon={app}\karpathy-wiki.exe
+UninstallDisplayIcon={app}\app.ico
 OutputDir=dist
 OutputBaseFilename=KarpathyWiki-Setup-v{#MyAppVersion}
+SetupIconFile=assets\app.ico
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -549,10 +591,24 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"
 [Files]
-Source: "dist\karpathy-wiki\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; ---- 程序文件 / 资源：每次安装都覆盖（只读应用代码与资源，随版本更新）----
+; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "dist\karpathy-wiki\*" 通配。
+Source: "dist\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
+; 品牌图标：安装到 {app} 供快捷方式 / 卸载项引用（exe 图标另由 build-exe.ps1 用 Windows API 注入，不依赖 rcedit）
+Source: "assets\app.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+; ---- 用户数据（config.json / .env / vault / data）不再安装到 {app} ----
+; 原因：{app} 位于 Program Files，普通用户无写权限且卸载会被清除。
+; 改为由应用在首次运行时自动创建到 %LOCALAPPDATA%\KarpathyWiki（见 api/src/utils/runtime.ts），
+; 普通用户可写、不受卸载影响、多用户互不干扰。AI 服务设置持久化于该目录的 config.json。
 [Icons]
-Name: "{group}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"
-Name: "{commondesktop}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"; Tasks: desktopicon
+Name: "{group}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"; IconFilename: "{app}\app.ico"; IconIndex: 0
+Name: "{commondesktop}\Karpathy-Wiki"; Filename: "{app}\karpathy-wiki.exe"; Tasks: desktopicon; IconFilename: "{app}\app.ico"; IconIndex: 0
 [Run]
 Filename: "{app}\karpathy-wiki.exe"; Description: "启动 Karpathy-Wiki"; Flags: nowait postinstall skipifsilent
 "@
@@ -597,8 +653,9 @@ Write-Host "  使用方式："
 Write-Host "  - 直接运行：dist\karpathy-wiki\karpathy-wiki.exe"
 Write-Host "  - 安装包：dist\KarpathyWiki-Setup-v*.exe（如 Inno Setup 可用）"
 Write-Host ""
-Write-Host "  首次运行前："
-Write-Host "  1. 编辑 config.json 确认模型配置"
-Write-Host "  2. 复制 .env.example 为 .env，填入 API Key"
+Write-Host "  首次运行前（配置位于 %LOCALAPPDATA%\KarpathyWiki）："
+Write-Host "  1. config.json 首次启动自动生成，可直接编辑该文件调整模型/provider"
+Write-Host "  2. 在同目录（KarpathyWiki）放置 .env 并填入 API Key（参考 .env.example）"
+Write-Host "  3. 如需公网/域名访问：将 config.json 的 server.host 改为 0.0.0.0 并配合反向代理或内置隧道"
 Write-Host "========================================" -ForegroundColor Green
 

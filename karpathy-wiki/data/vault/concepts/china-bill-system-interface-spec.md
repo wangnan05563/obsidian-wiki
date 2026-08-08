@@ -3,7 +3,7 @@ title: 中国票据业务系统直连接口规范
 type: concept
 created: 2025-03-30
 updated: 2025-03-30
-source: raw/wiki-batch-1784714936931-0-1.____________________.md
+source: raw/1.____________________-2.md
 tags: [票据, 接口规范, 票交所, 报文标准]
 ---
 

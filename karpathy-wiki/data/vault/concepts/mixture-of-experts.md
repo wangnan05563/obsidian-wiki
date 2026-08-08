@@ -3,7 +3,7 @@ title: Mixture of Experts 混合专家模型
 type: concept
 created: "2024-05-20"
 updated: "2024-05-20"
-source: "raw/wiki-batch-1784833342077-0-file1.md"
+source: "raw/file1.md"
 tags: [MoE, 稀疏激活, 深度学习架构, 路由器, 专家子网络]
 ---
 

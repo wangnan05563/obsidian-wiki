@@ -3,7 +3,7 @@ title: 批量编译测试
 type: concept
 created: 2025-01-27
 updated: 2025-04-17
-source: raw/wiki-batch-1784718922306-2-test-3.md
+source: raw/test-3.md
 tags: [test, batch-compile, automated-pipeline]
 ---
 

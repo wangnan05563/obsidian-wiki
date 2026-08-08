@@ -3,7 +3,7 @@ title: 中国票据业务系统直连接口规范（ECDS迁移票据业务分册
 type: concept
 created: 2026-06-01
 updated: 2026-06-01
-source: raw/wiki-batch-1784715074678-4-13._______________ECDS_________.md
+source: raw/中国票据业务系统直连接口规范（ECDS迁移票据业务分册）.md
 tags: [上海票据交易所, ECDS, 票据业务系统, 直连接口, 数据迁移, 电子商业汇票]
 ---
 

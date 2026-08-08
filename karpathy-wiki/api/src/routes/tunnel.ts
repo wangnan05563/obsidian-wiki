@@ -8,6 +8,7 @@ import {
   CloudflareLoginService,
 } from '../tunnel/tunnel-service.js';
 import type { TunnelConfig } from '../types.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // 内网穿透路由（参考 17_xianyu api_tunnel.py，适配 Fastify）。
 //   GET  /api/tunnel/status                    查询运行状态
@@ -29,7 +30,7 @@ function getLoginService(): CloudflareLoginService {
   return loginService;
 }
 
-export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService) {
+export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService, guards: IsolationGuards = createIsolationGuards()) {
   app.get('/api/tunnel/status', async (_request, reply) => {
     return reply.send({
       status: tunnel.status,
@@ -38,7 +39,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
     });
   });
 
-  app.post('/api/tunnel/start', async (_request, reply) => {
+  app.post('/api/tunnel/start', { preHandler: guards.requireAdmin }, async (_request, reply) => {
     try {
       // 从 config.json 读取 tunnel 配置和 server.port，路由自包含无需额外参数
       const config = await loadConfig();
@@ -72,7 +73,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
     }
   });
 
-  app.post('/api/tunnel/stop', async (_request, reply) => {
+  app.post('/api/tunnel/stop', { preHandler: guards.requireAdmin }, async (_request, reply) => {
     tunnel.stop();
     return reply.send({
       status: tunnel.status,
@@ -102,7 +103,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
     });
   });
 
-  app.post('/api/tunnel/config', async (request, reply) => {
+  app.post('/api/tunnel/config', { preHandler: guards.requireAdmin }, async (request, reply) => {
     const body = request.body as Partial<TunnelConfig> | null;
     if (!body) {
       return reply.code(400).send({ detail: '请求体为空' });
@@ -124,7 +125,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
   // ===== Cloudflare Named Tunnel 向导端点 =====
 
   // 启动 cloudflared tunnel login（非阻塞），10s 内提取授权 URL
-  app.post('/api/tunnel/cloudflare/login', async (_request, reply) => {
+  app.post('/api/tunnel/cloudflare/login', { preHandler: guards.requireAdmin }, async (_request, reply) => {
     const config = await loadConfig();
     const svc = getLoginService();
     try {
@@ -157,7 +158,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
   });
 
   // 创建命名隧道：cloudflared tunnel create <name>
-  app.post('/api/tunnel/cloudflare/create', async (request, reply) => {
+  app.post('/api/tunnel/cloudflare/create', { preHandler: guards.requireAdmin }, async (request, reply) => {
     const body = request.body as { tunnelName?: string; certFile?: string } | null;
     if (!body?.tunnelName?.trim()) {
       return reply.code(400).send({ detail: '请输入隧道名称' });
@@ -190,7 +191,7 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService)
   });
 
   // 配置 DNS CNAME：cloudflared tunnel route dns <name> <hostname>
-  app.post('/api/tunnel/cloudflare/route-dns', async (request, reply) => {
+  app.post('/api/tunnel/cloudflare/route-dns', { preHandler: guards.requireAdmin }, async (request, reply) => {
     const body = request.body as { hostname?: string; certFile?: string } | null;
     if (!body?.hostname?.trim()) {
       return reply.code(400).send({ detail: '请输入固定域名' });

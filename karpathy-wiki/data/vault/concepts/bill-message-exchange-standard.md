@@ -3,7 +3,7 @@ title: 票据报文交换标准
 type: concept
 created: 2025-03-30
 updated: 2025-03-30
-source: raw/wiki-batch-1784714936931-0-1.____________________.md
+source: raw/1.____________________-2.md
 tags: [票据, 报文, XML, 接口标准]
 ---
 

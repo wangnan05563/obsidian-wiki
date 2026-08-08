@@ -87,3 +87,4 @@ Desktop.ini
 # ---------- 清理技能自动生成规则 ----------
 # 调试截图（verify-help-*.png 调试用，不应入库）
 verify-help-*.png
+.workbuddy

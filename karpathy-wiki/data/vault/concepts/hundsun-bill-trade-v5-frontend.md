@@ -3,7 +3,7 @@ title: HUNDSUN 票据交易管理平台 V5.0 前端开发指导
 type: concept
 created: 2025-01-21
 updated: 2025-01-21
-source: raw/wiki-batch-1784698499517-5-HUNDSUN__________V5.0-______.md
+source: raw/HUNDSUN 票据交易管理平台 V5.0 前端开发指导.md
 tags: [恒生电子, HUNDSUN, 前端开发, Vue.js, H-UI, 票据交易]
 ---
 

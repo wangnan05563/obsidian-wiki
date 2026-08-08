@@ -2,12 +2,13 @@
 import { API_BASE } from '../utils/apiBase';
 import { ref, onMounted, computed, markRaw } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Aim, Connection, CaretTop, Star, Download, Reading, ChatRound, Monitor, Clock } from '@element-plus/icons-vue';
+import { Aim, Connection, CaretTop, Star, Clock } from '@element-plus/icons-vue';
+import NavIcons from '../components/NavIcons.vue';
 import type { StatsData, RunSummary } from '../types';
 import { useCompileStore } from '../stores/compile';
 
 // 使用函数类型写法替代类型字面量（S6598）
-const emit = defineEmits<(e: 'navigate', view: 'ingest' | 'browse' | 'query' | 'health' | 'progress') => void>();
+const emit = defineEmits<(e: 'navigate', view: 'ingest' | 'browse' | 'query' | 'health' | 'progress' | 'graph' | 'help') => void>();
 
 const stats = ref<StatsData | null>(null);
 const loading = ref(false);
@@ -158,16 +159,16 @@ onMounted(() => {
         <div class="shortcut-grid">
           <div
             v-for="(sc, idx) in [
-              { icon: markRaw(Download), label: '投递资料', view: 'ingest' },
-              { icon: markRaw(Reading), label: '浏览知识库', view: 'browse' },
-              { icon: markRaw(ChatRound), label: '智能问答', view: 'query' },
-              { icon: markRaw(Monitor), label: '知识库体检', view: 'health' },
+              { icon: 'browse', label: '知识浏览', view: 'browse' },
+              { icon: 'query', label: '知识问答', view: 'query' },
+              { icon: 'graph', label: '图谱', view: 'graph' },
+              { icon: 'help', label: '帮助文档', view: 'help' },
             ]"
             :key="idx"
             class="shortcut-item hover-3d"
-            @click="emit('navigate', sc.view as 'ingest' | 'browse' | 'query' | 'health')"
+            @click="emit('navigate', sc.view as 'browse' | 'query' | 'graph' | 'help')"
           >
-            <span class="shortcut-icon"><el-icon><component :is="sc.icon" /></el-icon></span>
+            <span class="shortcut-icon"><NavIcons :name="sc.icon" :size="28" /></span>
             <span class="shortcut-label">{{ sc.label }}</span>
           </div>
         </div>

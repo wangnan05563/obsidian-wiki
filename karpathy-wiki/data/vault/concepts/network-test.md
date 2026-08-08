@@ -3,7 +3,7 @@ title: Network Test
 type: concept
 created: 2025-05-25
 updated: 2025-05-25
-source: raw/wiki-batch-1784701735079-0-proxy-test1.md
+source: raw/proxy-test1.md
 tags: [network, test, concept]
 ---
 

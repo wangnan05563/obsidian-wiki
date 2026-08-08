@@ -302,4 +302,36 @@ describe('user-store 模块', () => {
       expect(users).toHaveLength(3);
     });
   });
+
+  describe('loadUsers 文件损坏保护（评审 S5）', () => {
+    it('文件损坏时应返回空列表且不覆盖原文件', async () => {
+      // 先写入损坏内容（非合法 JSON）
+      await fs.writeFile(usersPath, '{ this is not valid json', 'utf8');
+      resetUserStore();
+      // 重新初始化：文件存在 → loadUsers 读取损坏内容
+      await initUserStore(usersPath, 100000);
+      const users = await loadUsers();
+      expect(users).toHaveLength(0);
+      // 已标记损坏：关键写（createUser）应拒绝写盘，避免用空列表覆盖损坏原文件
+      await expect(
+        createUser({ username: 'x', password: 'password123', role: 'user' }),
+      ).rejects.toThrow(/损坏/);
+      // 原损坏文件内容仍在（未被覆盖）
+      const raw = await fs.readFile(usersPath, 'utf8');
+      expect(raw).toContain('not valid json');
+    });
+
+    it('文件不存在时应正常初始化且可创建用户（不标记损坏）', async () => {
+      resetUserStore();
+      // 不创建文件，直接初始化 → 创建默认用户（3 个），不标记为损坏
+      await initUserStore(usersPath, 100000);
+      const users = await loadUsers();
+      expect(users).toHaveLength(3); // 默认用户已创建
+      // 首次启动路径不标记损坏：createUser 可正常写盘落盘
+      const created = await createUser({ username: 'first', password: 'password123', role: 'user' });
+      expect(created.username).toBe('first');
+      const raw = await fs.readFile(usersPath, 'utf8');
+      expect(raw).toContain('first');
+    });
+  });
 });

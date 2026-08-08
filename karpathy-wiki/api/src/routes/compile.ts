@@ -25,8 +25,9 @@ function validateBatchFiles(
   const rejected: Array<{ name: string; reason: string }> = [];
   const maxBytes = batch.maxFileSizeMb * 1024 * 1024;
   for (const f of uploaded) {
-    // basename 剥离目录前缀防路径穿越，正则替换非法字符沿用单文件模式
-    const safeName = path.basename(f.name).replaceAll(/[^\w.-]/g, '_');
+    // basename 剥离目录前缀防路径穿越，正则替换非法字符沿用单文件模式。
+    // 白名单保留 Unicode 字母/数字（含中文），避免中文文件名被替换成下划线。
+    const safeName = path.basename(f.name).replaceAll(/[^\p{L}\p{N}._-]/gu, '_');
     const ext = path.extname(safeName).slice(1).toLowerCase();
     if (!ext) {
       rejected.push({ name: f.name, reason: '缺少扩展名' });
@@ -74,12 +75,14 @@ export function registerCompileRoute(
         return reply.code(400).send({ error: '缺少 file 字段' });
       }
       const buffer = await file.toBuffer();
-      // sanitize filename：防路径穿越，剥离目录前缀并替换非法字符
-      const safeName = path.basename(file.filename).replaceAll(/[^\w.-]/g, '_');
+      // sanitize filename：防路径穿越，剥离目录前缀并替换非法字符。
+      // 白名单保留 Unicode 字母/数字（含中文），避免中文文件名被替换成下划线。
+      const safeName = path.basename(file.filename).replaceAll(/[^\p{L}\p{N}._-]/gu, '_');
       // 落盘到临时目录，compile-workflow 会读取后存档到 raw/
-      const tmp = path.join(os.tmpdir(), `wiki-compile-${Date.now()}-${safeName}`);
+      const tmp = path.join(os.tmpdir(), `wiki-compile-${Date.now()}-${process.pid}-${safeName}`);
       await fs.writeFile(tmp, buffer);
-      input = { type: 'file', content: tmp };
+      // 传入原始文件名（已 sanitize），供 compile-workflow 保留原名到 raw/ 存档
+      input = { type: 'file', content: tmp, originalName: safeName };
     } else {
       // JSON：url 或 text
       const body = request.body as { type?: string; content?: string; rawPath?: string };
@@ -317,11 +320,11 @@ export function registerCompileRoute(
           if (isAborted()) break;
           const f = validFiles[i];
           // 落盘到临时文件：compile-workflow 通过 fs.readFile 读取后存档到 raw/
-          const tmp = path.join(os.tmpdir(), `wiki-batch-${Date.now()}-${i}-${f.name}`);
+          const tmp = path.join(os.tmpdir(), `wiki-batch-${Date.now()}-${process.pid}-${i}-${f.name}`);
           await fs.writeFile(tmp, f.buffer);
           tmpPaths.push(tmp);
 
-          const input: CompileInput = { type: 'file', content: tmp };
+          const input: CompileInput = { type: 'file', content: tmp, originalName: f.name };
 
           // 单文件开始事件：前端据此创建分组容器
           send('file_start', {

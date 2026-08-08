@@ -3,7 +3,7 @@ title: Batch Compile Testing
 type: concept
 created: 2025-04-21
 updated: 2025-04-21
-source: raw/wiki-batch-1784719195367-19-test-20.md
+source: raw/test-20.md
 tags: [testing, batch-processing, compilation, wiki]
 ---
 

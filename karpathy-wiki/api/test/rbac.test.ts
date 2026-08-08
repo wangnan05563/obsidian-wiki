@@ -34,16 +34,16 @@ describe('RBAC 模块', () => {
       expect(perms).toContain('users');
     });
 
-    it('普通用户仅拥有 browse/query/graph/help/about 五个权限', () => {
+    it('普通用户拥有 dashboard + browse/query/graph/help/about 六个权限', () => {
       const perms = getRolePermissions('user');
-      expect(perms).toHaveLength(5);
-      expect(perms).toEqual(['browse', 'query', 'graph', 'help', 'about']);
+      expect(perms).toHaveLength(6);
+      expect(perms).toEqual(['dashboard', 'browse', 'query', 'graph', 'help', 'about']);
     });
 
-    it('游客仅拥有 browse/query/graph/help/about 五个权限', () => {
+    it('游客拥有 dashboard + browse/query/graph/help/about 六个权限', () => {
       const perms = getRolePermissions('guest');
-      expect(perms).toHaveLength(5);
-      expect(perms).toEqual(['browse', 'query', 'graph', 'help', 'about']);
+      expect(perms).toHaveLength(6);
+      expect(perms).toEqual(['dashboard', 'browse', 'query', 'graph', 'help', 'about']);
     });
 
     it('返回数组应为新副本，修改不影响内部映射', () => {
@@ -70,8 +70,8 @@ describe('RBAC 模块', () => {
       expect(hasPermission('user', 'about')).toBe(true);
     });
 
-    it('普通用户对 dashboard/ingest/config/users 返回 false', () => {
-      expect(hasPermission('user', 'dashboard')).toBe(false);
+    it('普通用户对 ingest/config/users 返回 false（dashboard 已开放）', () => {
+      expect(hasPermission('user', 'dashboard')).toBe(true);
       expect(hasPermission('user', 'ingest')).toBe(false);
       expect(hasPermission('user', 'config')).toBe(false);
       expect(hasPermission('user', 'users')).toBe(false);
@@ -96,8 +96,9 @@ describe('RBAC 模块', () => {
     });
 
     it('普通用户对全部无权限的组合返回 false', () => {
-      expect(hasAnyPermission('user', ['dashboard', 'users'])).toBe(false);
+      // dashboard 已开放，故 [dashboard, users] 命中 dashboard 返回 true
       expect(hasAnyPermission('user', ['ingest', 'config'])).toBe(false);
+      expect(hasAnyPermission('user', ['users', 'config'])).toBe(false);
     });
 
     it('空数组返回 false', () => {
@@ -116,8 +117,8 @@ describe('RBAC 模块', () => {
       expect(hasAllPermissions('user', ['browse', 'query', 'graph'])).toBe(true);
     });
 
-    it('普通用户对 browse+dashboard 返回 false（缺 dashboard）', () => {
-      expect(hasAllPermissions('user', ['browse', 'dashboard'])).toBe(false);
+    it('普通用户对 browse+dashboard 返回 true（dashboard 已开放）', () => {
+      expect(hasAllPermissions('user', ['browse', 'dashboard'])).toBe(true);
     });
 
     it('空数组返回 true（全称量词的空集为真）', () => {
@@ -160,8 +161,8 @@ describe('RBAC 模块', () => {
       const matrix = getRolePermissionMatrix();
       expect(Object.keys(matrix)).toHaveLength(3);
       expect(matrix.admin).toHaveLength(14);
-      expect(matrix.user).toHaveLength(5);
-      expect(matrix.guest).toHaveLength(5);
+      expect(matrix.user).toHaveLength(6);
+      expect(matrix.guest).toHaveLength(6);
     });
 
     it('矩阵为深拷贝，修改不影响内部映射', () => {

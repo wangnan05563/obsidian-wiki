@@ -54,7 +54,11 @@ const QUERY_EVENT_HANDLERS: Record<string, QueryEventHandler> = {
       archivePath: parsed.archivePath || '',
     });
   },
-  done: (parsed, store) => store.finalizeAnswer(parsed.sessionId, parsed.messageIndex),
+  done: (parsed, store) => {
+    // 记录线程隔离键（与 sessionId 同源），供后续问答续接本地记忆
+    if (parsed.threadId) store.setThreadId(parsed.threadId);
+    store.finalizeAnswer(parsed.sessionId, parsed.messageIndex, parsed.threadId);
+  },
   error: (parsed, store) => {
     store.handleError(parsed.message || '问答出错');
     ElMessage.warning(parsed.message || '问答出错');

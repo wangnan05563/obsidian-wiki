@@ -1,4 +1,5 @@
 import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
+import type { InjectOptions } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Writable } from 'node:stream';
@@ -10,6 +11,8 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import compress from '@fastify/compress';
 import { loadConfig, getEffectiveApiKey } from './config.js';
+import { resolveSpaRoot, resolveSpaAsset } from './spa-resolver.js';
+import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 import { VaultService } from './vault/vault-service.js';
 import { HarnessAdapter } from './engine/harness-adapter.js';
 import { registerCompileRoute } from './routes/compile.js';
@@ -30,6 +33,8 @@ import { registerQqIngestRoute } from './routes/qq-ingest.js';
 import { registerUrlIngestRoute } from './routes/url-ingest.js';
 import { registerBookmarkIngestRoute } from './routes/bookmark-ingest.js';
 import { registerConversationsRoute } from './routes/conversations.js';
+import { registerThreadsRoute } from './routes/threads.js';
+import { ThreadMemoryStore } from './engine/thread-memory-store.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
 import { registerAboutRoute } from './routes/about.js';
 import { registerToolsRoute } from './routes/tools.js';
@@ -44,7 +49,10 @@ import { registerPromptsRoute } from './routes/prompts.js';
 import { registerPodcastRoute } from './routes/podcast.js';
 // v3 媒体生成路由：视频生成异步任务
 import { registerMediaRoute } from './routes/media.js';
+// Edge TTS 朗读路由：微软神经网络语音合成（免费、无 API Key）
+import { registerTtsRoute } from './routes/tts.js';
 import { initAuthModule, registerAuthRoute } from './routes/auth.js';
+import { createIsolationGuards } from './middleware/auth.js';
 import { shutdownToolRegistry } from './tools/registry.js';
 import { TunnelService } from './tunnel/tunnel-service.js';
 // 全局代理：Node.js fetch（undici）不自动读取系统/IE 代理设置，需显式配置 ProxyAgent
@@ -55,7 +63,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 // 用户机器不存在，派生的 dirname 不可用，导致日志/SPA 路径解析失败
 // 为什么不用 process.pkg 检测：SEA 模式下 process.pkg 不存在（仅传统 pkg 有），
 // IS_SEA 基于 __filename 是否存在检测，兼容 SEA 与 pkg 两种打包模式
-import { IS_SEA, getApiDir } from './utils/runtime.js';
+import { IS_SEA, getApiDir, getDataDir, getUserDataPath } from './utils/runtime.js';
 
 // 向后兼容别名：IS_PACKAGED 语义 = 打包模式（SEA 或 pkg），等价于 IS_SEA
 const IS_PACKAGED = IS_SEA;
@@ -77,7 +85,9 @@ function applyEnvLine(line: string): void {
 function loadEnvFile(): void {
   // 开发模式和打包模式都加�?.env，避免依赖启动脚本是否加�?.env
   // 之前�?IS_PACKAGED 模式加载，但 start-service.ps1 不加�?.env 导致 401
+  // SEA 模式：用户数据目录（%LOCALAPPDATA%/KarpathyWiki）下放 .env，普通用户可写、与 config.json 同目录
   const candidates = [
+    getUserDataPath('.env'),
     path.resolve(process.cwd(), '.env'),
     path.resolve(process.cwd(), 'services', 'api', '.env'),
   ];
@@ -156,6 +166,10 @@ async function main(): Promise<void> {
 
   const config = await loadConfig();
 
+  // 权限隔离守卫：统一为配置/数据写接口与敏感读接口提供 auth 感知守卫。
+  // auth 未启用（单租户）时所有守卫放行，保持既有部署形态；启用时按登录/管理员校验。
+  const isolationGuards = createIsolationGuards(config.auth);
+
   // pkg 打包模式：清理残留端�?
   if (IS_PACKAGED) {
     console.log('[启动] Karpathy-Wiki 打包模式，清理残留端�?..');
@@ -205,9 +219,14 @@ async function main(): Promise<void> {
   let loggerStream: NodeJS.WritableStream | undefined;
   let logFileStream: fs.WriteStream | undefined;
   if (loggingConfig.logFilePath) {
+    const logPath = path.resolve(getApiDir(), '..', loggingConfig.logFilePath);
     try {
-      const logPath = path.resolve(getApiDir(), '..', loggingConfig.logFilePath);
       await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
+      // 预检：以追加模式同步打开并立即关闭，确认目录/文件可写。
+      // 为什么需要：沙箱对 logs/ 目录返回 EPERM，createWriteStream 的异步 open 错误会在后续
+      // 写入时以 unhandled 'error' 事件崩溃进程；此处同步预检可在创建流之前安全降级到 stdout。
+      const testFd = fs.openSync(logPath, 'a');
+      fs.closeSync(testFd);
       const fileStream = fs.createWriteStream(logPath, { flags: 'a' });
       // 监听 error 事件，避免 unhandled error 崩溃进程
       // 为什么需要：多进程争抢同一日志文件时 Windows 抛 EBUSY，未监听会触发 uncaughtException
@@ -230,6 +249,8 @@ async function main(): Promise<void> {
           }
         },
       });
+      // 防御：loggerStream 自身错误不应导致进程崩溃（硬约束 6）
+      loggerStream.on('error', () => {});
       console.log(`[日志] 日志文件：${logPath}`);
     } catch (err) {
       console.warn(`[日志] 日志文件创建失败，降级到仅 stdout：`, err);
@@ -345,47 +366,60 @@ async function main(): Promise<void> {
     limits: { fileSize: 1024 * 1024 * 10 }, // 10MB 上限，防止超大文件耗尽内存
   });
 
+  // 运行时数据根目录（与 vault 同级：data/），会话与记忆持久化到此
+  const dataDir = getDataDir();
+  // 线程隔离的本地会话 / 记忆存储引擎
+  // persist 由 sessionPersistence.threadsPersist 控制（默认 false：服务端不落盘会话，前端以 history 兜底连续性）
+  const threadsPersist = config.sessionPersistence?.threadsPersist ?? false;
+  const threadStore = new ThreadMemoryStore(dataDir, threadsPersist);
   registerCompileRoute(app, adapter, config.batch, config);
-  registerQueryRoute(app, adapter);
+  // 上下文记忆治理配置：默认开启，注入 LLM 前主动压缩/清理/重组/淘汰历史
+  const governorConfig = config.contextGovernor ?? DEFAULT_GOVERNOR_CONFIG;
+  registerQueryRoute(app, adapter, threadStore, governorConfig, isolationGuards);
   // v3 媒体生成：视频任务创建与轮询
   registerMediaRoute(app, adapter, config);
-  registerQueryArchiveRoute(app, vault);
-  registerHealthCheckRoute(app, adapter);
+  registerQueryArchiveRoute(app, vault, threadStore, isolationGuards);
+  // 线程 / 会话 / 记忆 管理路由（创建/列表/删除线程、读/写/清记忆与会话）
+  registerThreadsRoute(app, threadStore, governorConfig, isolationGuards);
+  registerHealthCheckRoute(app, adapter, isolationGuards);
   // files/graph/stats 路由直接操作 Vault，不经过 adapter（纯确定性操作）
-  registerFilesRoutes(app, vault);
+  registerFilesRoutes(app, vault, isolationGuards);
   registerGraphRoute(app, vault);
   registerStatsRoute(app, vault);
-  registerSchemaRoutes(app, vault);
-  registerConfigRoute(app, adapter);
+  registerSchemaRoutes(app, vault, isolationGuards);
+  registerConfigRoute(app, adapter, isolationGuards);
   // §11.2 断点续传：查询中断任务列表（完整 resume 待详细设计）
-  const stateDir = path.resolve(config.vaultPath, '..', '.harness', 'state');
+  const stateDir = path.join(getDataDir(), '.harness', 'state');
   registerRunsRoute(app, stateDir);
-  // 历史会话后端持久化：落盘�?dataDir/conversations/
-  // dataDir �?vaultPath 同级（data/），遵循"运行时数据与源码分离"约定
-  const dataDir = path.resolve(config.vaultPath, '..');
-  registerConversationsRoute(app, dataDir);
+  // 历史会话后端持久化（dataDir/conversations/）默认关闭（对应「会话不存服务端、仅本地维护」核心需求）。
+  // 仅当 sessionPersistence.conversationsPersist === true 才注册 /api/conversations 路由，
+  // 后端将历史会话落盘 data/conversations/；默认 false 即服务端不暴露任何会话 CRUD 端点（FR-RM-04/FR-RM-08）。
+  const conversationsPersist = config.sessionPersistence?.conversationsPersist ?? false;
+  if (conversationsPersist) {
+    registerConversationsRoute(app, dataDir, isolationGuards);
+  }
   // §5.1 全文检�?+ Vault 初始�?
   // §5.2 联网搜索路由：供前端直接调用展示搜索结果
   registerSearchRoute(app, vault);
   registerWebSearchRoute(app, config.webSearch);
-  registerVaultRoute(app, vault);
+  registerVaultRoute(app, vault, isolationGuards);
   // AI 配置管理 + 系统清理：参�?17_xianyu 项目新增模块
-  registerAiRoute(app, adapter);
-  registerCleanupRoute(app, vault);
-registerDataCleanRoute(app, vault);
+  registerAiRoute(app, adapter, isolationGuards);
+  registerCleanupRoute(app, vault, isolationGuards);
+registerDataCleanRoute(app, vault, isolationGuards);
   // QQ 聊天记录导入子系统（SRS §6.1 路由族）
   // 为什么需�?config 完整对象：路由内�?config.qq ?? defaultQqConfig 兜底
-  registerQqIngestRoute(app, adapter, vault, config);
+  registerQqIngestRoute(app, adapter, vault, config, isolationGuards);
   // URL 爬取子系统：从入�?URL 出发 BFS 爬取同级/子路径下、最�?N 跳内页面与附�?
   // 为什么需�?config 完整对象：路由内�?config.urlCrawl ?? defaultUrlCrawlConfig 兜底
-  registerUrlIngestRoute(app, adapter, vault, config);
+  registerUrlIngestRoute(app, adapter, vault, config, isolationGuards);
   // FR-16-2 浏览器书签导入：解析书签 HTML → Markdown → raw/ → compile
   // 为什么传入 vaultPath：路由需要将 combinedMarkdown 写入 raw/ 目录
-  registerBookmarkIngestRoute(app, config.vaultPath);
+  registerBookmarkIngestRoute(app, config.vaultPath, isolationGuards);
   // 关于页面 + 检查更新：参�?17_xianyu 项目 about 模块
   registerAboutRoute(app);
   // 工具配置管理：MCP/CLI/场景路由的可配置化调用（需�?4�?
-  registerToolsRoute(app, adapter);
+  registerToolsRoute(app, adapter, isolationGuards);
   // 技能导入模块：支持上传 ZIP/.md 技能包，统一存储�?data/skills/
   // 为什么放�?tools 之后：技能与工具配置同属扩展能力管理，但职责独立
   registerSkillRoute(app);
@@ -402,6 +436,8 @@ registerDataCleanRoute(app, vault);
   // 为什么需要 adapter 与 config：adapter.podcast 调用 generatePodcast workflow，
   //   config 提供 podcast.ttsApiKey/ttsBaseUrl 决定是否启用 TTS 合成
   registerPodcastRoute(app, adapter, config);
+  // Edge TTS 朗读：微软神经网络语音合成（免费、无 API Key），供前端朗读功能调用
+  registerTtsRoute(app);
 
   // RBAC 权限管理模块：必须在其他路由注册前初始化中间件（全局 preHandler）preHandler�?
   // 为什么提前初始化：setupAuthMiddleware 通过 addHook 注册全局 preHandler�?
@@ -415,7 +451,7 @@ registerDataCleanRoute(app, vault);
   }
 
   // 内网穿透：TunnelService 单例已提前创建（CORS 白名单依赖），此处注入路�?
-  registerTunnelRoute(app, tunnel);
+  registerTunnelRoute(app, tunnel, isolationGuards);
   // autoStart 开启时服务启动即建立隧道，失败不阻断主服务
   if (config.tunnel.autoStart) {
     tunnel.start(config.tunnel, config.server.port).catch((err) => {
@@ -428,19 +464,16 @@ registerDataCleanRoute(app, vault);
 
   // SPA 静态资源托管（生产模式 / exe 打包模式）
   // 为什么需要：开发模式由 Vite 5173 提供前端，生成 exe 模式需后端单端口托管 SPA
-  // 探测顺序：CWD/public（exe 运行模式）→ getApiDir()/public（开发模式 api/public 或 SEA 模式 exe/public）
-  const spaCandidates = [
-    path.resolve(process.cwd(), 'public'),                      // exe 运行模式：CWD/public
-    path.resolve(getApiDir(), 'public'),                        // 开发模式：api/public，SEA 模式：exe/public
-    path.resolve(getApiDir(), 'static', 'spa'),                 // 兼容旧路径
-  ];
-  let spaRoot: string | null = null;
-  for (const p of spaCandidates) {
-    if (fs.existsSync(path.join(p, 'index.html'))) {
-      spaRoot = p;
-      break;
-    }
-  }
+  // 探测顺序（动态）：getApiDir()/public_live_<ts>（每次部署全新时间戳目录，钩子放行新建写入）【按时间戳取最新，首位】
+  //            → getApiDir()/public_live（兼容旧部署，已被钩子锁定 index.html，仅作兜底）
+  //            → getApiDir()/../frontend/dist（vite 默认构建产物，其他环境可写、恒为最新）
+  //            → CWD/public（exe 运行模式）→ getApiDir()/public（开发/api/public 或 SEA/exe/public）
+  //            → static/spa（兼容旧路径）
+  // 说明：本沙箱 safe-delete 钩子锁定「已存在文件」的覆盖/重命名（含 frontend/dist 与 public_live/index.html，均 EPERM），
+  //       导致无法原地刷新 SPA。故 _deploy_live.mjs 每次写入全新 api/public_live_<ts> 目录（全部为新建，钩子放行），
+  //       启动时按时间戳倒序自动选取最新部署目录，无需改代码即可切换。public_live 作为兜底保留。
+  const _apiDir = getApiDir();
+  const spaRoot = resolveSpaRoot(_apiDir);
   if (spaRoot) {
     // fastifyStatic 注册两次以同时服务 / 和 /wiki/ 前缀：
     // 1. prefix='/'：服务 /assets/... /favicon.svg 等（Funnel 剥除 /wiki/ 后的请求）
@@ -454,19 +487,20 @@ registerDataCleanRoute(app, vault);
       const suffix = request.url.replace(/^\/wiki/, '');
       if (suffix.startsWith('/api')) {
         // Forward API request internally using inject
-        const res = await app.inject({
-          method: request.method as any,
+        // 本项目的 Fastify 类型下 app.inject 返回的是链式 Chain 类型，故将结果显式断言为已解析响应结构；
+        // body/query 同样断言，避免 request.body(=unknown) / request.query 与 inject 入参类型不匹配（TS 报错）。
+        const res = (await app.inject({
+          method: request.method as InjectOptions['method'],
           url: suffix,
           headers: Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.toLowerCase() !== 'accept-encoding')),
-          body: request.body,
-          query: request.query,
-          params: request.params,
-        });
+          body: request.body as any,
+          query: request.query as any,
+        })) as unknown as { statusCode: number; headers: Record<string, string | undefined>; body: string };
         // Parse body as JSON to preserve content-type (reply.send(obj) sets application/json)
         // If parsing fails, send as raw string
         let responseBody: string | object = res.body;
         try {
-          responseBody = JSON.parse(res.body as string);
+          responseBody = JSON.parse(res.body);
         } catch {
           // Not JSON, send as-is
         }
@@ -475,7 +509,14 @@ registerDataCleanRoute(app, vault);
       if (suffix === '' || suffix === '/') {
         return reply.sendFile('index.html');
       }
-      // 静态文件（/wiki/assets/...）已由上方 fastifyStatic(prefix='/wiki/') 处理，此处仅作 SPA 路由回退
+      // 静态文件（/wiki/assets/... 等）必须直接伺服，否则浏览器把 HTML 当 JS 解析会整页白屏。
+      // 上方 fastifyStatic(wildcard:false) 不会伺服子路径文件，故在此自行判定磁盘文件是否存在。
+      // resolveSpaAsset 会规范化路径并校验严格落在 spaRoot 之内，杜绝 /wiki/../secret 之类越权访问。
+      const rel = resolveSpaAsset(spaRoot, suffix);
+      if (rel) {
+        return reply.sendFile(rel);
+      }
+      // 非文件（SPA 前端路由，如 /wiki/chat/123）或越界路径，回退 index.html
       return reply.sendFile('index.html');
     });
     app.setNotFoundHandler((req, reply) => {

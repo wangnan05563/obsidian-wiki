@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { Check, DocumentCopy, Document, Microphone, VideoPause, Refresh, Star, StarFilled } from '@element-plus/icons-vue';
+import { Check, DocumentCopy, Document, Microphone, VideoPause, Refresh } from '@element-plus/icons-vue';
 import { useClipboard } from '../composables/useClipboard';
 import { useTtsStore } from '../stores/tts';
+// 反馈图标（点赞/点踩）改用项目自研开源 SVG 图标 NavIcons（向上/向下大拇指），比 Star 星标更直观
+import NavIcons from './NavIcons.vue';
 
 // §2.5 MessageActions — 消息操作浮窗。
 // 职责：hover assistant 消息时显示操作按钮（复制纯文本/复制 Markdown/朗读/重新生成/反馈）。
@@ -70,10 +72,10 @@ function handleFeedback(type: 'up' | 'down') {
       <span class="btn-label">重生成</span>
     </button>
     <button class="action-btn" @click="handleFeedback('up')" title="赞">
-      <el-icon><StarFilled /></el-icon>
+      <NavIcons name="thumb-up" :size="15" />
     </button>
     <button class="action-btn" @click="handleFeedback('down')" title="踩">
-      <el-icon><Star /></el-icon>
+      <NavIcons name="thumb-down" :size="15" />
     </button>
   </div>
 </template>

@@ -17,7 +17,7 @@ function makeUser(role: 'admin' | 'user' | 'guest'): UserInfo {
     updatedAt: '2025-01-01T00:00:00.000Z',
     permissions: role === 'admin'
       ? ['dashboard', 'ingest', 'progress', 'browse', 'query', 'graph', 'health', 'config', 'tunnel', 'cleanup', 'help', 'about', 'users']
-      : ['browse', 'query', 'graph', 'help', 'about'],
+      : ['dashboard', 'browse', 'query', 'graph', 'help', 'about'],
   };
 }
 
@@ -71,8 +71,8 @@ describe('usePermission composable', () => {
     it('filterVisibleMenus 应返回空数组', () => {
       const { filterVisibleMenus } = usePermission();
       const menus = [
-        { key: 'browse' as AuthPermission, label: '浏览' },
-        { key: 'dashboard' as AuthPermission, label: '仪表盘' },
+        { permission: 'browse' as AuthPermission, label: '浏览' },
+        { permission: 'dashboard' as AuthPermission, label: '仪表盘' },
       ];
       const visible = filterVisibleMenus(menus);
       expect(visible).toEqual([]);
@@ -132,9 +132,9 @@ describe('usePermission composable', () => {
     it('filterVisibleMenus 应返回全部菜单', () => {
       const { filterVisibleMenus } = usePermission();
       const menus = [
-        { key: 'browse' as AuthPermission, label: '浏览' },
-        { key: 'dashboard' as AuthPermission, label: '仪表盘' },
-        { key: 'users' as AuthPermission, label: '用户管理' },
+        { permission: 'browse' as AuthPermission, label: '浏览' },
+        { permission: 'dashboard' as AuthPermission, label: '仪表盘' },
+        { permission: 'users' as AuthPermission, label: '用户管理' },
       ];
       const visible = filterVisibleMenus(menus);
       expect(visible).toHaveLength(3);
@@ -178,9 +178,9 @@ describe('usePermission composable', () => {
       expect(canView('browse')).toBe(true);
     });
 
-    it('canView dashboard 返回 false', () => {
+    it('canView dashboard 返回 true（仪表盘已开放给所有用户）', () => {
       const { canView } = usePermission();
-      expect(canView('dashboard')).toBe(false);
+      expect(canView('dashboard')).toBe(true);
     });
 
     it('canViewAny 对 [browse, dashboard] 返回 true', () => {
@@ -188,9 +188,10 @@ describe('usePermission composable', () => {
       expect(canViewAny(['browse', 'dashboard'])).toBe(true);
     });
 
-    it('canViewAny 对 [dashboard, users] 返回 false', () => {
+    // 仪表盘已开放给所有用户：普通用户拥有 dashboard，因此对 [dashboard, users] 返回 true
+    it('canViewAny 对 [dashboard, users] 返回 true', () => {
       const { canViewAny } = usePermission();
-      expect(canViewAny(['dashboard', 'users'])).toBe(false);
+      expect(canViewAny(['dashboard', 'users'])).toBe(true);
     });
 
     it('canViewAll 对 [browse, query] 返回 true', () => {
@@ -198,23 +199,25 @@ describe('usePermission composable', () => {
       expect(canViewAll(['browse', 'query'])).toBe(true);
     });
 
-    it('canViewAll 对 [browse, dashboard] 返回 false', () => {
+    it('canViewAll 对 [browse, dashboard] 返回 true（仪表盘已开放）', () => {
       const { canViewAll } = usePermission();
-      expect(canViewAll(['browse', 'dashboard'])).toBe(false);
+      expect(canViewAll(['browse', 'dashboard'])).toBe(true);
     });
 
     it('filterVisibleMenus 应过滤掉无权限菜单', () => {
       const { filterVisibleMenus } = usePermission();
       const menus = [
-        { key: 'browse' as AuthPermission, label: '浏览' },
-        { key: 'dashboard' as AuthPermission, label: '仪表盘' },
-        { key: 'query' as AuthPermission, label: '问答' },
-        { key: 'users' as AuthPermission, label: '用户管理' },
+        { permission: 'browse' as AuthPermission, label: '浏览' },
+        { permission: 'dashboard' as AuthPermission, label: '仪表盘' },
+        { permission: 'query' as AuthPermission, label: '问答' },
+        { permission: 'users' as AuthPermission, label: '用户管理' },
       ];
+      // 仪表盘已开放给所有用户，故 browse/dashboard/query 可见（users 仍被过滤）
       const visible = filterVisibleMenus(menus);
-      expect(visible).toHaveLength(2);
-      expect(visible[0].key).toBe('browse');
-      expect(visible[1].key).toBe('query');
+      expect(visible).toHaveLength(3);
+      expect(visible[0].permission).toBe('browse');
+      expect(visible[1].permission).toBe('dashboard');
+      expect(visible[2].permission).toBe('query');
     });
   });
 
@@ -235,21 +238,21 @@ describe('usePermission composable', () => {
       expect(canView('browse')).toBe(true);
     });
 
-    it('canView dashboard 返回 false', () => {
+    it('canView dashboard 返回 true（仪表盘已开放给所有用户）', () => {
       const { canView } = usePermission();
-      expect(canView('dashboard')).toBe(false);
+      expect(canView('dashboard')).toBe(true);
     });
 
-    it('filterVisibleMenus 应与普通用户相同', () => {
+    it('filterVisibleMenus 应与普通用户相同（仪表盘可见）', () => {
       const { filterVisibleMenus } = usePermission();
       const menus = [
-        { key: 'browse' as AuthPermission, label: '浏览' },
-        { key: 'dashboard' as AuthPermission, label: '仪表盘' },
-        { key: 'query' as AuthPermission, label: '问答' },
-        { key: 'users' as AuthPermission, label: '用户管理' },
+        { permission: 'browse' as AuthPermission, label: '浏览' },
+        { permission: 'dashboard' as AuthPermission, label: '仪表盘' },
+        { permission: 'query' as AuthPermission, label: '问答' },
+        { permission: 'users' as AuthPermission, label: '用户管理' },
       ];
       const visible = filterVisibleMenus(menus);
-      expect(visible).toHaveLength(2);
+      expect(visible).toHaveLength(3);
     });
   });
 
@@ -291,8 +294,8 @@ describe('usePermission composable', () => {
       store.token = 't';
       const { filterVisibleMenus } = usePermission();
       const menus = [
-        { key: 'browse' as AuthPermission, label: '浏览' },
-        { key: 'dashboard' as AuthPermission, label: '仪表盘' },
+        { permission: 'browse' as AuthPermission, label: '浏览' },
+        { permission: 'dashboard' as AuthPermission, label: '仪表盘' },
       ];
       const originalLength = menus.length;
       const visible = filterVisibleMenus(menus);

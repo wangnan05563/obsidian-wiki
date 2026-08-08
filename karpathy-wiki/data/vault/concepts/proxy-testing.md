@@ -3,7 +3,7 @@ title: Proxy Testing
 type: concept
 created: 2025-01-22
 updated: 2025-01-22
-source: raw/wiki-batch-1784701752317-1-proxy-test2.md
+source: raw/proxy-test2.md
 tags: [proxy, testing, network, methodology]
 ---
 

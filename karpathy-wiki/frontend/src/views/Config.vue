@@ -9,9 +9,70 @@ import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, A
 import { apiErrorMessage } from '../utils/apiError';
 import { STORAGE_KEYS, presetStorageKey } from '../constants/storageKeys';
 import { consumeSSE } from '../utils/sse';
+import { useAuthStore } from '../stores/auth';
+import { useTtsStore } from '../stores/tts';
+import { DEFAULT_TTS_CONFIG } from '../services/ttsConfig';
+// 按用户维度隔离的 AI/搜索/工具配置读写层（BYOK：密钥仅存客户端本地，按 userId 命名空间隔离）
+import {
+  loadAiUserConfig,
+  saveAiUserConfig,
+  loadSearchUserConfig,
+  saveSearchUserConfig,
+  loadToolsUserConfig,
+  saveToolsUserConfig,
+  DEFAULT_AI_USER_CONFIG,
+} from '../services/userConfig';
 
-const activeTab = ref<'schema' | 'config' | 'ai' | 'theme' | 'tools' | 'qq' | 'prompts'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai' | 'tts' | 'theme' | 'tools' | 'qq' | 'prompts'>('schema');
 const config = ref<ConfigData | null>(null);
+
+// ===== 朗读设置（按用户维度隔离）=====
+// 配置由 useTtsStore 统一管理，store 内部按当前登录用户（authStore.user.id）读取/写入本地存储，
+// 不同用户命名空间隔离（见 stores/tts.ts + services/ttsConfig.ts）。
+const ttsStore = useTtsStore();
+const authStore = useAuthStore();
+// 是否为管理员：用于 Config 内敏感 tab（SCHEMA/系统配置/AI 服务/工具/QQ/Prompt）的二次拦截，
+// 仅管理员可见可改；「朗读设置」「界面主题」为个人偏好，对所有登录用户开放。
+// 注意：authStore.isAdmin 经 Pinia 已解包为 boolean，这里用 computed 重新包一层以便模板 v-if 与脚本 .value 统一。
+const isAdmin = computed(() => authStore.isAdmin);
+
+// Edge 神经语音可用音色列表（与后端 EDGE_TTS_VOICES 一致，与 MessageToolbar 保持一致）
+const edgeVoices = [
+  { shortName: 'zh-CN-XiaoxiaoNeural', label: '晓晓（女·温婉）' },
+  { shortName: 'zh-CN-YunyangNeural', label: '云扬（男·播报）' },
+  { shortName: 'zh-CN-XiaoyiNeural', label: '晓伊（女·甜美）' },
+  { shortName: 'zh-CN-YunxiNeural', label: '云希（男·沉稳）' },
+  { shortName: 'zh-CN-XiaochenNeural', label: '晓辰（女·知性）' },
+  { shortName: 'zh-CN-YunfengNeural', label: '云枫（男·低沉）' },
+  { shortName: 'zh-CN-XiaohanNeural', label: '晓涵（女·温暖）' },
+  { shortName: 'zh-CN-YunhaoNeural', label: '云皓（男·活力）' },
+  { shortName: 'zh-CN-XiaomengNeural', label: '晓梦（女·清新）' },
+  { shortName: 'zh-CN-YunzeNeural', label: '云泽（男·儒雅）' },
+];
+
+// 说话风格（提升拟人度，对应后端 ALLOWED_STYLES 白名单子集）
+const ttsStyles = [
+  { value: 'general', label: '标准' },
+  { value: 'narration-relaxed', label: '轻松讲述' },
+  { value: 'chat', label: '闲聊' },
+  { value: 'newscast', label: '新闻播报' },
+  { value: 'newscast-casual', label: '轻松新闻' },
+  { value: 'empathetic', label: '共情' },
+  { value: 'calm', label: '平静' },
+  { value: 'gentle', label: '温柔' },
+  { value: 'cheerful', label: '欢快' },
+  { value: 'serious', label: '严肃' },
+];
+
+// 恢复朗读设置为默认值
+function resetTtsConfig(): void {
+  ttsStore.setProvider(DEFAULT_TTS_CONFIG.provider);
+  ttsStore.setVoice(DEFAULT_TTS_CONFIG.voice);
+  ttsStore.setStyle(DEFAULT_TTS_CONFIG.style);
+  ttsStore.setRate(DEFAULT_TTS_CONFIG.rate);
+  ttsStore.setVolume(DEFAULT_TTS_CONFIG.volume);
+  ttsStore.setPitch(DEFAULT_TTS_CONFIG.pitch);
+}
 const schemaContent = ref<string>('');
 const schemaBuffer = ref<string>('');
 const editingSchema = ref(false);
@@ -238,23 +299,39 @@ function clearAllPresetCache(): void {
   keysToRemove.forEach(k => localStorage.removeItem(k));
 }
 
-// 加载 AI 配置
+// 当前用户 id（未登录视为 guest 命名空间）；用于按用户隔离读写本地配置。
+const currentUserId = computed(() => authStore.user?.id || 'guest');
+
+// 本地脱敏：仅展示末 4 位，避免明文泄露（与后端 maskSensitive 行为保持一致）。
+function maskLocal(key: string): string {
+  if (!key) return '';
+  if (key.length <= 4) return '*'.repeat(key.length);
+  return key.slice(-4).padStart(key.length, '*');
+}
+
+// 加载 AI 配置（按用户隔离的本地存储，不再读取服务端共享 config.json）
 async function loadAiConfig() {
   loadingAi.value = true;
   try {
-    const res = await fetch(`${API_BASE}/ai/config`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: AiConfig = await res.json();
-    aiConfig.value = data;
-    // 表单初始化为当前配置，apiKey 显示脱敏值
+    const cfg = await loadAiUserConfig(currentUserId.value);
+    // 表单初始化为当前用户的本地配置（apiKey 为本人浏览器明文，password 控件默认以点显示）
     aiForm.value = {
-      provider: data.provider,
-      baseUrl: data.baseUrl,
-      model: data.model,
-      apiKey: data.apiKeyMasked || '',
+      provider: cfg.provider,
+      baseUrl: cfg.baseUrl,
+      model: cfg.model,
+      apiKey: cfg.apiKey,
     };
-    // 根据当前 provider 匹配预设 key，用于后续按预设持久化
-    const matched = aiPresets.value.find(p => p.provider === data.provider);
+    // 本地派生状态摘要（原 aiConfig 来自服务端，现在由本地配置派生）
+    aiConfig.value = {
+      provider: cfg.provider,
+      baseUrl: cfg.baseUrl,
+      model: cfg.model,
+      apiKeyRef: '',
+      apiKeyMasked: cfg.apiKey ? maskLocal(cfg.apiKey) : '',
+      apiKeySet: Boolean(cfg.apiKey),
+    };
+    // 根据当前 provider 匹配预设 key，用于预设标签高亮
+    const matched = aiPresets.value.find(p => p.provider === cfg.provider);
     selectedPresetKey.value = matched?.key ?? '';
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载 AI 配置失败', err));
@@ -284,41 +361,15 @@ async function loadPresets() {
 //   后端检测 provider 变化时自动迁移当前 apiKey 到 apiKeys[旧provider]，并从 apiKeys[新provider] 恢复 key。
 async function applyPreset(preset: LlmPreset) {
   selectedPresetKey.value = preset.key;
-  const cache = loadPresetCache(preset.key);
+  // 按用户隔离：预设仅作为"模板"填充 provider/baseUrl/model，不写服务端共享配置。
+  // apiKey 保留用户已填内容（不覆盖），用户仍需填写并保存自己的密钥。
   aiForm.value.provider = preset.provider;
-  // 有缓存则用缓存的 baseUrl/model（用户可能修改过），否则用预设默认值
-  aiForm.value.baseUrl = cache?.baseUrl || preset.baseUrl;
-  aiForm.value.model = cache?.model || preset.model;
-
-  // 后台同步到后端 config.json（不传 apiKey，保留现有 key；携带 apiKeyRef 同步环境变量名）
-  try {
-    const res = await fetch(`${API_BASE}/ai/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: preset.provider,
-        baseUrl: aiForm.value.baseUrl,
-        model: aiForm.value.model,
-        apiKeyRef: preset.apiKeyRef,
-        // 不传 apiKey：后端收到 undefined + provider 变更时自动从 apiKeys 表恢复对应 key
-      }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.ok) {
-        aiConfig.value = data.config;
-        // 从后端返回的脱敏值回填表单 apiKey（可能是旧 provider 保存的 key，或新 provider 恢复的 key）
-        aiForm.value.apiKey = data.config.apiKeyMasked || '';
-      }
-    }
-  } catch {
-    // 同步失败不阻断切换，用户可手动点"保存配置"
-  }
-
-  ElMessage.success(`已切换到 ${preset.label} 预设`);
+  aiForm.value.baseUrl = preset.baseUrl;
+  aiForm.value.model = preset.model;
+  ElMessage.success(`已套用 ${preset.label} 预设（请填写并保存你的 API Key）`);
 }
 
-// 保存 AI 配置
+// 保存 AI 配置（按用户隔离写入本地 IndexedDB，不回传服务端）
 async function saveAiConfig() {
   if (!aiForm.value.baseUrl.trim()) {
     ElMessage.warning('请填写 API Base URL');
@@ -331,34 +382,23 @@ async function saveAiConfig() {
 
   savingAi.value = true;
   try {
-    const res = await fetch(`${API_BASE}/ai/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: aiForm.value.provider,
-        baseUrl: aiForm.value.baseUrl,
-        model: aiForm.value.model,
-        apiKey: aiForm.value.apiKey,
-      }),
+    await saveAiUserConfig(currentUserId.value, {
+      provider: aiForm.value.provider,
+      baseUrl: aiForm.value.baseUrl,
+      model: aiForm.value.model,
+      apiKey: aiForm.value.apiKey,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.ok) {
-      aiConfig.value = data.config;
-      // 保存成功后按预设持久化非敏感 UI 状态（baseUrl/model）到 localStorage。
-      // 为什么不存 apiKey：apiKey 唯一权威源为后端 config.json，避免双轨不一致。
-      if (selectedPresetKey.value) {
-        savePresetCache(selectedPresetKey.value, {
-          baseUrl: aiForm.value.baseUrl,
-          model: aiForm.value.model,
-        });
-      }
-      // 保存后更新表单 apiKey 为脱敏值
-      aiForm.value.apiKey = data.config.apiKeyMasked || '';
-      ElMessage.success('AI 配置保存成功');
-    } else {
-      throw new Error(data.error || '保存失败');
-    }
+    // 更新本地派生状态摘要
+    aiConfig.value = {
+      ...aiConfig.value,
+      provider: aiForm.value.provider,
+      baseUrl: aiForm.value.baseUrl,
+      model: aiForm.value.model,
+      apiKeyRef: '',
+      apiKeyMasked: aiForm.value.apiKey ? maskLocal(aiForm.value.apiKey) : '',
+      apiKeySet: Boolean(aiForm.value.apiKey),
+    };
+    ElMessage.success('AI 配置已保存到本地（仅当前账户可见）');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
@@ -366,14 +406,12 @@ async function saveAiConfig() {
   }
 }
 
-// 恢复初始配置：调用后端重置接口，恢复出厂默认 LLM 配置。
-// 为什么需要：用户误改配置后可一键恢复，避免手动编辑 config.json。
-// 同时清除 localStorage 中的预设缓存，确保前端状态与后端一致。
+// 恢复初始配置：将当前账户的本地 AI 配置重置为默认值（仅影响当前用户，不影响他人）。
 const resettingAi = ref(false);
 async function resetAiConfig() {
   try {
     await ElMessageBox.confirm(
-      '确定恢复 LLM 配置到出厂默认值吗？此操作将重置 provider/baseUrl/model/apiKey，且不可撤销。',
+      '确定将当前账户的 AI 配置恢复为默认值吗？此操作仅清空你本地的 provider/baseUrl/model/apiKey，不影响其他账户。',
       '恢复初始配置',
       { confirmButtonText: '确定恢复', cancelButtonText: '取消', type: 'warning' },
     );
@@ -384,27 +422,26 @@ async function resetAiConfig() {
 
   resettingAi.value = true;
   try {
-    const res = await fetch(`${API_BASE}/ai/reset-config`, { method: 'POST' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.ok) {
-      aiConfig.value = data.config;
-      aiForm.value = {
-        provider: data.config.provider,
-        baseUrl: data.config.baseUrl,
-        model: data.config.model,
-        apiKey: data.config.apiKeyMasked || '',
-      };
-      // 重置当前选中预设 key
-      const matched = aiPresets.value.find(p => p.provider === data.config.provider);
-      selectedPresetKey.value = matched?.key ?? '';
-      // 清除 localStorage 中所有预设缓存，避免恢复后又被旧缓存覆盖
-      clearAllPresetCache();
-      aiTestResult.value = null;
-      ElMessage.success('已恢复到出厂默认配置');
-    } else {
-      throw new Error(data.error || '恢复失败');
-    }
+    await saveAiUserConfig(currentUserId.value, { ...DEFAULT_AI_USER_CONFIG });
+    aiForm.value = {
+      provider: DEFAULT_AI_USER_CONFIG.provider,
+      baseUrl: DEFAULT_AI_USER_CONFIG.baseUrl,
+      model: DEFAULT_AI_USER_CONFIG.model,
+      apiKey: '',
+    };
+    aiConfig.value = {
+      ...aiConfig.value,
+      provider: DEFAULT_AI_USER_CONFIG.provider,
+      baseUrl: DEFAULT_AI_USER_CONFIG.baseUrl,
+      model: DEFAULT_AI_USER_CONFIG.model,
+      apiKeyRef: '',
+      apiKeyMasked: '',
+      apiKeySet: false,
+    };
+    const matched = aiPresets.value.find(p => p.provider === DEFAULT_AI_USER_CONFIG.provider);
+    selectedPresetKey.value = matched?.key ?? '';
+    aiTestResult.value = null;
+    ElMessage.success('已恢复当前账户默认配置');
   } catch (err) {
     ElMessage.error(apiErrorMessage('恢复初始配置失败', err));
   } finally {
@@ -477,22 +514,18 @@ const WEB_SEARCH_PROVIDERS: Array<{ value: 'tavily' | 'bing'; label: string; api
 async function loadWebSearchConfig() {
   loadingWebSearch.value = true;
   try {
-    const res = await fetch(`${API_BASE}/ai/web-search`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.enabled) {
-      webSearchForm.value.provider = data.provider;
-      webSearchForm.value.apiKey = data.apiKeyMasked || '';
-      webSearchForm.value.maxResults = data.maxResults ?? 5;
-      webSearchStatus.value = {
-        enabled: true,
-        apiKeySet: data.apiKeySet,
-        apiKeyMasked: data.apiKeyMasked || '',
-        apiKeyRef: data.apiKeyRef,
-      };
-    } else {
-      webSearchStatus.value = { enabled: false, apiKeySet: false, apiKeyMasked: '', apiKeyRef: 'TAVILY_API_KEY' };
-    }
+    const cfg = await loadSearchUserConfig(currentUserId.value);
+    webSearchForm.value = {
+      provider: cfg.provider,
+      apiKey: cfg.apiKey,
+      maxResults: cfg.maxResults ?? 5,
+    };
+    webSearchStatus.value = {
+      enabled: Boolean(cfg.apiKey),
+      apiKeySet: Boolean(cfg.apiKey),
+      apiKeyMasked: cfg.apiKey ? maskLocal(cfg.apiKey) : '',
+      apiKeyRef: '',
+    };
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载联网搜索配置失败', err));
   } finally {
@@ -503,33 +536,18 @@ async function loadWebSearchConfig() {
 async function saveWebSearchConfig() {
   savingWebSearch.value = true;
   try {
-    const res = await fetch(`${API_BASE}/ai/web-search`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: webSearchForm.value.provider,
-        apiKey: webSearchForm.value.apiKey,
-        maxResults: webSearchForm.value.maxResults,
-      }),
+    await saveSearchUserConfig(currentUserId.value, {
+      provider: webSearchForm.value.provider,
+      apiKey: webSearchForm.value.apiKey,
+      maxResults: webSearchForm.value.maxResults,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.ok) {
-      const cfg = data.config;
-      webSearchStatus.value = {
-        enabled: true,
-        apiKeySet: cfg.apiKeySet,
-        apiKeyMasked: cfg.apiKeyMasked || '',
-        apiKeyRef: cfg.apiKeyRef,
-      };
-      // 保存后表单 apiKey 显示脱敏值
-      webSearchForm.value.apiKey = cfg.apiKeyMasked || '';
-      webSearchForm.value.provider = cfg.provider;
-      webSearchForm.value.maxResults = cfg.maxResults ?? 5;
-      ElMessage.success('联网搜索配置保存成功');
-    } else {
-      throw new Error(data.error || '保存失败');
-    }
+    webSearchStatus.value = {
+      enabled: Boolean(webSearchForm.value.apiKey),
+      apiKeySet: Boolean(webSearchForm.value.apiKey),
+      apiKeyMasked: webSearchForm.value.apiKey ? maskLocal(webSearchForm.value.apiKey) : '',
+      apiKeyRef: '',
+    };
+    ElMessage.success('联网搜索配置已保存到本地（仅当前账户可见）');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
@@ -812,19 +830,17 @@ function removeScene(idx: number): void {
   toolsForm.value.scenes.splice(idx, 1);
 }
 
-// 加载工具配置
+// 加载工具配置（按用户隔离的本地存储）
 async function loadToolsConfig(): Promise<void> {
   loadingTools.value = true;
   try {
-    const res = await fetch(`${API_BASE}/tools/config`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: ToolsConfig = await res.json();
+    const cfg = await loadToolsUserConfig(currentUserId.value);
     // 深拷贝避免编辑过程污染原对象
     toolsForm.value = {
-      mcpServers: (data.mcpServers ?? []).map(s => ({ ...s, args: [...(s.args ?? [])], env: s.env ? { ...s.env } : undefined })),
-      cliTools: (data.cliTools ?? []).map(t => ({ ...t })),
-      scenes: (data.scenes ?? []).map(sc => ({ ...sc, keywords: [...sc.keywords], tools: [...sc.tools] })),
-      routerMode: data.routerMode ?? 'auto',
+      mcpServers: (cfg.mcpServers ?? []).map(s => ({ ...s, args: [...(s.args ?? [])], env: s.env ? { ...s.env } : undefined })),
+      cliTools: (cfg.cliTools ?? []).map(t => ({ ...t })),
+      scenes: (cfg.scenes ?? []).map(sc => ({ ...sc, keywords: [...sc.keywords], tools: [...sc.tools] })),
+      routerMode: cfg.routerMode ?? 'auto',
     };
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载工具配置失败', err));
@@ -878,18 +894,9 @@ async function saveToolsConfig(): Promise<void> {
 
   savingTools.value = true;
   try {
-    const res = await fetch(`${API_BASE}/tools/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(toolsForm.value),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.ok) {
-      ElMessage.success('工具配置保存成功，下次问答将使用新配置');
-    } else {
-      throw new Error(data.error || '保存失败');
-    }
+    // 按用户隔离写入本地 IndexedDB，不回传服务端（每个用户使用自己配置的工具，互不干扰）
+    await saveToolsUserConfig(currentUserId.value, toolsForm.value);
+    ElMessage.success('工具配置已保存到本地（仅当前账户可见），下次问答将使用新配置');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存工具配置失败', err));
   } finally {
@@ -1363,6 +1370,18 @@ function clearTestResult(): void {
 }
 
 onMounted(async () => {
+  // 个人配置（AI 服务 / 搜索引擎 / 工具）按用户隔离存储在本地，对所有登录用户加载与展示；
+  // 不再依赖服务端共享 config.json，避免越权与多余请求，且各用户配置互不可见。
+  // 先加载预设列表，loadAiConfig 依赖 aiPresets 匹配当前 provider
+  await loadPresets();
+  loadAiConfig();
+  loadWebSearchConfig();
+  loadToolsConfig();
+  if (!isAdmin.value) {
+    // 非管理员：跳过敏感 admin 接口（SCHEMA/系统配置/历史/QQ/Prompt），默认落到「朗读设置」tab
+    activeTab.value = 'tts';
+    return;
+  }
   loadSchema();
   // loadConfig 完成后同步派生 4 个高级表单的初始值
   await loadConfig();
@@ -1370,11 +1389,6 @@ onMounted(async () => {
     syncAdvancedFormsFromConfig(config.value);
   }
   loadHistory();
-  // 先加载预设列表，loadAiConfig 依赖 aiPresets 匹配当前 provider
-  await loadPresets();
-  loadAiConfig();
-  loadWebSearchConfig();
-  loadToolsConfig();
   loadQqConfig();
   // FR-14-2 Prompt IDE：加载 prompt 文件列表，与其它配置并行加载
   // 为什么放在 onMounted 而非 watch activeTab：避免切换 tab 时首次加载延迟，影响用户体验
@@ -1397,7 +1411,7 @@ onMounted(async () => {
 
       <el-tabs v-model="activeTab" class="config-tabs">
         <!-- SCHEMA 编辑器 -->
-        <el-tab-pane label="SCHEMA 规范" name="schema">
+        <el-tab-pane v-if="isAdmin" label="SCHEMA 规范" name="schema">
           <div class="schema-section">
             <div class="action-bar">
               <span class="section-desc">页面规范文件，控制 AI 编译时的页面结构与约束</span>
@@ -1490,7 +1504,7 @@ onMounted(async () => {
         </el-tab-pane>
 
         <!-- 系统配置 -->
-        <el-tab-pane label="系统配置" name="config">
+        <el-tab-pane v-if="isAdmin" label="系统配置" name="config">
           <div class="config-section">
             <!-- §12.3-7 热加载操作栏 -->
             <div class="reload-bar">
@@ -1728,9 +1742,17 @@ onMounted(async () => {
           </div>
         </el-tab-pane>
 
-        <!-- AI 服务配置 -->
+        <!-- AI 服务配置：按用户维度隔离，仅当前账户可见 -->
         <el-tab-pane label="AI 服务" name="ai">
           <div class="ai-section">
+            <div class="section-header">
+              <span class="section-desc">// AI 服务（LLM）</span>
+              <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
+            </div>
+            <div class="tts-note">
+              以下配置仅对当前登录账户生效，按用户独立存储在本地并相互隔离；你的 API Key 仅存于本浏览器，
+              每次问答使用你自己的密钥，避免与他人共用额度、互相限流。切换账户后此处显示各自独立的设置，互不可见。
+            </div>
             <!-- 预设快捷选择 -->
             <div class="preset-bar">
               <span class="section-desc">// LLM 预设</span>
@@ -1819,7 +1841,7 @@ onMounted(async () => {
                 </div>
       <div v-if="!aiConfig.apiKeySet" class="key-hint">
                   <span class="hint-icon">?</span>
-                  <span>请配置 API Key 或设置环境变量 <code>{{ aiConfig.apiKeyRef }}</code></span>
+                  <span>请在本页面填写你的 API Key（仅保存在本浏览器，不会上传服务器）</span>
                 </div>
               </div>
             </div>
@@ -1878,19 +1900,128 @@ onMounted(async () => {
                 </div>
       <div v-if="webSearchStatus && !webSearchStatus.apiKeySet" class="key-hint">
                   <span class="hint-icon">?</span>
-                  <span>未配置 API Key 时，知识库问答点击"联网搜索"将仅使用本地知识库。请配置 <code>{{ webSearchStatus.apiKeyRef }}</code></span>
+                  <span>未配置 API Key 时，知识库问答点击"联网搜索"将仅使用本地知识库。请在上方填写你的搜索引擎 Key（仅存本浏览器）</span>
                 </div>
               </div>
             </div>
           </div>
         </el-tab-pane>
 
-        <!-- 工具配置：MCP / CLI / 场景路由 -->
+        <!-- 朗读设置：按用户维度隔离，仅当前账户可见 -->
+        <el-tab-pane label="朗读设置" name="tts">
+          <div class="tts-config-section">
+            <div class="section-header">
+              <span class="section-desc">// 朗读偏好（TTS）</span>
+              <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
+            </div>
+            <div class="tts-note">
+              以下配置仅对当前登录账户生效，按用户独立存储在本地并相互隔离；切换账户后此处显示各自独立的设置，互不可见。
+            </div>
+
+            <!-- 语音引擎 -->
+            <div class="config-block hover-glow">
+              <h3 class="block-title"><span class="block-bracket">[</span> 语音引擎 <span class="block-bracket">]</span></h3>
+              <div class="form-row">
+                <span class="form-label">引擎</span>
+                <div class="preset-tags">
+                  <span
+                    class="preset-tag"
+                    :class="{ active: ttsStore.providerName === 'edge' }"
+                    @click="ttsStore.setProvider('edge')"
+                  >神经语音（Edge）</span>
+                  <span
+                    class="preset-tag"
+                    :class="{ active: ttsStore.providerName === 'browser' }"
+                    @click="ttsStore.setProvider('browser')"
+                  >浏览器原生</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 音色 -->
+            <div v-if="ttsStore.providerName === 'edge'" class="config-block hover-glow">
+              <h3 class="block-title"><span class="block-bracket">[</span> 音色 <span class="block-bracket">]</span></h3>
+              <div class="voice-grid">
+                <button
+                  v-for="v in edgeVoices"
+                  :key="v.shortName"
+                  class="preset-tag"
+                  :class="{ active: ttsStore.currentVoice === v.shortName }"
+                  @click="ttsStore.setVoice(v.shortName)"
+                >{{ v.label }}</button>
+              </div>
+            </div>
+
+            <!-- 说话风格 -->
+            <div v-if="ttsStore.providerName === 'edge'" class="config-block hover-glow">
+              <h3 class="block-title"><span class="block-bracket">[</span> 说话风格 <span class="block-bracket">]</span></h3>
+              <div class="voice-grid">
+                <button
+                  v-for="s in ttsStyles"
+                  :key="s.value"
+                  class="preset-tag"
+                  :class="{ active: ttsStore.currentStyle === s.value }"
+                  @click="ttsStore.setStyle(s.value)"
+                >{{ s.label }}</button>
+              </div>
+            </div>
+
+            <!-- 朗读微调：语速 / 音量 / 音调 -->
+            <div v-if="ttsStore.providerName === 'edge'" class="config-block hover-glow">
+              <h3 class="block-title"><span class="block-bracket">[</span> 朗读微调 <span class="block-bracket">]</span></h3>
+              <div class="form-row slider-row">
+                <span class="form-label">语速</span>
+                <el-slider
+                  :model-value="ttsStore.rate"
+                  :min="0.5"
+                  :max="2"
+                  :step="0.05"
+                  class="tts-slider"
+                  @change="(v: number) => ttsStore.setRate(v)"
+                />
+                <span class="slider-val">{{ ttsStore.rate.toFixed(2) }}x</span>
+              </div>
+              <div class="form-row slider-row">
+                <span class="form-label">音量</span>
+                <el-slider
+                  :model-value="ttsStore.currentVolume"
+                  :min="-30"
+                  :max="30"
+                  :step="1"
+                  class="tts-slider"
+                  @change="(v: number) => ttsStore.setVolume(v)"
+                />
+                <span class="slider-val">{{ ttsStore.currentVolume >= 0 ? '+' : '' }}{{ ttsStore.currentVolume }}%</span>
+              </div>
+              <div class="form-row slider-row">
+                <span class="form-label">音调</span>
+                <el-slider
+                  :model-value="ttsStore.currentPitch"
+                  :min="-10"
+                  :max="10"
+                  :step="1"
+                  class="tts-slider"
+                  @change="(v: number) => ttsStore.setPitch(v)"
+                />
+                <span class="slider-val">{{ ttsStore.currentPitch >= 0 ? '+' : '' }}{{ ttsStore.currentPitch }}Hz</span>
+              </div>
+            </div>
+
+            <div class="ai-actions">
+              <el-button class="neon-btn" @click="resetTtsConfig">恢复默认</el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- 工具配置：MCP / CLI / 场景路由（按用户隔离） -->
         <el-tab-pane label="工具配置" name="tools">
           <div class="tools-section">
             <div class="section-header">
               <span class="section-desc">// 扩展工具（MCP / CLI / 场景路由）</span>
-              <span class="section-hint">配置 AI 问答可调用的外部工具，根据场景自动启用</span>
+              <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
+            </div>
+            <div class="tts-note">
+              以下工具配置仅对当前登录账户生效，按用户独立存储在本地并相互隔离；切换账户后此处显示各自独立的设置，互不可见。
             </div>
 
             <div v-if="loadingTools" class="section-loading">// 加载中…</div>
@@ -2143,7 +2274,7 @@ onMounted(async () => {
           </section>
         </el-tab-pane>
 
-        <el-tab-pane label="QQ 导入" name="qq">
+        <el-tab-pane v-if="isAdmin" label="QQ 导入" name="qq">
           <section v-loading="loadingQqConfig" class="qq-section">
             <div class="section-header">
               <div>
@@ -2279,7 +2410,7 @@ onMounted(async () => {
         <!-- FR-14-2 Prompt IDE：编辑 prompts/*.md + 即时预览 + 试运行 -->
         <!-- AC-14-4: 编辑 prompts/compile.md 等并即时预览渲染结果 -->
         <!-- AC-14-5: 输入测试资料，执行 compile 一次，查看输出 -->
-        <el-tab-pane label="Prompt IDE" name="prompts">
+        <el-tab-pane v-if="isAdmin" label="Prompt IDE" name="prompts">
           <div class="prompt-ide-section">
             <!-- 左侧：prompt 文件列表 -->
             <div class="prompt-list-container">
@@ -2979,6 +3110,62 @@ onMounted(async () => {
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--text-base);
+}
+
+/* ===== 朗读设置（按用户维度隔离）样式 ===== */
+.tts-config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 360px;
+}
+
+.tts-note {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-soft);
+  background: var(--accent-purple-a06);
+  border: 1px solid var(--accent-purple-a20);
+  border-left: 3px solid var(--neon-cyan);
+  border-radius: var(--radius-card);
+}
+
+.user-badge {
+  padding: 3px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a30);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.voice-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.slider-row {
+  align-items: center;
+}
+
+.tts-slider {
+  flex: 1;
+  margin: 0 4px;
+}
+
+.slider-val {
+  min-width: 56px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-bright);
 }
 
 /* ===== AI 服务配置样式 ===== */

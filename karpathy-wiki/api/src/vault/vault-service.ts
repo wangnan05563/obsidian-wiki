@@ -456,7 +456,14 @@ export class VaultService {
 
   // 存档原始资料到 raw/，返回相对路径。filename 仅取 basename 防注入。
   async archiveRaw(filename: string, content: string): Promise<string> {
-    const safeName = path.basename(filename).replace(/[^\w.-]/g, '_'); // NOSONAR: 用正则字符类做白名单过滤，replaceAll 不适用
+    // 白名单过滤：保留 Unicode 字母/数字（含中文）+ . _ -，其余替换为 _。
+    // 注意必须用 u 标志 + \p{L}\p{N}，否则 [^\w.-] 会把中文等 CJK 字符误判为非法而替换成 _。
+    const safeName = path.basename(filename).replace(/[^\p{L}\p{N}._-]/gu, '_'); // NOSONAR
+    // 二次防护：basename 仅剥离目录分隔符，但文件名本身若为 '..'（或 'a/../b' 之类），
+    // resolve('raw/..') 会跳到 vault 根目录。白名单保留 '.' 是为了扩展名，故这里单独拦截路径穿越片段。
+    if (/(^|\/)\.\.(\/|$)/.test(safeName)) {
+      throw new Error(`非法文件名（疑似路径穿越）: ${filename}`);
+    }
     const rel = `raw/${safeName}`;
     const full = this.resolve(rel);
     await fs.mkdir(path.dirname(full), { recursive: true });

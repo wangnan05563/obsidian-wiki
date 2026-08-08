@@ -121,8 +121,18 @@ export interface ChatMessage {
   // §5.1 L-7 归档所需：done 事件附带的会话 ID 与消息索引
   sessionId?: string;
   messageIndex?: number;
+  // 线程隔离键：本条消息所属问答线程（与 sessionId 同源，1 线程 1 会话）。
+  // 用于后续问答续接本地记忆，以及归档时定位线程会话。
+  threadId?: string;
   // 是否已归档
   archived?: boolean;
+  // 问答生成状态（FR-RM-09 问答状态持久化/断点续答）：
+  // - 'complete'：正常完成（done 事件最终落盘）；缺省亦视为 complete
+  // - 'streaming'：生成中（切页/刷新时被持久化的中间态），刷新重载后触发自动续答
+  // - 'interrupted'：用户主动停止/超时停止，重载后不自动续答（保留 [已停止]/[已超时] 部分答案）
+  // - 'error'：生成出错，重载后不自动续答（保留 [出错] 部分答案）
+  // 仅用于本地 IndexedDB 暂存与续答判定，不回传后端。
+  status?: 'complete' | 'streaming' | 'interrupted' | 'error';
   // FR-09-2 多模态输出（mindmap/faq/timeline），作为独立卡片渲染在主答案之后
   multimodal?: MultimodalOutput;
   // v3 图像生成结果：独立于 multimodal，通过 SSE image 事件推送
@@ -168,6 +178,11 @@ export interface ConversationRecord {
   isPinned: boolean;
   preview: string;
   messages: ChatMessage[];
+  // 线程隔离键：该会话关联的问答线程（本地记忆/会话上下文的归属）。可选，老数据/旧版无此字段。
+  threadId?: string;
+  // 本地多账户隔离键（FR-RM-06）：会话归属的用户 id（= authStore.user.id）。
+  // 老数据/升级前无此字段，读取时按「ownerId 缺失即归属当前用户」兼容，避免历史会话丢失。
+  ownerId?: string;
 }
 
 // SSE answer 事件数据
@@ -421,10 +436,30 @@ export interface SchemaDiffResponse {
 
 // ===== 问答归档相关类型 =====
 
+// 上下文记忆治理统计（与后端 api/src/engine/context-governor.ts 的 GovernorStats 对齐）；
+// done 事件回传，便于前端/运维观测压缩/清理/淘汰效果。
+export interface GovernorStats {
+  inputTokens: number;
+  outputTokens: number;
+  inputMessages: number;
+  outputMessages: number;
+  removedDuplicates: number;
+  removedLowValue: number;
+  compressedTurns: number;
+  evictedMessages: number;
+  reordered: boolean;
+  triggered: boolean;
+  summaryChars: number;
+}
+
 // done 事件附带的会话信息（供归档用）
+// 字段与后端 send('done', { threadId, sessionId, messageIndex, governor }) 对齐；
+// threadId/governor 为向后兼容的加法字段，旧前端忽略不影响归档。
 export interface QaSessionInfo {
   sessionId: string;
   messageIndex: number;
+  threadId?: string;
+  governor?: GovernorStats | null;
 }
 
 // 归档响应
@@ -677,6 +712,13 @@ export type AuthPermission =
 export interface LoginRequest {
   username: string;
   password: string;
+}
+
+// 自助注册请求体（公开接口，默认角色 user）
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  confirmPassword?: string;
 }
 
 // 登录响应

@@ -3,7 +3,7 @@ title: Batch Compile
 type: concept
 created: 2025-01-14
 updated: 2025-04-17
-source: raw/wiki-batch-1784719112886-14-test-15.md
+source: raw/test-15.md
 tags: [compilation, pipeline, testing]
 ---
 

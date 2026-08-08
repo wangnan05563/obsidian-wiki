@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { EngineAdapter, FixInput, BatchFixRequest, BatchFixProgressEvent } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 import { createSSESender } from '../utils/sse.js';
+import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // 注册健康检查路由。
 //   POST /api/health-check            体检（确定性逻辑，JSON 响应）
@@ -11,14 +12,14 @@ import { createSSESender } from '../utils/sse.js';
 // fix/fix/batch 均走 withCompileLock 串行队列，避免与 compile 并发写入冲突。
 // SSE 写入统一用 createSSESender：客户端 abort 时 send 自动短路 + safeEnd 容错结束流，
 // 避免 ERR_STREAM_DESTROYED 被 Fastify 转为 HTTP 500。
-export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAdapter) {
-  app.post('/api/health-check', async (_request, reply) => {
+export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAdapter, guards: IsolationGuards = createIsolationGuards()) {
+  app.post('/api/health-check', { preHandler: guards.requireAdmin }, async (_request, reply) => {
     const report = await adapter.healthCheck();
     return reply.send(report);
   });
 
   // 一键修复：SSE 流式返回修复进度
-  app.post('/api/health-check/fix', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/health-check/fix', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Partial<FixInput>;
     if (!body || (body.issueType !== 'broken_link' && body.issueType !== 'orphan') || !body.target) {
       return reply.code(400).send({ error: '请求体须有 issueType(broken_link|orphan) 和 target' });
@@ -66,7 +67,7 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
   // 批量修复：接收 items 数组，串行循环调用 adapter.healthCheckFix。
   // 每个问题的进度事件以 BatchFixProgressEvent 包装推送，前端可显示 "3/10" 进度。
   // 串行而非并发的理由同 fix 路由：vault 文件写入互斥。
-  app.post('/api/health-check/fix/batch', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/health-check/fix/batch', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Partial<BatchFixRequest>;
     if (!body || !Array.isArray(body.items) || body.items.length === 0) {
       return reply.code(400).send({ error: '请求体须有非空 items 数组' });

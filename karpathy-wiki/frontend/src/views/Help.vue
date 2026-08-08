@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { Search } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import { useConversationsStore } from '../stores/conversations';
+import { useAuthStore } from '../stores/auth';
+import { isUnlocked } from '../services/localVault';
+import { createBackup, restoreBackup, downloadBackup, readBackupFile } from '../services/backup';
 
 // ===== 类型定义 =====
 // 内容抽象为数据，渲染逻辑与内容分离，便于维护
@@ -22,7 +27,7 @@ interface DocSection {
   blocks: DocBlock[];
 }
 
-// ===== 12 个章节内容（与 App.vue 导航栏视图一一对应）=====
+// ===== 15 个导航视图，本文档覆盖其全部（用户管理 / 技能管理 / 数据清洗 随迭代新增）=====
 // 章节顺序：快速开始 → 关于 → 各功能模块 → 配置类 → 维护类
 const DOC_SECTIONS: DocSection[] = [
   {
@@ -46,6 +51,7 @@ const DOC_SECTIONS: DocSection[] = [
           '知识问答：进入「知识问答」页面，输入问题，AI 基于本地知识库回答并引用相关页面',
           '可选 - 体检：进入「体检」页面，检测孤立页面、断链、过期内容',
           '可选 - 远程访问：进入「内网穿透」页面，启动 Cloudflare 隧道暴露本机服务到公网',
+          '管理员专属：进入「用户管理 / 技能管理 / 数据清洗」维护账户、技能与知识库质量',
         ],
       },
       {
@@ -70,7 +76,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '展示当前版本号、发布日期、Git SHA、Node 版本与平台；一键检查更新；汇总 8 项外部资源链接（用户协议、隐私条款、开源声明、帮助文档、API 文档、联系我们、官方社区、报告问题）；浏览 19 项前后端依赖的开源许可清单。',
+        content: '展示当前版本号、发布日期、Git SHA、Node 版本与平台；一键检查更新；汇总 8 个菜单项（6 个外链：用户协议 / 隐私条款 / API 文档 / 联系我们 / 官方社区 / 报告问题；开源声明打开许可清单弹窗、帮助文档为站内跳转）；浏览 19 项前后端依赖的开源许可清单。',
       },
       {
         type: 'steps',
@@ -100,7 +106,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '展示知识库规模（页面数、原始资料数）、最近编译任务、最近问答记录、健康概览。提供到投递、浏览、问答、体检的快捷导航。',
+        content: '展示知识库规模（总页面数、双向链接数、实体页 / 概念页等目录分布）、最近操作日志与编译运行历史。提供知识浏览 / 知识问答 / 图谱 / 帮助文档的快捷入口。',
       },
       {
         type: 'steps',
@@ -128,14 +134,14 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '支持拖拽 .md 文件上传（多文件）、粘贴 URL 自动抓取网页内容、直接输入纯文本三种方式。提交后自动存档到 vault/raw/ 并触发编译流程。',
+        content: '支持 6 种投递入口：文件（拖拽 / 多选 .md）、文件夹、URL（自动抓取网页正文）、纯文本（直接编写 Markdown）、浏览器书签、QQ 聊天记录（核心为文件、URL、纯文本）。提交后自动存档到 vault/raw/ 并触发编译流程。',
       },
       {
         type: 'steps',
         title: '操作步骤',
         content: [
           '点击导航栏「投递资料」进入页面',
-          '选择投递方式：文件 / URL / 文本',
+          '选择投递方式：文件 / 文件夹 / URL / 文本 / 书签 / QQ',
           '文件方式：拖拽 .md 文件到上传区，或点击选择文件',
           'URL 方式：粘贴网页链接，系统自动抓取正文',
           '文本方式：直接在编辑器输入 Markdown 内容',
@@ -228,7 +234,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '基于本地知识库的 RAG 问答，AI 回答时引用具体页面（[[页面名]] 格式）。支持流式输出、思考过程展示、追问建议、多模态图片输入（vision 模型）、TTS 朗读、联网搜索（Tavily/Bing）、深度思考模式。',
+        content: '基于本地知识库的 RAG 问答，AI 回答时引用具体页面（[[页面名]] 格式）。通过工具栏「中间件」多选开关统一控制联网搜索（Tavily/Bing）、深度思考、扩展工具、追问建议、真流式；支持流式输出、思考过程展示、多模态图片输入（vision 模型）、TTS 朗读（Edge 神经网络语音，失败时回退浏览器语音）。',
       },
       {
         type: 'steps',
@@ -236,7 +242,7 @@ const DOC_SECTIONS: DocSection[] = [
         content: [
           '点击导航栏「知识问答」进入页面',
           '在底部输入框输入问题',
-          '可选：点击工具栏切换深度思考 / 联网搜索 / 上传图片',
+          '可选：通过工具栏「中间件」多选开启深度思考 / 联网搜索；点击附件按钮上传图片（需选择支持 vision 的模型）',
           '可选：使用 ModelSelector 切换 LLM 模型',
           '查看 AI 回答，点击引用标记跳转对应页面',
           '点击追问建议继续对话',
@@ -251,7 +257,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'note',
         title: '注意事项',
-        content: '问答历史持久化到后端 data/conversations/，按 UUID 命名避免冲突；开发模式（5173）和生产模式（3000）的会话隔离。联网搜索需要配置 Tavily 或 Bing API Key。',
+        content: '问答历史仅保存在本地浏览器（IndexedDB），按账户隔离（ownerId），不上传服务端；清除浏览器缓存或更换设备会丢失，建议定期导出备份。联网搜索需要配置 Tavily 或 Bing API Key。',
         noteType: 'warning',
       },
     ],
@@ -265,7 +271,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '使用 vis-network 渲染知识图谱，4 类节点（页面/概念/对比/查询）按颜色区分。支持缩放、拖拽、点击节点跳转、悬停高亮关联边。',
+        content: '使用 vis-network 渲染知识图谱，6 类节点（实体 / 概念 / 对比 / 问答 / 业务问答 / 方案沉淀）按目录着色，与 SCHEMA.md type 枚举对齐。支持缩放、拖拽、点击节点跳转、悬停高亮关联边。',
       },
       {
         type: 'steps',
@@ -324,42 +330,48 @@ const DOC_SECTIONS: DocSection[] = [
     id: 'config',
     title: '配置',
     icon: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
-    intro: 'LLM 服务、联网搜索、模型切换配置。',
+    intro: 'LLM 服务、联网搜索、工具、朗读与系统级配置（按用户隔离 / 仅管理员）。',
     blocks: [
       {
         type: 'feature',
         title: '核心功能',
-        content: '配置 LLM Provider（8 家预设：OpenAI/DeepSeek/GLM/Qwen/Moonshot/豆包/Ollama/Agnes）、API Key、baseUrl、模型。支持连接测试、一键恢复默认、联网搜索（Tavily/Bing）配置。',
+        content: '配置页入口对所有登录用户开放，按配置项性质分为「个人偏好（按用户隔离、本地存储）」与「系统级（仅管理员）」两类。个人可配置：AI 服务（LLM Provider 预设 / 自定义 baseUrl / model / apiKey，BYOK）、联网搜索（Tavily/Bing）、工具（MCP/CLI/场景路由）、朗读设置（TTS 引擎、音色、语速、语调、音量）、界面主题。仅管理员可改系统级：SCHEMA 规范、系统配置、批量编译、QQ 导入、Prompt IDE。',
       },
       {
         type: 'config',
-        title: '参数配置',
+        title: 'AI 服务参数（按用户隔离，本地存储）',
         content: [
-          ['provider', 'glm', 'LLM 提供商标识'],
+          ['provider', 'glm', 'LLM 提供商标识（8 家预设：OpenAI/DeepSeek/GLM/Qwen/Moonshot/豆包/Ollama/Agnes）'],
           ['baseUrl', 'https://open.bigmodel.cn/api/paas/v4', 'OpenAI 兼容 API 基础地址'],
           ['model', 'glm-4-plus', '模型名称'],
-          ['apiKeyRef', 'GLM_KEY', '环境变量名（向后兼容）'],
-          ['apiKey', '****xxxx', 'API Key（脱敏存储在 config.json）'],
-          ['maxSteps', '20', 'LLM Agent 最大步数'],
-          ['tokenBudget', '50000', '单次会话 token 预算'],
+          ['apiKeyRef', 'GLM_KEY', '环境变量名（全局预设引用，向后兼容）'],
+          ['apiKey', '****xxxx', 'API Key（仅存本机 IndexedDB，按 userId 命名空间隔离，不写服务端）'],
+        ],
+      },
+      {
+        type: 'config',
+        title: '高级运行参数（仅管理员保存，经 /api/config 热加载）',
+        content: [
+          ['maxSteps', '20', 'LLM Agent 最大步数（即时生效）'],
+          ['tokenBudget', '200000', '单次会话 token 预算（即时生效）'],
+          ['staleDays', '30', '体检判定页面过期的天数（即时生效）'],
         ],
       },
       {
         type: 'steps',
         title: '操作步骤',
         content: [
-          '点击导航栏「配置」进入页面',
-          '选择 LLM 预设或自定义输入',
-          '填入 API Key（脱敏显示）',
-          '点击「测试连接」验证配置',
-          '点击「保存」写入 config.json',
-          '可选：配置联网搜索 Provider 与 API Key',
+          '点击导航栏「配置」进入页面（所有登录用户均可进入）',
+          '（个人）在「AI 服务」选择 LLM 预设或自定义输入，填入本账户 API Key，点击「测试连接」后保存（仅存本机）',
+          '（个人）可选在「联网搜索」配置 Tavily / Bing 的 Key 并启用',
+          '（个人）在「工具」配置 MCP / CLI / 场景路由，「朗读设置」调整 TTS，「界面主题」切换外观',
+          '（管理员）在「SCHEMA 规范 / 系统配置 / 批量编译 / QQ 导入 / Prompt IDE」编辑系统级配置并保存',
         ],
       },
       {
         type: 'note',
         title: '注意事项',
-        content: 'API Key 仅存储在后端 config.json，前端 localStorage 只保存非敏感 UI 状态（baseUrl/model）。模型切换通过 PUT /api/ai/config 同步 config.json 与运行时 EngineAdapter 实例。',
+        content: 'API Key 采用 BYOK：仅存储在本机浏览器 IndexedDB（usercfg::ai::<userId>），不写服务端 config.json，每个用户可独立覆盖全局预设（provider/baseUrl/model/apiKey）。非敏感 UI 状态（baseUrl/model）缓存于 localStorage。全局运行参数（maxSteps/tokenBudget/staleDays）经 PUT /api/config/budget、PUT /api/config/health-check 保存，并由 POST /api/config/reload 热加载；adapter/vaultPath/server 等需重启进程生效。',
         noteType: 'warning',
       },
     ],
@@ -446,6 +458,111 @@ const DOC_SECTIONS: DocSection[] = [
       },
     ],
   },
+  {
+    id: 'users',
+    title: '用户管理',
+    icon: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
+    intro: '管理系统账户，仅管理员可见。',
+    blocks: [
+      {
+        type: 'feature',
+        title: '核心功能',
+        content: '仅管理员可访问。展示用户总数 / 管理员数 / 普通用户数 / 已启用数统计；维护用户列表（用户名、角色、状态、创建时间、最后登录）。支持创建用户、编辑（修改角色、启用 / 禁用、重置密码）、删除用户。',
+      },
+      {
+        type: 'steps',
+        title: '操作步骤',
+        content: [
+          '以管理员身份点击导航栏「用户管理」进入页面',
+          '点击「＋ 新建用户」填写用户名、密码、角色（管理员 / 普通用户 / 游客）后创建',
+          '在列表中点击某用户的「编辑」，可修改角色、启用 / 禁用开关、设置新密码（留空不修改）',
+          '点击「删除」移除用户（不能删除当前登录账户，操作需二次确认）',
+          '查看统计卡片与列表实时反映变更',
+        ],
+      },
+      {
+        type: 'scenario',
+        title: '使用场景',
+        content: '多用户部署时分配账户与角色，回收离职人员访问权限，审计账户启用状态。',
+      },
+      {
+        type: 'note',
+        title: '注意事项',
+        content: '角色分三级：管理员（全部功能）、普通用户（仪表盘 + 知识浏览 / 图谱 / 问答 + 公共辅助页）、游客（同普通用户）。删除当前登录账户被禁止，避免锁死管理员。',
+        noteType: 'warning',
+      },
+    ],
+  },
+  {
+    id: 'skill',
+    title: '技能管理',
+    icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+    intro: '导入与管理外部技能资源，仅管理员可见。',
+    blocks: [
+      {
+        type: 'feature',
+        title: '核心功能',
+        content: '仅管理员可访问。导入外部技能文件（.skill 为 ZIP 归档，.md 为 Markdown，单文件上限 10MB），导入时做安全校验并提示警告。支持列表浏览、按名称 / ID / 描述搜索、按格式（ZIP / MD）筛选、查看详情（SKILL.md 内容与文件结构）、删除技能。统计技能总数与占用空间。',
+      },
+      {
+        type: 'steps',
+        title: '操作步骤',
+        content: [
+          '以管理员身份点击导航栏「技能管理」进入页面',
+          '点击或拖拽文件到上传区，选择 .skill 或 .md 文件（≤10MB）',
+          '等待导入完成，若含警告会弹窗提示',
+          '使用搜索框与格式筛选定位技能，点击「查看详情」阅读 SKILL.md',
+          '点击「删除」移除不再需要的技能（需确认）',
+        ],
+      },
+      {
+        type: 'scenario',
+        title: '使用场景',
+        content: '扩展系统能力：将社区或自研的 Agent 技能以 .skill 形式导入，供问答工作流按场景调用。',
+      },
+      {
+        type: 'note',
+        title: '注意事项',
+        content: '导入的技能文件会在后端解包并执行其内部逻辑，仅管理员可操作以防供应链风险。技能格式须符合 SKILL.md 规范，否则导入可能失败或仅部分生效。',
+        noteType: 'warning',
+      },
+    ],
+  },
+  {
+    id: 'dataclean',
+    title: '数据清洗',
+    icon: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
+    intro: '扫描 Vault 质量、去重合并、修复与归档，仅管理员可见。',
+    blocks: [
+      {
+        type: 'feature',
+        title: '核心功能',
+        content: '仅管理员可访问（与系统清理同权限）。扫描 Vault 页面质量评分（评分 / 字数 / 链接 / 目录 / frontmatter / 问题），展示总页数、平均分、优秀 / 良好 / 需改进分布。支持 Vault 预检、重复检测（基于内容哈希 + Jaccard 相似度，提供配对视图与分组视图）、查看行级差异、合并重复页、归档选中页、修复 frontmatter。',
+      },
+      {
+        type: 'steps',
+        title: '操作步骤',
+        content: [
+          '以管理员身份点击导航栏「数据清洗」进入页面（自动扫描页面）',
+          '点击「预检」执行 Vault 预检，查看错误 / 警告',
+          '点击「去重」检测重复页面，在配对 / 分组视图查看相似度',
+          '对某对重复点击「查看差异」对比行级 diff，点击「合并」将低质量页合并到高质量页',
+          '勾选页面后点击「归档」移入 archive/YYYY-MM-DD/，或「修复 Frontmatter」补全元数据',
+        ],
+      },
+      {
+        type: 'scenario',
+        title: '使用场景',
+        content: '知识库长期累积后清理重复与低质量页面、补全 frontmatter、归档过时内容，保持检索质量。',
+      },
+      {
+        type: 'note',
+        title: '注意事项',
+        content: '归档与合并会改动 Vault 文件；合并默认保留质量较高的代表页并替换双向链接，建议先「预检」与「查看差异」确认。归档路径为 archive/YYYY-MM-DD/，操作前请确认选择范围。',
+        noteType: 'warning',
+      },
+    ],
+  },
 ];
 
 // ===== 搜索过滤 =====
@@ -494,11 +611,96 @@ onMounted(async () => {
   if (DOC_SECTIONS.length > 0) {
     activeAnchor.value = DOC_SECTIONS[0].id;
   }
+  // 同步本地加密状态（FR-RM-07）：若已登录且密钥在内存 / sessionStorage，则视为已开启
+  cryptoOn.value = isUnlocked();
   const scrollContainer = document.querySelector('.help-content-area');
   if (scrollContainer) {
     scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
   }
 });
+
+// ===== 本地数据保护（FR-RM-07 加密 + 风险 R-2 导出备份）=====
+const conversationsStore = useConversationsStore();
+const authStore = useAuthStore();
+
+// 登录态变化后重新按 owner 隔离加载会话（与 Query.vue 一致的多账户隔离防御）
+watch(
+  () => authStore.user?.id,
+  async () => {
+    try {
+      await conversationsStore.loadConversations();
+    } catch {
+      // 静默降级
+    }
+  },
+);
+const cryptoOn = ref(false);
+const localLocked = computed(() => conversationsStore.localLocked);
+
+const unlockPwd = ref('');
+const exportPwd = ref('');
+const importPwd = ref('');
+const importFile = ref<File | null>(null);
+const busy = ref(false);
+
+async function doUnlock() {
+  if (!unlockPwd.value) return;
+  try {
+    await conversationsStore.unlockLocalData(unlockPwd.value);
+    cryptoOn.value = true;
+    ElMessage.success('本地数据已解锁');
+    unlockPwd.value = '';
+  } catch (e) {
+    ElMessage.error('解锁失败：' + (e instanceof Error ? e.message : String(e)));
+  }
+}
+
+async function doExport() {
+  if (!exportPwd.value) {
+    ElMessage.warning('请先设置备份口令');
+    return;
+  }
+  busy.value = true;
+  try {
+    const backup = await createBackup(exportPwd.value);
+    downloadBackup(backup);
+    ElMessage.success('备份已导出（请用安全方式保存该文件）');
+    exportPwd.value = '';
+  } catch (e) {
+    ElMessage.error('导出失败：' + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    busy.value = false;
+  }
+}
+
+function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  importFile.value = input.files?.[0] ?? null;
+}
+
+async function doImport() {
+  if (!importFile.value) {
+    ElMessage.warning('请先选择备份文件');
+    return;
+  }
+  if (!importPwd.value) {
+    ElMessage.warning('请输入备份口令');
+    return;
+  }
+  busy.value = true;
+  try {
+    const backup = await readBackupFile(importFile.value);
+    const res = await restoreBackup(backup, importPwd.value);
+    ElMessage.success(`导入完成：会话 ${res.conversations} 条、附件 ${res.attachments} 条`);
+    importFile.value = null;
+    importPwd.value = '';
+    await conversationsStore.loadConversations();
+  } catch (e) {
+    ElMessage.error('导入失败：' + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    busy.value = false;
+  }
+}
 
 onBeforeUnmount(() => {
   const scrollContainer = document.querySelector('.help-content-area');
@@ -522,6 +724,7 @@ onBeforeUnmount(() => {
           :prefix-icon="Search"
           size="small"
           clearable
+          autocomplete="off"
           class="sidebar-search"
         />
         <nav class="anchor-nav">
@@ -633,6 +836,104 @@ onBeforeUnmount(() => {
 
         <div v-if="filteredSections.length === 0" class="empty-content">
           未找到匹配的章节
+        </div>
+
+        <!-- 本地数据保护（FR-RM-07 加密 + 风险 R-2 导出备份）-->
+        <div id="local-data" class="glass-card section-card local-data-card">
+          <div class="section-head">
+            <div class="section-icon-wrap">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
+              </svg>
+            </div>
+            <h3 class="section-title">本地数据保护</h3>
+          </div>
+          <p class="section-intro">
+            问答会话与附件仅保存在本地浏览器（IndexedDB）。可开启加密（基于登录密码派生密钥）以防同设备其他进程读取，
+            并建议定期导出加密备份以防丢失。
+          </p>
+          <div class="blocks">
+            <div class="block">
+              <div class="block-title">
+                <span class="block-bullet feature"></span>
+                <span>加密状态</span>
+              </div>
+              <p class="block-text">
+                本地加密：<b>{{ cryptoOn ? '已开启' : '未启用' }}</b>；
+                数据锁定：<b>{{ localLocked ? '已锁定（需解锁）' : '正常' }}</b>。
+              </p>
+            </div>
+
+            <div class="block" v-if="localLocked">
+              <div class="block-title">
+                <span class="block-bullet steps"></span>
+                <span>解锁本地数据</span>
+              </div>
+              <p class="block-text">
+                检测到已加密的本地会话，请输入登录密码解锁以查看历史记录。
+              </p>
+              <div class="local-actions">
+                <el-input
+                  v-model="unlockPwd"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  placeholder="登录密码"
+                  size="small"
+                  style="max-width: 240px"
+                />
+                <el-button size="small" type="primary" :disabled="!unlockPwd" @click="doUnlock">解锁</el-button>
+              </div>
+            </div>
+
+            <div class="block">
+              <div class="block-title">
+                <span class="block-bullet scenario"></span>
+                <span>导出备份</span>
+              </div>
+              <p class="block-text note-text note-warning">
+                风险 R-2：清除缓存 / 换设备 / 重装会导致本地数据丢失。请定期导出加密备份；
+                备份使用<b>独立口令</b>，即使遗忘登录密码也可凭备份口令恢复本地数据。
+              </p>
+              <div class="local-actions">
+                <el-input
+                  v-model="exportPwd"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  placeholder="备份口令"
+                  size="small"
+                  style="max-width: 240px"
+                />
+                <el-button size="small" type="primary" :disabled="!exportPwd || busy" @click="doExport">导出</el-button>
+              </div>
+            </div>
+
+            <div class="block">
+              <div class="block-title">
+                <span class="block-bullet config"></span>
+                <span>导入备份</span>
+              </div>
+              <p class="block-text">
+                从备份文件恢复会话与附件（合并写入本地）。导入前请输入备份时设置的口令。
+              </p>
+              <div class="local-actions">
+                <input type="file" accept="application/json,.json" @change="onFileChange" />
+                <el-input
+                  v-model="importPwd"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  placeholder="备份口令"
+                  size="small"
+                  style="max-width: 240px"
+                />
+                <el-button size="small" type="primary" :disabled="!importFile || !importPwd || busy" @click="doImport">
+                  导入
+                </el-button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 底部 -->
@@ -1008,6 +1309,26 @@ onBeforeUnmount(() => {
   padding: 64px 0;
   color: var(--text-dim);
   font-size: 13px;
+}
+
+/* 本地数据保护卡片 */
+.local-data-card {
+  border-left: 3px solid var(--neon-cyan);
+}
+
+.local-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-left: 16px;
+  margin-top: 8px;
+}
+
+.local-actions input[type='file'] {
+  max-width: 240px;
+  font-size: 12px;
+  color: var(--text-soft);
 }
 
 /* 底部 */

@@ -3,7 +3,7 @@ title: Java 编码规范对比
 type: comparison
 created: 2025-05-22
 updated: 2025-05-22
-source: raw/wiki-batch-1784698696023-10-____-Java____.md
+source: raw/____-Java____.md
 tags: [java, coding-standard, comparison]
 ---
 

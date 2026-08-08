@@ -3,7 +3,7 @@ title: 恒生票据5.0 应用分层规范
 type: concept
 created: 2026-03-23
 updated: 2026-03-23
-source: raw/wiki-batch-1784698464932-4-HUNDSUN__________V5.0-JAVA____20260323.md
+source: raw/HUNDSUN__________V5.0-JAVA____20260323.md
 tags: [编码规范, 应用分层, Java, 恒生, 票据系统]
 ---
 

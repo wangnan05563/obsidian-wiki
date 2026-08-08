@@ -37,6 +37,14 @@ async function markPagesAsDraft(vault: VaultService, pagePaths: string[]): Promi
 const VALID_PAGE_TYPES = ['entity', 'concept', 'comparison', 'query', 'qa', 'solution'] as const;
 type PageType = (typeof VALID_PAGE_TYPES)[number];
 
+// 去掉编译路由写入临时文件时附加的内部前缀（wiki-batch-<ts>-<i>- 与 wiki-compile-<ts>-），
+// 避免批次/单文件上传的内部命名泄漏到 raw/ 存档文件名。用户的原始文件名应被保留。
+function stripInternalPrefix(name: string): string {
+  return name
+    .replace(/^wiki-batch-\d+-\d+-/, '')
+    .replace(/^wiki-compile-\d+-/, '');
+}
+
 // FR-15-4：目录名 → type 推断映射
 // 为什么需要兜底：LLM 可能漏写或写错 type 字段，按写入路径的顶层目录推断是最可靠的回退策略
 // 与前端 Browse.vue KANBAN_COLUMNS 的 dirMap 保持一致，避免前后端推断分歧
@@ -266,7 +274,10 @@ export async function* compileWorkflow(
   let rawFilename: string;
   if (input.type === 'file') {
     const buf = await fs.readFile(input.content);
-    const baseName = path.basename(input.content);
+    // 优先使用上传时的原始文件名（已去内部前缀），否则回退到临时文件 basename。
+    // 临时文件形如 wiki-batch-<ts>-<i>-<orig> 或 wiki-compile-<ts>-<orig>，
+    // 直接取 basename 会把内部批次前缀泄漏进 raw/ 存档名，导致用户无法识别。
+    const baseName = stripInternalPrefix(input.originalName ?? path.basename(input.content));
     const ext = path.extname(baseName).toLowerCase().slice(1);
     // FR-13-1：PDF 先通过 pdf-parse 提取文本为 Markdown，再走 compile 工作流
     // 为什么单独分支：PDF 不是 Office 格式，与 Office ZIP+XML 解析路径无关

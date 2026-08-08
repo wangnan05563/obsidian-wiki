@@ -279,7 +279,7 @@ describe('middleware/auth 模块', () => {
       expect((reply._state.body as any).code).toBe('UNAUTHORIZED');
     });
 
-    it('普通用户访问 dashboard 应返回 403', async () => {
+    it('普通用户访问 dashboard 应通过（仪表盘已开放给所有用户）', async () => {
       const guard = requirePermission('dashboard', 300000);
       const req = createMockRequest({
         currentUser: { userId: 'u1', username: 'user', role: 'user' },
@@ -287,9 +287,7 @@ describe('middleware/auth 模块', () => {
       });
       const reply = createMockReply();
       await guard(req, reply);
-      expect(reply._state.code).toBe(403);
-      expect((reply._state.body as any).code).toBe('FORBIDDEN');
-      expect((reply._state.body as any).required).toBe('dashboard');
+      expect(reply._state.sent).toBe(false);
     });
 
     it('管理员访问 dashboard 应通过', async () => {

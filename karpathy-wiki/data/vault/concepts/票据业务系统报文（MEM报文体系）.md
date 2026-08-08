@@ -3,7 +3,7 @@ title: 票据业务系统报文（MEM报文体系）
 type: concept
 created: 2026-06-01
 updated: 2026-06-01
-source: raw/wiki-batch-1784715100107-5-2.______________________.md
+source: raw/2.______________________.md
 tags: [票据, XML报文, MEM报文, 接口规范]
 ---
 

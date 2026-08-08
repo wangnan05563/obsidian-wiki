@@ -3,7 +3,7 @@ title: 知识库编译器
 type: concept
 created: 2025-01-22
 updated: 2025-01-22
-source: raw/wiki-batch-1784696431804-2-test3.txt
+source: raw/知识库编译器.txt
 tags: [compiler, tool, knowledge-base]
 ---
 

@@ -3,10 +3,11 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import type { AppConfig, ToolsConfig, QqConfig, UrlCrawlConfig, SkillPreset } from './types.js';
 import { DEFAULT_CRAWL_CONFIG } from './utils/url-crawl.js';
+import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 // 路径解析统一走 runtime.ts，兼容开发模式（api/config.json）与 SEA 模式（exe/config.json）
 // 为什么移除 fileURLToPath + import.meta.url：SEA 模式下 __filename 指向构建时 bundle.cjs，
 // 用户机器不存在，派生的 API_SRC_DIR 不可用，导致 config.json 加载失败
-import { getResourcePath } from './utils/runtime.js';
+import { getResourcePath, getUserDataPath, getUserDataDir, IS_SEA } from './utils/runtime.js';
 
 // 配置文件名。路径解析见 getConfigPath()
 const CONFIG_FILENAME = 'config.json';
@@ -20,9 +21,9 @@ const DEFAULT_BATCH_FALLBACK = {
   maxFileSizeMb: 10,
 };
 
-// config.json 权威路径（开发模式：api/config.json，SEA 模式：exe/config.json）
-// 为什么用 getResourcePath：内部基于 IS_SEA 标志统一解析，与 CWD 解耦
-const API_CONFIG_PATH = getResourcePath(CONFIG_FILENAME);
+// config.json 权威路径（开发模式：api/config.json，SEA 模式：%LOCALAPPDATA%/KarpathyWiki/config.json）
+// 为什么用 getUserDataPath：SEA 模式把可写配置放到用户数据目录，避免写在 Program Files 无权限/被卸载清除
+const API_CONFIG_PATH = getUserDataPath(CONFIG_FILENAME);
 
 // 默认配置（NPR-05-7 默认值清单）。
 // vaultPath 默认 '../data/vault'（相对 api，指向 karpathy-wiki/data/vault），
@@ -204,6 +205,23 @@ function defaultConfig(): AppConfig {
         defaultVideoSeconds: 5,
       },
     },
+    // 会话持久化（对应「问答会话本地存储 + 线程隔离 + 本地记忆」需求）。
+    // 默认关闭服务端落盘（D-1 决策 / SRS 核心需求：会话内容不存储于服务器端，仅在本地维护）：
+    //   - 本应用已引入多用户注册，服务端落盘会话会违反「注册用户间数据隔离 + 会话不上服务端」要求；
+    //   - 会话历史唯一权威源为前端 IndexedDB（含 ownerId 隔离），Query 始终携带完整 history，
+    //     因此服务端无需持久化会话/记忆即可保证问答连续性。
+    // threadsPersist=false：ThreadMemoryStore 不写 data/threads/，getHistoryContext 恒返回 []（前端用 history 兜底）。
+    // conversationsPersist=false：/api/conversations 路由族不注册，服务端不暴露任何会话 CRUD 端点（FR-RM-04/FR-RM-08）。
+    // 如需开启（如单用户本地优先调试）可在 config.json 的 sessionPersistence 中显式设 true。
+    sessionPersistence: {
+      threadsPersist: false,
+      conversationsPersist: false,
+    },
+    // 上下文记忆治理（对应「上下文窗口受限场景下的对话历史主动管理」需求）
+    // 默认开启：注入 LLM 前自动语义压缩/清理/重组/容量淘汰，保护关键信息、保持连贯。
+    // 阈值可调：maxTokens 控制注入历史 token 硬上限；warnRatio 控制主动触发时机；
+    //   recencyWindow 保证最近 N 条原文不被压缩（连贯性底线）。
+    contextGovernor: { ...DEFAULT_GOVERNOR_CONFIG },
   };
 }
 
@@ -342,7 +360,87 @@ export async function loadConfig(): Promise<AppConfig> {
           agnes: { ...defaults.media.agnes, ...parsed.media.agnes },
         }
       : defaults.media,
+    // 会话持久化配置合并：parsed.sessionPersistence 可选，未配置时用默认值（均为 false，服务端不落盘会话）
+    // 为什么独立合并：嵌套对象，浅合并会丢失 threadsPersist/conversationsPersist 下层字段
+    sessionPersistence: parsed.sessionPersistence && defaults.sessionPersistence
+      ? {
+          threadsPersist:
+            parsed.sessionPersistence.threadsPersist ?? defaults.sessionPersistence.threadsPersist,
+          conversationsPersist:
+            parsed.sessionPersistence.conversationsPersist ?? defaults.sessionPersistence.conversationsPersist,
+        }
+      : defaults.sessionPersistence,
+    // 上下文记忆治理配置合并：parsed.contextGovernor 可选，未配置时用默认值（开启）
+    // 为什么用条件合并：contextGovernor 是嵌套对象（含 maxTokens/warnRatio 等），浅合并会丢失下层字段
+    contextGovernor: parsed.contextGovernor && defaults.contextGovernor
+      ? { ...defaults.contextGovernor, ...parsed.contextGovernor }
+      : defaults.contextGovernor,
   };
+
+  // SEA 模式：把可写数据路径收敛到用户数据目录，避免落到 exe 同级（Program Files 不可写/卸载清除）
+  // 为什么整体归一化：defaultConfig 中 vaultPath/auth/urlCrawl 等默认是相对路径（开发模式相对 api/），
+  //   SEA 模式下这些相对基准（CWD）不可靠，必须改写为用户数据根目录下的绝对路径。
+  // 绝对路径保留：尊重用户在配置中显式指定的绝对路径（如自定义 vault 位置）。
+  if (IS_SEA) {
+    const dataDir = path.join(getUserDataDir(), 'data');
+    const rebase = (p: string | undefined, fallback: string): string =>
+      !p || path.isAbsolute(p) ? (p ?? fallback) : path.join(dataDir, fallback);
+
+    merged.vaultPath = rebase(merged.vaultPath, 'vault');
+    if (merged.auth) {
+      merged.auth.usersFilePath = rebase(merged.auth.usersFilePath, 'users.json');
+      merged.auth.auditLogPath = rebase(merged.auth.auditLogPath, 'audit.log');
+    }
+    if (merged.urlCrawl) {
+      if (merged.urlCrawl.logging) {
+        merged.urlCrawl.logging.logFilePath = rebase(merged.urlCrawl.logging.logFilePath, 'url-crawl.log');
+      }
+      merged.urlCrawl.incrementalStatePath = rebase(merged.urlCrawl.incrementalStatePath, 'url-crawl-state.json');
+    }
+    // 日志文件默认空串（不落盘）；若用户自定义相对路径，同样收敛到用户数据目录避免 Program Files 无权限
+    if (merged.logging) {
+      merged.logging.logFilePath = rebase(merged.logging.logFilePath, 'api.log');
+    }
+  }
+
+  // SEA 首次运行：若用户数据目录尚无 config.json，落盘默认配置，便于用户编辑且保持行为一致
+  // 为什么只在 SEA：开发模式保持不自动生成文件的最小惊讶原则
+  // 为什么写"干净默认"而非 merged：merged 已被 SEA rebase 成机器相关的绝对路径
+  //   （如 C:\Users\xxx\AppData\Local\KarpathyWiki\data\vault），固化进 config.json 会降低可移植性
+  //   （换机/漫游配置会失效）。这些路径每次启动都会由 loadConfig 的 SEA rebase 块重新派生，
+  //   因此落盘时把派生字段回退为相对默认值，配置保持可移植且单一真相源。
+  if (IS_SEA && !fsSync.existsSync(API_CONFIG_PATH)) {
+    try {
+      const defaults = defaultConfig();
+      const portable: AppConfig = {
+        ...merged,
+        vaultPath: defaults.vaultPath,
+        auth: merged.auth
+          ? {
+              ...merged.auth,
+              usersFilePath: defaults.auth?.usersFilePath ?? merged.auth.usersFilePath,
+              auditLogPath: defaults.auth?.auditLogPath ?? merged.auth.auditLogPath,
+            }
+          : merged.auth,
+        urlCrawl: merged.urlCrawl
+          ? {
+              ...merged.urlCrawl,
+              logging: {
+                ...merged.urlCrawl.logging,
+                logFilePath: defaults.urlCrawl?.logging?.logFilePath ?? merged.urlCrawl.logging?.logFilePath,
+              },
+              incrementalStatePath: defaults.urlCrawl?.incrementalStatePath ?? merged.urlCrawl.incrementalStatePath,
+            }
+          : merged.urlCrawl,
+        logging: merged.logging
+          ? { ...merged.logging, logFilePath: defaults.logging?.logFilePath ?? merged.logging.logFilePath }
+          : merged.logging,
+      };
+      await fs.writeFile(API_CONFIG_PATH, JSON.stringify(portable, null, 2), 'utf8');
+    } catch {
+      // 落盘失败不阻断启动，应用退化为内存默认值
+    }
+  }
 
   // 写入缓存
   configCache.data = merged;

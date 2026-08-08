@@ -3,7 +3,7 @@ title: Wiki Batch Compile
 type: concept
 created: 2025-01-17
 updated: 2025-01-17
-source: raw/wiki-batch-1784719150134-16-test-17.md
+source: raw/test-17.md
 tags: [test, batch-compile, compilation, workflow]
 ---
 

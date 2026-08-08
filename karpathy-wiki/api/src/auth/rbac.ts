@@ -5,7 +5,8 @@ import type { AuthRole, AuthPermission } from './types.js';
 // 修改权限分配规则需变更代码 + 测试，避免运行时配置被篡改绕过控制
 
 // 角色-权限映射表
-// 设计依据：需求要求 admin 拥有全部，user/guest 仅拥有知识浏览/图谱/问答三个核心菜单
+// 设计依据：admin 拥有全部；user/guest 拥有仪表盘 + 知识浏览/图谱/问答四个核心菜单 + 公共辅助页
+// 仪表盘（dashboard）已对全员开放（需求：仪表盘菜单开放给所有用户）
 // help/about 作为公共辅助页面，所有人可见（无需权限点校验，由前端兜底）
 const ROLE_PERMISSIONS: Readonly<Record<AuthRole, Readonly<AuthPermission[]>>> = {
   // 管理员：系统所有功能模块
@@ -25,12 +26,12 @@ const ROLE_PERMISSIONS: Readonly<Record<AuthRole, Readonly<AuthPermission[]>>> =
     'users',
     'skill',
   ],
-  // 普通用户：知识浏览、知识图谱查看、知识库问答 + 公共辅助页
-  user: ['browse', 'query', 'graph', 'help', 'about'],
-  // 游客：与普通用户相同（核心三菜单 + 公共辅助页）
-  // 为什么不进一步收紧：需求明确「游客仅拥有 browse/query/graph」
-  // help/about 视为登录态辅助页（登出回到 login），不视为业务权限点
-  guest: ['browse', 'query', 'graph', 'help', 'about'],
+  // 普通用户：仪表盘 + 知识浏览、知识图谱查看、知识库问答 + 公共辅助页
+  // 需求：仪表盘开放给所有用户（含普通用户）
+  user: ['dashboard', 'browse', 'query', 'graph', 'help', 'about'],
+  // 游客：与普通用户相同（仪表盘 + 核心四菜单 + 公共辅助页）
+  // 需求：仪表盘开放给所有用户（含游客）
+  guest: ['dashboard', 'browse', 'query', 'graph', 'help', 'about'],
 };
 
 // 获取角色对应的权限列表（返回新数组避免外部修改）

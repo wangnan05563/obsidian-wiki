@@ -12,6 +12,7 @@
 // 2. 本工具基于 IS_SEA 标志，在两种模式下返回正确的资源路径
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // SEA 模式检测：__filename 在 SEA exe 中指向构建时的 bundle.cjs，用户机器上不存在
@@ -78,11 +79,47 @@ export function getResourcePath(filename: string): string {
   return path.join(getApiDir(), filename);
 }
 
-// 获取 data 目录（用户数据：skills、conversations 等）
+// 获取 data 目录（用户数据：skills、conversations、users.json、audit.log 等）
 // 开发模式：karpathy-wiki/data/（api/ 的上一级）
-// SEA 模式：exe/data/
+// SEA 模式：用户数据根目录下的 data/（见 getUserDataDir）
 export function getDataDir(): string {
-  if (IS_SEA) return path.join(SRC_DIR, 'data');
+  if (IS_SEA) return path.join(getUserDataDir(), 'data');
   return path.resolve(getApiDir(), '..', 'data');
+}
+
+// 用户数据根目录（可写配置 / vault / data / .env 等）
+// 为什么需要独立目录：
+//   打包(SEA)模式下，exe 安装在 Program Files（或其他需管理员目录），普通用户对该目录
+//   无写权限，且卸载时会一并清除。若把 config.json / vault / data 放在 exe 同级，
+//   应用的"保存配置"会静默失败，且重装/卸载丢失全部用户数据。
+//   正确做法：可写用户数据落到每个用户自己的 %LOCALAPPDATA%\KarpathyWiki，
+//   由应用首次运行时自动创建，普通用户可写、不受卸载影响、多用户互不干扰。
+// 开发模式：沿用既有布局（api/ 目录），行为不变。
+// 为什么用 LOCALAPPDATA：按用户隔离、无需管理员；回退顺序 APPDATA → HOME 兼容非常规环境。
+let _userDataDir: string | null = null;
+export function getUserDataDir(): string {
+  if (_userDataDir !== null) return _userDataDir;
+  if (IS_SEA) {
+    const base =
+      process.env.LOCALAPPDATA ||
+      process.env.APPDATA ||
+      os.homedir();
+    _userDataDir = path.join(base, 'KarpathyWiki');
+  } else {
+    // 开发模式：用户数据根目录 = api 目录（config.json 在 api/，data 在 api/..）
+    _userDataDir = getApiDir();
+  }
+  // 确保目录存在（首次运行自动创建）
+  try {
+    fs.mkdirSync(_userDataDir, { recursive: true });
+  } catch {
+    // 创建失败时退回原值，后续读写会报错由调用方处理
+  }
+  return _userDataDir;
+}
+
+// 用户数据目录下的具体文件路径（如 config.json / .env）
+export function getUserDataPath(filename: string): string {
+  return path.join(getUserDataDir(), filename);
 }
 

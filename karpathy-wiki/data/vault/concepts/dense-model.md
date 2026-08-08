@@ -3,7 +3,7 @@ title: 稠密模型 Dense Model
 type: concept
 created: "2024-05-20"
 updated: "2024-05-20"
-source: "raw/wiki-batch-1784833342077-0-file1.md"
+source: "raw/file1.md"
 tags: [Dense Model, 稠密架构, 深度学习]
 ---
 
