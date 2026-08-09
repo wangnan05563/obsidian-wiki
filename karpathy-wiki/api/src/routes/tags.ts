@@ -35,7 +35,7 @@ export function registerTagsRoute(
   app.get('/api/tags/pending', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_req, reply) => {
     try {
       const pages = await listPendingTagPages(vault);
-      return reply.send({ pages });
+      reply.send({ pages });
     } catch (err) {
       reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -51,14 +51,14 @@ export function registerTagsRoute(
     const body = req.body as { path?: string } | null;
     const pagePath = body?.path ?? '';
     if (!VAULT_PAGE_PATTERN.test(pagePath)) {
-      return reply.code(400).send({
+      return void reply.code(400).send({
         error: 'Invalid path: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
       });
     }
 
     try {
       const aiTags = await suggestTagsForPage(vault, pagePath, config);
-      return reply.send({ path: pagePath, aiTags });
+      reply.send({ path: pagePath, aiTags });
     } catch (err) {
       reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -72,19 +72,19 @@ export function registerTagsRoute(
     const tag = body?.tag ?? '';
 
     if (!VAULT_PAGE_PATTERN.test(pagePath)) {
-      return reply.code(400).send({
+      return void reply.code(400).send({
         error: 'Invalid path: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
       });
     }
     if (!TAG_PATTERN.test(tag)) {
-      return reply.code(400).send({
-        error: 'Invalid tag: must be 1~32 chars of [a-zA-Z0-9_\\u4e00-\\u9fa5-]',
+      return void reply.code(400).send({
+        error: String.raw`Invalid tag: must be 1~32 chars of [a-zA-Z0-9_\u4e00-\u9fa5-]`,
       });
     }
 
     try {
       const result = await confirmTagForPage(vault, pagePath, tag);
-      return reply.send({ path: pagePath, ...result });
+      reply.send({ path: pagePath, ...result });
     } catch (err) {
       reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }

@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -65,7 +65,7 @@ export function registerAboutRoute(app: FastifyInstance): void {
     const [version, buildDate] = await Promise.all([readVersion(), readBuildDate()]);
     const gitSha = readGitSha();
 
-    return reply.send({
+    reply.send({
       product: 'Karpathy Wiki',
       version,
       build_date: buildDate,
@@ -81,7 +81,7 @@ export function registerAboutRoute(app: FastifyInstance): void {
   app.get('/api/about/check-update', async (_req: FastifyRequest, reply: FastifyReply) => {
     const now = Date.now();
     if (checkUpdateCache && (now - checkUpdateCache.ts) < CHECK_UPDATE_CACHE_TTL_MS) {
-      return reply.send(checkUpdateCache.data);
+      reply.send(checkUpdateCache.data);
     }
 
     const current = await readVersion();
@@ -96,7 +96,7 @@ export function registerAboutRoute(app: FastifyInstance): void {
     };
 
     checkUpdateCache = { data, ts: now };
-    return reply.send(data);
+    reply.send(data);
   });
 }
 

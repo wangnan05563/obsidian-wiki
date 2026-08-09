@@ -87,4 +87,15 @@ Desktop.ini
 # ---------- 清理技能自动生成规则 ----------
 # 调试截图（verify-help-*.png 调试用，不应入库）
 verify-help-*.png
+# 根目录调试截图（一次性调试产物）
+debug_*.png
+# 隔离/备份目录（旧 JS 编译产物临时隔离，非源码）
+_stale_js_quarantine/
+_shadow_js_trash_bak/
+# 根目录临时脚本与调试文件
+temp_*.ps1
+tmp_*.ps1
+_debug_*.py
+# PID 文件（运行时生成，标识进程 ID）
+*.pid
 .workbuddy

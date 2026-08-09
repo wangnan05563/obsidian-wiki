@@ -1,5 +1,5 @@
 import { ref, watch, type Ref } from 'vue';
-import { API_BASE } from '../../utils/apiBase';
+import { API_BASE, apiFetch } from '../../utils/apiBase';
 import type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 import { createBrowserTTSProvider } from './browserTtsProvider';
 
@@ -142,7 +142,7 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
     const styleStr = currentStyle && currentStyle !== 'general' ? currentStyle : '';
 
     try {
-      const res = await fetch(`${API_BASE}/api/tts/synthesize`, {
+      const res = await apiFetch(`${API_BASE}/api/tts/synthesize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, voice, rate: rateStr, volume: volumeStr, pitch: pitchStr, style: styleStr }),

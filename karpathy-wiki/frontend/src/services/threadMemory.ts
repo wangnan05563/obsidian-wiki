@@ -10,7 +10,7 @@
 //   • memory（记忆）= 线程内的滚动上下文，用于后续问答连贯交互。
 // ============================================================================
 
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 
 export interface ThreadMeta {
   id: string;
@@ -50,7 +50,7 @@ export interface MemoryData {
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, init);
+  const res = await apiFetch(`${API_BASE}${url}`, init);
   if (!res.ok) {
     throw new Error(`请求失败 ${res.status}: ${url}`);
   }

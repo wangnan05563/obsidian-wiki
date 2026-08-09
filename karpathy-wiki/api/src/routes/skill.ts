@@ -21,33 +21,32 @@ export function registerSkillRoute(app: FastifyInstance) {
     const contentType = request.headers['content-type'] ?? '';
     if (!contentType.startsWith('multipart/form-data')) {
       const err: SkillImportError = { error: 'Content-Type 必须为 multipart/form-data' };
-      return reply.code(400).send(err);
+      return void reply.code(400).send(err);
     }
 
     const file = await request.file();
     if (!file) {
-      const err: SkillImportError = { error: '缺少 file 字段' };
-      return reply.code(400).send(err);
+      return void reply.code(400).send({ error: '缺少 file 字段' });
     }
 
     const buffer = await file.toBuffer();
     try {
       const result = await importSkill(buffer, file.filename);
-      return reply.send(result);
+      return void reply.send(result);
     } catch (e) {
       const err: SkillImportError = {
         error: e instanceof Error ? e.message : '技能导入失败',
         details: e instanceof Error ? e.stack?.split('\n')[0] : undefined,
       };
       request.log.error({ err: e, filename: file.filename }, 'skill import failed');
-      return reply.code(400).send(err);
+      reply.code(400).send(err);
     }
   });
 
   // GET /api/skills：列出所有已导入技能
   app.get('/api/skills', async (_request, reply) => {
     const skills = await listSkills();
-    return reply.send({ skills });
+    reply.send({ skills });
   });
 
   // GET /api/skills/:id：获取技能详情
@@ -56,9 +55,9 @@ export function registerSkillRoute(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const detail = await getSkillDetail(id);
     if (!detail) {
-      return reply.code(404).send({ error: '技能不存在或 ID 非法' });
+      reply.code(404).send({ error: '技能不存在或 ID 非法' });
     }
-    return reply.send(detail);
+    return void reply.send(detail);
   });
 
   // DELETE /api/skills/:id：删除技能
@@ -69,8 +68,8 @@ export function registerSkillRoute(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const ok = await deleteSkill(id);
     if (!ok) {
-      return reply.code(404).send({ error: '技能不存在或 ID 非法' });
+      return void reply.code(404).send({ error: '技能不存在或 ID 非法' });
     }
-    return reply.send({ ok: true });
+    reply.send({ ok: true });
   });
 }

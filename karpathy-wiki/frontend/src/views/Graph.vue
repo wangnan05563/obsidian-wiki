@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Lightning, Iphone, Link, Close, StarFilled, Document } from '@element-plus/icons-vue';
@@ -137,7 +137,7 @@ function toggleEntityOnly() {
 async function loadGraph() {
   loading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/graph`);
+    const res = await apiFetch(`${API_BASE}/graph`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const raw: GraphData = await res.json();
     // FR-15-5：按类型过滤 + 实体子图模式
@@ -360,7 +360,7 @@ async function createLink(targetPath: string) {
   if (!selectedPage.value) return;
   linkingPath.value = targetPath;
   try {
-    const res = await fetch(`${API_BASE}/discover/link`, {
+    const res = await apiFetch(`${API_BASE}/discover/link`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sourcePath: selectedPage.value, targetPath }),

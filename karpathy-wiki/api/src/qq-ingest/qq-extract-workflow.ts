@@ -15,7 +15,6 @@
 //     → yield ProgressEvent (chunk_start/draft_written/done)
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import matter from 'gray-matter';
 import type { VaultService } from '../vault/vault-service.js';

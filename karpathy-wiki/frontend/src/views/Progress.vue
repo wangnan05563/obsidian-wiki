@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { onMounted, onBeforeUnmount, computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading, Check, Close, Lightning } from '@element-plus/icons-vue';
@@ -17,7 +17,7 @@ const switchingProvider = ref(false);
 
 async function loadLlmPresets() {
   try {
-    const res = await fetch(`${API_BASE}/ai/presets`);
+    const res = await apiFetch(`${API_BASE}/ai/presets`);
     if (!res.ok) return;
     const data = await res.json() as { presets?: LlmPreset[] } | LlmPreset[];
     llmPresets.value = Array.isArray(data) ? data : (data.presets ?? []);
@@ -30,7 +30,7 @@ async function quickSwitchProvider(preset: LlmPreset) {
   if (switchingProvider.value) return;
   switchingProvider.value = true;
   try {
-    const res = await fetch(`${API_BASE}/ai/config`, {
+    const res = await apiFetch(`${API_BASE}/ai/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -125,7 +125,7 @@ async function startResume(runId: string) {
   store.isCompiling = true;
   abortController = new AbortController();
   try {
-    const response = await fetch(`${API_BASE}/compile/resume/${runId}`, {
+    const response = await apiFetch(`${API_BASE}/compile/resume/${runId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: abortController.signal

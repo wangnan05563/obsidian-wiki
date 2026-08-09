@@ -98,7 +98,7 @@ const showDiff = ref(false);
 async function loadSchema() {
   loadingSchema.value = true;
   try {
-    const res = await fetch(`${API_BASE}/schema`);
+    const res = await authStore.authFetch(`${API_BASE}/schema`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: SchemaContent = await res.json();
     schemaContent.value = data.content;
@@ -114,7 +114,7 @@ async function loadSchema() {
 async function loadHistory() {
   loadingHistory.value = true;
   try {
-    const res = await fetch(`${API_BASE}/schema/history`);
+    const res = await authStore.authFetch(`${API_BASE}/schema/history`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     commits.value = data.commits ?? [];
@@ -132,7 +132,7 @@ async function loadDiff() {
   loadingDiff.value = true;
   showDiff.value = true;
   try {
-    const res = await fetch(`${API_BASE}/schema/diff?from=${encodeURIComponent(selectedFrom.value)}`);
+    const res = await authStore.authFetch(`${API_BASE}/schema/diff?from=${encodeURIComponent(selectedFrom.value)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     diffLines.value = data.lines ?? [];
@@ -148,7 +148,7 @@ async function loadDiff() {
 async function saveSchema() {
   savingSchema.value = true;
   try {
-    const res = await fetch(`${API_BASE}/schema`, {
+    const res = await authStore.authFetch(`${API_BASE}/schema`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: schemaBuffer.value }),
@@ -186,7 +186,7 @@ function diffLinePrefix(type: string): string {
 async function loadConfig() {
   loadingConfig.value = true;
   try {
-    const res = await fetch(`${API_BASE}/config`);
+    const res = await authStore.authFetch(`${API_BASE}/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     config.value = await res.json();
   } catch (err) {
@@ -208,7 +208,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 async function reloadConfig() {
   reloading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/config/reload`, {
+    const res = await authStore.authFetch(`${API_BASE}/config/reload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -343,7 +343,7 @@ async function loadAiConfig() {
 // 加载 LLM 预设列表
 async function loadPresets() {
   try {
-    const res = await fetch(`${API_BASE}/ai/presets`);
+    const res = await authStore.authFetch(`${API_BASE}/ai/presets`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     aiPresets.value = data.presets ?? [];
@@ -454,7 +454,7 @@ async function testConnection() {
   testingAi.value = true;
   aiTestResult.value = null;
   try {
-    const res = await fetch(`${API_BASE}/ai/test-connection`, {
+    const res = await authStore.authFetch(`${API_BASE}/ai/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -607,7 +607,7 @@ async function saveBudget() {
   }
   savingBudget.value = true;
   try {
-    const res = await fetch(`${API_BASE}/config/budget`, {
+    const res = await authStore.authFetch(`${API_BASE}/config/budget`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -641,7 +641,7 @@ async function saveHealthCheck() {
   }
   savingHealthCheck.value = true;
   try {
-    const res = await fetch(`${API_BASE}/config/health-check`, {
+    const res = await authStore.authFetch(`${API_BASE}/config/health-check`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ staleDays: healthCheckForm.value.staleDays }),
@@ -684,7 +684,7 @@ async function saveBatch() {
   }
   savingBatch.value = true;
   try {
-    const res = await fetch(`${API_BASE}/config/batch`, {
+    const res = await authStore.authFetch(`${API_BASE}/config/batch`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -723,7 +723,7 @@ async function saveLogging() {
   }
   savingLogging.value = true;
   try {
-    const res = await fetch(`${API_BASE}/config/logging`, {
+    const res = await authStore.authFetch(`${API_BASE}/config/logging`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -911,7 +911,7 @@ async function testCliTool(idx: number): Promise<void> {
   testingCli.value = true;
   cliTestResult.value = null;
   try {
-    const res = await fetch(`${API_BASE}/tools/test-cli`, {
+    const res = await authStore.authFetch(`${API_BASE}/tools/test-cli`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1100,7 +1100,7 @@ watch(() => qqConfig, () => {
 async function loadQqConfig() {
   loadingQqConfig.value = true;
   try {
-    const res = await fetch(`${API_BASE}/qq-ingest/config`);
+    const res = await authStore.authFetch(`${API_BASE}/qq-ingest/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const qq = data.qq as QqConfigData;
@@ -1148,7 +1148,7 @@ async function saveQqConfigForm() {
 
   savingQqConfig.value = true;
   try {
-    const res = await fetch(`${API_BASE}/qq-ingest/config`, {
+    const res = await authStore.authFetch(`${API_BASE}/qq-ingest/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ qq: qqConfig }),
@@ -1219,7 +1219,7 @@ const promptDirty = computed(() => promptContent.value !== promptContentSaved.va
 async function loadPromptList(): Promise<void> {
   loadingPrompts.value = true;
   try {
-    const res = await fetch(`${API_BASE}/prompts`);
+    const res = await authStore.authFetch(`${API_BASE}/prompts`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     promptFiles.value = data.prompts ?? [];
@@ -1249,7 +1249,7 @@ async function selectPrompt(name: string): Promise<void> {
   }
   currentPromptName.value = name;
   try {
-    const res = await fetch(`${API_BASE}/prompts/${encodeURIComponent(name)}`);
+    const res = await authStore.authFetch(`${API_BASE}/prompts/${encodeURIComponent(name)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     promptContent.value = data.content ?? '';
@@ -1266,7 +1266,7 @@ async function savePrompt(): Promise<void> {
   if (!currentPromptName.value) return;
   savingPrompt.value = true;
   try {
-    const res = await fetch(`${API_BASE}/prompts/${encodeURIComponent(currentPromptName.value)}`, {
+    const res = await authStore.authFetch(`${API_BASE}/prompts/${encodeURIComponent(currentPromptName.value)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: promptContent.value }),
@@ -1305,7 +1305,7 @@ async function runTest(): Promise<void> {
   testAbortController = new AbortController();
 
   try {
-    const res = await fetch(`${API_BASE}/prompts/test-run`, {
+    const res = await authStore.authFetch(`${API_BASE}/prompts/test-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Check, Close, CircleClose } from '@element-plus/icons-vue';
@@ -111,7 +111,7 @@ const calendarGroups = computed(() => {
 async function loadAllPages() {
   pagesLoading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/files/pages`);
+    const res = await apiFetch(`${API_BASE}/files/pages`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     allPages.value = data.pages ?? [];
@@ -194,7 +194,7 @@ const tagRegenerating = ref(false);
 
 async function loadTree() {
   try {
-    const res = await fetch(`${API_BASE}/files/tree`);
+    const res = await apiFetch(`${API_BASE}/files/tree`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     treeData.value = data.tree ?? [];
@@ -205,7 +205,7 @@ async function loadTree() {
 
 async function loadDrafts() {
   try {
-    const res = await fetch(`${API_BASE}/qq-ingest/drafts`);
+    const res = await apiFetch(`${API_BASE}/qq-ingest/drafts`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     drafts.value = data.drafts ?? [];
@@ -219,7 +219,7 @@ async function loadDrafts() {
 // 为什么独立函数：与 loadDrafts 解耦，tags 模式切换时单独触发
 async function loadPendingTags() {
   try {
-    const res = await fetch(`${API_BASE}/tags/pending`);
+    const res = await apiFetch(`${API_BASE}/tags/pending`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     pendingTagPages.value = data.pages ?? [];
@@ -241,7 +241,7 @@ async function handleTagPageClick(p: PendingTagPage) {
   editing.value = false;
   loading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/files?path=${encodeURIComponent(p.path)}`);
+    const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(p.path)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     fileContent.value = await res.json();
     editBuffer.value = fileContent.value?.content ?? '';
@@ -259,7 +259,7 @@ async function confirmTag(pagePath: string, tag: string) {
   if (tagOperating.value) return;
   tagOperating.value = true;
   try {
-    const res = await fetch(`${API_BASE}/tags/confirm`, {
+    const res = await apiFetch(`${API_BASE}/tags/confirm`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: pagePath, tag }),
@@ -311,7 +311,7 @@ async function regenerateTags(pagePath: string) {
   }
   tagRegenerating.value = true;
   try {
-    const res = await fetch(`${API_BASE}/tags/suggest`, {
+    const res = await apiFetch(`${API_BASE}/tags/suggest`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: pagePath }),
@@ -399,7 +399,7 @@ async function handleSearchHit(hit: SearchHit) {
   editing.value = false;
   loading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/files?path=${encodeURIComponent(hit.path)}`);
+    const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(hit.path)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     fileContent.value = await res.json();
     editBuffer.value = fileContent.value?.content ?? '';
@@ -422,7 +422,7 @@ async function handleNodeClick(node: TreeNode) {
   editing.value = false;
   loading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/files?path=${encodeURIComponent(node.path)}`);
+    const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(node.path)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     fileContent.value = await res.json();
     editBuffer.value = fileContent.value?.content ?? '';
@@ -446,7 +446,7 @@ async function handlePageClick(p: PageItem) {
   editing.value = false;
   loading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/files?path=${encodeURIComponent(p.path)}`);
+    const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(p.path)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     fileContent.value = await res.json();
     editBuffer.value = fileContent.value?.content ?? '';
@@ -469,7 +469,7 @@ async function handleDraftClick(d: DraftItem) {
   editing.value = false;
   loading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/files?path=${encodeURIComponent(d.path)}`);
+    const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(d.path)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     fileContent.value = await res.json();
     editBuffer.value = fileContent.value?.content ?? '';
@@ -496,7 +496,7 @@ async function saveEdit() {
   const target = mode.value === 'draft' ? currentDraftPath.value : currentNode.value;
   if (!target) return;
   try {
-    const res = await fetch(`${API_BASE}/files?path=${encodeURIComponent(target)}`, {
+    const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(target)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: editBuffer.value }),
@@ -546,7 +546,7 @@ async function publishDraft(d: DraftItem) {
   compileStore.setDraftAbortController(controller);
 
   try {
-    const res = await fetch(`${API_BASE}/qq-ingest/compile/${encodeURIComponent(d.path)}`,
+    const res = await apiFetch(`${API_BASE}/qq-ingest/compile/${encodeURIComponent(d.path)}`,
       { method: 'POST', signal: controller.signal },
     );
     if (!res.ok || !res.body) {
@@ -600,7 +600,7 @@ async function publishAllDrafts() {
   compileStore.setDraftAbortController(controller);
 
   try {
-    const res = await fetch(`${API_BASE}/qq-ingest/compile/batch`, {
+    const res = await apiFetch(`${API_BASE}/qq-ingest/compile/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // 不传 drafts 字段：后端扫描 drafts/ 目录全部文件

@@ -146,7 +146,7 @@ function doSynthesize(args: {
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
-        try { ws.close(); } catch { /* ignore */ }
+        try { ws.close(); } catch { /* 超时后关闭 ws 失败可忽略 */ }
         reject(new Error(`Edge TTS 合成超时（${EDGE_TTS_TIMEOUT_MS}ms）`));
       }
     }, EDGE_TTS_TIMEOUT_MS);
@@ -185,34 +185,41 @@ function doSynthesize(args: {
       ws.send(ssmlMsg);
     };
 
+    // 处理 turn.end 消息：合成完成，关闭连接并返回结果
+    const handleTurnEnd = (): void => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        try { ws.close(); } catch { /* 合成完成后关闭 ws 失败可忽略 */ }
+        if (audioChunks.length === 0) {
+          reject(new Error('Edge TTS 未返回音频数据（可能文本被过滤或音色无效）'));
+        } else {
+          resolve(Buffer.concat(audioChunks));
+        }
+      }
+    };
+
+    // 处理音频数据消息：提取音频块并收集
+    const handleAudioData = (buffer: Buffer): void => {
+      const delimIndex = buffer.indexOf(AUDIO_DELIM);
+      if (delimIndex >= 0) {
+        const audioData = buffer.subarray(delimIndex + AUDIO_DELIM.length);
+        if (audioData.length > 0) {
+          audioChunks.push(audioData);
+        }
+      }
+    };
+
     ws.onmessage = (event) => {
       const buffer = Buffer.from(event.data as ArrayBuffer);
-
-      // 检查是否为 turn.end（合成完成信号）
       const messageStr = buffer.subarray(0, Math.min(buffer.length, 200)).toString('utf8');
+
       if (messageStr.includes('Path:turn.end')) {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timeout);
-          try { ws.close(); } catch { /* ignore */ }
-          if (audioChunks.length === 0) {
-            reject(new Error('Edge TTS 未返回音频数据（可能文本被过滤或音色无效）'));
-          } else {
-            resolve(Buffer.concat(audioChunks));
-          }
-        }
+        handleTurnEnd();
         return;
       }
-
-      // 检查是否为音频数据
       if (messageStr.includes('Path:audio')) {
-        const delimIndex = buffer.indexOf(AUDIO_DELIM);
-        if (delimIndex >= 0) {
-          const audioData = buffer.subarray(delimIndex + AUDIO_DELIM.length);
-          if (audioData.length > 0) {
-            audioChunks.push(audioData);
-          }
-        }
+        handleAudioData(buffer);
       }
     };
 

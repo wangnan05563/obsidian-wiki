@@ -44,7 +44,7 @@ async function ensureSkillsRoot(): Promise<void> {
 // 为什么不用原始文件名直接作目录名：文件名可能含中文/空格/特殊字符，导致路径解析问题
 // 清洗策略：取主名（去扩展名）→ 转小写 → 替换非法字符为连字符 → 校验白名单
 function deriveSkillId(filename: string): string {
-  const basename = path.basename(filename).replace(/\.(skill|md)$/i, '');
+  const basename = path.basename(filename).replace(/\.(?:skill|md)$/i, '');
   // 转小写 + 替换非白名单字符为连字符
   const cleaned = basename
     .toLowerCase()
@@ -76,6 +76,18 @@ function isZipFileExtensionAllowed(filePath: string): boolean {
   return ALLOWED_ZIP_FILE_EXTENSIONS.has(ext);
 }
 
+// 提取正文首段作为描述（跳过标题行和 frontmatter 分隔线）
+function extractFirstParagraph(body: string): string {
+  const lines = body.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---')) {
+      return trimmed.slice(0, 200);
+    }
+  }
+  return '';
+}
+
 // 从 SKILL.md 内容解析技能名称和描述
 // 优先级：frontmatter.name/description > 首个标题 > 文件名
 function parseSkillMetadata(content: string, fallbackName: string): { name: string; description: string; entryFile: string } {
@@ -92,27 +104,11 @@ function parseSkillMetadata(content: string, fallbackName: string): { name: stri
     }
     // frontmatter 无 description 时从正文首段提取（去除空行和标题）
     if (!description) {
-      const body = parsed.content.trim();
-      const lines = body.split('\n');
-      // 跳过标题行（# 开头）和空行，取第一个内容段
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---')) {
-          description = trimmed.slice(0, 200);
-          break;
-        }
-      }
+      description = extractFirstParagraph(parsed.content.trim());
     }
   } catch {
     // gray-matter 解析失败时用纯文本提取首段
-    const lines = content.trim().split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---')) {
-        description = trimmed.slice(0, 200);
-        break;
-      }
-    }
+    description = extractFirstParagraph(content.trim());
   }
 
   return { name, description, entryFile: 'SKILL.md' };
@@ -158,6 +154,44 @@ async function listFilesRecursive(dirPath: string, basePath: string = ''): Promi
   return files;
 }
 
+// 校验 ZIP 条目：路径安全 + 扩展名白名单，同时查找 SKILL.md 入口
+function validateZipEntries(
+  entries: AdmZip.IZipEntry[],
+  targetDir: string,
+  warnings: string[],
+): AdmZip.IZipEntry | null {
+  let skillMdEntry: AdmZip.IZipEntry | null = null;
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    if (!isPathSafe(targetDir, entry.entryName)) {
+      throw new Error(`安全校验失败：ZIP 内文件 "${entry.entryName}" 路径非法（疑似路径穿越攻击）`);
+    }
+    if (!isZipFileExtensionAllowed(entry.entryName)) {
+      warnings.push(`跳过非法扩展名文件：${entry.entryName}`);
+      continue;
+    }
+    if (SKILL_MD_CANDIDATES.includes(entry.entryName) || SKILL_MD_CANDIDATES.includes(path.basename(entry.entryName))) {
+      skillMdEntry ??= entry;
+    }
+  }
+  return skillMdEntry;
+}
+
+// 解压合法 ZIP 条目到目标目录
+async function extractValidEntries(
+  entries: AdmZip.IZipEntry[],
+  targetDir: string,
+): Promise<void> {
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    if (!isZipFileExtensionAllowed(entry.entryName)) continue;
+    if (!isPathSafe(targetDir, entry.entryName)) continue;
+    const targetPath = path.resolve(targetDir, entry.entryName);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, entry.getData());
+  }
+}
+
 // 导入 ZIP 格式技能（.skill 文件）
 // 解压策略：
 //   1. 校验 ZIP 内所有文件路径安全（无路径穿越）+ 扩展名白名单
@@ -184,30 +218,7 @@ async function importZipSkill(
   }
 
   const entries = zip.getEntries();
-  let skillMdEntry: AdmZip.IZipEntry | null = null;
-
-  // 第一遍：校验所有条目路径安全 + 扩展名白名单
-  for (const entry of entries) {
-    if (entry.isDirectory) continue;
-
-    // 路径穿越校验
-    if (!isPathSafe(targetDir, entry.entryName)) {
-      throw new Error(`安全校验失败：ZIP 内文件 "${entry.entryName}" 路径非法（疑似路径穿越攻击）`);
-    }
-
-    // 扩展名白名单校验
-    if (!isZipFileExtensionAllowed(entry.entryName)) {
-      warnings.push(`跳过非法扩展名文件：${entry.entryName}`);
-      continue;
-    }
-
-    // 查找 SKILL.md 入口文件（大小写兼容）
-    if (SKILL_MD_CANDIDATES.includes(entry.entryName) || SKILL_MD_CANDIDATES.includes(path.basename(entry.entryName))) {
-      if (!skillMdEntry) {
-        skillMdEntry = entry;
-      }
-    }
-  }
+  const skillMdEntry = validateZipEntries(entries, targetDir, warnings);
 
   if (!skillMdEntry) {
     // 清理空目录后抛错
@@ -216,17 +227,7 @@ async function importZipSkill(
   }
 
   // 第二遍：解压合法文件到目标目录
-  for (const entry of entries) {
-    if (entry.isDirectory) continue;
-    if (!isZipFileExtensionAllowed(entry.entryName)) continue;
-    if (!isPathSafe(targetDir, entry.entryName)) continue;
-
-    const targetPath = path.resolve(targetDir, entry.entryName);
-    // 确保父目录存在
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    // 解压文件内容（getData 返回 Buffer）
-    await fs.writeFile(targetPath, entry.getData());
-  }
+  await extractValidEntries(entries, targetDir);
 
   // 解析 SKILL.md 提取元数据
   const skillMdPath = path.resolve(targetDir, skillMdEntry.entryName);
@@ -335,18 +336,14 @@ export async function listSkills(): Promise<SkillMeta[]> {
   try {
     entries = await fs.readdir(SKILLS_ROOT, { withFileTypes: true });
   } catch {
+    // skills 目录不存在时返回空列表
     return [];
   }
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const skillId = entry.name;
-    // 校验目录名是否符合 ID 白名单（跳过非法目录，如临时目录）
-    if (!SKILL_ID_PATTERN.test(skillId)) continue;
-
+  // 读取单个技能目录的元数据，读取失败时返回 null
+  const readSkillMeta = async (skillId: string): Promise<SkillMeta | null> => {
     const skillDir = path.resolve(SKILLS_ROOT, skillId);
     try {
-      // 查找入口文件
       let entryFile = '';
       for (const candidate of SKILL_MD_CANDIDATES) {
         if (fsSync.existsSync(path.resolve(skillDir, candidate))) {
@@ -354,29 +351,29 @@ export async function listSkills(): Promise<SkillMeta[]> {
           break;
         }
       }
-      if (!entryFile) continue;
+      if (!entryFile) return null;
 
       const content = await fs.readFile(path.resolve(skillDir, entryFile), 'utf8');
       const { name, description } = parseSkillMetadata(content, skillId);
       const stat = await fs.stat(skillDir);
       const size = await calculateDirSize(skillDir);
-
-      // 推断格式：目录下只有 SKILL.md 一个文件视为 md 格式，否则 zip
       const allFiles = await listFilesRecursive(skillDir);
       const format: 'zip' | 'md' = allFiles.length <= 1 ? 'md' : 'zip';
 
-      skills.push({
-        id: skillId,
-        name,
-        description,
-        format,
-        importedAt: stat.mtime.toISOString(),
-        size,
-        entryFile,
-      });
+      return { id: skillId, name, description, format, importedAt: stat.mtime.toISOString(), size, entryFile };
     } catch {
       // 单个技能读取失败时跳过，不阻断列表
+      return null;
     }
+  };
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillId = entry.name;
+    if (!SKILL_ID_PATTERN.test(skillId)) continue;
+
+    const meta = await readSkillMeta(skillId);
+    if (meta) skills.push(meta);
   }
 
   return skills;

@@ -285,7 +285,6 @@ export function extractiveCompress(
   while (i < turns.length) {
     const user = turns[i].role === 'user' ? turns[i] : null;
     const assistant = turns[i + 1]?.role === 'assistant' ? turns[i + 1] : null;
-    const start = user ? i : i + 1;
     const end = assistant ? i + 2 : i + 1;
     const q = user?.content ?? '';
     const a = assistant?.content ?? (user ? '' : turns[i].content);

@@ -1,4 +1,4 @@
-// 工具配置路由：提供 MCP/CLI/场景路由配置的读取、保存与工具列表查询。
+﻿// 工具配置路由：提供 MCP/CLI/场景路由配置的读取、保存与工具列表查询。
 //   GET  /api/tools/config   读取工具配置（从 config.json）
 //   PUT  /api/tools/config   保存工具配置到 config.json + 刷新缓存
 //   GET  /api/tools/list     列出已配置的扩展工具概览
@@ -26,7 +26,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
       scenes: [],
       routerMode: 'auto',
     };
-    return reply.send(toolsConfig);
+    return void reply.send(toolsConfig);
   });
 
   // PUT /api/tools/config：保存工具配置。
@@ -42,7 +42,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
 
     // 基本校验：routerMode 必须是合法枚举值
     if (body.routerMode !== undefined && !['keyword', 'auto'].includes(body.routerMode)) {
-      return reply.code(400).send({ error: 'routerMode must be "keyword" or "auto"' });
+      return void reply.code(400).send({ error: 'routerMode must be "keyword" or "auto"' });
     }
 
     const updated = await saveToolsConfig({
@@ -57,7 +57,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
       adapter.updateConfig({ toolsConfig: updated.tools });
     }
 
-    return reply.send({ ok: true, tools: updated.tools });
+    return void reply.send({ ok: true, tools: updated.tools });
   });
 
   // GET /api/tools/list：列出已配置的扩展工具概览。
@@ -65,7 +65,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
   app.get('/api/tools/list', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request, reply) => {
     const config = await loadConfig();
     const overview = listConfiguredTools(config.tools);
-    return reply.send(overview);
+    return void reply.send(overview);
   });
 
   // POST /api/tools/test-cli：测试 CLI 工具执行。
@@ -80,7 +80,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
     };
 
     if (!body.command) {
-      return reply.code(400).send({ error: 'command is required' });
+      return void reply.code(400).send({ error: 'command is required' });
     }
 
     // 构造临时 CliToolEntry 用于测试执行
@@ -97,7 +97,7 @@ export function registerToolsRoute(app: FastifyInstance, adapter?: EngineAdapter
     // 返回字段名与前端 Config.vue testCliTool 期望对齐（BR-026-1）：
     // - output: 标准输出（前端展示在 pre 标签）
     // - error: 错误输出（失败时展示）
-    return reply.send({
+    return void reply.send({
       ok: result.ok,
       output: result.stdout,
       error: result.stderr || (result.timedOut ? `Command timed out after ${body.timeoutMs ?? 30000}ms` : ''),

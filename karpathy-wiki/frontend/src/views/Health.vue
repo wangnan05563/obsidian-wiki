@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -48,7 +48,7 @@ async function runCheck() {
   report.value = null;
   batchSummary.value = null; // 重新体检时清除旧汇总
   try {
-    const res = await fetch(`${API_BASE}/health-check`, { method: 'POST' });
+    const res = await apiFetch(`${API_BASE}/health-check`, { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     report.value = await res.json();
   } catch (err) {
@@ -105,7 +105,7 @@ async function fixIssue(issueType: 'broken_link' | 'orphan', target: { from: str
   const payload: FixRequest = { issueType, target };
 
   try {
-    const res = await fetch(`${API_BASE}/health-check/fix`, {
+    const res = await apiFetch(`${API_BASE}/health-check/fix`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -242,7 +242,7 @@ async function batchFix(scope: FixScope) {
   const payload: BatchFixRequest = { items: collected.items, issueKeys: collected.issueKeys };
 
   try {
-    const res = await fetch(`${API_BASE}/health-check/fix/batch`, {
+    const res = await apiFetch(`${API_BASE}/health-check/fix/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

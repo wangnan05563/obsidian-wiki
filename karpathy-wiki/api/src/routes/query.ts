@@ -15,6 +15,53 @@ import { withSessionLock } from '../session-lock.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 
+// 解析线程上下文：校验 threadId + 加载历史记忆 + 上下文治理
+// 提取为独立函数降低 S3776 认知复杂度
+async function resolveThreadContext(
+  body: Record<string, unknown>,
+  store: ThreadMemoryStore,
+  governorConfig: ContextGovernorConfig,
+  input: QueryInput,
+  guards: IsolationGuards,
+  request: FastifyRequest,
+): Promise<{ threadId: string; governorStats: GovernorStats | null }> {
+  let threadId: string;
+  let governorStats: GovernorStats | null = null;
+
+  const provided = (body.threadId as string | undefined)?.trim();
+  if (provided && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(provided)) {
+    throw Object.assign(new Error(`非法的 threadId: ${provided}`), { statusCode: 400 });
+  }
+  const owner = guards.enabled ? ((request as any).currentUser?.userId ?? null) : null;
+  if (provided) {
+    if (guards.enabled) {
+      const existing = await store.getThread(provided);
+      if (!existing || (existing.ownerId ?? null) !== owner) {
+        throw Object.assign(new Error(`非法的 threadId: ${provided}`), { statusCode: 404 });
+      }
+    }
+    threadId = provided;
+  } else {
+    threadId = (await store.ensureThread(randomUUID(), owner)).id;
+  }
+  const memoryContext = await store.getHistoryContext(threadId);
+  const rawHistory: HistoryMessage[] =
+    memoryContext.length > 0
+      ? memoryContext
+      : ((body.history ?? []) as Array<{ role: string; content: string }>).map((h) => ({ role: h.role as 'user' | 'assistant', content: h.content, ts: '' }));
+
+  const existingSummary = await store.getMemorySummary(threadId);
+  const governed = await govern(rawHistory, {
+    question: input.question,
+    config: governorConfig,
+    existingSummary: existingSummary || undefined,
+  });
+  governorStats = governed.stats;
+  input.history = governed.messages.length > 0 ? governed.messages : undefined;
+
+  return { threadId, governorStats };
+}
+
 // 注册 POST /api/query 路由。
 // §5.2 改造：请求体扩展 mode/webSearch/attachments/model；SSE 事件扩展 thinking/progress/followups
 // 本地持久化改造：问答会话与记忆通过 ThreadMemoryStore 落盘到 data/threads/{threadId}/，
@@ -65,7 +112,7 @@ export function registerQueryRoute(
     };
     // 可选链合并 body nullish 守卫与字段访问（S6582）
     if (!body?.question || typeof body.question !== 'string') {
-      return reply.code(400).send({ error: '请求体须含 question 字段' });
+      return void reply.code(400).send({ error: '请求体须含 question 字段' });
     }
 
     // ── BYOK 强制每用户各自配置 ──
@@ -80,7 +127,7 @@ export function registerQueryRoute(
       && typeof llmOverride.baseUrl === 'string' && llmOverride.baseUrl.trim() !== ''
       && typeof llmOverride.model === 'string' && llmOverride.model.trim() !== '';
     if (!llmOverride || !keyOk || !fieldsOk) {
-      return reply.code(400).send({
+      return void reply.code(400).send({
         error: '请先在「配置 → AI 服务」中填写完整且有效的 API 配置（provider / baseUrl / model / API Key）。本应用不为用户共用服务端密钥，各用户的额度与限流相互独立。',
       });
     }
@@ -115,57 +162,16 @@ export function registerQueryRoute(
     };
 
     // ── 线程隔离 + 本地记忆解析 ──────────────────────────────────────────
-    // 线程隔离边界：所有会话与记忆都通过 threadId 命名空间隔离。
-    //   - 携带合法 threadId：从本地记忆注入历史上下文（保证跨重启连贯），
-    //     写入时也落盘到该线程目录。
-    //   - 未携带或非法：回退为前端透传 history（向后兼容），并自动创建新线程。
-    //   - 非法 threadId：直接 400，绝不落到"全局"或越界目录。
+    // 提取为 resolveThreadContext 函数，降低 handler 认知复杂度
     let threadId: string;
-    // 上下文治理统计（done 事件回传，便于前端/运维观测压缩清理效果）；声明提前以覆盖 try 作用域
     let governorStats: GovernorStats | null = null;
     try {
-      const provided = body.threadId?.trim();
-      if (provided && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(provided)) {
-        return reply.code(400).send({ error: `非法的 threadId: ${provided}` });
-      }
-      // ── 归属隔离（BR-ISOLATION-01）─────────────────────────────────────
-      // auth 启用时线程必须归属当前用户：携带的 threadId 须属本人，否则 404（不暴露存在性）；
-      // 未携带时新建线程并盖章 owner。单租户（auth 关闭）跳过校验，保持既有行为。
-      const owner = guards.enabled ? (request.currentUser?.userId ?? null) : null;
-      if (provided) {
-        if (guards.enabled) {
-          const existing = await store.getThread(provided);
-          if (!existing || (existing.ownerId ?? null) !== owner) {
-            return reply.code(404).send({ error: `非法的 threadId: ${provided}` });
-          }
-        }
-        threadId = provided;
-      } else {
-        threadId = (await store.ensureThread(randomUUID(), owner)).id;
-      }
-      // 解析历史上下文：优先后端记忆（连贯性），否则回退前端透传 history
-      const memoryContext = await store.getHistoryContext(threadId);
-      // 统一为 HistoryMessage[]（前端透传 history 缺 ts，补空串占位）
-      const rawHistory: HistoryMessage[] =
-        memoryContext.length > 0
-          ? memoryContext
-          : (body.history ?? []).map((h) => ({ role: h.role, content: h.content, ts: '' }));
-
-      // ── 上下文记忆治理 ────────────────────────────────────────────────
-      // 在注入 LLM 前，对历史做主动治理：语义压缩（早期→摘要）/ 清理（去重+低价值）/
-      // 重组（相关性排序）/ 容量淘汰（接近上限自动触发）。保护关键信息（摘要+最近窗口），
-      // 保证跨窗口连贯。existingSummary 来自存储层折叠（compactMemory），与新压缩合并。
-      const existingSummary = await store.getMemorySummary(threadId);
-      const governed = await govern(rawHistory, {
-        question: input.question,
-        config: governorConfig,
-        existingSummary: existingSummary || undefined,
-      });
-      governorStats = governed.stats;
-      input.history = governed.messages.length > 0 ? governed.messages : undefined;
+      const ctx = await resolveThreadContext(body, store, governorConfig, input, guards, request);
+      threadId = ctx.threadId;
+      governorStats = ctx.governorStats;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return reply.code(500).send({ error: msg });
+      const errAny = err as { statusCode?: number; message?: string };
+      return void reply.code(errAny.statusCode ?? 500).send({ error: errAny.message ?? String(err) });
     }
 
     // 本轮问答使用的会话/记忆标识（sessionId === threadId，1 线程 1 会话）
@@ -220,8 +226,8 @@ export function registerQueryRoute(
           send('multimodal', chunk.multimodal);
         }
         // §5.2 联网搜索引用：缓存最新 webRefs，与 refs 一起在 done 时发送
-        if (chunk.webRefs && chunk.webRefs.length > 0) {
-          webRefs = chunk.webRefs;
+        if ((chunk.webRefs?.length ?? 0) > 0) {
+          webRefs = chunk.webRefs ?? [];
         }
       };
 
@@ -304,6 +310,88 @@ function toArchiveDateStr(input: unknown): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// 回退到 ThreadMemoryStore 读取问答内容（兼容旧客户端 / threadsPersist=true 场景）
+interface ArchiveFallbackResult {
+  question: string;
+  answer: string;
+  refs: string[];
+  dateStr: string;
+}
+async function resolveFallbackArchive(
+  body: Record<string, unknown>,
+  store: ThreadMemoryStore,
+  guards: IsolationGuards,
+  request: FastifyRequest,
+  threadId: string | undefined,
+): Promise<ArchiveFallbackResult | { error: string; status: number } | null> {
+  if (!threadId || typeof body?.messageIndex !== 'number' || !Number.isInteger(body.messageIndex)) {
+    return { error: '请求体须含 answer，或 threadId(或 sessionId) 与整数 messageIndex', status: 400 };
+  }
+  if (!UUID_RE.test(threadId)) {
+    return { error: `非法的 threadId: ${threadId}`, status: 400 };
+  }
+  if (guards.enabled) {
+    const existing = await store.getThread(threadId);
+    if (!existing || (existing.ownerId ?? null) !== (request.currentUser?.userId ?? null)) {
+      return { error: `非法的 threadId: ${threadId}`, status: 404 };
+    }
+  }
+  const session = await store.getSession(threadId);
+  if (!session || body.messageIndex < 0 || body.messageIndex >= session.messages.length) {
+    return { error: '会话或消息不存在（可能已清理）', status: 404 };
+  }
+  const record = session.messages[body.messageIndex];
+  return {
+    question: (body.question as string) || record.question,
+    answer: record.answer,
+    refs: Array.isArray(body.refs) ? [] : record.refs,
+    dateStr: toArchiveDateStr(record.ts),
+  };
+}
+
+// 写入 vault 归档：生成 frontmatter、写入文件、追加 index 和 log
+interface ArchiveVaultInput {
+  question: string;
+  answer: string;
+  refs: string[];
+  dateStr: string;
+  threadId?: string;
+}
+async function writeArchiveToVault(
+  vault: VaultService,
+  input: ArchiveVaultInput,
+): Promise<{ ok: boolean; path: string }> {
+  const { question, answer, refs, dateStr, threadId } = input;
+  const shortId = threadId && UUID_RE.test(threadId)
+    ? threadId.slice(0, 8)
+    : randomUUID().slice(0, 8);
+  const uniq = randomUUID().slice(0, 4);
+  const relPath = `queries/qa-${dateStr}-${shortId}-${uniq}.md`;
+
+  const frontmatter = {
+    title: `问答归档：${question.slice(0, 30)}${question.length > 30 ? '…' : ''}`,
+    type: 'query',
+    created: dateStr,
+    updated: dateStr,
+    source: 'qa-archive',
+    tags: ['问答归档', ...refs],
+  };
+
+  const refLines = refs.map((r) => `- [[${r}]]`).join('\n');
+  const refsSection = refs.length > 0 ? `\n\n## 引用页面\n${refLines}` : '';
+  const content = matter.stringify(
+    `# 问答归档\n\n## 问题\n${question}\n\n## 回答\n${answer}${refsSection}\n`,
+    frontmatter,
+  );
+
+  await withCompileLock(async () => {
+    await vault.writeFile(relPath, content);
+    await vault.appendIndex(frontmatter.title, `归档问答：${question.slice(0, 40)}`);
+    await vault.appendLog('query', [relPath], `归档问答: ${question.slice(0, 40)}`);
+  });
+  return { ok: true, path: relPath };
+}
+
 export function registerQueryArchiveRoute(
   app: FastifyInstance,
   vault: VaultService,
@@ -330,92 +418,39 @@ export function registerQueryArchiveRoute(
     let refs: string[] = Array.isArray(body?.refs)
       ? body.refs.filter((r): r is string => typeof r === 'string')
       : [];
-    let dateStr: string;
+    let dateStr: string = toArchiveDateStr(body?.ts);
 
     const threadId = body?.threadId ?? body?.sessionId;
-    if (!answer) {
-      // 回退路径：需要 threadId + 整数 messageIndex，且 threadId 合法
-      if (!threadId || typeof body?.messageIndex !== 'number' || !Number.isInteger(body.messageIndex)) {
-        return reply.code(400).send({ error: '请求体须含 answer，或 threadId(或 sessionId) 与整数 messageIndex' });
+    if (answer === '') {
+      const fallback = await resolveFallbackArchive(body, store, guards, request, threadId);
+      if (fallback instanceof Object && 'error' in fallback) {
+        return void reply.code(fallback.status ?? 400).send({ error: fallback.error });
       }
-      if (!UUID_RE.test(threadId)) {
-        return reply.code(400).send({ error: `非法的 threadId: ${threadId}` });
+      if (fallback) {
+        question = fallback.question;
+        answer = fallback.answer;
+        refs = fallback.refs;
+        dateStr = fallback.dateStr;
       }
-      // 归属隔离：auth 启用时服务端会话须归属当前用户，否则 404（不暴露存在性）
-      if (guards.enabled) {
-        const existing = await store.getThread(threadId);
-        if (!existing || (existing.ownerId ?? null) !== (request.currentUser?.userId ?? null)) {
-          return reply.code(404).send({ error: `非法的 threadId: ${threadId}` });
-        }
-      }
-      const session = await store.getSession(threadId);
-      if (!session || body.messageIndex < 0 || body.messageIndex >= session.messages.length) {
-        return reply.code(404).send({ error: '会话或消息不存在（可能已清理）' });
-      }
-      const record = session.messages[body.messageIndex];
-      question = question || record.question;
-      answer = record.answer;
-      if (!refs.length) refs = record.refs;
-      dateStr = toArchiveDateStr(record.ts);
     } else {
       dateStr = toArchiveDateStr(body.ts);
     }
 
     // 统一清洗 refs（去除可能破坏 wikilink 语法的换行/控制字符），并剔除空串
-    refs = refs.map((r) => r.replace(/[\r\n]/g, ' ').trim()).filter(Boolean);
+    const cleanedRefs = refs.map((r) => r.replace(/[\r\n]/g, ' ').trim()).filter(Boolean);
+    refs = cleanedRefs;
 
     // 防御：question 与 answer 均为空时无归档意义，直接拒绝
     if (!question && !answer) {
-      return reply.code(400).send({ error: '归档内容为空（question 与 answer 均缺失）' });
+      return void reply.code(400).send({ error: '归档内容为空（question 与 answer 均缺失）' });
     }
 
-    // 生成归档页面文件名：queries/qa-{date}-{短分组id}-{随机}.md
-    // shortId 用于同线程分组（合法 UUID 取前 8 位，否则随机）；uniq 保证同一线程同一天多次归档不互相覆盖。
-    // 文件名仅含日期与十六进制，杜绝路径穿越。
-    const shortId = threadId && UUID_RE.test(threadId)
-      ? threadId.slice(0, 8)
-      : randomUUID().slice(0, 8);
-    const uniq = randomUUID().slice(0, 4);
-    const relPath = `queries/qa-${dateStr}-${shortId}-${uniq}.md`;
-
-    // 构造 frontmatter + 正文。type: query 符合 SCHEMA 规范
-    const frontmatter = {
-      title: `问答归档：${question.slice(0, 30)}${question.length > 30 ? '…' : ''}`,
-      type: 'query',
-      created: dateStr,
-      updated: dateStr,
-      source: 'qa-archive',
-      tags: ['问答归档', ...refs],
-    };
-
-    // 提取嵌套模板到变量，降低模板复杂度（S4624）
-    const refLines = refs.map((r) => `- [[${r}]]`).join('\n');
-    const refsSection = refs.length > 0
-      ? `\n\n## 引用页面\n${refLines}`
-      : '';
-
-    const content = matter.stringify(
-      `# 问答归档\n\n## 问题\n${question}\n\n## 回答\n${answer}${refsSection}\n`,
-      frontmatter,
-    );
-
+    // 写入 vault 归档
     try {
-      // 串行化 vault 写入：与 compile 路由共用锁，避免 index.md/log.md 追加竞态
-      await withCompileLock(async () => {
-        await vault.writeFile(relPath, content);
-        // 追加到 index.md
-        await vault.appendIndex(
-          frontmatter.title,
-          `归档问答：${question.slice(0, 40)}`,
-        );
-        // 记录操作日志
-        await vault.appendLog('query', [relPath], `归档问答: ${question.slice(0, 40)}`);
-      });
-      // 归档成功：本地会话记录保留（持久化在 data/threads/{threadId}/session.json），
-      // 不再需要像内存 Map 那样主动释放——磁盘存储天然不受内存泄漏约束。
-      return reply.send({ ok: true, path: relPath });
+      const result = await writeArchiveToVault(vault, { question, answer, refs, dateStr, threadId });
+      return void reply.send(result);
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }

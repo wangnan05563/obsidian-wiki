@@ -57,7 +57,7 @@ class FixedWindowCounter {
       this.sweepWindow = windowStart;
     }
     let entry = this.counts.get(key);
-    if (!entry || entry.windowStart !== windowStart) {
+    if (entry?.windowStart !== windowStart) {
       // 窗口已滚动或首次命中：重置计数
       entry = { windowStart, count: 0 };
       this.counts.set(key, entry);

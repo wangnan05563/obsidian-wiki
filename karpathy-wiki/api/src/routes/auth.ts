@@ -96,7 +96,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const clientIp = clientIpFromRequest(request);
     // 可选链合并 body nullish 守卫与字段访问（S6582）
     if (!body?.username || !body?.password) {
-      return reply.code(400).send({ ok: false, message: '用户名和密码不能为空' });
+      reply.code(400).send({ ok: false, message: '用户名和密码不能为空' });
     }
 
     // FR-RM-10 登录限流（复用同一框架）：单 IP 10 次/分钟、单用户名 5 次/分钟（防爆破）
@@ -135,7 +135,12 @@ export function registerAuthRoute(app: FastifyInstance): void {
         }),
       );
       // 不区分"用户名错误"和"密码错误"，统一返回
-      return reply.code(401).send({ ok: false, message: '用户名或密码错误' });
+      return void reply.code(401).send({ ok: false, message: '用户名或密码错误' });
+    }
+
+    // 显式守卫帮助 TS 收窄 user 类型（上方 OR 条件未保证 user 非 null）
+    if (!user) {
+      return void reply.code(500).send({ error: 'unreachable' });
     }
 
     // 检查用户是否启用
@@ -151,7 +156,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
           message: '账户已禁用',
         }),
       );
-      return reply.code(403).send({ ok: false, message: '账户已禁用，请联系管理员' });
+      reply.code(403).send({ ok: false, message: '账户已禁用，请联系管理员' });
     }
 
     // 创建会话
@@ -178,7 +183,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
       }),
     );
 
-    return reply.send({
+    return void reply.send({
       ok: true,
       token: session.token,
       user: {
@@ -213,7 +218,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
     // 1. 同步格式校验（不访问存储）
     const validation = validateRegistrationInput(body);
     if (!validation.ok) {
-      return reply.code(validation.status).send({ error: validation.error });
+      reply.code(validation.status).send({ error: validation.error });
     }
     const username = body.username;
 
@@ -242,7 +247,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
           message: '用户名已存在',
         }),
       );
-      return reply.code(409).send({ error: '用户名已存在' });
+      reply.code(409).send({ error: '用户名已存在' });
     }
 
     // 3. 创建用户（PBKDF2 哈希），角色强制为 user
@@ -251,7 +256,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
     try {
       newUser = await createUser({ username, password: body.password, role: 'user' });
     } catch (err) {
-      return reply.code(400).send({ error: err instanceof Error ? err.message : '注册失败' });
+      return void reply.code(400).send({ error: err instanceof Error ? err.message : '注册失败' });
     }
 
     // 4. 自动登录：创建会话并返回 token
@@ -276,7 +281,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
       }),
     );
 
-    return reply.send({
+    return void reply.send({
       ok: true,
       token: session.token,
       user: {
@@ -303,9 +308,9 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const user = await findUserById(session.userId);
     if (!user) {
       // 用户已被删除但会话仍有效
-      return reply.code(401).send({ error: '用户不存在' });
+      return void reply.code(401).send({ error: '用户不存在' });
     }
-    return reply.send({
+    return void reply.send({
       id: user.id,
       username: user.username,
       role: user.role,
@@ -331,13 +336,13 @@ export function registerAuthRoute(app: FastifyInstance): void {
       result: 'success',
     });
 
-    return reply.send({ ok: true });
+    return void reply.send({ ok: true });
   });
 
   // GET /api/auth/permissions：当前用户权限列表
   app.get('/api/auth/permissions', { preHandler: authGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
     const session = request.currentUser!;
-    return reply.send({
+    return void reply.send({
       role: session.role,
       permissions: getRolePermissions(session.role),
     });
@@ -358,7 +363,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
       updatedAt: u.updatedAt,
       lastLoginAt: u.lastLoginAt,
     }));
-    return reply.send({ users: sanitized });
+    return void reply.send({ users: sanitized });
   });
 
   // POST /api/auth/users：创建用户
@@ -366,10 +371,10 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const body = request.body as CreateUserRequest;
     // 可选链合并 body nullish 守卫与字段访问（S6582）
     if (!body?.username || !body?.password || !body?.role) {
-      return reply.code(400).send({ error: '用户名、密码和角色不能为空' });
+      reply.code(400).send({ error: '用户名、密码和角色不能为空' });
     }
     if (!['admin', 'user', 'guest'].includes(body.role)) {
-      return reply.code(400).send({ error: '无效的角色' });
+      reply.code(400).send({ error: '无效的角色' });
     }
     try {
       const user = await createUser({
@@ -384,7 +389,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
         result: 'success',
         message: `创建用户 ${user.username}（角色：${user.role}）`,
       });
-      return reply.send({
+      return void reply.send({
         id: user.id,
         username: user.username,
         role: user.role,
@@ -400,7 +405,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
         result: 'fail',
         message: err instanceof Error ? err.message : String(err),
       });
-      return reply.code(400).send({ error: err instanceof Error ? err.message : '创建用户失败' });
+      reply.code(400).send({ error: err instanceof Error ? err.message : '创建用户失败' });
     }
   });
 
@@ -409,7 +414,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateUserRequest;
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      reply.code(400).send({ error: '请求体为空' });
     }
     try {
       const updated = await updateUser(id, {
@@ -433,7 +438,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
         result: 'success',
         message: `更新用户 ${updated.username}`,
       });
-      return reply.send({
+      return void reply.send({
         id: updated.id,
         username: updated.username,
         role: updated.role,
@@ -450,7 +455,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
         result: 'fail',
         message: err instanceof Error ? err.message : String(err),
       });
-      return reply.code(400).send({ error: err instanceof Error ? err.message : '更新用户失败' });
+      reply.code(400).send({ error: err instanceof Error ? err.message : '更新用户失败' });
     }
   });
 
@@ -459,7 +464,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const { id } = request.params as { id: string };
     // 禁止删除自己
     if (request.currentUser?.userId === id) {
-      return reply.code(400).send({ error: '不能删除当前登录用户' });
+      reply.code(400).send({ error: '不能删除当前登录用户' });
     }
     try {
       // 先销毁被删用户的会话
@@ -471,7 +476,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
         resource: `/api/auth/users/${id}`,
         result: 'success',
       });
-      return reply.send({ ok: true });
+      return void reply.send({ ok: true });
     } catch (err) {
       audit({
         request,
@@ -480,13 +485,13 @@ export function registerAuthRoute(app: FastifyInstance): void {
         result: 'fail',
         message: err instanceof Error ? err.message : String(err),
       });
-      return reply.code(400).send({ error: err instanceof Error ? err.message : '删除用户失败' });
+      reply.code(400).send({ error: err instanceof Error ? err.message : '删除用户失败' });
     }
   });
 
   // GET /api/auth/audit-log：审计日志（仅管理员）
   app.get('/api/auth/audit-log', { preHandler: adminGuard }, async (_request: FastifyRequest, reply: FastifyReply) => {
     const entries = await readAuditLog(auditLogPath, 1000);
-    return reply.send({ entries, count: entries.length });
+    return void reply.send({ entries, count: entries.length });
   });
 }

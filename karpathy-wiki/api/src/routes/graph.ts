@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 
 // 注册图谱数据路由。
@@ -12,9 +12,9 @@ export function registerGraphRoute(app: FastifyInstance, vault: VaultService) {
   app.get('/api/graph', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const graph = await vault.buildLinkGraph();
-      return reply.send(graph);
+      return void reply.send(graph);
     } catch (err: unknown) {
-      return reply.code(500).send({
+      reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }

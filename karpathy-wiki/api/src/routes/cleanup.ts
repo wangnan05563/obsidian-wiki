@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
@@ -139,9 +139,9 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
           oldest: rawStat.oldest,
         },
       };
-      return reply.send(status);
+      return void reply.send(status);
     } catch (err: unknown) {
-      reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -306,10 +306,10 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
         errors: result.errors.slice(0, 5),
       });
 
-      return reply.send(result);
+      return void reply.send(result);
     } catch (err: unknown) {
       // 兜底：未预期异常返回 500
-      reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }

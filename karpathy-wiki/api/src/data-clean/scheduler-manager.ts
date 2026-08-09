@@ -1,4 +1,4 @@
-﻿import fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { scanVault } from './quality-scanner.js';
 import type { VaultService } from '../vault/vault-service.js';
@@ -8,10 +8,10 @@ const SCHEDULE_FILE = 'data-clean-schedules.json';
 
 export class SchedulerManager {
   private schedules: ScanSchedule[] = [];
-  private filePath: string;
-  private vaultRef: VaultService | undefined;
+  private readonly filePath: string;
+  private readonly vaultRef: VaultService | undefined;
   private intervalId?: NodeJS.Timeout;
-  private running: Map<string, boolean> = new Map();
+  private readonly running: Map<string, boolean> = new Map();
 
   constructor(vaultPath: string) {
     this.filePath = path.join(path.dirname(vaultPath), SCHEDULE_FILE);
@@ -58,9 +58,9 @@ export class SchedulerManager {
     if (idx === -1) return undefined;
 
     const existing = this.schedules[idx];
-    Object.assign(existing, updates);
+    this.schedules[idx] = { ...existing, ...updates };
 
-    if (updates.enabled !== undefined && !existing.enabled!) {
+    if (updates.enabled !== undefined && !existing.enabled) {
       this.stopInterval(id);
     } else if (updates.enabled === true && !(this.running.get(id))) {
       this.startInterval(id);
@@ -116,10 +116,10 @@ export class SchedulerManager {
     const sched = this.getById(id);
     if (!sched) return;
 
-    let intervalMs = 6 * 60 * 60 * 1000; // default: 6 hours
     const cronMatch = sched.cron.match(/^every\s+(\d+)\s*(min|hour|day)s?$/i);
+    let intervalMs = 6 * 60 * 60 * 1000; // default: 6 hours
     if (cronMatch) {
-      const value = parseInt(cronMatch[1]);
+      const value = Number.parseInt(cronMatch[1], 10);
       const unit = cronMatch[2].toLowerCase();
       switch (unit) {
         case 'min': intervalMs = value * 60 * 1000; break;

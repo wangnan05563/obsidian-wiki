@@ -53,21 +53,21 @@ export function registerTtsRoute(app: FastifyInstance) {
     const body = request.body as Partial<EdgeTtsParams> | undefined;
 
     if (!body?.text || typeof body.text !== 'string') {
-      return reply.code(400).send({ error: '请求体须包含 text 字段（字符串）' });
+      return void reply.code(400).send({ error: '请求体须包含 text 字段（字符串）' });
     }
 
     const text = body.text.trim();
     if (!text) {
-      return reply.code(400).send({ error: 'text 不能为空' });
+      return void reply.code(400).send({ error: 'text 不能为空' });
     }
     if (text.length > 5000) {
-      return reply.code(400).send({ error: `文本过长（${text.length} 字），上限 5000 字` });
+      return void reply.code(400).send({ error: `文本过长（${text.length} 字），上限 5000 字` });
     }
 
     // 音色白名单校验
     const voice = body.voice ?? 'zh-CN-XiaoxiaoNeural';
     if (!ALLOWED_VOICE_PATTERN.test(voice)) {
-      return reply.code(400).send({ error: `音色名格式不合法: ${voice}` });
+      return void reply.code(400).send({ error: `音色名格式不合法: ${voice}` });
     }
 
     // 语速/音量/音调格式校验（SSML prosody 属性）
@@ -75,13 +75,13 @@ export function registerTtsRoute(app: FastifyInstance) {
     const volume = body.volume ?? '+0%';
     const pitch = body.pitch ?? '+0Hz';
     if (!PROSODY_RATE_PATTERN.test(rate)) {
-      return reply.code(400).send({ error: `rate 格式不合法（须为 [+-]N%）：${rate}` });
+      return void reply.code(400).send({ error: `rate 格式不合法（须为 [+-]N%）：${rate}` });
     }
     if (!PROSODY_RATE_PATTERN.test(volume)) {
-      return reply.code(400).send({ error: `volume 格式不合法（须为 [+-]N%）：${volume}` });
+      return void reply.code(400).send({ error: `volume 格式不合法（须为 [+-]N%）：${volume}` });
     }
     if (!PROSODY_PITCH_PATTERN.test(pitch)) {
-      return reply.code(400).send({ error: `pitch 格式不合法（须为 [+-]NHz）：${pitch}` });
+      return void reply.code(400).send({ error: `pitch 格式不合法（须为 [+-]NHz）：${pitch}` });
     }
 
     // 说话风格白名单校验（仅作安全过滤；本环境 Edge 端点不支持 express-as，
@@ -104,16 +104,16 @@ export function registerTtsRoute(app: FastifyInstance) {
       reply.header('Content-Length', audioBuffer.length);
       // 缓存控制：合成结果确定性强（同文本同参数同音色 → 同音频），允许浏览器缓存
       reply.header('Cache-Control', 'private, max-age=3600');
-      return reply.send(audioBuffer);
+      return void reply.send(audioBuffer);
     } catch (err: unknown) {
       request.log.error({ err, voice, textLen: text.length }, 'Edge TTS synthesis failed');
       const message = err instanceof Error ? err.message : String(err);
-      return reply.code(502).send({ error: `语音合成失败: ${message}` });
+      reply.code(502).send({ error: `语音合成失败: ${message}` });
     }
   });
 
   // 获取可用音色列表（静态返回，无需网络请求）
   app.get('/api/tts/voices', async (_request: FastifyRequest, reply: FastifyReply) => {
-    return reply.send({ voices: getEdgeTtsVoices() });
+    return void reply.send({ voices: getEdgeTtsVoices() });
   });
 }

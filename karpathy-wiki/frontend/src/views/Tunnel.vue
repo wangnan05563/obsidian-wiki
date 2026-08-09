@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type {
@@ -65,7 +65,7 @@ const PROVIDER_DESC: Record<string, string> = {
 
 async function loadStatus() {
   try {
-    const res = await fetch(`${API_BASE}/tunnel/status`);
+    const res = await apiFetch(`${API_BASE}/tunnel/status`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     status.value = await res.json();
   } catch (err) {
@@ -76,7 +76,7 @@ async function loadStatus() {
 
 async function loadConfig() {
   try {
-    const res = await fetch(`${API_BASE}/tunnel/config`);
+    const res = await apiFetch(`${API_BASE}/tunnel/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: TunnelConfigData = await res.json();
     config.value = data;
@@ -99,7 +99,7 @@ async function startTunnel() {
   downloadError.value = null;
   authError.value = null;
   try {
-    const res = await fetch(`${API_BASE}/tunnel/start`, { method: 'POST' });
+    const res = await apiFetch(`${API_BASE}/tunnel/start`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) {
       // 下载失败：渲染手动放置指引而非普通错误提示
@@ -127,7 +127,7 @@ async function startTunnel() {
 async function stopTunnel() {
   stopping.value = true;
   try {
-    const res = await fetch(`${API_BASE}/tunnel/stop`, { method: 'POST' });
+    const res = await apiFetch(`${API_BASE}/tunnel/stop`, { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     status.value = await res.json();
     ElMessage.success('隧道已停止');
@@ -149,7 +149,7 @@ async function saveConfig() {
       autoStart: formAutoStart.value,
       tunnelMode: formTunnelMode.value,
     };
-    const res = await fetch(`${API_BASE}/tunnel/config`, {
+    const res = await apiFetch(`${API_BASE}/tunnel/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -172,7 +172,7 @@ async function onProviderChange() {
   // 隧道运行中切换 provider：先停止当前隧道，避免旧 provider 继续占用
   if (status.value?.status === 'running') {
     try {
-      await fetch(`${API_BASE}/tunnel/stop`, { method: 'POST' });
+      await apiFetch(`${API_BASE}/tunnel/stop`, { method: 'POST' });
       await loadStatus();
       ElMessage.info('已停止当前隧道，请手动启动新 Provider');
     } catch {
@@ -228,7 +228,7 @@ async function startLogin() {
   loginResult.value = null;
   loginStatus.value = null;
   try {
-    const res = await fetch(`${API_BASE}/tunnel/cloudflare/login`, { method: 'POST' });
+    const res = await apiFetch(`${API_BASE}/tunnel/cloudflare/login`, { method: 'POST' });
     const data: CloudflareLoginStartResult = await res.json();
     loginResult.value = data;
     if (data.status === 'failed') {
@@ -250,7 +250,7 @@ function startLoginPolling() {
   // 每 2.5s 轮询 login 状态，直到 success 或 failed
   loginPollTimer = setInterval(async () => {
     try {
-      const res = await fetch(`${API_BASE}/tunnel/cloudflare/login/status`);
+      const res = await apiFetch(`${API_BASE}/tunnel/cloudflare/login/status`);
       const data: CloudflareLoginStatusResult = await res.json();
       loginStatus.value = data;
       if (data.status === 'success') {
@@ -274,7 +274,7 @@ async function createTunnel() {
   }
   creatingTunnel.value = true;
   try {
-    const res = await fetch(`${API_BASE}/tunnel/cloudflare/create`, {
+    const res = await apiFetch(`${API_BASE}/tunnel/cloudflare/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tunnelName: wizardTunnelName.value.trim() }),
@@ -297,7 +297,7 @@ async function routeDns() {
   }
   routingDns.value = true;
   try {
-    const res = await fetch(`${API_BASE}/tunnel/cloudflare/route-dns`, {
+    const res = await apiFetch(`${API_BASE}/tunnel/cloudflare/route-dns`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hostname: wizardHostname.value.trim() }),

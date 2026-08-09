@@ -31,7 +31,7 @@ export function applyPerRequestOverride(
 
   // 2) 联网搜索：用户带 apiKey 时以其覆盖（合并服务端 apiKeyRef 等），否则回退服务端配置
   let effectiveWebSearch: WebSearchConfig | undefined = webSearchConfig;
-  if (override.searchConfig && override.searchConfig.apiKey) {
+  if (override.searchConfig?.apiKey) {
     effectiveWebSearch = {
       provider: override.searchConfig.provider,
       apiKeyRef: webSearchConfig?.apiKeyRef ?? '',

@@ -1,4 +1,4 @@
-// QQ 聊天记录导入子系统路由（SRS §6.1 路由族）
+﻿// QQ 聊天记录导入子系统路由（SRS §6.1 路由族）
 // 注册 6 个端点：upload/preview/extract/drafts/compile/compile/batch
 // M1 阶段实现：upload（完整）、preview（完整）、drafts（完整）、compile（复用 adapter）
 // M1 桩实现：extract（501，待 M2 实现 LLM 抽取）、compile/batch（501，待 M2 实现）
@@ -55,7 +55,7 @@ export function registerQqIngestRoute(
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const file = await request.file();
     if (!file) {
-      return reply.code(400).send({ error: '缺少 file 字段' });
+      return void reply.code(400).send({ error: '缺少 file 字段' });
     }
 
     // 文件大小校验：与 multipart 全局上限 10MB 一致
@@ -125,7 +125,7 @@ export function registerQqIngestRoute(
     async (request, reply) => {
       const { rawId } = request.params;
       if (!RAW_ID_PATTERN.test(rawId)) {
-        return reply.code(400).send({ error: '无效的 rawId' });
+        return void reply.code(400).send({ error: '无效的 rawId' });
       }
 
       try {
@@ -137,16 +137,16 @@ export function registerQqIngestRoute(
         );
 
         if (qqFiles.length === 0) {
-          return reply.code(404).send({ error: `未找到 rawId=${rawId} 对应的预清洗结果` });
+          return void reply.code(404).send({ error: `未找到 rawId=${rawId} 对应的预清洗结果` });
         }
 
         // 读取第一个匹配文件（rawId 是 UUID，理论上唯一）
         const content = await vault.readFile(qqFiles[0].path);
         const parsed = JSON.parse(content);
-        return reply.send(parsed);
+        return void reply.send(parsed);
       } catch (err: unknown) {
         request.log.error({ err, rawId }, 'qq-ingest preview error');
-        return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+        return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
       }
     },
   );
@@ -164,7 +164,7 @@ export function registerQqIngestRoute(
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rawId } = request.params as { rawId: string };
       if (!RAW_ID_PATTERN.test(rawId)) {
-        return reply.code(400).send({ error: '无效的 rawId' });
+        return void reply.code(400).send({ error: '无效的 rawId' });
       }
 
       // SSE headers
@@ -221,10 +221,10 @@ export function registerQqIngestRoute(
       const drafts = tree
         .filter((n) => n.type === 'file' && n.name.endsWith('.md'))
         .map((n) => ({ path: n.path, name: n.name }));
-      return reply.send({ drafts });
+      return void reply.send({ drafts });
     } catch (err: unknown) {
       request.log.error({ err }, 'qq-ingest drafts list error');
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -243,7 +243,7 @@ export function registerQqIngestRoute(
       // 路径穿越防护：draftPath 必须匹配 drafts/xxx.md 格式
       const decoded = decodeURIComponent(draftPath);
       if (!DRAFT_PATH_PATTERN.test(decoded)) {
-        return reply.code(400).send({ error: '无效的 draftPath，必须为 drafts/xxx.md 格式' });
+        return void reply.code(400).send({ error: '无效的 draftPath，必须为 drafts/xxx.md 格式' });
       }
 
       // SSE headers
@@ -303,7 +303,7 @@ export function registerQqIngestRoute(
     const body = (request.body ?? {}) as { drafts?: string[] };
 
     // 解析待编译 draft 列表：请求体显式指定 > 扫描 drafts/ 目录
-    let draftPaths: string[];
+    let draftPaths: string[] = [];
     if (Array.isArray(body.drafts) && body.drafts.length > 0) {
       draftPaths = body.drafts;
     } else {
@@ -314,14 +314,14 @@ export function registerQqIngestRoute(
           .map((n) => n.path);
       } catch (err) {
         request.log.error({ err }, 'qq-ingest compile/batch scan drafts error');
-        return reply.code(500).send({ error: '扫描 drafts 目录失败' });
+        return void reply.code(500).send({ error: '扫描 drafts 目录失败' });
       }
     }
 
     // 路径穿越防护：每个 draftPath 必须匹配 drafts/xxx.md 格式
     const invalidPaths = draftPaths.filter((p) => !DRAFT_PATH_PATTERN.test(p));
     if (invalidPaths.length > 0) {
-      return reply.code(400).send({
+      return void reply.code(400).send({
         error: '存在无效的 draftPath，必须为 drafts/xxx.md 格式',
         invalid: invalidPaths,
       });
@@ -330,14 +330,14 @@ export function registerQqIngestRoute(
     // 上限校验：与 batch.maxBatchSize 联动，防滥用
     const maxBatchSize = config.batch?.maxBatchSize ?? 50;
     if (draftPaths.length > maxBatchSize) {
-      return reply.code(400).send({
+      return void reply.code(400).send({
         error: `批量编译上限 ${maxBatchSize}，当前 ${draftPaths.length} 个 draft`,
         hint: '请分批提交或调整 config.batch.maxBatchSize',
       });
     }
 
     if (draftPaths.length === 0) {
-      return reply.code(400).send({ error: '无可编译的 draft 文件' });
+      return void reply.code(400).send({ error: '无可编译的 draft 文件' });
     }
 
     // SSE headers
@@ -483,10 +483,10 @@ export function registerQqIngestRoute(
         extract_base_url: '',
         extract_token_budget: 50000,
       };
-      return reply.send({ qq });
+      return void reply.send({ qq });
     } catch (err: unknown) {
       request.log.error({ err }, 'qq-ingest config get error');
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -513,10 +513,10 @@ export function registerQqIngestRoute(
       });
       // 同步更新运行时 config 引用，避免后续路由用旧值
       config.qq = updated.qq;
-      return reply.send({ qq: updated.qq });
+      return void reply.send({ qq: updated.qq });
     } catch (err: unknown) {
       request.log.error({ err }, 'qq-ingest config put error');
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 }

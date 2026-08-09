@@ -25,6 +25,69 @@ export interface SearchFilter {
   tags?: string[];
 }
 
+// 检查页面是否匹配搜索过滤器（frontmatter 过滤）
+function matchSearchFilter(
+  content: string,
+  filter?: SearchFilter,
+  terms?: string[],
+): { matched: boolean; content?: string } {
+  if (!filter?.source && !filter?.status && !filter?.type && !filter?.tags) {
+    return { matched: true };
+  }
+  const parsed = matter(content);
+  const fm = parsed.data;
+  if (filter?.source && fm.source !== filter.source) return { matched: false };
+  if (filter?.status && fm.status !== filter.status) return { matched: false };
+  if (filter?.type && String(fm.type ?? '').toLowerCase() !== filter.type.toLowerCase()) return { matched: false };
+  if (filter?.tags && filter.tags.length > 0) {
+    const pageTags: string[] = Array.isArray(fm.tags) ? fm.tags : [];
+    if (!pageTags.some((t) => filter.tags!.includes(t))) return { matched: false };
+  }
+  // 纯过滤模式（无关键词）
+  if (terms?.length === 0) return { matched: true, content: '' };
+  return { matched: true, content: parsed.content };
+}
+
+// 处理单个页面文件：读取内容、过滤、匹配关键词，返回 SearchHit 或 null
+async function processSearchFile(
+  vault: VaultService,
+  rel: string,
+  d: string,
+  f: string,
+  terms: string[],
+  filter?: SearchFilter,
+): Promise<SearchHit | null> {
+  if (!f.endsWith('.md')) return null;
+  let content: string;
+  try {
+    content = await vault.readFile(rel);
+  } catch {
+    return null;
+  }
+  if (filter?.folder && !rel.startsWith(filter.folder + '/')) return null;
+
+  const filterResult = matchSearchFilter(content, filter, terms);
+  if (!filterResult.matched) return null;
+
+  // 纯过滤模式（无关键词）直接返回
+  if (filterResult.content === '') {
+    const title = f.slice(0, -3);
+    const snippet = content.slice(0, 120).replaceAll('\n', ' ');
+    return { path: rel, title, snippet, hits: 1 };
+  }
+
+  const searchContent = filterResult.content || content;
+  const lower = searchContent.toLowerCase();
+  const hitCount = terms.filter((t) => lower.includes(t)).length;
+  if (hitCount === 0) return null;
+
+  const title = f.slice(0, -3);
+  const firstIdx = lower.indexOf(terms[0]);
+  const start = Math.max(0, firstIdx - 30);
+  const snippet = searchContent.slice(start, start + 120).replaceAll('\n', ' ');
+  return { path: rel, title, snippet, hits: hitCount };
+}
+
 // 简单全文搜索：扫描所有页面目录，按关键词匹配标题与正文。
 // 垂直切片阶段用最朴素的 includes 匹配，后续可替换为倒排索引或向量化检索。
 // query-workflow.ts 的 searchPages 工具与 /api/search 路由共用此实现（DRY）。
@@ -37,7 +100,6 @@ export async function searchPages(
 ): Promise<SearchHit[]> {
   const pageDirs = ['entities', 'concepts', 'comparisons', 'queries', 'qa', 'solutions'];
   const terms = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-  // 是否有前端过滤器活跃（source/status/type），允许空关键词场景
   const hasFilter = filter?.source || filter?.status || filter?.type;
   if (terms.length === 0 && !hasFilter) return [];
 
@@ -52,61 +114,11 @@ export async function searchPages(
       continue;
     }
     for (const f of entries) {
-      if (!f.endsWith('.md')) continue;
-      const rel = `${d}/${f}`;
-      let content = '';
-      try {
-        content = await vault.readFile(rel);
-      } catch {
-        continue;
-      }
-
-      // FR-12 scopeFilter：目录限定——跳过不在指定目录下的页面
-      // 为什么放最外层而非 hasFilter 内：folder 过滤是纯路径匹配，无需解析 frontmatter，性能更优
-      if (filter?.folder && !rel.startsWith(filter.folder + '/')) continue;
-
-      // 当 source/status/type/tags 过滤活跃时，解析 frontmatter 进行匹配
-      if (hasFilter || filter?.tags) {
-        const parsed = matter(content);
-        const fm = parsed.data;
-        if (filter?.source && fm.source !== filter.source) continue;
-        if (filter?.status && fm.status !== filter.status) continue;
-        // FR-15-3：type 过滤（大小写不敏感，与 SCHEMA.md 枚举对齐）
-        if (filter?.type && String(fm.type ?? '').toLowerCase() !== filter.type.toLowerCase()) continue;
-        // FR-12 tags 过滤：页面 frontmatter 必须包含至少一个指定 tag
-        if (filter?.tags && filter.tags.length > 0) {
-          const pageTags: string[] = Array.isArray(fm.tags) ? fm.tags : [];
-          const hasMatch = pageTags.some((t: string) => filter.tags!.includes(t));
-          if (!hasMatch) continue;
-        }
-        // 纯过滤模式（无关键词）：frontmatter 匹配即收录
-        if (terms.length === 0) {
-          const title = f.slice(0, -3);
-          const snippet = (parsed.content || content).slice(0, 120).replaceAll('\n', ' ');
-          results.push({ path: rel, title, snippet, hits: 1 });
-          continue;
-        }
-        // 有关键词 + 过滤器：继续用过滤后的内容做全文匹配
-        content = parsed.content;
-      }
-
-      const lower = content.toLowerCase();
-      // 任一关键词命中即收录，命中数越多排序越靠前
-      const hitCount = terms.filter((t) => lower.includes(t)).length;
-      if (hitCount === 0) continue;
-
-      const title = f.slice(0, -3);
-      // 摘要取首个关键词出现位置前后 60 字符
-      const firstIdx = lower.indexOf(terms[0]);
-      const start = Math.max(0, firstIdx - 30);
-      // 用 replaceAll 替代 replace+全局正则（S7781）
-      const snippet = content.slice(start, start + 120).replaceAll('\n', ' ');
-
-      results.push({ path: rel, title, snippet, hits: hitCount });
+      const hit = await processSearchFile(vault, `${d}/${f}`, d, f, terms, filter);
+      if (hit) results.push(hit);
     }
   }
 
-  // 命中数多的优先，同命中数按标题字典序
   results.sort((a, b) => {
     if (b.hits !== a.hits) return b.hits - a.hits;
     return a.title.localeCompare(b.title);

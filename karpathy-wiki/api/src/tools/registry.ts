@@ -95,11 +95,9 @@ function buildLazyMcpToolDefinition(
     handler: async (args: unknown, _ctx: unknown) => {
       try {
         // 保证并发调用不会重复连接 MCP 服务器
-        if (!connectedCache) {
-          connectedCache = resolveAndCallLazyTool(serverEntry, placeholder.name, mcpTimeoutMs, args)
+        connectedCache ??= resolveAndCallLazyTool(serverEntry, placeholder.name, mcpTimeoutMs, args)
             .then(() => {})
             .catch(() => { connectedCache = null; });
-        }
         const res = await resolveAndCallLazyTool(serverEntry, placeholder.name, mcpTimeoutMs, args);
         return res;
       } catch (err) {

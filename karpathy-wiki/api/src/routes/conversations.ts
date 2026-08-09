@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+﻿import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
@@ -107,9 +107,9 @@ export function registerConversationsRoute(
         if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
         return b.updatedAt.localeCompare(a.updatedAt);
       });
-      return reply.send({ conversations: summaries });
+      return void reply.send({ conversations: summaries });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -124,12 +124,12 @@ export function registerConversationsRoute(
       const { id } = request.params;
       const record = await readConversation(id);
       if (!record) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
       if (guards.enabled && (record.ownerId ?? null) !== (request.currentUser?.userId ?? null)) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
-      return reply.send({ conversation: record });
+      return void reply.send({ conversation: record });
     },
   );
 
@@ -141,11 +141,11 @@ export function registerConversationsRoute(
     async (request, reply) => {
       const { id } = request.params;
       if (!UUID_RE.test(id)) {
-        return reply.code(400).send({ error: '无效的会话 ID' });
+        return void reply.code(400).send({ error: '无效的会话 ID' });
       }
       const body = request.body as Partial<ConversationRecord>;
       if (!body) {
-        return reply.code(400).send({ error: '请求体为空' });
+        return void reply.code(400).send({ error: '请求体为空' });
       }
 
       // 服务端归属：auth 启用时用 currentUser.userId 盖章；单租户为 null。
@@ -171,10 +171,10 @@ export function registerConversationsRoute(
 
       try {
         await writeConversation(record);
-        return reply.send({ ok: true, conversation: record });
+        return void reply.send({ ok: true, conversation: record });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        return reply.code(500).send({ error: msg });
+        return void reply.code(500).send({ error: msg });
       }
     },
   );
@@ -187,27 +187,27 @@ export function registerConversationsRoute(
     async (request, reply) => {
       const { id } = request.params;
       if (!UUID_RE.test(id)) {
-        return reply.code(400).send({ error: '无效的会话 ID' });
+        return void reply.code(400).send({ error: '无效的会话 ID' });
       }
       const record = await readConversation(id);
       if (!record) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
       if (guards.enabled && (record.ownerId ?? null) !== (request.currentUser?.userId ?? null)) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
       const file = path.join(conversationsDir, `${id}.json`);
       try {
         await fs.unlink(file);
-        return reply.send({ ok: true });
+        return void reply.send({ ok: true });
       } catch (err: unknown) {
         // 文件不存在视为已删除
         const code = (err as NodeJS.ErrnoException).code;
         if (code === 'ENOENT') {
-          return reply.send({ ok: true });
+          return void reply.send({ ok: true });
         }
         const msg = err instanceof Error ? err.message : String(err);
-        return reply.code(500).send({ error: msg });
+        return void reply.code(500).send({ error: msg });
       }
     },
   );
@@ -221,14 +221,14 @@ export function registerConversationsRoute(
       const { id } = request.params;
       const record = await readConversation(id);
       if (!record) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
       if (guards.enabled && (record.ownerId ?? null) !== (request.currentUser?.userId ?? null)) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
       record.isPinned = !record.isPinned;
       await writeConversation(record);
-      return reply.send({ ok: true, isPinned: record.isPinned });
+      return void reply.send({ ok: true, isPinned: record.isPinned });
     },
   );
 
@@ -241,18 +241,18 @@ export function registerConversationsRoute(
       const { id } = request.params;
       const body = request.body as { title?: string };
       if (!body?.title?.trim()) {
-        return reply.code(400).send({ error: '标题不能为空' });
+        return void reply.code(400).send({ error: '标题不能为空' });
       }
       const record = await readConversation(id);
       if (!record) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
       if (guards.enabled && (record.ownerId ?? null) !== (request.currentUser?.userId ?? null)) {
-        return reply.code(404).send({ error: '会话不存在' });
+        return void reply.code(404).send({ error: '会话不存在' });
       }
       record.title = body.title.trim();
       await writeConversation(record);
-      return reply.send({ ok: true, title: record.title });
+      return void reply.send({ ok: true, title: record.title });
     },
   );
 }

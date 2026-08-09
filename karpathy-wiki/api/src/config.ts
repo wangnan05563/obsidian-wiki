@@ -7,7 +7,7 @@ import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 // 路径解析统一走 runtime.ts，兼容开发模式（api/config.json）与 SEA 模式（exe/config.json）
 // 为什么移除 fileURLToPath + import.meta.url：SEA 模式下 __filename 指向构建时 bundle.cjs，
 // 用户机器不存在，派生的 API_SRC_DIR 不可用，导致 config.json 加载失败
-import { getResourcePath, getUserDataPath, getUserDataDir, IS_SEA } from './utils/runtime.js';
+import { getUserDataPath, getUserDataDir, IS_SEA } from './utils/runtime.js';
 
 // 配置文件名。路径解析见 getConfigPath()
 const CONFIG_FILENAME = 'config.json';
@@ -260,6 +260,74 @@ interface ConfigCache {
 const configCache: ConfigCache = { data: null, path: null, loadedAt: 0 };
 const CONFIG_CACHE_TTL_MS = 30 * 1000; // 30秒缓存
 
+// 合并嵌套配置对象，避免下层数据丢失。
+// 提取为独立函数以降低 loadConfig 的认知复杂度（S3776）。
+function mergeConfigObjects(defaults: AppConfig, parsed: Partial<AppConfig>): AppConfig {
+  return {
+    ...defaults,
+    ...parsed,
+    llm: { ...defaults.llm, ...parsed.llm },
+    budget: { ...defaults.budget, ...parsed.budget },
+    server: { ...defaults.server, ...parsed.server },
+    healthCheck: { ...defaults.healthCheck, ...parsed.healthCheck },
+    tunnel: { ...defaults.tunnel, ...parsed.tunnel },
+    // 为什么用条件合并而非展开：parsed.logging 是可选的，展开后 level 会变成 string | undefined
+    logging: parsed.logging
+      ? { ...defaults.logging, ...parsed.logging }
+      : defaults.logging,
+    // §5.2 webSearch 合并：parsed.webSearch 可选，未配置时用默认值（含空 apiKey）
+    webSearch: parsed.webSearch
+      ? { ...defaults.webSearch, ...parsed.webSearch }
+      : defaults.webSearch,
+    // 批量编译配置合并：parsed.batch 可选，未配置时用默认值
+    batch: parsed.batch
+      ? { ...(defaults.batch ?? DEFAULT_BATCH_FALLBACK), ...parsed.batch }
+      : defaults.batch,
+    // RBAC auth 配置合并：parsed.auth 可选，未配置时用默认值
+    auth: parsed.auth
+      ? { ...defaults.auth, ...parsed.auth }
+      : defaults.auth,
+    // QQ 导入子系统配置合并：parsed.qq 可选，未配置时用默认值
+    qq: parsed.qq && defaults.qq
+      ? {
+          ...defaults.qq,
+          ...parsed.qq,
+          noise_rules: { ...defaults.qq.noise_rules, ...parsed.qq.noise_rules },
+          privacy_patterns: { ...defaults.qq.privacy_patterns, ...parsed.qq.privacy_patterns },
+        }
+      : defaults.qq,
+    // URL 爬取子系统配置合并：parsed.urlCrawl 可选，未配置时用默认值
+    urlCrawl: parsed.urlCrawl
+      ? { ...defaults.urlCrawl, ...parsed.urlCrawl }
+      : defaults.urlCrawl,
+    // FR-13-2 OCR 配置合并：parsed.ocr 可选，未配置时为 undefined（resolveOcrConfig 会回退到 llm）
+    ocr: parsed.ocr
+      ? { ...defaults.ocr, ...parsed.ocr }
+      : defaults.ocr,
+    // FR-09-3 Podcast 配置合并：parsed.podcast 可选，未配置时为 undefined
+    podcast: parsed.podcast
+      ? { ...defaults.podcast, ...parsed.podcast }
+      : defaults.podcast,
+    // v3 媒体生成配置合并：parsed.media 可选，未配置时用默认值
+    media: parsed.media && defaults.media
+      ? { agnes: { ...defaults.media.agnes, ...parsed.media.agnes } }
+      : defaults.media,
+    // 会话持久化配置合并：parsed.sessionPersistence 可选，未配置时用默认值
+    sessionPersistence: parsed.sessionPersistence && defaults.sessionPersistence
+      ? {
+          threadsPersist:
+            parsed.sessionPersistence.threadsPersist ?? defaults.sessionPersistence.threadsPersist,
+          conversationsPersist:
+            parsed.sessionPersistence.conversationsPersist ?? defaults.sessionPersistence.conversationsPersist,
+        }
+      : defaults.sessionPersistence,
+    // 上下文记忆治理配置合并：parsed.contextGovernor 可选，未配置时用默认值（开启）
+    contextGovernor: parsed.contextGovernor && defaults.contextGovernor
+      ? { ...defaults.contextGovernor, ...parsed.contextGovernor }
+      : defaults.contextGovernor,
+  };
+}
+
 // 从 config.json 加载配置，合并默认值。
 // apiKeyRef 仅存环境变量名，API Key 在使用方通过 process.env[apiKeyRef] 读取（M-7）。
 export async function loadConfig(): Promise<AppConfig> {
@@ -300,146 +368,12 @@ export async function loadConfig(): Promise<AppConfig> {
   }
 
   // 浅合并嵌套对象，避免下层数据丢失
-  const merged = {
-    ...defaults,
-    ...parsed,
-    llm: { ...defaults.llm, ...parsed.llm },
-    budget: { ...defaults.budget, ...parsed.budget },
-    server: { ...defaults.server, ...parsed.server },
-    healthCheck: { ...defaults.healthCheck, ...parsed.healthCheck },
-    tunnel: { ...defaults.tunnel, ...parsed.tunnel },
-    // 为什么用条件合并而非展开：parsed.logging 是可选的，展开后 level 会变成 string | undefined
-    logging: parsed.logging
-      ? { ...defaults.logging, ...parsed.logging }
-      : defaults.logging,
-    // §5.2 webSearch 合并：parsed.webSearch 可选，未配置时用默认值（含空 apiKey）
-    // 为什么用 ?? 而非 !：避免可选字段被 undefined 覆盖（BR-028-1）
-    webSearch: parsed.webSearch
-      ? { ...defaults.webSearch, ...parsed.webSearch }
-      : defaults.webSearch,
-    // 批量编译配置合并：parsed.batch 可选，未配置时用默认值
-    // 为什么用 ?? 而非 !：避免可选字段被 undefined 覆盖（BR-028-1）
-    batch: parsed.batch
-      ? { ...(defaults.batch ?? DEFAULT_BATCH_FALLBACK), ...parsed.batch }
-      : defaults.batch,
-    // RBAC auth 配置合并：parsed.auth 可选，未配置时用默认值
-    // 为什么独立合并：auth 是嵌套对象，浅合并会丢失下层字段
-    auth: parsed.auth
-      ? { ...defaults.auth, ...parsed.auth }
-      : defaults.auth,
-    // QQ 导入子系统配置合并：parsed.qq 可选，未配置时用默认值
-    // 为什么独立合并：qq 是嵌套对象（noise_rules/privacy_patterns），浅合并会丢失下层字段
-    // 为什么用条件合并而非展开：parsed.qq.noise_rules 可能部分启用，需保留默认全开基础上覆盖
-    // 为什么加 defaults.qq 守卫：defaultConfig() 实际总返回 qq 非空，
-    // 但 TS 推断 AppConfig.qq 为可选（QqConfig | undefined），守卫后可省略 ?. 且无需 ! 断言（BR-028-1/2）
-    qq: parsed.qq && defaults.qq
-      ? {
-          ...defaults.qq,
-          ...parsed.qq,
-          noise_rules: { ...defaults.qq.noise_rules, ...parsed.qq.noise_rules },
-          privacy_patterns: { ...defaults.qq.privacy_patterns, ...parsed.qq.privacy_patterns },
-        }
-      : defaults.qq,
-    // URL 爬取子系统配置合并：parsed.urlCrawl 可选，未配置时用默认值
-    // 为什么独立合并：urlCrawl 含数组字段（allowedAttachmentTypes），浅合并会丢失默认值
-    urlCrawl: parsed.urlCrawl
-      ? { ...defaults.urlCrawl, ...parsed.urlCrawl }
-      : defaults.urlCrawl,
-    // FR-13-2 OCR 配置合并：parsed.ocr 可选，未配置时为 undefined（resolveOcrConfig 会回退到 llm）
-    ocr: parsed.ocr
-      ? { ...defaults.ocr, ...parsed.ocr }
-      : defaults.ocr,
-    // FR-09-3 Podcast 配置合并：parsed.podcast 可选，未配置时为 undefined
-    podcast: parsed.podcast
-      ? { ...defaults.podcast, ...parsed.podcast }
-      : defaults.podcast,
-    // v3 媒体生成配置合并：parsed.media 可选，未配置时用默认值
-    // 为什么独立合并：media.agnes 是嵌套对象，浅合并会让用户部分配置覆盖整个默认段
-    media: parsed.media && defaults.media
-      ? {
-          agnes: { ...defaults.media.agnes, ...parsed.media.agnes },
-        }
-      : defaults.media,
-    // 会话持久化配置合并：parsed.sessionPersistence 可选，未配置时用默认值（均为 false，服务端不落盘会话）
-    // 为什么独立合并：嵌套对象，浅合并会丢失 threadsPersist/conversationsPersist 下层字段
-    sessionPersistence: parsed.sessionPersistence && defaults.sessionPersistence
-      ? {
-          threadsPersist:
-            parsed.sessionPersistence.threadsPersist ?? defaults.sessionPersistence.threadsPersist,
-          conversationsPersist:
-            parsed.sessionPersistence.conversationsPersist ?? defaults.sessionPersistence.conversationsPersist,
-        }
-      : defaults.sessionPersistence,
-    // 上下文记忆治理配置合并：parsed.contextGovernor 可选，未配置时用默认值（开启）
-    // 为什么用条件合并：contextGovernor 是嵌套对象（含 maxTokens/warnRatio 等），浅合并会丢失下层字段
-    contextGovernor: parsed.contextGovernor && defaults.contextGovernor
-      ? { ...defaults.contextGovernor, ...parsed.contextGovernor }
-      : defaults.contextGovernor,
-  };
+  const merged = mergeConfigObjects(defaults, parsed);
 
-  // SEA 模式：把可写数据路径收敛到用户数据目录，避免落到 exe 同级（Program Files 不可写/卸载清除）
-  // 为什么整体归一化：defaultConfig 中 vaultPath/auth/urlCrawl 等默认是相对路径（开发模式相对 api/），
-  //   SEA 模式下这些相对基准（CWD）不可靠，必须改写为用户数据根目录下的绝对路径。
-  // 绝对路径保留：尊重用户在配置中显式指定的绝对路径（如自定义 vault 位置）。
+  // SEA 模式路径重写与首次落盘（提取为独立函数降低 loadConfig 认知复杂度）
   if (IS_SEA) {
-    const dataDir = path.join(getUserDataDir(), 'data');
-    const rebase = (p: string | undefined, fallback: string): string =>
-      !p || path.isAbsolute(p) ? (p ?? fallback) : path.join(dataDir, fallback);
-
-    merged.vaultPath = rebase(merged.vaultPath, 'vault');
-    if (merged.auth) {
-      merged.auth.usersFilePath = rebase(merged.auth.usersFilePath, 'users.json');
-      merged.auth.auditLogPath = rebase(merged.auth.auditLogPath, 'audit.log');
-    }
-    if (merged.urlCrawl) {
-      if (merged.urlCrawl.logging) {
-        merged.urlCrawl.logging.logFilePath = rebase(merged.urlCrawl.logging.logFilePath, 'url-crawl.log');
-      }
-      merged.urlCrawl.incrementalStatePath = rebase(merged.urlCrawl.incrementalStatePath, 'url-crawl-state.json');
-    }
-    // 日志文件默认空串（不落盘）；若用户自定义相对路径，同样收敛到用户数据目录避免 Program Files 无权限
-    if (merged.logging) {
-      merged.logging.logFilePath = rebase(merged.logging.logFilePath, 'api.log');
-    }
-  }
-
-  // SEA 首次运行：若用户数据目录尚无 config.json，落盘默认配置，便于用户编辑且保持行为一致
-  // 为什么只在 SEA：开发模式保持不自动生成文件的最小惊讶原则
-  // 为什么写"干净默认"而非 merged：merged 已被 SEA rebase 成机器相关的绝对路径
-  //   （如 C:\Users\xxx\AppData\Local\KarpathyWiki\data\vault），固化进 config.json 会降低可移植性
-  //   （换机/漫游配置会失效）。这些路径每次启动都会由 loadConfig 的 SEA rebase 块重新派生，
-  //   因此落盘时把派生字段回退为相对默认值，配置保持可移植且单一真相源。
-  if (IS_SEA && !fsSync.existsSync(API_CONFIG_PATH)) {
-    try {
-      const defaults = defaultConfig();
-      const portable: AppConfig = {
-        ...merged,
-        vaultPath: defaults.vaultPath,
-        auth: merged.auth
-          ? {
-              ...merged.auth,
-              usersFilePath: defaults.auth?.usersFilePath ?? merged.auth.usersFilePath,
-              auditLogPath: defaults.auth?.auditLogPath ?? merged.auth.auditLogPath,
-            }
-          : merged.auth,
-        urlCrawl: merged.urlCrawl
-          ? {
-              ...merged.urlCrawl,
-              logging: {
-                ...merged.urlCrawl.logging,
-                logFilePath: defaults.urlCrawl?.logging?.logFilePath ?? merged.urlCrawl.logging?.logFilePath,
-              },
-              incrementalStatePath: defaults.urlCrawl?.incrementalStatePath ?? merged.urlCrawl.incrementalStatePath,
-            }
-          : merged.urlCrawl,
-        logging: merged.logging
-          ? { ...merged.logging, logFilePath: defaults.logging?.logFilePath ?? merged.logging.logFilePath }
-          : merged.logging,
-      };
-      await fs.writeFile(API_CONFIG_PATH, JSON.stringify(portable, null, 2), 'utf8');
-    } catch {
-      // 落盘失败不阻断启动，应用退化为内存默认值
-    }
+    applySeaRebase(merged);
+    await writeSeaDefaultsIfNeeded(merged);
   }
 
   // 写入缓存
@@ -464,6 +398,68 @@ function refreshConfigCache(data: AppConfig): void {
   configCache.data = data;
   configCache.path = getConfigPath();
   configCache.loadedAt = Date.now();
+}
+
+// SEA 模式路径重写：把可写数据路径收敛到用户数据目录，避免落到 exe 同级（Program Files 不可写/卸载清除）
+// 为什么整体归一化：defaultConfig 中 vaultPath/auth/urlCrawl 等默认是相对路径（开发模式相对 api/），
+//   SEA 模式下这些相对基准（CWD）不可靠，必须改写为用户数据根目录下的绝对路径。
+// 绝对路径保留：尊重用户在配置中显式指定的绝对路径（如自定义 vault 位置）。
+function applySeaRebase(merged: AppConfig): void {
+  const dataDir = path.join(getUserDataDir(), 'data');
+  const rebase = (p: string | undefined, fallback: string): string =>
+    !p || path.isAbsolute(p) ? (p ?? fallback) : path.join(dataDir, fallback);
+
+  merged.vaultPath = rebase(merged.vaultPath, 'vault');
+  if (merged.auth) {
+    merged.auth.usersFilePath = rebase(merged.auth.usersFilePath, 'users.json');
+    merged.auth.auditLogPath = rebase(merged.auth.auditLogPath, 'audit.log');
+  }
+  if (merged.urlCrawl) {
+    if (merged.urlCrawl.logging) {
+      merged.urlCrawl.logging.logFilePath = rebase(merged.urlCrawl.logging.logFilePath, 'url-crawl.log');
+    }
+    merged.urlCrawl.incrementalStatePath = rebase(merged.urlCrawl.incrementalStatePath, 'url-crawl-state.json');
+  }
+  if (merged.logging) {
+    merged.logging.logFilePath = rebase(merged.logging.logFilePath, 'api.log');
+  }
+}
+
+// SEA 首次运行：若用户数据目录尚无 config.json，落盘默认配置，便于用户编辑且保持行为一致
+// 为什么只在 SEA：开发模式保持不自动生成文件的最小惊讶原则
+// 为什么写"干净默认"而非 merged：merged 已被 SEA rebase 成机器相关的绝对路径，固化进 config.json 会降低可移植性
+async function writeSeaDefaultsIfNeeded(merged: AppConfig): Promise<void> {
+  if (fsSync.existsSync(API_CONFIG_PATH)) return;
+  try {
+    const defaults = defaultConfig();
+    const portable: AppConfig = {
+      ...merged,
+      vaultPath: defaults.vaultPath,
+      auth: merged.auth
+        ? {
+            ...merged.auth,
+            usersFilePath: defaults.auth?.usersFilePath ?? merged.auth.usersFilePath,
+            auditLogPath: defaults.auth?.auditLogPath ?? merged.auth.auditLogPath,
+          }
+        : merged.auth,
+      urlCrawl: merged.urlCrawl
+        ? {
+            ...merged.urlCrawl,
+            logging: {
+              ...merged.urlCrawl.logging,
+              logFilePath: defaults.urlCrawl?.logging?.logFilePath ?? merged.urlCrawl.logging?.logFilePath,
+            },
+            incrementalStatePath: defaults.urlCrawl?.incrementalStatePath ?? merged.urlCrawl.incrementalStatePath,
+          }
+        : merged.urlCrawl,
+      logging: merged.logging
+        ? { ...merged.logging, logFilePath: defaults.logging?.logFilePath ?? merged.logging.logFilePath }
+        : merged.logging,
+    };
+    await fs.writeFile(API_CONFIG_PATH, JSON.stringify(portable, null, 2), 'utf8');
+  } catch {
+    // 落盘失败不阻断启动，应用退化为内存默认值
+  }
 }
 
 // 保存 AI 配置到 config.json（部分更新，仅合并 llm 字段）。
@@ -578,7 +574,7 @@ export function maskApiKey(key: string): string {
   if (!key || key.length < 4) {
     return key ? '****' : '';
   }
-  return '****' + key.slice(-4);
+  return `****${key.slice(-4)}`;
 }
 
 // 恢复 LLM 配置到出厂默认值（defaultConfig 中的 llm 字段）。

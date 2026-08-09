@@ -33,14 +33,14 @@ function normalizeTitle(title: string): string[] {
   // 提取括号内英文别名（中英文同实体场景）
   const aliasMatch = lower.match(/\(([^)]+)\)/) || lower.match(/（([^)]+)）/);
   if (aliasMatch) {
-    const alias = aliasMatch[1].replace(/[()（）\-—::]/g, ' ').replace(/\s+/g, ' ').trim();
+    const alias = aliasMatch[1].replace(/[()（）\-—:]/g, ' ').replace(/\s+/g, ' ').trim();
     if (alias) keys.push(alias);
   }
   // 主名称：去括号及括号内内容，再去标点
   const main = lower
     .replace(/\([^)]+\)/g, ' ')
     .replace(/（[^）]+）/g, ' ')
-    .replace(/[()（）\-—::]/g, ' ')
+    .replace(/[()（）\-—:]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (main) keys.push(main);
@@ -141,7 +141,7 @@ export class VaultService {
   // 文件内容二级缓存（P2-7 inode 缓存）
   // 为什么需要：listAllPages/healthCheck 等多次 readFile 同一文件，stat 比 readFile 快 10-100 倍
   // 失效策略：chokidar 监听文件变化 + writeFile 时主动清除
-  private _fileContentCache = new Map<string, { mtime: number; content: string }>();
+  private readonly _fileContentCache = new Map<string, { mtime: number; content: string }>();
   private _fileWatcher: FSWatcher | null = null;
 
   // pending tags 结果缓存（P3-2）：避免 /api/tags/pending 每次请求都全量扫描
@@ -389,7 +389,7 @@ export class VaultService {
     try {
       const existing = await this.readFile('index.md');
       // 转义 pageName 中的正则元字符，防止注入
-      const escaped = pageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = pageName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
       const dupRe = new RegExp(`^- \\[\\[${escaped}\\]\\]`, 'm');
       if (dupRe.test(existing)) {
         return { ok: true, skipped: true };
@@ -686,9 +686,22 @@ export class VaultService {
       files.map((f) => ({ dir, file: f, rel: `${dir}/${f}` })),
     );
 
-    // 第 3 步：分批并行读取 + 解析 frontmatter（P3-3）
-    // 为什么分批：Promise.all 同时发起 1055 个 readFile 会耗尽 libuv 线程池（默认 4 个），
-    //   每批 50 个既能利用并行，又避免事件循环阻塞 + Windows Defender 实时扫描放大延迟
+    // 第 3 步：分批并行读取 + 解析 frontmatter（提取为独立函数降低 listPendingTagPages 认知复杂度）
+    const parsedResults = await this.batchParsePendingTags(allFiles);
+
+    // 第 4 步：过滤 + 写缓存
+    const result = parsedResults.filter((p): p is PendingTagPage => p !== null);
+    this._pendingTagsCache = result;
+    this._pendingTagsCachedAt = Date.now();
+    return result;
+  }
+
+  // 分批并行读取文件的 frontmatter，提取 ai_tags 字段（P3-3）
+  // 提取为独立函数降低 listPendingTagPages 认知复杂度（S3776）
+  // 为什么分批：Promise.all 同时发起 1055 个 readFile 会耗尽 libuv 线程池（默认 4 个）
+  private async batchParsePendingTags(
+    allFiles: Array<{ dir: string; file: string; rel: string }>,
+  ): Promise<(PendingTagPage | null)[]> {
     const BATCH_SIZE = 50;
     const parsedResults: (PendingTagPage | null)[] = [];
     for (let i = 0; i < allFiles.length; i += BATCH_SIZE) {
@@ -698,9 +711,9 @@ export class VaultService {
           try {
             const raw = await this.readFile(rel);
             const m = matter(raw);
-            const aiTags = Array.isArray(m.data.ai_tags) ? (m.data.ai_tags as string[]) : [];
+            const aiTags = ensureStringArray(m.data.ai_tags);
             if (aiTags.length === 0) return null;
-            const existingTags = Array.isArray(m.data.tags) ? (m.data.tags as string[]) : [];
+            const existingTags = ensureStringArray(m.data.tags);
             const title = typeof m.data.title === 'string' ? m.data.title : file.slice(0, -3);
             return { path: rel, title, aiTags, existingTags };
           } catch {
@@ -710,11 +723,11 @@ export class VaultService {
       );
       parsedResults.push(...batchResults);
     }
-
-    // 第 4 步：过滤 + 写缓存
-    const result = parsedResults.filter((p): p is PendingTagPage => p !== null);
-    this._pendingTagsCache = result;
-    this._pendingTagsCachedAt = Date.now();
-    return result;
+    return parsedResults;
   }
+}
+
+/** 安全地将 unknown 值转为 string[]，过滤非字符串元素 */
+function ensureStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }

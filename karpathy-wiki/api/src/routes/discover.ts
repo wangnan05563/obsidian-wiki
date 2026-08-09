@@ -1,4 +1,4 @@
-// Discover Sources 推荐路由（FR-16-1）
+﻿// Discover Sources 推荐路由（FR-16-1）
 //
 // 注册 2 个端点：
 //   GET  /api/discover/recommend  - 列出与指定页面拓扑相关但未双链的页面
@@ -25,16 +25,16 @@ export function registerDiscoverRoute(app: FastifyInstance, vault: VaultService)
     const query = req.query as { pagePath?: string } | null;
     const pagePath = query?.pagePath ?? '';
     if (!VAULT_PAGE_PATTERN.test(pagePath)) {
-      return reply.code(400).send({
+      reply.code(400).send({
         error: 'Invalid pagePath: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
       });
     }
 
     try {
       const recommendations = await recommendPages(vault, pagePath);
-      return reply.send({ pagePath, recommendations });
+      return void reply.send({ pagePath, recommendations });
     } catch (err) {
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -50,21 +50,21 @@ export function registerDiscoverRoute(app: FastifyInstance, vault: VaultService)
     const targetPath = body?.targetPath ?? '';
 
     if (!VAULT_PAGE_PATTERN.test(sourcePath)) {
-      return reply.code(400).send({
+      reply.code(400).send({
         error: 'Invalid sourcePath: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
       });
     }
     if (!VAULT_PAGE_PATTERN.test(targetPath)) {
-      return reply.code(400).send({
+      reply.code(400).send({
         error: 'Invalid targetPath: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
       });
     }
 
     try {
       const result = await createBidirectionalLink(vault, sourcePath, targetPath);
-      return reply.send({ sourcePath, targetPath, ...result });
+      return void reply.send({ sourcePath, targetPath, ...result });
     } catch (err) {
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 }

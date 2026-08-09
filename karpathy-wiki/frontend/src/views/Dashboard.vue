@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, computed, markRaw } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Aim, Connection, CaretTop, Star, Clock } from '@element-plus/icons-vue';
@@ -37,7 +37,7 @@ const hasContent = computed(() => (stats.value?.totalPages ?? 0) > 0);
 async function loadStats() {
   loading.value = true;
   try {
-    const res = await fetch(`${API_BASE}/stats`);
+    const res = await apiFetch(`${API_BASE}/stats`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     stats.value = await res.json();
   } catch (err) {
@@ -62,7 +62,7 @@ async function loadRuns() {
 async function initVault() {
   initializing.value = true;
   try {
-    const res = await fetch(`${API_BASE}/vault/init`, { method: 'POST' });
+    const res = await apiFetch(`${API_BASE}/vault/init`, { method: 'POST' });
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || `HTTP ${res.status}`);

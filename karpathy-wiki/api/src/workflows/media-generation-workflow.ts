@@ -7,7 +7,6 @@
 // 为什么视频走独立端点：视频生成需数分钟，超出 query SSE 60 秒超时
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';

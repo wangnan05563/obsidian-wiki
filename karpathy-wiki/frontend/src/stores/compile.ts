@@ -1,4 +1,4 @@
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type {
@@ -675,7 +675,7 @@ export const useCompileStore = defineStore('compile', () => {
   async function loadRuns() {
     loadingRuns.value = true;
     try {
-      const res = await fetch(`${API_BASE}/compile/runs`);
+      const res = await apiFetch(`${API_BASE}/compile/runs`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       runs.value = data.runs ?? [];
@@ -690,7 +690,7 @@ export const useCompileStore = defineStore('compile', () => {
   async function loadLog(runId: string) {
     loadingLog.value = true;
     try {
-      const res = await fetch(`${API_BASE}/compile/runs/${runId}/log`);
+      const res = await apiFetch(`${API_BASE}/compile/runs/${runId}/log`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       logEntries.value = data.entries ?? [];

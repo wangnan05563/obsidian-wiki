@@ -69,7 +69,7 @@ export function registerAiRoute(
     const apiKey = getEffectiveApiKey(config);
     const maskedKey = maskApiKey(apiKey);
 
-    return reply.send({
+    return void reply.send({
       provider: config.llm.provider,
       baseUrl: config.llm.baseUrl,
       model: config.llm.model,
@@ -85,8 +85,41 @@ export function registerAiRoute(
 
   // GET /api/ai/presets：返回 LLM 预设列表，供前端渲染快捷选择按钮。
   app.get('/api/ai/presets', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
-    return reply.send({ presets: LLM_PRESETS });
+    return void reply.send({ presets: LLM_PRESETS });
   });
+
+  // 脱敏 API Key：**** 开头表示前端回传的脱敏值，视为未修改
+  function sanitizeApiKey(raw: string | undefined): string | undefined {
+    if (raw === undefined) return undefined;
+    return raw.startsWith('****') ? undefined : raw;
+  }
+
+  // 同步 adapter 运行时实例，避免切换预设后 baseUrl/model 不匹配
+  function syncAdapterConfig(
+    adapter: EngineAdapter | undefined,
+    merged: Awaited<ReturnType<typeof saveAiConfig>>,
+    activeSkill?: string,
+  ): void {
+    if (!adapter || !Object.hasOwn(adapter, 'updateConfig') || typeof adapter.updateConfig !== 'function') return;
+    const effectiveKey = getEffectiveApiKey(merged);
+    const skillUpdates: Record<string, unknown> = {
+      provider: merged.llm.provider,
+      baseUrl: merged.llm.baseUrl,
+      model: merged.llm.model,
+      apiKey: effectiveKey,
+    };
+    if (activeSkill !== undefined) {
+      skillUpdates.activeSkill = activeSkill || '';
+      const activePreset = merged.skills?.find((s) => s.id === activeSkill);
+      skillUpdates.systemPrompt = activePreset?.systemPrompt ?? '';
+      skillUpdates.scope = activePreset?.scope ?? 'all';
+      skillUpdates.outputFormat = activePreset?.outputFormat ?? '';
+      if (activePreset?.model) {
+        skillUpdates.model = activePreset.model;
+      }
+    }
+    adapter.updateConfig(skillUpdates as Parameters<typeof adapter.updateConfig>[0]);
+  }
 
   // PUT /api/ai/config：保存 AI 配置到 config.json。
   // apiKey 处理逻辑：
@@ -113,26 +146,11 @@ export function registerAiRoute(
     };
 
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
     }
 
-    // 脱敏值检测：**** 开头表示前端回传的脱敏值，视为未修改
-    let apiKey: string | undefined;
-    if (body.apiKey !== undefined) {
-      if (body.apiKey.startsWith('****')) {
-        apiKey = undefined; // 不修改
-      } else {
-        apiKey = body.apiKey; // 新值或空串（清除）
-      }
-    }
-
-    const updates: {
-      provider?: string;
-      baseUrl?: string;
-      model?: string;
-      apiKey?: string;
-      apiKeyRef?: string;
-    } = {};
+    const apiKey = sanitizeApiKey(body.apiKey);
+    const updates: Record<string, string | undefined> = {};
     if (body.provider !== undefined) updates.provider = body.provider;
     if (body.baseUrl !== undefined) updates.baseUrl = body.baseUrl;
     if (body.model !== undefined) updates.model = body.model;
@@ -140,39 +158,18 @@ export function registerAiRoute(
     if (body.apiKeyRef !== undefined) updates.apiKeyRef = body.apiKeyRef;
 
     try {
-      const merged = await saveAiConfig(updates);
+      const merged = await saveAiConfig(updates as Parameters<typeof saveAiConfig>[0]);
       const effectiveKey = getEffectiveApiKey(merged);
 
-      // FR-12 skills 持久化与热加载：如果请求含 skills，直接写入 config.json 并更新内存
+      // FR-12 skills 持久化与热加载
       if (body.skills !== undefined || body.activeSkill !== undefined) {
         const cfg = await saveSkillsConfig(body.skills, body.activeSkill);
         merged.skills = cfg.skills;
         merged.activeSkill = cfg.activeSkill;
       }
 
-      // 落盘后同步 adapter 运行时实例，避免切换预设后 baseUrl/model 不匹配导致 400
-      if (adapter && typeof adapter.updateConfig === 'function') {
-        const skillUpdates: Record<string, unknown> = {
-          provider: merged.llm.provider,
-          baseUrl: merged.llm.baseUrl,
-          model: merged.llm.model,
-          apiKey: effectiveKey,
-        };
-        // FR-12: 切换 AI 伙伴时同步更新 adapter
-        if (body.activeSkill !== undefined) {
-          skillUpdates.activeSkill = body.activeSkill || '';
-          const activePreset = merged.skills?.find((s) => s.id === body.activeSkill);
-          skillUpdates.systemPrompt = activePreset?.systemPrompt ?? '';
-          skillUpdates.scope = activePreset?.scope ?? 'all';
-          skillUpdates.outputFormat = activePreset?.outputFormat ?? '';
-          // 伙伴预设中指定了 model 时覆盖全局 model
-          if (activePreset?.model) {
-            skillUpdates.model = activePreset.model;
-          }
-        }
-        adapter.updateConfig(skillUpdates as Parameters<typeof adapter.updateConfig>[0]);
-      }
-      return reply.send({
+      syncAdapterConfig(adapter, merged, body.activeSkill);
+      return void reply.send({
         ok: true,
         config: {
           provider: merged.llm.provider,
@@ -182,14 +179,13 @@ export function registerAiRoute(
           apiKeyMasked: maskApiKey(effectiveKey),
           apiKeySet: Boolean(effectiveKey),
           providerKeyStatus: getProviderKeyStatus(merged),
-          // FR-12
           skills: merged.skills ?? [],
           activeSkill: merged.activeSkill ?? '',
         },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ error: msg });
+      return void reply.code(500).send({ error: msg });
     }
   });
 
@@ -209,7 +205,7 @@ export function registerAiRoute(
           apiKey: effectiveKey,
         });
       }
-      return reply.send({
+      return void reply.send({
         ok: true,
         config: {
           provider: merged.llm.provider,
@@ -223,7 +219,7 @@ export function registerAiRoute(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ error: msg });
+      return void reply.code(500).send({ error: msg });
     }
   });
 
@@ -251,7 +247,7 @@ export function registerAiRoute(
     }
 
     if (!apiKey && !baseUrl.includes('localhost')) {
-      return reply.send({
+      return void reply.send({
         ok: false,
         detail: 'API Key 未设置，请先配置 API Key 或设置环境变量 ' + config.llm.apiKeyRef,
       });
@@ -279,11 +275,11 @@ export function registerAiRoute(
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        return reply.send({ ok: false, detail: formatHttpError(res.status, errText) });
+        return void reply.send({ ok: false, detail: formatHttpError(res.status, errText) });
       }
 
       const data = await res.json();
-      return reply.send({
+      return void reply.send({
         ok: true,
         model: data.model || model,
         detail: '连接成功',
@@ -294,7 +290,7 @@ export function registerAiRoute(
       const detail = err instanceof Error && err.name === 'AbortError'
         ? '连接超时（>15s），请检查 baseUrl 或网络'
         : msg;
-      return reply.send({ ok: false, detail });
+      return void reply.send({ ok: false, detail });
     } finally {
       clearTimeout(timeout);
     }
@@ -306,11 +302,11 @@ export function registerAiRoute(
     const config = await loadConfig();
     const ws = config.webSearch;
     if (!ws) {
-      return reply.send({ enabled: false });
+      return void reply.send({ enabled: false });
     }
     // 实际生效的 apiKey 优先级：config.json.webSearch.apiKey > process.env[apiKeyRef]
     const effectiveKey = ws.apiKey || process.env[ws.apiKeyRef] || '';
-    return reply.send({
+    return void reply.send({
       enabled: true,
       provider: ws.provider,
       apiKeyRef: ws.apiKeyRef,
@@ -331,7 +327,7 @@ export function registerAiRoute(
     };
 
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
     }
 
     try {
@@ -346,7 +342,7 @@ export function registerAiRoute(
       if (adapter && typeof adapter.updateConfig === 'function') {
         adapter.updateConfig({ webSearchConfig: ws } as { webSearchConfig: typeof ws });
       }
-      return reply.send({
+      return void reply.send({
         ok: true,
         config: {
           provider: ws.provider,
@@ -358,7 +354,7 @@ export function registerAiRoute(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ error: msg });
+      return void reply.code(500).send({ error: msg });
     }
   });
 }

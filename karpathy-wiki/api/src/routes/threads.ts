@@ -30,7 +30,7 @@ import { createIsolationGuards } from '../middleware/auth.js';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function badId(reply: FastifyReply, id: string) {
-  return reply.code(400).send({ error: `非法的 threadId: ${id}` });
+  return void reply.code(400).send({ error: `非法的 threadId: ${id}` });
 }
 
 export function registerThreadsRoute(
@@ -62,7 +62,7 @@ export function registerThreadsRoute(
   app.post('/api/threads', { preHandler: guards.requireAuth }, async (request, reply) => {
     const body = (request.body ?? {}) as { title?: string };
     const thread = await store.createThread({ title: body.title, owner: ownerIdOf(request) });
-    return reply.send({ thread });
+    return void reply.send({ thread });
   });
 
   // 列出线程摘要（按归属过滤：auth 启用时仅返回本人线程）
@@ -70,7 +70,7 @@ export function registerThreadsRoute(
     const threads = await store.listThreads();
     const owner = ownerIdOf(request);
     const visible = guards.enabled ? threads.filter((t) => (t.ownerId ?? null) === owner) : threads;
-    return reply.send({ threads: visible });
+    return void reply.send({ threads: visible });
   });
 
   // 读取完整线程
@@ -79,8 +79,8 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     const full = await store.getThreadFull(id);
-    if (!full) return reply.code(404).send({ error: '线程不存在' });
-    return reply.send({ thread: full });
+    if (!full) return void reply.code(404).send({ error: '线程不存在' });
+    return void reply.send({ thread: full });
   });
 
   // 删除线程（连同会话与记忆）
@@ -89,7 +89,7 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     await store.deleteThread(id);
-    return reply.send({ ok: true });
+    return void reply.send({ ok: true });
   });
 
   // 重命名
@@ -98,10 +98,10 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     const body = request.body as { title?: string };
-    if (!body?.title?.trim()) return reply.code(400).send({ error: '标题不能为空' });
+    if (!body?.title?.trim()) return void reply.code(400).send({ error: '标题不能为空' });
     const meta = await store.renameThread(id, body.title);
-    if (!meta) return reply.code(404).send({ error: '线程不存在' });
-    return reply.send({ ok: true, title: meta.title });
+    if (!meta) return void reply.code(404).send({ error: '线程不存在' });
+    return void reply.send({ ok: true, title: meta.title });
   });
 
   // 切换置顶
@@ -110,8 +110,8 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     const meta = await store.togglePin(id);
-    if (!meta) return reply.code(404).send({ error: '线程不存在' });
-    return reply.send({ ok: true, isPinned: meta.isPinned });
+    if (!meta) return void reply.code(404).send({ error: '线程不存在' });
+    return void reply.send({ ok: true, isPinned: meta.isPinned });
   });
 
   // 读取会话
@@ -120,8 +120,8 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     const session = await store.getSession(id);
-    if (!session) return reply.code(404).send({ error: '会话不存在' });
-    return reply.send({ session });
+    if (!session) return void reply.code(404).send({ error: '会话不存在' });
+    return void reply.send({ session });
   });
 
   // 清空会话
@@ -130,7 +130,7 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     await store.clearSession(id);
-    return reply.send({ ok: true });
+    return void reply.send({ ok: true });
   });
 
   // 读取记忆
@@ -139,7 +139,7 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     const memory = await store.getMemory(id);
-    return reply.send({ memory: memory ?? { threadId: id, entries: [], updatedAt: new Date().toISOString() } });
+    return void reply.send({ memory: memory ?? { threadId: id, entries: [], updatedAt: new Date().toISOString() } });
   });
 
   // 写入/追加记忆
@@ -151,7 +151,7 @@ export function registerThreadsRoute(
     const body = request.body as
       | { entries?: HistoryMessage[]; role?: 'user' | 'assistant'; content?: string }
       | null;
-    if (!body) return reply.code(400).send({ error: '请求体为空' });
+    if (!body) return void reply.code(400).send({ error: '请求体为空' });
 
     let entries: HistoryMessage[];
     const now = new Date().toISOString();
@@ -164,11 +164,11 @@ export function registerThreadsRoute(
     } else if (body.role && typeof body.content === 'string') {
       entries = [{ role: body.role === 'assistant' ? 'assistant' : 'user', content: body.content, ts: now }];
     } else {
-      return reply.code(400).send({ error: '需提供 entries 数组或 { role, content }' });
+      return void reply.code(400).send({ error: '需提供 entries 数组或 { role, content }' });
     }
 
     const updated = await store.appendMemory(id, entries);
-    return reply.send({ ok: true, memory: updated });
+    return void reply.send({ ok: true, memory: updated });
   });
 
   // 清空记忆
@@ -177,7 +177,7 @@ export function registerThreadsRoute(
     if (!UUID_RE.test(id)) return badId(reply, id);
     if (!(await assertOwned(request, id, reply))) return;
     await store.clearMemory(id);
-    return reply.send({ ok: true });
+    return void reply.send({ ok: true });
   });
 
   // 预览治理后的注入上下文（非破坏性，不改写记忆）。可选 ?question= 用于相关性重组。
@@ -190,14 +190,14 @@ export function registerThreadsRoute(
       if (!UUID_RE.test(id)) return badId(reply, id);
       if (!(await assertOwned(request, id, reply))) return;
       const memory = await store.getMemory(id);
-      if (!memory) return reply.code(404).send({ error: '线程不存在' });
+      if (!memory) return void reply.code(404).send({ error: '线程不存在' });
       const existingSummary = memory.summary ?? '';
       const governed = await govern(memory.entries, {
         question: request.query.question,
         config: governorConfig,
         existingSummary: existingSummary || undefined,
       });
-      return reply.send({
+      return void reply.send({
         context: governed.messages,
         summary: governed.summary,
         stats: governed.stats,
@@ -216,7 +216,7 @@ export function registerThreadsRoute(
       keepRecent: body.keepRecent,
       summaryMaxChars: body.summaryMaxChars,
     });
-    return reply.send({ ok: true, memory: updated });
+    return void reply.send({ ok: true, memory: updated });
   });
 }
 

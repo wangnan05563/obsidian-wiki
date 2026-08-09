@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
 import type { SessionRecord, AuthPermission, AuditAction } from '../auth/types.js';
 import { validateSession } from '../auth/session.js';
 import { checkPermission } from '../auth/permission-cache.js';
@@ -212,9 +212,9 @@ export interface IsolationGuards {
   /** auth 是否启用；路由层可据此决定是否做 owner 归属校验。 */
   enabled: boolean;
   /** 要求已登录（auth 启用时），未登录返回 401。auth 关闭时放行。 */
-  requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  requireAuth: (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => void;
   /** 要求管理员角色（auth 启用时），否则 401/403。auth 关闭时放行。 */
-  requireAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  requireAdmin: (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => void;
 }
 
 export function createIsolationGuards(auth?: IsolationGuardInput): IsolationGuards {
@@ -222,16 +222,18 @@ export function createIsolationGuards(auth?: IsolationGuardInput): IsolationGuar
   // AuthConfig.permissionCacheTtlSec 单位为秒，requireAdmin 内部需要毫秒
   const ttlMs = (auth?.permissionCacheTtlSec ?? 300) * 1000;
 
-  const authGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    if (!enabled) return; // 单租户：放行
+  const authGuard = (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void => {
+    if (!enabled) { done(); return; } // 单租户：放行
     if (!request.currentUser) {
       reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
+      done(); return;
     }
+    done();
   };
 
-  const adminGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    if (!enabled) return; // 单租户：放行
-    await requireAdmin(ttlMs)(request, reply);
+  const adminGuard = (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void => {
+    if (!enabled) { done(); return; } // 单租户：放行
+    requireAdmin(ttlMs)(request, reply).then(() => done(), (err) => done(err as Error));
   };
 
   return { enabled, requireAuth: authGuard, requireAdmin: adminGuard };

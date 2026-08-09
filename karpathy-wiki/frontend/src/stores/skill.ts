@@ -1,4 +1,4 @@
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { SkillMeta, SkillDetail, SkillImportResult, SkillListResponse } from '../types';
@@ -34,7 +34,7 @@ export const useSkillStore = defineStore('skill', () => {
     loading.value = true;
     error.value = '';
     try {
-      const res = await fetch(`${API_BASE}/skills`);
+      const res = await apiFetch(`${API_BASE}/skills`);
       if (!res.ok) {
         throw new Error(`加载技能列表失败：${res.status}`);
       }
@@ -62,7 +62,7 @@ export const useSkillStore = defineStore('skill', () => {
       const formData = new FormData();
       formData.append('file', file);
 
-      const res = await fetch(`${API_BASE}/skills/import`, {
+      const res = await apiFetch(`${API_BASE}/skills/import`, {
         method: 'POST',
         body: formData,
       });
@@ -91,7 +91,7 @@ export const useSkillStore = defineStore('skill', () => {
   // 查看技能详情
   async function fetchSkillDetail(id: string): Promise<SkillDetail | null> {
     try {
-      const res = await fetch(`${API_BASE}/skills/${encodeURIComponent(id)}`);
+      const res = await apiFetch(`${API_BASE}/skills/${encodeURIComponent(id)}`);
       if (!res.ok) {
         throw new Error(`获取技能详情失败：${res.status}`);
       }
@@ -107,7 +107,7 @@ export const useSkillStore = defineStore('skill', () => {
   // 删除技能
   async function deleteSkill(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${API_BASE}/skills/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/skills/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
       if (!res.ok) {

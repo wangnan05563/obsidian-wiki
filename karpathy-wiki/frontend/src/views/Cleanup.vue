@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CleanupBody, CleanupResult, CleanupStorageStatus, CleanupTarget } from '../types';
@@ -77,7 +77,7 @@ function confirmText(title: string): string {
 async function loadStatus() {
   loadingStatus.value = true;
   try {
-    const res = await fetch(`${API_BASE}/cleanup/status`);
+    const res = await apiFetch(`${API_BASE}/cleanup/status`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     status.value = await res.json();
   } catch (err) {
@@ -113,7 +113,7 @@ async function handleCleanup(key: keyof typeof forms) {
       // 仅 run_logs/raw_archive 按 days 清理，其他两类与时间无关
       ...(card.showDays ? { days: form.days } : {}),
     };
-    const res = await fetch(`${API_BASE}/cleanup`, {
+    const res = await apiFetch(`${API_BASE}/cleanup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
