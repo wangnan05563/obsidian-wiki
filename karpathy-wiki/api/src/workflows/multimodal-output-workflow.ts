@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
@@ -40,7 +39,7 @@ export async function collectContextPages(
     for (const p of contextPaths.slice(0, maxPages)) {
       try {
         const content = await vault.readFile(p);
-        const createdMatch = content.match(/^---\s*[\s\S]*?created:\s*([^\s\n]+)\s*[\s\S]*?---/m);
+        const createdMatch = content.match(/^---\s*[\s\S]*?created:\s*([^\s]+)\s*[\s\S]*?---/m);
         const created = createdMatch?.[1] ?? '';
         // 路径形如 concepts/llm.md，标题取文件名去扩展名
         const title = p.slice(p.lastIndexOf('/') + 1, -3);
@@ -69,7 +68,7 @@ export async function collectContextPages(
       const content = await vault.readFile(hit.path);
       // 提取 frontmatter.created 字段供 timeline 模式使用
       // 为什么简单正则而非 gray-matter：避免引入额外依赖，且 frontmatter 结构稳定
-      const createdMatch = content.match(/^---\s*[\s\S]*?created:\s*([^\s\n]+)\s*[\s\S]*?---/m);
+      const createdMatch = content.match(/^---\s*[\s\S]*?created:\s*([^\s]+)\s*[\s\S]*?---/m);
       const created = createdMatch?.[1] ?? '';
       pages.push({
         path: hit.path,
@@ -85,17 +84,17 @@ export async function collectContextPages(
 }
 
 // 构造 LLM 输入 prompt：模式指令 + 上下文页面 + 用户问题
-function buildMultimodalPrompt(
+async function buildMultimodalPrompt(
   mode: 'mindmap' | 'faq' | 'timeline',
   pages: { path: string; title: string; content: string; created: string }[],
   question: string,
 ): Promise<string> {
-  return loadMultimodalPrompt().then((promptTemplate) => {
-    const pageContext = pages
-      .map((p, i) => `### 页面 ${i + 1}: ${p.title}\n路径: ${p.path}\n创建时间: ${p.created || '未知'}\n内容:\n${p.content}`)
-      .join('\n\n---\n\n');
+  const promptTemplate = await loadMultimodalPrompt();
+  const pageContext = pages
+    .map((p, i) => `### 页面 ${i + 1}: ${p.title}\n路径: ${p.path}\n创建时间: ${p.created || '未知'}\n内容:\n${p.content}`)
+    .join('\n\n---\n\n');
 
-    return `${promptTemplate}
+  return `${promptTemplate}
 
 ## 用户问题
 ${question}
@@ -105,7 +104,6 @@ ${pageContext}
 
 ## 任务
 请按 **${mode}** 模式生成结构化输出。严格遵守对应模式的格式与约束，输出仅包含目标模式的内容。`;
-  });
 }
 
 // FR-09-2 多模态输出工作流入口

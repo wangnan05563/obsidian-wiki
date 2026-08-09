@@ -1,4 +1,4 @@
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { LlmPreset } from '../types';
@@ -33,7 +33,7 @@ export const useModelStore = defineStore('model', () => {
 
   async function loadPresets() {
     try {
-      const res = await fetch(`${API_BASE}/ai/presets`);
+      const res = await apiFetch(`${API_BASE}/ai/presets`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { presets?: LlmPreset[] } | LlmPreset[];
       presets.value = Array.isArray(data) ? data : (data.presets ?? []);
@@ -42,7 +42,7 @@ export const useModelStore = defineStore('model', () => {
       currentModel.value = selected?.model ?? '';
       // 从后端读取当前生效的 apiKey 状态（脱敏值 + 是否已设置）
       try {
-        const cfgRes = await fetch(`${API_BASE}/ai/config`);
+        const cfgRes = await apiFetch(`${API_BASE}/ai/config`);
         if (cfgRes.ok) {
           const cfg = await cfgRes.json() as { apiKeyMasked?: string; apiKeySet?: boolean };
           apiKeyMasked.value = cfg.apiKeyMasked ?? '';
@@ -68,7 +68,7 @@ export const useModelStore = defineStore('model', () => {
     currentModel.value = preset.model;
     localStorage.setItem(STORAGE_KEYS.SELECTED_MODEL_PRESET, preset.key);
     try {
-      const res = await fetch(`${API_BASE}/ai/config`, {
+      const res = await apiFetch(`${API_BASE}/ai/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         // 不传 apiKey：后端收到 undefined 表示不修改现有 key
@@ -94,7 +94,7 @@ export const useModelStore = defineStore('model', () => {
   // 供 AI 配置页面「保存」按钮调用。前端不再 localStorage 存储 apiKey 明文。
   async function saveApiKey(newKey: string) {
     try {
-      const res = await fetch(`${API_BASE}/ai/config`, {
+      const res = await apiFetch(`${API_BASE}/ai/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey: newKey }),

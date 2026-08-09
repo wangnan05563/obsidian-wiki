@@ -130,12 +130,8 @@ async function saveUsers(users: UserRecord[]): Promise<void> {
     throw new Error('用户数据文件损坏，写盘被拒绝（请手动修复 data/users.json）');
   }
   const data = JSON.stringify({ users }, null, 2);
-  try {
-    await fs.writeFile(usersFilePath, data, 'utf8');
-  } catch (err) {
-    // 写盘失败（只读文件系统 / 沙箱写保护 / 磁盘满）：上抛由调用方决定如何暴露（评审 S2）
-    throw err;
-  }
+  // 写盘失败（只读文件系统 / 沙箱写保护 / 磁盘满）：上抛由调用方决定如何暴露（评审 S2）
+  await fs.writeFile(usersFilePath, data, 'utf8');
 }
 
 // 根据用户名查找用户（用于登录验证）

@@ -19,6 +19,23 @@ import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.
 // 为什么不直接用 new URL：构造函数不拦截协议，需显式白名单
 const URL_PATTERN = /^https?:\/\/[^\s]+$/i;
 
+// 构建爬取配置：合并 config 默认值与请求级覆盖参数。
+// 提取为独立函数以降低路由处理函数的认知复杂度（S3776）。
+// 覆盖优先级：请求 body > config.urlCrawl > DEFAULT_CRAWL_CONFIG
+function buildCrawlConfig(
+  config: AppConfig,
+  body: { url?: string; maxPages?: number; maxHops?: number },
+): Partial<UrlCrawlConfig> {
+  const crawlConfig: Partial<UrlCrawlConfig> = { ...(config.urlCrawl ?? {}) };
+  if (typeof body.maxPages === 'number' && body.maxPages > 0) {
+    crawlConfig.maxPages = Math.min(Math.floor(body.maxPages), 500);
+  }
+  if (typeof body.maxHops === 'number' && body.maxHops > 0) {
+    crawlConfig.maxHops = Math.min(Math.floor(body.maxHops), 10);
+  }
+  return crawlConfig;
+}
+
 // 注册 URL 爬取路由族
 export function registerUrlIngestRoute(
   app: FastifyInstance,
@@ -50,11 +67,11 @@ export function registerUrlIngestRoute(
 
     // URL 非空校验
     if (!entryUrl) {
-      return reply.code(400).send({ error: '缺少 url 字段' });
+      return void reply.code(400).send({ error: '缺少 url 字段' });
     }
     // URL 格式校验：防 javascript:/data: 等危险协议
     if (!URL_PATTERN.test(entryUrl)) {
-      return reply.code(400).send({ error: 'URL 必须以 http:// 或 https:// 开头' });
+      return void reply.code(400).send({ error: 'URL 必须以 http:// 或 https:// 开头' });
     }
 
     // SSE headers
@@ -70,14 +87,9 @@ export function registerUrlIngestRoute(
     try {
       // 从 config 读取爬取参数：config.urlCrawl 缺失时由 crawlUrl 内部默认值兜底
       // 5.1.4 请求级覆盖：请求 body 中的 maxPages/maxHops 优先级高于 config
-      // 为什么用条件展开：避免 undefined 覆盖 config 中已配置的值
-      const crawlConfig: Partial<UrlCrawlConfig> = { ...(config.urlCrawl ?? {}) };
-      if (typeof body.maxPages === 'number' && body.maxPages > 0) {
-        crawlConfig.maxPages = Math.min(Math.floor(body.maxPages), 500);
-      }
-      if (typeof body.maxHops === 'number' && body.maxHops > 0) {
-        crawlConfig.maxHops = Math.min(Math.floor(body.maxHops), 10);
-      }
+      // 请求级参数覆盖：提取为独立函数降低路由处理函数认知复杂度（S3776）
+      const crawlConfig = buildCrawlConfig(config, body);
+      
 
       // 遍历爬取生成器，逐事件推送给前端
       for await (const ev of crawlUrl(entryUrl, crawlConfig)) {
@@ -86,6 +98,14 @@ export function registerUrlIngestRoute(
 
         // 事件映射：直接透传 UrlCrawlEvent 的 type 字段作为 SSE event 名
         // 不同 type 携带不同 data，前端按 type 分发渲染
+        let status: string;
+        if (ev.type === 'error' || ev.type === 'page_error') {
+          status = 'error';
+        } else if (ev.type === 'done') {
+          status = 'done';
+        } else {
+          status = 'running';
+        }
         send(ev.type, {
           step: ev.step,
           message: ev.message,
@@ -93,9 +113,7 @@ export function registerUrlIngestRoute(
           // 为什么用 ?? {}：data 可选，无 data 时推送空对象避免前端 JSON.parse(null) 报错
           data: ev.data ?? {},
           // 附加 status 字段：与 QQ ingest 路由事件格式对齐，便于前端复用 UI 组件
-          // error/page_error 事件附 status='error'，done 附 status='done'，其余附 status='running'
-          status: ev.type === 'error' || ev.type === 'page_error' ? 'error'
-            : ev.type === 'done' ? 'done' : 'running',
+          status,
         });
       }
     } catch (err: unknown) {
@@ -130,10 +148,10 @@ export function registerUrlIngestRoute(
           logFilePath: currentUrlCrawl.logging?.logFilePath ?? DEFAULT_CRAWL_CONFIG.logging.logFilePath,
         },
       };
-      return reply.send({ urlCrawl });
+      return void reply.send({ urlCrawl });
     } catch (err: unknown) {
       request.log.error({ err }, 'url-ingest config get error');
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -151,10 +169,10 @@ export function registerUrlIngestRoute(
       const updated = await saveUrlCrawlConfig(updates);
       // 同步更新运行时 config 引用，避免后续路由用旧值
       config.urlCrawl = updated.urlCrawl;
-      return reply.send({ urlCrawl: updated.urlCrawl });
+      return void reply.send({ urlCrawl: updated.urlCrawl });
     } catch (err: unknown) {
       request.log.error({ err }, 'url-ingest config put error');
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 }

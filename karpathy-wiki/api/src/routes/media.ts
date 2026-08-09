@@ -22,12 +22,12 @@ export function registerMediaRoute(
 
     // prompt 必填：视频生成围绕用户描述展开，空 prompt 无法生成
     if (!body?.prompt || typeof body.prompt !== 'string' || body.prompt.trim().length === 0) {
-      return reply.code(400).send({ error: '请求体须含非空 prompt 字段' });
+      return void reply.code(400).send({ error: '请求体须含非空 prompt 字段' });
     }
 
     try {
       const result = await adapter.generateVideo(body.prompt.trim(), appConfig);
-      return reply.send({ ok: true, ...result });
+      return void reply.send({ ok: true, ...result });
     } catch (err: unknown) {
       // 为什么同时 request.log.error：JSON 错误只回前端，后端日志流需独立记录以便排障
       request.log.error(
@@ -37,7 +37,7 @@ export function registerMediaRoute(
       const message = err instanceof Error ? err.message : String(err);
       // 区分"未配置 API key"（400）与"Agnes API 失败"（500）
       const isConfigError = message.includes('not configured');
-      return reply.code(isConfigError ? 400 : 500).send({
+      reply.code(isConfigError ? 400 : 500).send({
         ok: false,
         error: message,
       });
@@ -51,17 +51,17 @@ export function registerMediaRoute(
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { taskId } = request.params as { taskId: string };
     if (!taskId) {
-      return reply.code(400).send({ error: '须提供 taskId' });
+      reply.code(400).send({ error: '须提供 taskId' });
     }
 
     try {
       const result = await adapter.pollVideoTask(taskId, appConfig);
-      return reply.send({ ok: true, ...result });
+      return void reply.send({ ok: true, ...result });
     } catch (err: unknown) {
       request.log.error({ err, taskId }, 'video poll failed');
       const message = err instanceof Error ? err.message : String(err);
       const isConfigError = message.includes('not configured');
-      return reply.code(isConfigError ? 400 : 500).send({
+      reply.code(isConfigError ? 400 : 500).send({
         ok: false,
         error: message,
       });

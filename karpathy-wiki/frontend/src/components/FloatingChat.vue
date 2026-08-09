@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, nextTick, watch, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Promotion, Close, Minus, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
@@ -96,7 +96,7 @@ async function sendQuestion(question: string) {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/query`, {
+    const response = await apiFetch(`${API_BASE}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // §真流式：复用主问答的 streamMode 偏好，与 Query 页面行为一致

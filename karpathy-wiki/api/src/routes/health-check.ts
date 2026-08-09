@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { EngineAdapter, FixInput, BatchFixRequest, BatchFixProgressEvent } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 import { createSSESender } from '../utils/sse.js';
@@ -15,14 +15,14 @@ import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.
 export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAdapter, guards: IsolationGuards = createIsolationGuards()) {
   app.post('/api/health-check', { preHandler: guards.requireAdmin }, async (_request, reply) => {
     const report = await adapter.healthCheck();
-    return reply.send(report);
+    return void reply.send(report);
   });
 
   // 一键修复：SSE 流式返回修复进度
   app.post('/api/health-check/fix', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Partial<FixInput>;
     if (!body || (body.issueType !== 'broken_link' && body.issueType !== 'orphan') || !body.target) {
-      return reply.code(400).send({ error: '请求体须有 issueType(broken_link|orphan) 和 target' });
+      return void reply.code(400).send({ error: '请求体须有 issueType(broken_link|orphan) 和 target' });
     }
 
     reply.raw.writeHead(200, {
@@ -70,13 +70,13 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
   app.post('/api/health-check/fix/batch', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Partial<BatchFixRequest>;
     if (!body || !Array.isArray(body.items) || body.items.length === 0) {
-      return reply.code(400).send({ error: '请求体须有非空 items 数组' });
+      return void reply.code(400).send({ error: '请求体须有非空 items 数组' });
     }
 
     // 校验每个 item：issueType 合法 + target 非空
     for (const item of body.items) {
       if (!item || (item.issueType !== 'broken_link' && item.issueType !== 'orphan') || !item.target) {
-        return reply.code(400).send({
+        return void reply.code(400).send({
           error: 'items 中存在无效项，每项须有 issueType(broken_link|orphan) 和 target',
         });
       }

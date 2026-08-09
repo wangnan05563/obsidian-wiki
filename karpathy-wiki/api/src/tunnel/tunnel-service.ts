@@ -644,6 +644,33 @@ class TailscaleProvider extends TunnelProvider {
     return this.cachedStatus;
   }
 
+  // 提取 allowFunnel 中第一个 .ts.net 主机。
+  // 提取为独立方法降低 refreshStatus 认知复杂度（S3776）。
+  private findTsNetHost(allowFunnel: Record<string, boolean>): string | null {
+    for (const [endpoint, enabled] of Object.entries(allowFunnel)) {
+      if (!enabled) continue;
+      const h = endpoint.split(':')[0].replace(/\.$/, '');
+      if (h.toLowerCase().endsWith('.ts.net')) {
+        return h;
+      }
+    }
+    return null;
+  }
+
+  // 路径区分模式：检查 Web.Handlers 中是否存在自己的路径前缀。
+  // 提取为独立方法降低 refreshStatus 认知复杂度（S3776）。
+  private checkPathPrefixInHandlers(data: Record<string, unknown>): boolean {
+    const web = data.Web as Record<string, unknown> | undefined;
+    if (!web || typeof web !== 'object') return false;
+    for (const cfg of Object.values(web)) {
+      if (cfg && typeof cfg === 'object' && 'Handlers' in (cfg as Record<string, unknown>)) {
+        const handlers = (cfg as Record<string, unknown>).Handlers as Record<string, unknown>;
+        return handlers !== undefined && (this.pathPrefix in handlers);
+      }
+    }
+    return false;
+  }
+
   // 异步刷新 status 缓存：用 execAsync 非阻塞查询 funnel status --json
   // 路径区分模式：通过检查 Handlers 中是否存在自己的路径前缀确认当前应用 Funnel 配置
   private async refreshStatus(): Promise<void> {
@@ -659,32 +686,14 @@ class TailscaleProvider extends TunnelProvider {
         this.cachedStatus = 'stopped';
         return;
       }
-      let host: string | null = null;
-      for (const [endpoint, enabled] of Object.entries(allowFunnel)) {
-        if (!enabled) continue;
-        const h = endpoint.split(':')[0].replace(/\.$/, '');
-        if (h.toLowerCase().endsWith('.ts.net')) {
-          host = h;
-          break;
-        }
-      }
+      const host = this.findTsNetHost(allowFunnel);
       if (!host) {
         this.cachedStatus = 'stopped';
         return;
       }
       // 路径区分模式：检查 Handlers 中是否存在自己的路径前缀
       if (this.pathPrefix) {
-        const web = data.Web as Record<string, unknown> | undefined;
-        let handlers: Record<string, unknown> | undefined;
-        if (web && typeof web === 'object') {
-          for (const cfg of Object.values(web)) {
-            if (cfg && typeof cfg === 'object' && 'Handlers' in (cfg as Record<string, unknown>)) {
-              handlers = (cfg as Record<string, unknown>).Handlers as Record<string, unknown>;
-              break;
-            }
-          }
-        }
-        if (!handlers || !(this.pathPrefix in handlers)) {
+        if (!this.checkPathPrefixInHandlers(data)) {
           this.cachedStatus = 'stopped';
           return;
         }
@@ -918,7 +927,16 @@ export class CloudflareLoginService {
     this.loginAuthUrl = null;
     this.loginOutput = [];
 
-    // 后台读取 stdout，提取授权 URL（含 cloudflare 的 URL）
+    // 后台读取 stdout，提取授权 URL
+    this.startLoginOutputCollection();
+
+    // 非阻塞等待：每 500ms 检查一次，最多 10s
+    return this.waitForLoginResult();
+  }
+
+  // 启动 login 子进程的输出收集与 URL 提取（提取为独立函数降低 startLogin 认知复杂度，S3776）
+  private startLoginOutputCollection(): void {
+    if (!this.loginProcess) return;
     const urlPattern = /https:\/\/\S+/;
     const collectOutput = (chunk: Buffer): void => {
       const text = chunk.toString();
@@ -937,12 +955,19 @@ export class CloudflareLoginService {
     };
     this.loginProcess.stdout?.on('data', collectOutput);
     this.loginProcess.stderr?.on('data', collectOutput);
+  }
 
-    // 非阻塞等待：每 500ms 检查一次，最多 10s
+  // 非阻塞等待 login 结果：提取为独立函数降低 startLogin 认知复杂度（S3776）
+  private async waitForLoginResult(): Promise<{
+    status: 'waiting' | 'failed';
+    authUrl: string | null;
+    message: string;
+    output?: string;
+  }> {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
       if (this.loginAuthUrl) break;
-      if (this.loginProcess.exitCode !== null) break;
+      if (this.loginProcess?.exitCode !== null) break;
       await new Promise<void>((r) => setTimeout(r, 500));
     }
 
@@ -954,9 +979,10 @@ export class CloudflareLoginService {
       };
     }
 
-    if (this.loginProcess.exitCode !== null) {
+    const proc = this.loginProcess;
+    if (proc && proc.exitCode !== null) {
       const output = this.loginOutput.join('\n');
-      const exitCode = this.loginProcess.exitCode;
+      const exitCode = proc.exitCode;
       this.cleanupLoginProcess();
       return {
         status: 'failed',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
@@ -64,7 +64,7 @@ const MAX_FILE_SIZE_MB = ref<number>(10);
 //   每次进入页面都重新拉取最新配置，避免使用 stale 缓存值
 async function loadBatchConfig(): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/config`);
+    const res = await apiFetch(`${API_BASE}/config`);
     if (!res.ok) return;
     const cfg: ConfigData = await res.json();
     if (cfg.batch) {
@@ -269,7 +269,7 @@ async function uploadQqFile() {
   fd.append('file', qqFile.value);
 
   try {
-    const res = await fetch(`${API_BASE}/qq-ingest/upload`, {
+    const res = await apiFetch(`${API_BASE}/qq-ingest/upload`, {
       method: 'POST',
       body: fd,
       signal: qqAbortController.signal,
@@ -334,7 +334,7 @@ async function extractQqDrafts() {
   qqAbortController = new AbortController();
 
   try {
-    const res = await fetch(`${API_BASE}/qq-ingest/extract/${qqRawId.value}`,
+    const res = await apiFetch(`${API_BASE}/qq-ingest/extract/${qqRawId.value}`,
       { method: 'POST', signal: qqAbortController.signal },
     );
     if (!res.ok || !res.body) {
@@ -513,7 +513,7 @@ async function startUrlCrawl() {
     if (urlMaxHops.value !== null && urlMaxHops.value > 0) {
       reqBody.maxHops = Math.min(Math.floor(urlMaxHops.value), 10);
     }
-    const res = await fetch(`${API_BASE}/url-ingest/crawl`, {
+    const res = await apiFetch(`${API_BASE}/url-ingest/crawl`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(reqBody),
@@ -597,7 +597,7 @@ async function handleBookmarkFile(file: UploadFile) {
   formData.append('file', raw);
 
   try {
-    const res = await fetch(`${API_BASE}/ingest/bookmarks`, {
+    const res = await apiFetch(`${API_BASE}/ingest/bookmarks`, {
       method: 'POST',
       body: formData,
     });

@@ -29,7 +29,7 @@ export function registerPodcastRoute(
 
     // topic 必填：播客脚本围绕主题展开，空主题无法检索相关页面
     if (!body?.topic || typeof body.topic !== 'string' || body.topic.trim().length === 0) {
-      return reply.code(400).send({ error: '请求体须含非空 topic 字段' });
+      return void reply.code(400).send({ error: '请求体须含非空 topic 字段' });
     }
 
     // AC-09-6 范围限定：tags/folder 均可选，至少一个时启用过滤
@@ -42,7 +42,7 @@ export function registerPodcastRoute(
       const result = await adapter.podcast(body.topic.trim(), appConfig, scopeFilter);
 
       // 归档成功：返回完整结果供前端渲染（脚本 + 音频列表 + 时长 + 归档路径）
-      return reply.send({
+      return void reply.send({
         ok: true,
         script: result.script,
         audioFiles: result.audioFiles,
@@ -59,7 +59,7 @@ export function registerPodcastRoute(
       const message = err instanceof Error ? err.message : String(err);
       // 区分"无相关页面"与"LLM 失败"：前者是用户输入问题（400），后者是服务端问题（500）
       const isNoPages = message.includes('no relevant pages');
-      return reply.code(isNoPages ? 400 : 500).send({
+      reply.code(isNoPages ? 400 : 500).send({
         ok: false,
         error: message,
       });

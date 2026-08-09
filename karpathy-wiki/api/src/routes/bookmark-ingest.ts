@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import { parseBookmarksHtml } from '../utils/bookmark-connector.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
@@ -16,11 +16,10 @@ export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: str
     // 文件大小限制：书签导出文件通常 100KB-10MB，20MB 上限足够
     const data = await request.file({ limits: { fileSize: 20 * 1024 * 1024 } });
     if (!data) {
-      return reply.code(400).send({ error: '请上传书签 HTML 文件' });
+      return void reply.code(400).send({ error: '请上传书签 HTML 文件' });
     }
 
     const buffer = await data.toBuffer();
-    const filename = data.filename || 'bookmarks.html';
 
     // 编码检测：尝试 UTF-8，失败则回退 GBK（Windows 中文浏览器常用 GBK 编码）
     let html: string;
@@ -36,7 +35,7 @@ export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: str
 
     // 验证是否为书签文件：检查 Netscape Bookmark 文件头
     if (!html.includes('NETSCAPE-Bookmark-file') && !html.includes('<DT><A')) {
-      return reply.code(400).send({
+      return void reply.code(400).send({
         error: '文件格式不符合书签 HTML 格式。请从浏览器导出书签为 HTML 文件。',
       });
     }
@@ -45,7 +44,7 @@ export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: str
       const result = parseBookmarksHtml(html);
 
       if (result.entries.length === 0) {
-        return reply.code(400).send({ error: '未找到有效书签链接' });
+        return void reply.code(400).send({ error: '未找到有效书签链接' });
       }
 
       // 保存 Markdown 到 raw/ 目录（后续由用户触发 compile）
@@ -58,12 +57,12 @@ export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: str
         await fs.mkdir(rawDir, { recursive: true });
         await fs.writeFile(rawPath, result.combinedMarkdown, 'utf8');
       } catch (err) {
-        return reply.code(500).send({
+        return void reply.code(500).send({
           error: `保存文件失败：${err instanceof Error ? err.message : String(err)}`,
         });
       }
 
-      return reply.send({
+      return void reply.send({
         ok: true,
         totalBookmarks: result.totalBookmarks,
         totalFolders: result.totalFolders,
@@ -73,7 +72,7 @@ export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: str
         message: `已导入 ${result.totalBookmarks} 条书签（${result.totalFolders} 个文件夹），保存至 ${rawPath}，可立即编译。`,
       });
     } catch (err) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: `解析失败：${err instanceof Error ? err.message : String(err)}`,
       });
     }

@@ -156,7 +156,7 @@ const activeSkillId = ref(localStorage.getItem(STORAGE_KEYS.ACTIVE_SKILL) || '')
 
 async function loadSkills() {
   try {
-    const res = await fetch(`${API_BASE}/ai/config`);
+    const res = await authStore.authFetch(`${API_BASE}/ai/config`);
     if (!res.ok) return;
     const cfg = await res.json() as { skills?: typeof skills.value; activeSkill?: string };
     skills.value = cfg.skills?.filter((s) => s.enabled) ?? [];
@@ -167,7 +167,7 @@ async function loadSkills() {
 
 async function handleSkillChange(skillId: string) {
   try {
-    await fetch(`${API_BASE}/ai/config`, {
+    await authStore.authFetch(`${API_BASE}/ai/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ activeSkill: skillId }),
@@ -357,7 +357,7 @@ async function submitVideoTask() {
   videoTaskId.value = '';
 
   try {
-    const resp = await fetch(`${API_BASE}/media/video`, {
+    const resp = await authStore.authFetch(`${API_BASE}/media/video`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt }),
@@ -384,7 +384,7 @@ function startVideoPolling() {
   videoPollTimer = setInterval(async () => {
     if (!videoTaskId.value) return;
     try {
-      const resp = await fetch(`${API_BASE}/media/video/${videoTaskId.value}`);
+      const resp = await authStore.authFetch(`${API_BASE}/media/video/${videoTaskId.value}`);
       const data = await resp.json();
       if (!resp.ok || !data.ok) {
         throw new Error(data.error || `HTTP ${resp.status}`);
@@ -599,7 +599,7 @@ async function sendQuestion(question: string) {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/query`, {
+    const response = await authStore.authFetch(`${API_BASE}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

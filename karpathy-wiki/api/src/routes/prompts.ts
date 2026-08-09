@@ -87,11 +87,11 @@ export function registerPromptsRoute(
       const prompts = files
         .filter((f) => f.endsWith('.md') && PROMPT_WHITELIST_SET.has(f))
         .map((f) => PROMPT_META[f] ?? { name: f, label: f, description: '' });
-      return reply.send({ prompts });
+      return void reply.send({ prompts });
     } catch (err: unknown) {
       // 记录到后端日志流：catch 块只发前端不记日志时，500 排障无据可查
       request.log.error({ err, dir: PROMPTS_DIR }, 'GET /api/prompts failed');
-      return reply.code(500).send({
+      reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -103,14 +103,14 @@ export function registerPromptsRoute(
     async (request, reply) => {
       const { name } = request.params;
       if (!PROMPT_WHITELIST_SET.has(name)) {
-        return reply.code(400).send({ error: '不允许的 prompt 文件名' });
+        return void reply.code(400).send({ error: '不允许的 prompt 文件名' });
       }
       try {
         const filePath = path.join(PROMPTS_DIR, name);
         const content = await fs.readFile(filePath, 'utf8');
-        return reply.send({ name, content });
+        return void reply.send({ name, content });
       } catch (err: unknown) {
-        return reply.code(404).send({
+        reply.code(404).send({
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -124,18 +124,18 @@ export function registerPromptsRoute(
     async (request, reply) => {
       const { name } = request.params;
       if (!PROMPT_WHITELIST_SET.has(name)) {
-        return reply.code(400).send({ error: '不允许的 prompt 文件名' });
+        return void reply.code(400).send({ error: '不允许的 prompt 文件名' });
       }
       const body = request.body as { content?: string };
       if (!body || typeof body.content !== 'string') {
-        return reply.code(400).send({ error: '请求体须含 content 字段' });
+        return void reply.code(400).send({ error: '请求体须含 content 字段' });
       }
       try {
         const filePath = path.join(PROMPTS_DIR, name);
         await fs.writeFile(filePath, body.content, 'utf8');
-        return reply.send({ ok: true });
+        return void reply.send({ ok: true });
       } catch (err: unknown) {
-        return reply.code(500).send({
+        reply.code(500).send({
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -164,22 +164,22 @@ export function registerPromptsRoute(
       promptContent?: string;
       testInput?: string;
     };
-    if (!body || !body.promptName || !body.promptContent || !body.testInput) {
-      return reply.code(400).send({
+    if (!body?.promptName || !body?.promptContent || !body?.testInput) {
+      return void reply.code(400).send({
         error: '请求体须含 promptName、promptContent、testInput',
       });
     }
     if (!PROMPT_WHITELIST_SET.has(body.promptName)) {
-      return reply.code(400).send({ error: '不允许的 prompt 文件名' });
+      return void reply.code(400).send({ error: '不允许的 prompt 文件名' });
     }
     // 仅 compile.md 支持试运行：其他 prompt（query/tag-suggest 等）调用链路不同
     if (body.promptName !== 'compile.md') {
-      return reply.code(400).send({
+      return void reply.code(400).send({
         error: '当前仅支持 compile.md 的试运行',
       });
     }
 
-    const filePath = path.join(PROMPTS_DIR, body.promptName);
+    const filePath = path.join(PROMPTS_DIR, body.promptName as string);
     let originalContent: string | null = null;
 
     try {
@@ -192,7 +192,7 @@ export function registerPromptsRoute(
     try {
       await fs.writeFile(filePath, body.promptContent, 'utf8');
     } catch (err: unknown) {
-      return reply.code(500).send({
+      reply.code(500).send({
         error: `写入 prompt 文件失败: ${err instanceof Error ? err.message : String(err)}`,
       });
     }

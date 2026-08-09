@@ -54,6 +54,7 @@ async function collectAllPageMetadata(vault: VaultService): Promise<PageMetadata
     try {
       entries = await fs.readdir(dirFull);
     } catch {
+      // 目录不存在或无权访问时跳过，不阻塞整体推荐流程
       continue;
     }
     for (const f of entries) {
@@ -63,7 +64,7 @@ async function collectAllPageMetadata(vault: VaultService): Promise<PageMetadata
       try {
         const raw = await vault.readFile(rel);
         const parsed = matter(raw);
-        const tags = Array.isArray(parsed.data.tags) ? (parsed.data.tags as string[]) : [];
+        const tags = ensureStringArray(parsed.data.tags);
         const author = typeof parsed.data.author === 'string' ? parsed.data.author : null;
         const title = typeof parsed.data.title === 'string' ? parsed.data.title : pageName;
         // 抽取正文中所有 [[页面名]] 双链，用于排除已建立连接的页面
@@ -208,4 +209,9 @@ export async function createBidirectionalLink(
   }
 
   return { sourceRelated, targetRelated };
+}
+
+/** 安全地将 unknown 值转为 string[]，过滤非字符串元素 */
+function ensureStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }

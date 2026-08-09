@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+﻿import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -20,7 +20,7 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
         files = await fs.readdir(stateDir);
       } catch (err: unknown) {
         if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
-          return reply.send({ runs: [] });
+          return void reply.send({ runs: [] });
         }
         throw err;
       }
@@ -50,9 +50,9 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
       }
       // 按开始时间倒序，最新的在前
       runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-      return reply.send({ runs });
+      return void reply.send({ runs });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -65,7 +65,7 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
       const { runId } = request.params;
       // 防路径穿越：只允许 UUID 格式的 runId
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
-        return reply.code(400).send({ error: '无效的 runId' });
+        return void reply.code(400).send({ error: '无效的 runId' });
       }
       const logFile = path.join(logDir, `${runId}.log`);
       try {
@@ -75,10 +75,10 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string) {
           .split('\n')
           .filter((line) => line.trim())
           .map((line) => JSON.parse(line));
-        return reply.send({ entries });
+        reply.send({ entries });
       } catch {
         // 文件不存在或读取失败
-        return reply.code(404).send({ error: '日志不存在', entries: [] });
+        reply.code(404).send({ error: '日志不存在', entries: [] });
       }
     },
   );

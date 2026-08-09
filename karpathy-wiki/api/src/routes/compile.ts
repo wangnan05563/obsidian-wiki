@@ -72,7 +72,7 @@ export function registerCompileRoute(
       // multipart 文件上传
       const file = await request.file();
       if (!file) {
-        return reply.code(400).send({ error: '缺少 file 字段' });
+        return void reply.code(400).send({ error: '缺少 file 字段' });
       }
       const buffer = await file.toBuffer();
       // sanitize filename：防路径穿越，剥离目录前缀并替换非法字符。
@@ -87,11 +87,11 @@ export function registerCompileRoute(
       // JSON：url 或 text
       const body = request.body as { type?: string; content?: string; rawPath?: string };
       if (!body || (body.type !== 'url' && body.type !== 'text') || !body.content) {
-        return reply.code(400).send({ error: '请求体须含 type(url|text) 与 content' });
+        return void reply.code(400).send({ error: '请求体须含 type(url|text) 与 content' });
       }
       input = {
-        type: body.type,
-        content: body.content,
+        type: body.type as 'text' | 'url' | 'file',
+        content: body.content ?? '',
         rawPath: body.rawPath,
       };
     }
@@ -153,7 +153,7 @@ export function registerCompileRoute(
       const { runId } = request.params;
       // 防路径穿越：只允许 UUID 格式的 runId
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
-        return reply.code(400).send({ error: '无效的 runId' });
+        reply.code(400).send({ error: '无效的 runId' });
       }
 
       reply.raw.writeHead(200, {
@@ -215,18 +215,18 @@ export function registerCompileRoute(
       }
     } catch (err: unknown) {
       request.log.error({ err }, 'batch compile multipart parse error');
-      return reply.code(400).send({ error: '文件解析失败' });
+      reply.code(400).send({ error: '文件解析失败' });
     }
 
     if (uploaded.length === 0) {
-      return reply.code(400).send({ error: '缺少 files 字段或文件为空' });
+      reply.code(400).send({ error: '缺少 files 字段或文件为空' });
     }
 
     // 扩展名白名单校验：为什么用白名单而非黑名单：黑名单无法覆盖所有危险类型（如 .exe/.js），白名单更安全
     const { validFiles, rejected } = validateBatchFiles(uploaded, batch);
 
     if (validFiles.length === 0) {
-      return reply.code(400).send({
+      reply.code(400).send({
         error: '没有符合白名单的文件',
         rejected,
       });
@@ -234,7 +234,7 @@ export function registerCompileRoute(
 
     // 批量大小上限校验：防止单请求触发过多 LLM 调用导致 token 耗尽
     if (validFiles.length > batch.maxBatchSize) {
-      return reply.code(400).send({
+      reply.code(400).send({
         error: `批量编译文件数 ${validFiles.length} 超过上限 ${batch.maxBatchSize}`,
       });
     }

@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   loadConfig,
   reloadConfig,
@@ -29,7 +29,7 @@ export function registerConfigRoute(
   app.get('/api/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
     const config = await loadConfig();
     // 脱敏：apiKeyRef 是环境变量名（非 Key 本身），可展示；实际 Key 不返回
-    return reply.send({
+    return void reply.send({
       vaultPath: config.vaultPath,
       adapter: config.adapter,
       llm: {
@@ -60,9 +60,9 @@ export function registerConfigRoute(
   app.put('/api/config', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Partial<AppConfig>;
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
     }
-    return reply.send({
+    return void reply.send({
       ok: true,
       message: '配置已收到。请使用 PUT /api/config/{budget,health-check,batch,logging} 子资源接口进行持久化。',
     });
@@ -78,7 +78,7 @@ export function registerConfigRoute(
       tokenBudget: fresh.budget.tokenBudget,
       staleDays: fresh.healthCheck.staleDays,
     });
-    return reply.send({
+    return void reply.send({
       ok: true,
       applied: {
         model: fresh.llm.model,
@@ -98,14 +98,14 @@ export function registerConfigRoute(
       tokenBudget?: number;
     };
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
     }
     // 输入校验：maxSteps 必须为正整数，tokenBudget 必须为正整数
     if (body.maxSteps !== undefined && (!Number.isInteger(body.maxSteps) || body.maxSteps < 1)) {
-      return reply.code(400).send({ error: 'maxSteps 必须为正整数' });
+      return void reply.code(400).send({ error: 'maxSteps 必须为正整数' });
     }
     if (body.tokenBudget !== undefined && (!Number.isInteger(body.tokenBudget) || body.tokenBudget < 1)) {
-      return reply.code(400).send({ error: 'tokenBudget 必须为正整数' });
+      return void reply.code(400).send({ error: 'tokenBudget 必须为正整数' });
     }
     try {
       const merged = await saveBudgetConfig({
@@ -117,13 +117,13 @@ export function registerConfigRoute(
         maxSteps: merged.budget.maxSteps,
         tokenBudget: merged.budget.tokenBudget,
       });
-      return reply.send({
+      return void reply.send({
         ok: true,
         config: merged.budget,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ error: msg });
+      return void reply.code(500).send({ error: msg });
     }
   });
 
@@ -134,10 +134,10 @@ export function registerConfigRoute(
       staleDays?: number;
     };
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
     }
     if (body.staleDays !== undefined && (!Number.isInteger(body.staleDays) || body.staleDays < 1)) {
-      return reply.code(400).send({ error: 'staleDays 必须为正整数' });
+      return void reply.code(400).send({ error: 'staleDays 必须为正整数' });
     }
     try {
       const merged = await saveHealthCheckConfig({
@@ -146,13 +146,13 @@ export function registerConfigRoute(
       adapter.updateConfig({
         staleDays: merged.healthCheck.staleDays,
       });
-      return reply.send({
+      return void reply.send({
         ok: true,
         config: merged.healthCheck,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ error: msg });
+      return void reply.code(500).send({ error: msg });
     }
   });
 
@@ -166,18 +166,18 @@ export function registerConfigRoute(
       maxFileSizeMb?: number;
     };
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
     }
     // 输入校验：maxBatchSize/maxFileSizeMb 必须为正整数；allowedExtensions 必须为字符串数组
     if (body.maxBatchSize !== undefined && (!Number.isInteger(body.maxBatchSize) || body.maxBatchSize < 1)) {
-      return reply.code(400).send({ error: 'maxBatchSize 必须为正整数' });
+      return void reply.code(400).send({ error: 'maxBatchSize 必须为正整数' });
     }
     if (body.maxFileSizeMb !== undefined && (!Number.isInteger(body.maxFileSizeMb) || body.maxFileSizeMb < 1)) {
-      return reply.code(400).send({ error: 'maxFileSizeMb 必须为正整数' });
+      return void reply.code(400).send({ error: 'maxFileSizeMb 必须为正整数' });
     }
     if (body.allowedExtensions !== undefined) {
       if (!Array.isArray(body.allowedExtensions) || body.allowedExtensions.some(e => typeof e !== 'string' || !e.trim())) {
-        return reply.code(400).send({ error: 'allowedExtensions 必须为非空字符串数组' });
+        return void reply.code(400).send({ error: 'allowedExtensions 必须为非空字符串数组' });
       }
     }
     try {
@@ -186,14 +186,14 @@ export function registerConfigRoute(
         maxBatchSize: body.maxBatchSize,
         maxFileSizeMb: body.maxFileSizeMb,
       });
-      return reply.send({
+      return void reply.send({
         ok: true,
         config: merged.batch,
         requireRestart: ['multipart.fileSize'], // maxFileSizeMb 变更需重启才完全生效
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ error: msg });
+      return void reply.code(500).send({ error: msg });
     }
   });
 
@@ -206,29 +206,29 @@ export function registerConfigRoute(
       enableRequestLog?: boolean;
     };
     if (!body) {
-      return reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
     }
     // 输入校验：level 必须为有效 pino 级别
     const validLevels = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
     if (body.level !== undefined && !validLevels.includes(body.level)) {
-      return reply.code(400).send({ error: `level 必须为: ${validLevels.join(', ')}` });
+      return void reply.code(400).send({ error: `level 必须为: ${validLevels.join(', ')}` });
     }
     if (body.enableRequestLog !== undefined && typeof body.enableRequestLog !== 'boolean') {
-      return reply.code(400).send({ error: 'enableRequestLog 必须为 boolean' });
+      return void reply.code(400).send({ error: 'enableRequestLog 必须为 boolean' });
     }
     try {
       const merged = await saveLoggingConfig({
         level: body.level,
         enableRequestLog: body.enableRequestLog,
       });
-      return reply.send({
+      return void reply.send({
         ok: true,
         config: merged.logging,
         requireRestart: body.level === undefined ? [] : ['pino.level'],
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ error: msg });
+      return void reply.code(500).send({ error: msg });
     }
   });
 }

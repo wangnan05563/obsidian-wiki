@@ -207,7 +207,7 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
         const withType = ensurePageTypeField(targetPath, content);
         const finalContent = ensureEntitiesField(withType);
         await vault.writeFile(targetPath, finalContent);
-        return { ok: true, path: targetPath, redirected: targetPath !== p ? p : undefined };
+        return { ok: true, path: targetPath, redirected: targetPath === p ? undefined : p };
       },
     },
     {
@@ -261,6 +261,71 @@ const TOOL_STEP_MAP: Record<string, string> = {
 //
 // 这里接受 harnessConfig 而非已构造的 harness 实例，是因为 hooks 在 harness 构造时绑定，
 // 必须在本工作流内部构造 harness 才能注入 afterStep hook 推送进度事件。
+/**
+ * 从 CompileInput 提取原始内容与文件名，提取为独立函数降低 compileWorkflow 认知复杂度（S3776）
+ * file 类型支持 PDF/Office/图片OCR/音频转写/纯文本等多种格式
+ */
+async function extractRawContent(
+  input: CompileInput,
+  appConfig?: AppConfig,
+): Promise<{ rawContent: string; rawFilename: string }> {
+  if (input.type !== 'file') {
+    return {
+      rawContent: input.content,
+      rawFilename: input.rawPath ? path.basename(input.rawPath) : `input-${Date.now()}.md`,
+    };
+  }
+
+  const buf = await fs.readFile(input.content);
+  const baseName = stripInternalPrefix(input.originalName ?? path.basename(input.content));
+  const ext = path.extname(baseName).toLowerCase().slice(1);
+
+  if (ext === 'pdf') {
+    return {
+      rawContent: await convertPdfToMarkdown(buf),
+      rawFilename: baseName.replace(/\.[^.]+$/, '') + '.md',
+    };
+  }
+  if (OCR_SUPPORTED_MIME[ext]) {
+    const ocrConfig = appConfig ? resolveOcrConfig(appConfig) : null;
+    if (ocrConfig) {
+      return {
+        rawContent: await ocrImageToMarkdown(buf, OCR_SUPPORTED_MIME[ext], ocrConfig),
+        rawFilename: baseName.replace(/\.[^.]+$/, '') + '.md',
+      };
+    }
+    return {
+      rawContent: '[Warning: Image OCR is not configured. Please configure the ocr field in config.json with a vision-capable model.]',
+      rawFilename: baseName.replace(/\.[^.]+$/, '') + '.md',
+    };
+  }
+  if (AUDIO_SUPPORTED_MIME[ext]) {
+    const audioConfig = appConfig ? resolveAudioConfig(appConfig) : null;
+    if (audioConfig) {
+      return {
+        rawContent: await audioToText(buf, AUDIO_SUPPORTED_MIME[ext], baseName, audioConfig),
+        rawFilename: baseName.replace(/\.[^.]+$/, '') + '.md',
+      };
+    }
+    return {
+      rawContent: '[Warning: Audio transcription is not configured. Please configure the audio field in config.json with a speech-to-text endpoint (e.g., OpenAI Whisper API).]',
+      rawFilename: baseName.replace(/\.[^.]+$/, '') + '.md',
+    };
+  }
+  if (['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt'].includes(ext)) {
+    const convResult = await convertOfficeFile(baseName, buf);
+    return {
+      rawContent: convResult.markdown,
+      rawFilename: baseName.replace(/\.[^.]+$/, '') + '.md',
+    };
+  }
+
+  return {
+    rawContent: buf.toString('utf8'),
+    rawFilename: baseName,
+  };
+}
+
 export async function* compileWorkflow(
   harnessConfig: HarnessConfig,
   vault: VaultService,
@@ -269,55 +334,8 @@ export async function* compileWorkflow(
   // 为什么可选：保持向后兼容，未传 config 时跳过 tag 建议（如 resume 场景）
   appConfig?: AppConfig,
 ): AsyncIterable<ProgressEvent> {
-  // 1. 存档原始资料到 raw/。file 类型读取本地文件，url/text 直接存档字符串。
-  let rawContent: string;
-  let rawFilename: string;
-  if (input.type === 'file') {
-    const buf = await fs.readFile(input.content);
-    // 优先使用上传时的原始文件名（已去内部前缀），否则回退到临时文件 basename。
-    // 临时文件形如 wiki-batch-<ts>-<i>-<orig> 或 wiki-compile-<ts>-<orig>，
-    // 直接取 basename 会把内部批次前缀泄漏进 raw/ 存档名，导致用户无法识别。
-    const baseName = stripInternalPrefix(input.originalName ?? path.basename(input.content));
-    const ext = path.extname(baseName).toLowerCase().slice(1);
-    // FR-13-1：PDF 先通过 pdf-parse 提取文本为 Markdown，再走 compile 工作流
-    // 为什么单独分支：PDF 不是 Office 格式，与 Office ZIP+XML 解析路径无关
-    if (ext === 'pdf') {
-      rawContent = await convertPdfToMarkdown(buf);
-      rawFilename = baseName.replace(/\.[^.]+$/, '') + '.md';
-    } else if (OCR_SUPPORTED_MIME[ext]) {
-      // FR-13-2: Image OCR via LLM vision model
-      // Why separate branch: images have no text layer, must go through OCR
-      const ocrConfig = appConfig ? resolveOcrConfig(appConfig) : null;
-      if (ocrConfig) {
-        const mimeType = OCR_SUPPORTED_MIME[ext];
-        rawContent = await ocrImageToMarkdown(buf, mimeType, ocrConfig);
-      } else {
-        rawContent = '[Warning: Image OCR is not configured. Please configure the ocr field in config.json with a vision-capable model.]';
-      }
-      rawFilename = baseName.replace(/\.[^.]+$/, '') + '.md';
-    } else if (AUDIO_SUPPORTED_MIME[ext]) {
-      // FR-13-3: Audio transcription via LLM voice model (OpenAI-compatible /v1/audio/transcriptions)
-      // Why separate branch: audio files have no text layer, must go through STT
-      const audioConfig = appConfig ? resolveAudioConfig(appConfig) : null;
-      if (audioConfig) {
-        const mimeType = AUDIO_SUPPORTED_MIME[ext];
-        rawContent = await audioToText(buf, mimeType, baseName, audioConfig);
-      } else {
-        rawContent = '[Warning: Audio transcription is not configured. Please configure the audio field in config.json with a speech-to-text endpoint (e.g., OpenAI Whisper API).]';
-      }
-      rawFilename = baseName.replace(/\.[^.]+$/, '') + '.md';
-    } else if (['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt'].includes(ext)) {
-      const convResult = await convertOfficeFile(baseName, buf);
-      rawContent = convResult.markdown;
-      rawFilename = baseName.replace(/\.[^.]+$/, '') + '.md';
-    } else {
-      rawContent = buf.toString('utf8');
-      rawFilename = baseName;
-    }
-  } else {
-    rawContent = input.content;
-    rawFilename = input.rawPath ? path.basename(input.rawPath) : `input-${Date.now()}.md`;
-  }
+  // 1. 提取原始内容与文件名，存档到 raw/
+  const { rawContent, rawFilename } = await extractRawContent(input, appConfig);
   const rawPath = await vault.archiveRaw(rawFilename, rawContent);
   yield { step: 'archive', status: 'done', message: `原始资料已存档: ${rawPath}`, data: { path: rawPath } };
 

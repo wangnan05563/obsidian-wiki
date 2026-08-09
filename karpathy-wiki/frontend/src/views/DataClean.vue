@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Sort } from '@element-plus/icons-vue';
@@ -84,7 +84,7 @@ async function loadPages() {
   loading.value = true;
   scanProgress.value = '正在加载页面数据...';
   try {
-    const res = await fetch(`${API_BASE}/data-clean/pages`);
+    const res = await apiFetch(`${API_BASE}/data-clean/pages`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     pages.value = await res.json();
     scanProgress.value = `已加载 ${pages.value.length} 个页面，平均质量 ${qualityStats.value?.avg || 0}/100`;
@@ -95,7 +95,7 @@ async function loadPages() {
     // 自动重试一次：网络抖动等瞬时错误可恢复
     try {
       await new Promise(r => setTimeout(r, 1000));
-      const res = await fetch(`${API_BASE}/data-clean/pages`);
+      const res = await apiFetch(`${API_BASE}/data-clean/pages`);
       if (res.ok) { pages.value = await res.json(); scanProgress.value = '重试成功'; ElMessage.success('重试成功'); }
     } catch { ElMessage.warning('重试也失败 — 请检查服务状态'); }
   } finally { loading.value = false; }
@@ -104,7 +104,7 @@ async function loadPages() {
 async function runDeduplication() {
   scanProgress.value = '正在检测重复页面（基于内容哈希 + Jaccard 相似度）...';
   try {
-    const res = await fetch(`${API_BASE}/data-clean/deduplicate`, { method: 'POST' });
+    const res = await apiFetch(`${API_BASE}/data-clean/deduplicate`, { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: DeduplicateResult = await res.json();
     duplicates.value = data.matches;
@@ -120,7 +120,7 @@ async function runDeduplication() {
 async function runPrecheck() {
   scanProgress.value = '正在执行 Vault 预检...';
   try {
-    const res = await fetch(`${API_BASE}/data-clean/precheck`);
+    const res = await apiFetch(`${API_BASE}/data-clean/precheck`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     precheckResult.value = await res.json();
     // 非空断言：fetch 成功返回 json 后 precheckResult.value 一定非 null
@@ -143,7 +143,7 @@ async function archiveSelected() {
   catch { return; }
   scanProgress.value = '正在归档文件...';
   try {
-    const res = await fetch(`${API_BASE}/data-clean/archive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: selectedPages.value, dry_run: false }) });
+    const res = await apiFetch(`${API_BASE}/data-clean/archive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: selectedPages.value, dry_run: false }) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result = await res.json();
     ElMessage.success(`已归档 ${result.archived.length} 个文件`);
@@ -156,7 +156,7 @@ async function fixFrontmatterFor(paths: string[]) {
   if (paths.length === 0) return;
   scanProgress.value = '正在修复 frontmatter...';
   try {
-    const res = await fetch(`${API_BASE}/data-clean/fix-frontmatter`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths, dry_run: false }) });
+    const res = await apiFetch(`${API_BASE}/data-clean/fix-frontmatter`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths, dry_run: false }) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result = await res.json();
     ElMessage.success(`已为 ${result.fixed.length} 个文件修复 frontmatter`);
@@ -170,7 +170,7 @@ async function mergeDuplicatePair(match: DuplicatePair) {
   catch { return; }
   scanProgress.value = `正在合并 ${match.pageB.title} → ${match.pageA.title}...`;
   try {
-    const res = await fetch(`${API_BASE}/data-clean/merge`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageA: match.pageA, pageB: match.pageB, archive_kept: true, dry_run: false }) });
+    const res = await apiFetch(`${API_BASE}/data-clean/merge`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageA: match.pageA, pageB: match.pageB, archive_kept: true, dry_run: false }) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result: MergeResult = await res.json();
     if (result.errors.length > 0) {

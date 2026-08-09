@@ -1,5 +1,4 @@
-import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
-import type { InjectOptions } from 'fastify';
+import Fastify, { FastifyRequest, FastifyReply, type FastifyInstance, type InjectOptions } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Writable } from 'node:stream';
@@ -149,6 +148,118 @@ function openBrowser(url: string): void {
   }
 }
 
+// 日志双写流设置：同时输出到 stdout 和文件
+// 提取为独立函数降低 main 认知复杂度（S3776）
+// 降级策略：目录创建/文件打开失败时降级到仅 stdout，不阻断主服务
+async function setupLoggerStream(loggingConfig: { level: string; enableRequestLog: boolean; logFilePath?: string }): Promise<{
+  loggerStream: NodeJS.WritableStream | undefined;
+  logFileStream: fs.WriteStream | undefined;
+}> {
+  if (!loggingConfig.logFilePath) return { loggerStream: undefined, logFileStream: undefined };
+  const logPath = path.resolve(getApiDir(), '..', loggingConfig.logFilePath);
+  try {
+    await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
+    // 预检：以追加模式同步打开并立即关闭，确认目录/文件可写
+    const testFd = fs.openSync(logPath, 'a');
+    fs.closeSync(testFd);
+    const fileStream = fs.createWriteStream(logPath, { flags: 'a' });
+    let fileStreamHealthy = true;
+    fileStream.on('error', (err) => {
+      if (fileStreamHealthy) {
+        console.warn(`[日志] 日志文件写入失败，降级到仅 stdout：`, err);
+        fileStreamHealthy = false;
+      }
+    });
+    const logFileStream = fileStream;
+    const loggerStream = new Writable({
+      write(chunk, encoding, callback) {
+        process.stdout.write(chunk, encoding);
+        if (fileStreamHealthy && !fileStream.destroyed) {
+          fileStream.write(chunk, encoding, callback);
+        } else {
+          callback();
+        }
+      },
+    });
+    loggerStream.on('error', () => {});
+    console.log(`[日志] 日志文件：${logPath}`);
+    return { loggerStream, logFileStream };
+  } catch (err) {
+    console.warn(`[日志] 日志文件创建失败，降级到仅 stdout：`, err);
+    return { loggerStream: undefined, logFileStream: undefined };
+  }
+}
+
+/**
+ * SPA 静态资源托管设置
+ * 提取为独立函数降低 main 认知复杂度（S3776）
+ * 开发模式由 Vite 5173 提供前端，生成 exe 模式需后端单端口托管 SPA
+ */
+async function setupSpaStatic(app: FastifyInstance): Promise<void> {
+  // 探测顺序（动态）：getApiDir()/public_live_<ts>（每次部署全新时间戳目录，钩子放行新建写入）【按时间戳取最新，首位】
+  //            → getApiDir()/public_live（兼容旧部署，已被钩子锁定 index.html，仅作兜底）
+  //            → getApiDir()/../frontend/dist（vite 默认构建产物，其他环境可写、恒为最新）
+  //            → CWD/public（exe 运行模式）→ getApiDir()/public（开发/api/public 或 SEA/exe/public）
+  //            → static/spa（兼容旧路径）
+  const _apiDir = getApiDir();
+  const spaRoot = resolveSpaRoot(_apiDir);
+  if (spaRoot) {
+    // fastifyStatic 注册两次以同时服务 / 和 /wiki/ 前缀：
+    // 1. prefix='/'：服务 /assets/... /favicon.svg 等（Funnel 剥除 /wiki/ 后的请求）
+    // 2. prefix='/wiki/'：服务 /wiki/assets/... 等（浏览器直接请求 /wiki/ 路径时）
+    // decorateReply:false 避免第二次注册时重复添加 sendFile decorator
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false, decorateReply: false });
+    await app.register(fastifyStatic, { root: spaRoot, prefix: '/wiki/', wildcard: false });
+    // /wiki/* route: handle Tailscale Funnel prefix + SPA fallback
+    // POST/PUT/DELETE 等非 GET 请求需通过 inject 转发到内部 API
+    app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
+      const suffix = request.url.replace(/^\/wiki/, '');
+      if (suffix.startsWith('/api')) {
+        // Forward API request internally using inject
+        // 本项目的 Fastify 类型下 app.inject 返回的是链式 Chain 类型，故将结果显式断言为已解析响应结构；
+        // body/query 同样断言，避免 request.body(=unknown) / request.query 与 inject 入参类型不匹配（TS 报错）。
+        const res = (await app.inject({
+          method: request.method as InjectOptions['method'],
+          url: suffix,
+          headers: Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.toLowerCase() !== 'accept-encoding')),
+          body: request.body as any,
+          query: request.query as any,
+        })) as unknown as { statusCode: number; headers: Record<string, string | undefined>; body: string };
+        // Parse body as JSON to preserve content-type (reply.send(obj) sets application/json)
+        // If parsing fails, send as raw string
+        let responseBody: string | object = res.body;
+        try {
+          responseBody = JSON.parse(res.body);
+        } catch {
+          // Not JSON, send as-is
+        }
+        return reply.status(res.statusCode).header('Content-Type', res.headers['content-type'] || 'application/json').send(responseBody);
+      }
+      if (suffix === '' || suffix === '/') {
+        return reply.sendFile('index.html');
+      }
+      // 静态文件（/wiki/assets/... 等）必须直接伺服，否则浏览器把 HTML 当 JS 解析会整页白屏。
+      // 上方 fastifyStatic(wildcard:false) 不会伺服子路径文件，故在此自行判定磁盘文件是否存在。
+      // resolveSpaAsset 会规范化路径并校验严格落在 spaRoot 之内，杜绝 /wiki/../secret 之类越权访问。
+      const rel = resolveSpaAsset(spaRoot, suffix);
+      if (rel) {
+        return reply.sendFile(rel);
+      }
+      // 非文件（SPA 前端路由，如 /wiki/chat/123）或越界路径，回退 index.html
+      return reply.sendFile('index.html');
+    });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.method === 'GET' && !req.url.startsWith('/api')) {
+        return reply.sendFile('index.html');
+      }
+      reply.code(404).send({ error: 'Not Found' });
+    });
+    console.log('[SPA] served from ' + spaRoot);
+  } else {
+    console.log('[SPA] No SPA artifacts found, API-only mode (dev mode served by Vite)');
+  }
+}
+
 async function main(): Promise<void> {
   // pkg 打包模式：加�?.env + 端口清理
   loadEnvFile();
@@ -210,52 +321,8 @@ async function main(): Promise<void> {
   // 为什么不�?logger: true：默认配置无法控制级别，且不记录请求级日�?
   const loggingConfig = config.logging ?? { level: 'info', enableRequestLog: true, logFilePath: '' };
 
-  // 日志双写：同时输出到 stdout 和文件，确保事后排障有完整日志落盘
-  // 为什么需要：默认 pino 仅输出到 stdout，进程退出后日志丢失，前端报错时无法追溯后端日志
-  // 降级策略：目录创建/文件打开失败时降级到仅 stdout，不阻断主服务（硬约束 6）
-  // 路径解析：基于 getApiDir() 解析日志文件路径
-  // 开发模式：getApiDir() = api/，logFilePath '../logs/api-dev.log' 解析为 karpathy-wiki/logs/api-dev.log
-  // SEA 模式：getApiDir() = exe 目录，logFilePath 解析为 exe 同级 logs/ 目录
-  let loggerStream: NodeJS.WritableStream | undefined;
-  let logFileStream: fs.WriteStream | undefined;
-  if (loggingConfig.logFilePath) {
-    const logPath = path.resolve(getApiDir(), '..', loggingConfig.logFilePath);
-    try {
-      await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
-      // 预检：以追加模式同步打开并立即关闭，确认目录/文件可写。
-      // 为什么需要：沙箱对 logs/ 目录返回 EPERM，createWriteStream 的异步 open 错误会在后续
-      // 写入时以 unhandled 'error' 事件崩溃进程；此处同步预检可在创建流之前安全降级到 stdout。
-      const testFd = fs.openSync(logPath, 'a');
-      fs.closeSync(testFd);
-      const fileStream = fs.createWriteStream(logPath, { flags: 'a' });
-      // 监听 error 事件，避免 unhandled error 崩溃进程
-      // 为什么需要：多进程争抢同一日志文件时 Windows 抛 EBUSY，未监听会触发 uncaughtException
-      let fileStreamHealthy = true;
-      fileStream.on('error', (err) => {
-        if (fileStreamHealthy) {
-          console.warn(`[日志] 日志文件写入失败，降级到仅 stdout：`, err);
-          fileStreamHealthy = false;
-        }
-      });
-      logFileStream = fileStream; // 供 shutdown 关闭（GS-1 长连接资源清理）
-      loggerStream = new Writable({
-        write(chunk, encoding, callback) {
-          process.stdout.write(chunk, encoding);
-          // fileStream 不健康或已销毁时跳过文件写入，直接回调避免阻塞 pino
-          if (fileStreamHealthy && !fileStream.destroyed) {
-            fileStream.write(chunk, encoding, callback);
-          } else {
-            callback();
-          }
-        },
-      });
-      // 防御：loggerStream 自身错误不应导致进程崩溃（硬约束 6）
-      loggerStream.on('error', () => {});
-      console.log(`[日志] 日志文件：${logPath}`);
-    } catch (err) {
-      console.warn(`[日志] 日志文件创建失败，降级到仅 stdout：`, err);
-    }
-  }
+  // 日志双写：同时输出到 stdout 和文件（提取为独立函数降低 main 认知复杂度）
+  const { loggerStream, logFileStream } = await setupLoggerStream(loggingConfig);
 
   const app = Fastify({
     logger: {
@@ -462,73 +529,8 @@ registerDataCleanRoute(app, vault, isolationGuards);
   // 健康检查端点（�?docker-compose healthcheck 用）
   app.get('/health', async () => ({ ok: true }));
 
-  // SPA 静态资源托管（生产模式 / exe 打包模式）
-  // 为什么需要：开发模式由 Vite 5173 提供前端，生成 exe 模式需后端单端口托管 SPA
-  // 探测顺序（动态）：getApiDir()/public_live_<ts>（每次部署全新时间戳目录，钩子放行新建写入）【按时间戳取最新，首位】
-  //            → getApiDir()/public_live（兼容旧部署，已被钩子锁定 index.html，仅作兜底）
-  //            → getApiDir()/../frontend/dist（vite 默认构建产物，其他环境可写、恒为最新）
-  //            → CWD/public（exe 运行模式）→ getApiDir()/public（开发/api/public 或 SEA/exe/public）
-  //            → static/spa（兼容旧路径）
-  // 说明：本沙箱 safe-delete 钩子锁定「已存在文件」的覆盖/重命名（含 frontend/dist 与 public_live/index.html，均 EPERM），
-  //       导致无法原地刷新 SPA。故 _deploy_live.mjs 每次写入全新 api/public_live_<ts> 目录（全部为新建，钩子放行），
-  //       启动时按时间戳倒序自动选取最新部署目录，无需改代码即可切换。public_live 作为兜底保留。
-  const _apiDir = getApiDir();
-  const spaRoot = resolveSpaRoot(_apiDir);
-  if (spaRoot) {
-    // fastifyStatic 注册两次以同时服务 / 和 /wiki/ 前缀：
-    // 1. prefix='/'：服务 /assets/... /favicon.svg 等（Funnel 剥除 /wiki/ 后的请求）
-    // 2. prefix='/wiki/'：服务 /wiki/assets/... 等（浏览器直接请求 /wiki/ 路径时）
-    // decorateReply:false 避免第二次注册时重复添加 sendFile decorator
-    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false, decorateReply: false });
-    await app.register(fastifyStatic, { root: spaRoot, prefix: '/wiki/', wildcard: false });
-    // /wiki/* route: handle Tailscale Funnel prefix + SPA fallback
-    // POST/PUT/DELETE 等非 GET 请求需通过 inject 转发到内部 API
-    app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
-      const suffix = request.url.replace(/^\/wiki/, '');
-      if (suffix.startsWith('/api')) {
-        // Forward API request internally using inject
-        // 本项目的 Fastify 类型下 app.inject 返回的是链式 Chain 类型，故将结果显式断言为已解析响应结构；
-        // body/query 同样断言，避免 request.body(=unknown) / request.query 与 inject 入参类型不匹配（TS 报错）。
-        const res = (await app.inject({
-          method: request.method as InjectOptions['method'],
-          url: suffix,
-          headers: Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.toLowerCase() !== 'accept-encoding')),
-          body: request.body as any,
-          query: request.query as any,
-        })) as unknown as { statusCode: number; headers: Record<string, string | undefined>; body: string };
-        // Parse body as JSON to preserve content-type (reply.send(obj) sets application/json)
-        // If parsing fails, send as raw string
-        let responseBody: string | object = res.body;
-        try {
-          responseBody = JSON.parse(res.body);
-        } catch {
-          // Not JSON, send as-is
-        }
-        return reply.status(res.statusCode).header('Content-Type', res.headers['content-type'] || 'application/json').send(responseBody);
-      }
-      if (suffix === '' || suffix === '/') {
-        return reply.sendFile('index.html');
-      }
-      // 静态文件（/wiki/assets/... 等）必须直接伺服，否则浏览器把 HTML 当 JS 解析会整页白屏。
-      // 上方 fastifyStatic(wildcard:false) 不会伺服子路径文件，故在此自行判定磁盘文件是否存在。
-      // resolveSpaAsset 会规范化路径并校验严格落在 spaRoot 之内，杜绝 /wiki/../secret 之类越权访问。
-      const rel = resolveSpaAsset(spaRoot, suffix);
-      if (rel) {
-        return reply.sendFile(rel);
-      }
-      // 非文件（SPA 前端路由，如 /wiki/chat/123）或越界路径，回退 index.html
-      return reply.sendFile('index.html');
-    });
-    app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !req.url.startsWith('/api')) {
-        return reply.sendFile('index.html');
-      }
-      return reply.code(404).send({ error: 'Not Found' });
-    });
-    console.log('[SPA] served from ' + spaRoot);
-  } else {
-    console.log('[SPA] No SPA artifacts found, API-only mode (dev mode served by Vite)');
-  }
+  // SPA 静态资源托管（提取为独立函数降低 main 认知复杂度）
+  await setupSpaStatic(app);
 
   try {
     await app.listen({ host: config.server.host, port: config.server.port });

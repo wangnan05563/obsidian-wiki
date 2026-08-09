@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
@@ -11,9 +11,9 @@ export function registerVaultRoute(app: FastifyInstance, vault: VaultService, gu
   app.post('/api/vault/init', { preHandler: guards.requireAdmin }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       await vault.init();
-      return reply.send({ ok: true, vaultPath: vault.getVaultPath() });
+      return void reply.send({ ok: true, vaultPath: vault.getVaultPath() });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }

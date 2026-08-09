@@ -1,5 +1,5 @@
 import { ref, type Ref } from 'vue';
-import { API_BASE } from '../../utils/apiBase';
+import { API_BASE, apiFetch } from '../../utils/apiBase';
 import type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 
 // DoubaoTTSProvider：基于后端代理的豆包 TTS（volcengine）云端朗读。
@@ -84,7 +84,7 @@ export function createDoubaoTTSProvider(config: DoubaoTTSConfig = {}): TTSProvid
       // 异步获取音频并播放：避免阻塞 speak() 调用契约
       void (async () => {
         try {
-          const res = await fetch(`${API_BASE}${endpoint}`, {
+          const res = await apiFetch(`${API_BASE}${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text, voice, rate }),

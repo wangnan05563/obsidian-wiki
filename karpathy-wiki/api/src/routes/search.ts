@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 import type { WebSearchConfig } from '../types.js';
 import { searchPages } from '../search-util.js';
@@ -14,7 +14,7 @@ export function registerSearchRoute(app: FastifyInstance, vault: VaultService) {
     const query = request.query as { q?: string; source?: string; status?: string; type?: string };
     const hasFilter = query.source || query.status || query.type;
     if (!query.q?.trim() && !hasFilter) {
-      return reply.code(400).send({ error: '缺少 q 参数或过滤条件（source/status/type）' });
+      return void reply.code(400).send({ error: '缺少 q 参数或过滤条件（source/status/type）' });
     }
 
     try {
@@ -23,9 +23,9 @@ export function registerSearchRoute(app: FastifyInstance, vault: VaultService) {
         status: query.status,
         type: query.type,
       });
-      return reply.send({ hits, total: hits.length });
+      reply.send({ hits, total: hits.length });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -40,23 +40,23 @@ export function registerWebSearchRoute(app: FastifyInstance, config?: WebSearchC
   app.post('/api/search/web', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { query?: string; limit?: number };
     if (typeof body?.query !== 'string') {
-      return reply.code(400).send({ error: '请求体须含 query 字段' });
+      return void reply.code(400).send({ error: '请求体须含 query 字段' });
     }
     if (!config) {
-      return reply.code(400).send({ error: '搜索功能未配置' });
+      return void reply.code(400).send({ error: '搜索功能未配置' });
     }
 
     // 复用 workflow 工厂：保证路由直调与工具调用行为一致
     const tool = createWebSearchTool(config);
     if (!tool) {
-      return reply.code(400).send({ error: '搜索 API Key 未配置' });
+      return void reply.code(400).send({ error: '搜索 API Key 未配置' });
     }
 
     try {
       const results = await tool.handler({ query: body.query, limit: body.limit });
-      return reply.send({ results, total: results.length });
+      reply.send({ results, total: results.length });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }

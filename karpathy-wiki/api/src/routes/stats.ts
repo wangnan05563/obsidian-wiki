@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { VaultService } from '../vault/vault-service.js';
@@ -45,14 +45,14 @@ export function registerStatsRoute(app: FastifyInstance, vault: VaultService) {
         // log.md 可能还未创建
       }
 
-      return reply.send({
+      reply.send({
         totalPages: graph.nodes.length,
         totalLinks: graph.edges.length,
         dirCounts,
         recentLog,
       });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }

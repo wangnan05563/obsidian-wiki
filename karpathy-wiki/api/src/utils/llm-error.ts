@@ -14,8 +14,8 @@ const PROVIDER_FAULT_PATTERNS: Record<string, RegExp> = {
 // 从原始错误信息中提取 HTTP 状态码
 function extractStatusCode(errMsg: string): number | null {
   // 匹配 "LLM API error 520:" 或 "HTTP 502" 等模式
-  const match = errMsg.match(/(?:HTTP|error)\s+(\d{3})\b/i);
-  return match ? parseInt(match[1], 10) : null;
+  const match = errMsg.match(/(?:HTTP|error)\s+(?<code>\d{3})\b/i);
+  return match ? Number.parseInt(match.groups!.code, 10) : null;
 }
 
 // 检测错误是否来自特定 provider

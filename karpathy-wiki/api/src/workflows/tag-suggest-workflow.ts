@@ -160,8 +160,8 @@ export async function confirmTagForPage(
   const raw = await vault.readFile(pagePath);
   const parsed = matter(raw);
 
-  const existingTags: string[] = Array.isArray(parsed.data.tags) ? (parsed.data.tags as string[]) : [];
-  const existingAiTags: string[] = Array.isArray(parsed.data.ai_tags) ? (parsed.data.ai_tags as string[]) : [];
+  const existingTags = ensureStringArray(parsed.data.tags);
+  const existingAiTags = ensureStringArray(parsed.data.ai_tags);
 
   // 已存在于 tags 则直接返回当前状态（幂等）
   if (existingTags.includes(tag)) {
@@ -194,4 +194,9 @@ export { type PendingTagPage } from '../vault/vault-service.js';
 
 export async function listPendingTagPages(vault: VaultService): Promise<PendingTagPage[]> {
   return vault.listPendingTagPages();
+}
+
+/** 安全地将 unknown 值转为 string[]，过滤非字符串元素 */
+function ensureStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }

@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import matter from 'gray-matter';
 import type { VaultService } from '../vault/vault-service.js';
 import path from 'node:path';
@@ -29,16 +29,16 @@ export function registerFilesRoutes(app: FastifyInstance, vault: VaultService, g
     const now = Date.now();
     // 检查缓存
     if (filesTreeCache && (now - filesTreeCache.cachedAt) < FILES_TREE_CACHE_TTL_MS) {
-      return reply.send({ tree: filesTreeCache.tree });
+      return void reply.send({ tree: filesTreeCache.tree });
     }
 
     try {
       const tree = await vault.listTree();
       // 写入缓存
       filesTreeCache = { tree, cachedAt: now };
-      return reply.send({ tree });
+      return void reply.send({ tree });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -49,14 +49,14 @@ export function registerFilesRoutes(app: FastifyInstance, vault: VaultService, g
   app.get('/api/files/pages', { config: { rateLimit: READ_RATE_LIMIT } }, async (_request, reply) => {
     const now = Date.now();
     if (filesPagesCache && (now - filesPagesCache.cachedAt) < FILES_TREE_CACHE_TTL_MS) {
-      return reply.send({ pages: filesPagesCache.pages });
+      return void reply.send({ pages: filesPagesCache.pages });
     }
     try {
       const pages = await vault.listAllPages();
       filesPagesCache = { pages, cachedAt: now };
-      return reply.send({ pages });
+      return void reply.send({ pages });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -66,7 +66,7 @@ export function registerFilesRoutes(app: FastifyInstance, vault: VaultService, g
   app.get('/api/files', { config: { rateLimit: READ_RATE_LIMIT } }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { path?: string };
     if (!query.path) {
-      return reply.code(400).send({ error: '缺少 path 参数' });
+      return void reply.code(400).send({ error: '缺少 path 参数' });
     }
     try {
       // 图片等二进制文件：直接返回二进制流（不经过 gray-matter 解析）
@@ -82,18 +82,18 @@ export function registerFilesRoutes(app: FastifyInstance, vault: VaultService, g
           '.m4a': 'audio/mp4', '.mp4': 'video/mp4', '.webm': 'video/webm',
         };
         reply.header('Content-Type', contentTypes[ext] || 'application/octet-stream');
-        return reply.send(buffer);
+        return void reply.send(buffer);
       }
       const content = await vault.readFile(query.path);
       // gray-matter 分离 frontmatter 与正文，前端可分别渲染元信息与 Markdown 正文
       const parsed = matter(content);
-      return reply.send({
+      return void reply.send({
         content,
         frontmatter: parsed.data,
         body: parsed.content,
       });
     } catch (err: unknown) {
-      return reply.code(404).send({
+      return void reply.code(404).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -103,20 +103,20 @@ export function registerFilesRoutes(app: FastifyInstance, vault: VaultService, g
   app.put('/api/files', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { path?: string };
     if (!query.path) {
-      return reply.code(400).send({ error: '缺少 path 参数' });
+      return void reply.code(400).send({ error: '缺少 path 参数' });
     }
     const body = request.body as { content?: string };
     if (!body || typeof body.content !== 'string') {
-      return reply.code(400).send({ error: '请求体须有 content 字段' });
+      return void reply.code(400).send({ error: '请求体须有 content 字段' });
     }
     try {
       await vault.writeFile(query.path, body.content);
       // 文件变更后使目录树与页面列表缓存同时失效（写后即刷）
       filesTreeCache = null;
       filesPagesCache = null;
-      return reply.send({ ok: true, path: query.path });
+      return void reply.send({ ok: true, path: query.path });
     } catch (err: unknown) {
-      return reply.code(403).send({
+      return void reply.code(403).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }

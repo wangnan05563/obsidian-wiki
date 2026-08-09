@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -92,9 +92,9 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService, 
   app.get('/api/schema', { config: { rateLimit: READ_RATE_LIMIT } }, async (_request, reply) => {
     try {
       const content = await vault.readFile('SCHEMA.md');
-      return reply.send({ content });
+      return void reply.send({ content });
     } catch (err: unknown) {
-      return reply.code(404).send({
+      return void reply.code(404).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -103,16 +103,16 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService, 
   app.put('/api/schema', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { content?: string };
     if (!body || typeof body.content !== 'string') {
-      return reply.code(400).send({ error: '请求体须含 content 字段' });
+      return void reply.code(400).send({ error: '请求体须含 content 字段' });
     }
     try {
       const full = path.resolve(vault.getVaultPath(), 'SCHEMA.md');
       await fs.writeFile(full, body.content, 'utf8');
       // 清除缓存，因为 SCHEMA.md 已被修改
       cache.clear();
-      return reply.send({ ok: true });
+      return void reply.send({ ok: true });
     } catch (err: unknown) {
-      return reply.code(500).send({
+      return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -125,7 +125,7 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService, 
     // 先查缓存
     const cached = getFromCache(cacheKey);
     if (cached) {
-      return reply.send(cached);
+      return void reply.send(cached);
     }
 
     const log = await runGit(vaultPath, [
@@ -148,20 +148,20 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService, 
 
     // 写入缓存
     setInCache(cacheKey, result);
-    return reply.send(result);
+    return void reply.send(result);
   });
 
   app.get('/api/schema/diff', { config: { rateLimit: READ_RATE_LIMIT } }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { from?: string; to?: string };
     if (!query.from) {
-      return reply.code(400).send({ error: '缺少 from 参数' });
+      return void reply.code(400).send({ error: '缺少 from 参数' });
     }
     // 防参数注入：from/to 直接传入 git 命令，必须校验为 commit hash 格式
     if (!/^[0-9a-f]{7,40}$/i.test(query.from)) {
-      return reply.code(400).send({ error: 'from 参数须为 commit hash 格式' });
+      return void reply.code(400).send({ error: 'from 参数须为 commit hash 格式' });
     }
     if (query.to && query.to !== 'HEAD' && !/^[0-9a-f]{7,40}$/i.test(query.to)) {
-      return reply.code(400).send({ error: 'to 参数须为 commit hash 格式或 HEAD' });
+      return void reply.code(400).send({ error: 'to 参数须为 commit hash 格式或 HEAD' });
     }
 
     const vaultPath = vault.getVaultPath();
@@ -171,11 +171,11 @@ export function registerSchemaRoutes(app: FastifyInstance, vault: VaultService, 
     ]);
 
     if (!diff.trim()) {
-      return reply.send({ lines: [], hasChanges: false });
+      return void reply.send({ lines: [], hasChanges: false });
     }
 
     const lines = parseDiffLines(diff);
-    return reply.send({ lines, hasChanges: lines.length > 0 });
+    return void reply.send({ lines, hasChanges: lines.length > 0 });
   });
 }
 
