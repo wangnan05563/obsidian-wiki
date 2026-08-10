@@ -33,4 +33,4 @@ for i, line in enumerate(lines):
 result = "\n".join(lines)
 with open(path, "w", encoding="utf-8") as f:
     f.write(result)
-print(f"\nDone. Fixed lines with ?{{ pattern.")
+print("\nDone. Fixed lines with ?{ pattern.")

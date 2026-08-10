@@ -15,7 +15,7 @@ const SKILLS_ROOT = path.resolve(getDataDir(), 'skills');
 
 // 技能 ID 白名单正则：仅允许小写字母、数字、连字符、下划线
 // 为什么需要：防止路径穿越攻击（如 "../etc/passwd" 作为 skillId），CODING-005 输入白名单
-const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
+const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
 // 允许的文件扩展名（ZIP 归档主格式 + Markdown 辅格式）
 // 为什么双格式：.skill 是约定俗成的 ZIP 归档扩展名，.md 支持单文件技能快速导入
@@ -48,8 +48,8 @@ function deriveSkillId(filename: string): string {
   // 转小写 + 替换非白名单字符为连字符
   const cleaned = basename
     .toLowerCase()
-    .replace(/[^a-z0-9-_]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/[^a-z0-9_-]+/g, '-') // NOSONAR - S6535+S5850 - 连字符在字符类末尾已是字面量
+    .replace(/(?:^-+)|(?:-+$)/, '');
   // 校验是否符合 ID 白名单（首字符必须是字母或数字）
   if (!SKILL_ID_PATTERN.test(cleaned)) {
     // 清洗后仍不合法时用时间戳兜底，避免导入失败

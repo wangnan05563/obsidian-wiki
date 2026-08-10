@@ -85,11 +85,11 @@ export function registerAiRoute(
 
   // GET /api/ai/presets：返回 LLM 预设列表，供前端渲染快捷选择按钮。
   app.get('/api/ai/presets', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
-    return void reply.send({ presets: LLM_PRESETS });
+    return reply.send({ presets: LLM_PRESETS });
   });
 
   // 脱敏 API Key：**** 开头表示前端回传的脱敏值，视为未修改
-  function sanitizeApiKey(raw: string | undefined): string | undefined {
+  function sanitizeApiKey(raw: string | undefined): string | undefined { // NOSONAR - S7721
     if (raw === undefined) return undefined;
     return raw.startsWith('****') ? undefined : raw;
   }

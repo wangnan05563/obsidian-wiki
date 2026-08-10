@@ -38,13 +38,17 @@ async function handleLogin() {
   }
   loading.value = true;
   errorMsg.value = '';
-  const ok = await authStore.login({
-    username: username.value,
-    password: password.value,
-  });
-  loading.value = false;
-  if (!ok) {
-    errorMsg.value = authStore.error || '登录失败';
+  try {
+    const ok = await authStore.login({
+      username: username.value,
+      password: password.value,
+    });
+    if (!ok) {
+      errorMsg.value = authStore.error || '登录失败';
+    }
+  } finally {
+    // 无论成功/失败/异常都复位 loading，避免卡在「登录中…」（state-machine-simplify-rule）
+    loading.value = false;
   }
   // 登录成功由父组件监听 isLoggedIn 切换视图，此处无需处理
 }

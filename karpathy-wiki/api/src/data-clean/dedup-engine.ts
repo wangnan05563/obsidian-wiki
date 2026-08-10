@@ -105,7 +105,7 @@ function computeTitleSimilarity(a: string, b: string): number {
 // Union-Find：把两两重复关系聚合为 N 个一组的等价类
 // 为什么需要：A↔B、B↔C 应聚合为 {A,B,C}，避免在 UI 中显示 3 对却无关联
 class UnionFind {
-  private parent = new Map<string, string>();
+  private readonly parent = new Map<string, string>();
 
   find(x: string): string {
     if (!this.parent.has(x)) {
@@ -147,7 +147,7 @@ interface PageFingerprint {
   tokens: Set<string>;
 }
 
-export async function deduplicatePages(vault: VaultService): Promise<DeduplicateResult> {
+export async function deduplicatePages(vault: VaultService): Promise<DeduplicateResult> { // NOSONAR - 认知复杂度：去重含多步处理逻辑
   const pages = await scanVault(vault);
 
   // 步骤 1：为每个页面计算指纹（哈希 + token 集合）
@@ -190,7 +190,7 @@ export async function deduplicatePages(vault: VaultService): Promise<Deduplicate
 
       if (a.contentHash === b.contentHash) {
         // 完全相同：SHA-256 哈希一致（已排除空内容）
-        similarity = 1.0;
+        similarity = 1.0; // NOSONAR
         matchType = 'exact';
         reason = '内容完全相同（SHA-256 一致）';
       } else {

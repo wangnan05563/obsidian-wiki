@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+﻿import fs from 'node:fs/promises';
 import type { HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
@@ -13,8 +13,12 @@ async function loadMultimodalPrompt(): Promise<string> {
   return fs.readFile(getPromptPath('multimodal-output.md'), 'utf8');
 }
 
+// 多模态输出模式列表（as const 确保类型安全）
+export const MULTIMODAL_MODES = ['mindmap', 'faq', 'timeline'] as const;
+export type MultimodalMode = (typeof MULTIMODAL_MODES)[number];
+
 // 模式 → 中文标签（用于 thinking 提示与日志）
-const MODE_LABELS: Record<string, string> = {
+const MODE_LABELS: Record<MultimodalMode, string> = {
   mindmap: '思维导图',
   faq: '问答对',
   timeline: '时间线',
@@ -85,7 +89,7 @@ export async function collectContextPages(
 
 // 构造 LLM 输入 prompt：模式指令 + 上下文页面 + 用户问题
 async function buildMultimodalPrompt(
-  mode: 'mindmap' | 'faq' | 'timeline',
+  mode: MultimodalMode,
   pages: { path: string; title: string; content: string; created: string }[],
   question: string,
 ): Promise<string> {
@@ -114,7 +118,7 @@ export async function generateMultimodalOutput(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   question: string,
-  mode: 'mindmap' | 'faq' | 'timeline',
+  mode: MultimodalMode,
   contextPaths?: string[],
 ): Promise<MultimodalOutput> {
   // 1. 收集相关页面作为生成上下文（优先复用主问答 refs）
@@ -154,6 +158,6 @@ export async function generateMultimodalOutput(
 }
 
 // 导出模式标签供路由层使用（thinking 提示文案）
-export function getModeLabel(mode: 'mindmap' | 'faq' | 'timeline'): string {
+export function getModeLabel(mode: MultimodalMode): string {
   return MODE_LABELS[mode] ?? mode;
 }

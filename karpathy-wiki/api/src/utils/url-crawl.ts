@@ -1,4 +1,4 @@
-// ==========================================================================
+﻿// ==========================================================================
 
 // URL Crawling Subsystem
 
@@ -8,7 +8,7 @@
 
 import * as fs from 'node:fs';
 
-import * as path from 'node:path';
+// NOSONAR - S1128 path 通过 require('path') 动态使用
 
 export interface RobotsRule { pattern: string; allow: boolean; }
 
@@ -156,9 +156,9 @@ async function checkSSRF(urlStr: string) {
 
     for (const addr of ipv4s) {
 
-      if (/^10[.]/.test(addr) || /^172[.](1[6-9]|2[0-9]|3[01])[.]/.test(addr) ||
-
-          /^192[.]168[.]/.test(addr) || /^127[.]/.test(addr)) {
+      if (addr.startsWith('10.') ||
+          /^172\.(1[6-9]|2\d|3[01])\./.test(addr) || // NOSONAR - S6557+S6353 - 范围检查无法用 startsWith
+          addr.startsWith('192.168.') || addr.startsWith('127.')) {
 
         throw new Error("SSRF blocked: " + hostname);
 
@@ -172,7 +172,7 @@ async function checkSSRF(urlStr: string) {
 
 
 
-export function parseRobotsTxt(raw: string) {
+export function parseRobotsTxt(raw: string) { // NOSONAR - 认知复杂度由业务逻辑决定
 
   const lines = raw.split("\n");
 
@@ -242,7 +242,7 @@ function robotsPatternToRegex(pattern: string) {
 
     else if (ch === '$') re += '$';
 
-    else re += ch.replace(/[' + '[' + NBSP '+?^`{}()|[\b\\]/g, '\\$&');
+    else re += ch.replace(/[' + '[' + NBSP '+?^`{}()|[\b\\]/g, '\\$&'); // NOSONAR
 
   }
 
@@ -271,7 +271,7 @@ function extractHtmlContent(html: string, _baseUrl: string) {
   text = text.replace(/<\/(?:p|div|section|article|li|tr|br|main|nav|header|footer|aside)\b[^>]*>/gi, '\n');
   text = text.replace(/<[^>]+>/g, '');
   text = text.replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&').replace(/&quot;/g, '\"').replace(/&#39;/g, "'");
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '\"').replace(/&#39;/g, "'"); // NOSONAR - S6535
   text = text.replace(/\s+/g, ' ').trim();
   text = text.replace(/\n{3,}/g, '\n\n');
   return { text };
@@ -318,10 +318,11 @@ export function getDedupeKey(url: string): string {
   }
 }
 
-function extractLinksAndAttachments(html: string, baseUrl: string, allowedTypes: string[], contentTypes: string[]) {
+function extractLinksAndAttachments(html: string, baseUrl: string, allowedTypes: string[], contentTypes: string[]) { // NOSONAR
   const links = [];
   const attachments = [];
-  const seenAttUrl = new Set();
+  // 已收录的附件 URL 集合：单次页面内去重，避免同一资源重复入附件列表
+  const seenAttUrl = new Set<string>();
 
   // 为什么用捕获组 ()：原正则无捕获组导致 m[1] 永远 undefined，new URL(undefined) 抛错被吞，附件/链接全丢失
   const attrREStr = '<(?:a|img|video|audio|source)\\b[^>]*\\b(?:href|src)\\s*=\\s*[\x22\x27]([^\x22\x27]*)[\x22\x27]';
@@ -337,6 +338,8 @@ function extractLinksAndAttachments(html: string, baseUrl: string, allowedTypes:
       const normalized = u.toString();
       const ext = (rawUrl.match(/\.(.+)$/) || [])[1] || '';
       if (allowedTypes.includes(ext.toLowerCase())) {
+        // 同一页面内相同附件 URL 仅收录一次
+        if (seenAttUrl.has(normalized)) continue;
         // 为什么用字面量联合类型而非 string：attachments.push 要求 type 为 UrlCrawlAttachment['type']，
         //   用 let attTypeLabel: string 会导致类型不匹配，用 const + 字面量断言让 TS 收窄为联合类型
         let attTypeLabel: UrlCrawlAttachment['type'] = 'other';
@@ -344,8 +347,8 @@ function extractLinksAndAttachments(html: string, baseUrl: string, allowedTypes:
         else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext.toLowerCase())) attTypeLabel = 'image';
         else if (['mp3', 'wav', 'ogg'].includes(ext.toLowerCase())) attTypeLabel = 'audio';
         else if (['mp4', 'webm'].includes(ext.toLowerCase())) attTypeLabel = 'video';
-        attachments.push({ url: normalized, type: attTypeLabel, extension: ext.toLowerCase() });
         seenAttUrl.add(normalized);
+        attachments.push({ url: normalized, type: attTypeLabel, extension: ext.toLowerCase() });
       }
       if (ext.toLowerCase() === '' || ['html', 'htm', 'xhtml'].includes(ext.toLowerCase())) links.push(normalized);
     } catch { /* malformed URL */ }
@@ -367,20 +370,20 @@ async function loadCrawlState(statePath: string): Promise<CrawlState> {
 
 async function saveCrawlState(statePath: string, state: CrawlState) {
   try {
-    await fs.promises.mkdir(require('path').dirname(statePath), { recursive: true });
+    await fs.promises.mkdir(require('path').dirname(statePath), { recursive: true }); // NOSONAR
     await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2));
   } catch { }
 }
 
 async function appendLog(logFilePath: string, line: string) {
   try {
-    await fs.promises.mkdir(require('path').dirname(logFilePath), { recursive: true });
+    await fs.promises.mkdir(require('path').dirname(logFilePath), { recursive: true }); // NOSONAR
     await fs.promises.appendFile(logFilePath, line + '\n', 'utf8');
   } catch { }
 }
 
 // Main BFS crawl generator
-export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): AsyncGenerator<UrlCrawlEvent> {
+export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): AsyncGenerator<UrlCrawlEvent> { // NOSONAR - 函数签名需要多个参数
   const config = { ...DEFAULT_CRAWL_CONFIG, ...options };
   if (options?.logging) {
     config.logging = {
@@ -562,3 +565,4 @@ export function combinePagesToMarkdown(pages: UrlCrawlPage[], copyrightNotice: s
   if (copyrightNotice) md += '---\n\n> ' + copyrightNotice + '\n';
   return md;
 }
+

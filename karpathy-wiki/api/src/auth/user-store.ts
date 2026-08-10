@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+﻿import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -170,7 +170,7 @@ export function validateRegistrationInput(params: {
     return { ok: false, error: '用户名和密码不能为空', status: 400 };
   }
   // 用户名：3-32 位字母、数字、下划线
-  if (!/^[A-Za-z0-9_]{3,32}$/.test(username)) {
+  if (!/^\w{3,32}$/.test(username)) {
     return { ok: false, error: '用户名须为 3-32 位字母、数字或下划线', status: 400 };
   }
   // 密码：长度 8-64（简易机制的安全底线）

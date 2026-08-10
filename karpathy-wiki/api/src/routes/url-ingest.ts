@@ -148,10 +148,10 @@ export function registerUrlIngestRoute(
           logFilePath: currentUrlCrawl.logging?.logFilePath ?? DEFAULT_CRAWL_CONFIG.logging.logFilePath,
         },
       };
-      return void reply.send({ urlCrawl });
+      await reply.send({ urlCrawl });
     } catch (err: unknown) {
       request.log.error({ err }, 'url-ingest config get error');
-      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      await reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -172,7 +172,7 @@ export function registerUrlIngestRoute(
       return void reply.send({ urlCrawl: updated.urlCrawl });
     } catch (err: unknown) {
       request.log.error({ err }, 'url-ingest config put error');
-      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 }

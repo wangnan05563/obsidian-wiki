@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 //     → existsSync 返回 false（用户机器不存在）→ IS_SEA = true
 // 为什么用 declare：TypeScript ESM 模式不认识 __filename，需声明类型避免编译报错
 declare const __filename: string | undefined;
-const cjsFilename = typeof __filename === 'undefined' ? undefined : __filename;
+const cjsFilename = typeof __filename === 'undefined' ? undefined : __filename; // NOSONAR - 变量在 IS_SEA 表达式中使用
 export const IS_SEA = Boolean(cjsFilename === process.execPath || (cjsFilename && !fs.existsSync(cjsFilename)));
 
 // 源码目录

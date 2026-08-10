@@ -25,6 +25,8 @@ import { useAuthStore } from './stores/auth';
 import { usePermission } from './composables/usePermission';
 import { STORAGE_KEYS } from './constants/storageKeys';
 import type { AuthPermission } from './types';
+import MobileShell from './components/mobile/MobileShell.vue';
+import { useIsMobile } from './composables/useIsMobile';
 
 type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help' | 'users' | 'skill' | 'dataclean';
 
@@ -32,6 +34,10 @@ const store = useCompileStore();
 const authStore = useAuthStore();
 const { isLoggedIn, isAdmin, canView, filterVisibleMenus } = usePermission();
 const currentView = ref<ViewName>('dashboard');
+
+// 移动端判定：满足断点（<768px）时整页渲染 MobileShell，桌面端布局保持不变
+// 为什么在 App 根：单 SPA 无 vue-router，用 isMobile 决定顶层渲染分支
+const { isMobile } = useIsMobile();
 
 // 未登录时的认证界面模式：login / register 互切
 // 注册成功后 authStore 自动写入 token + user，isLoggedIn 变 true，自动进入主应用
@@ -163,7 +169,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-root">
+  <MobileShell v-if="isMobile" />
+  <div v-else class="app-root">
   <!-- 背景视差层：4 层叠加，通过 scrollY 实现视差滚动 -->
   <div class="bg-layer base" :style="{ transform: `translateY(${scrollY * 0.15}px)` }"></div>
   <div class="bg-layer grid" :style="{ transform: `translateY(${scrollY * 0.08}px)` }"></div>
