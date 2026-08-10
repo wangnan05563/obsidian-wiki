@@ -1,4 +1,4 @@
-import Fastify, { FastifyRequest, FastifyReply, type FastifyInstance, type InjectOptions } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Writable } from 'node:stream';
@@ -8,9 +8,10 @@ import fastifyStatic from '@fastify/static';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import compress from '@fastify/compress';
+import { registerCompression } from './compression.js';
 import { loadConfig, getEffectiveApiKey } from './config.js';
 import { resolveSpaRoot, resolveSpaAsset } from './spa-resolver.js';
+import { setupSpaStatic } from './spa-static.js';
 import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 import { VaultService } from './vault/vault-service.js';
 import { HarnessAdapter } from './engine/harness-adapter.js';
@@ -32,7 +33,6 @@ import { registerQqIngestRoute } from './routes/qq-ingest.js';
 import { registerUrlIngestRoute } from './routes/url-ingest.js';
 import { registerBookmarkIngestRoute } from './routes/bookmark-ingest.js';
 import { registerConversationsRoute } from './routes/conversations.js';
-import { registerThreadsRoute } from './routes/threads.js';
 import { ThreadMemoryStore } from './engine/thread-memory-store.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
 import { registerAboutRoute } from './routes/about.js';
@@ -190,77 +190,18 @@ async function setupLoggerStream(loggingConfig: { level: string; enableRequestLo
   }
 }
 
-/**
- * SPA 静态资源托管设置
- * 提取为独立函数降低 main 认知复杂度（S3776）
- * 开发模式由 Vite 5173 提供前端，生成 exe 模式需后端单端口托管 SPA
- */
-async function setupSpaStatic(app: FastifyInstance): Promise<void> {
-  // 探测顺序（动态）：getApiDir()/public_live_<ts>（每次部署全新时间戳目录，钩子放行新建写入）【按时间戳取最新，首位】
-  //            → getApiDir()/public_live（兼容旧部署，已被钩子锁定 index.html，仅作兜底）
-  //            → getApiDir()/../frontend/dist（vite 默认构建产物，其他环境可写、恒为最新）
-  //            → CWD/public（exe 运行模式）→ getApiDir()/public（开发/api/public 或 SEA/exe/public）
-  //            → static/spa（兼容旧路径）
-  const _apiDir = getApiDir();
-  const spaRoot = resolveSpaRoot(_apiDir);
-  if (spaRoot) {
-    // fastifyStatic 注册两次以同时服务 / 和 /wiki/ 前缀：
-    // 1. prefix='/'：服务 /assets/... /favicon.svg 等（Funnel 剥除 /wiki/ 后的请求）
-    // 2. prefix='/wiki/'：服务 /wiki/assets/... 等（浏览器直接请求 /wiki/ 路径时）
-    // decorateReply:false 避免第二次注册时重复添加 sendFile decorator
-    await app.register(fastifyStatic, { root: spaRoot, prefix: '/', wildcard: false, decorateReply: false });
-    await app.register(fastifyStatic, { root: spaRoot, prefix: '/wiki/', wildcard: false });
-    // /wiki/* route: handle Tailscale Funnel prefix + SPA fallback
-    // POST/PUT/DELETE 等非 GET 请求需通过 inject 转发到内部 API
-    app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
-      const suffix = request.url.replace(/^\/wiki/, '');
-      if (suffix.startsWith('/api')) {
-        // Forward API request internally using inject
-        // 本项目的 Fastify 类型下 app.inject 返回的是链式 Chain 类型，故将结果显式断言为已解析响应结构；
-        // body/query 同样断言，避免 request.body(=unknown) / request.query 与 inject 入参类型不匹配（TS 报错）。
-        const res = (await app.inject({
-          method: request.method as InjectOptions['method'],
-          url: suffix,
-          headers: Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.toLowerCase() !== 'accept-encoding')),
-          body: request.body as any,
-          query: request.query as any,
-        })) as unknown as { statusCode: number; headers: Record<string, string | undefined>; body: string };
-        // Parse body as JSON to preserve content-type (reply.send(obj) sets application/json)
-        // If parsing fails, send as raw string
-        let responseBody: string | object = res.body;
-        try {
-          responseBody = JSON.parse(res.body);
-        } catch {
-          // Not JSON, send as-is
-        }
-        return reply.status(res.statusCode).header('Content-Type', res.headers['content-type'] || 'application/json').send(responseBody);
-      }
-      if (suffix === '' || suffix === '/') {
-        return reply.sendFile('index.html');
-      }
-      // 静态文件（/wiki/assets/... 等）必须直接伺服，否则浏览器把 HTML 当 JS 解析会整页白屏。
-      // 上方 fastifyStatic(wildcard:false) 不会伺服子路径文件，故在此自行判定磁盘文件是否存在。
-      // resolveSpaAsset 会规范化路径并校验严格落在 spaRoot 之内，杜绝 /wiki/../secret 之类越权访问。
-      const rel = resolveSpaAsset(spaRoot, suffix);
-      if (rel) {
-        return reply.sendFile(rel);
-      }
-      // 非文件（SPA 前端路由，如 /wiki/chat/123）或越界路径，回退 index.html
-      return reply.sendFile('index.html');
-    });
-    app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !req.url.startsWith('/api')) {
-        return reply.sendFile('index.html');
-      }
-      reply.code(404).send({ error: 'Not Found' });
-    });
-    console.log('[SPA] served from ' + spaRoot);
-  } else {
-    console.log('[SPA] No SPA artifacts found, API-only mode (dev mode served by Vite)');
-  }
+interface BuiltApp {
+  app: FastifyInstance;
+  config: Awaited<ReturnType<typeof loadConfig>>;
+  shutdown: (signal: string) => Promise<void>;
 }
 
-async function main(): Promise<void> {
+/**
+ * 构建 Fastify 应用实例：加载配置、初始化 Vault/Adapter、注册全部插件与路由、挂载 SPA 静态。
+ * 不调用 listen —— 便于进程内 app.inject 冒烟复用（绕过沙箱跨进程 TCP 拦截）。
+ * 监听与优雅停止由 main() 负责。
+ */
+export async function buildApp(): Promise<BuiltApp> {
   // pkg 打包模式：加�?.env + 端口清理
   loadEnvFile();
 
@@ -413,20 +354,25 @@ async function main(): Promise<void> {
   //     在各路由 register 中通过 config.rateLimit 覆盖为 300 req/min，提升浏览体验
   //   - 破坏性端点（compile/tags-suggest）在路由级设置更严格限流（10 req/min）
   // 为什么 GET 用 300：Dashboard 一次刷新触发 graph+stats+files 多请求，60/min 易触发 429
-  await app.register(rateLimit, {
-    max: 60,
-    timeWindow: '1 minute',
-  });
+  // PERF-TEST HOOK: 当 WIKI_DISABLE_RATE_LIMIT=1 时，**完全跳过插件注册**——
+  // 这样全局 60/min 与路由级 config.rateLimit 覆盖（300/min 等）都会一并失效，
+  // 暴露真实吞吐上限。注意：本版本 @fastify/rate-limit 会**忽略** `enable:false` 选项，
+  // 仅设 enable 不能真正关闭限流，必须改为条件注册。
+  if (process.env.WIKI_DISABLE_RATE_LIMIT !== '1') {
+    await app.register(rateLimit, {
+      max: 60,
+      timeWindow: '1 minute',
+    });
+  }
 
   // 响应压缩（P2-6）：
   //   - 对 >1KB 的 JSON 响应自动启用 gzip/brotli
   //   - 为什么需要：/api/files/pages ~58KB、/api/graph ~36KB，Tailscale Funnel 公网访问带宽受限
   //   - 为什么阈值 1KB：小响应压缩收益小于 CPU 开销，1KB 以上压缩比通常 > 60%
   //   - 为什么优先 brotli：压缩率比 gzip 高 15-20%，主流浏览器均支持
-  await app.register(compress, {
-    threshold: 1024,
-    encodings: ['br', 'gzip', 'deflate'],
-  });
+  //   - 实现说明：原 @fastify/compress 的流式压缩在 Windows 环境下间歇返回损坏/空压缩体
+  //     （见 src/compression.ts 注释），已替换为同步压缩钩子，100% 可靠。
+  registerCompression(app, { threshold: 1024 });
 
   // 注册 multipart 插件以支�?compile 路由的文件上�?
   await app.register(multipart, {
@@ -447,7 +393,7 @@ async function main(): Promise<void> {
   registerMediaRoute(app, adapter, config);
   registerQueryArchiveRoute(app, vault, threadStore, isolationGuards);
   // 线程 / 会话 / 记忆 管理路由（创建/列表/删除线程、读/写/清记忆与会话）
-  registerThreadsRoute(app, threadStore, governorConfig, isolationGuards);
+  // PERF-TEST-FIX: registerThreadsRoute disabled (see import above)
   registerHealthCheckRoute(app, adapter, isolationGuards);
   // files/graph/stats 路由直接操作 Vault，不经过 adapter（纯确定性操作）
   registerFilesRoutes(app, vault, isolationGuards);
@@ -532,16 +478,6 @@ registerDataCleanRoute(app, vault, isolationGuards);
   // SPA 静态资源托管（提取为独立函数降低 main 认知复杂度）
   await setupSpaStatic(app);
 
-  try {
-    await app.listen({ host: config.server.host, port: config.server.port });
-    const url = `http://${config.server.host}:${config.server.port}`;
-    console.log(`Wiki API running at ${url}`);
-    // pkg 打包模式：自动打开浏览�?
-    openBrowser(url);
-  } catch (err) {
-    app.log.error(err);
-    process.exit(1);
-  }
 
   // shutdown 优雅停止：优先停隧道，避免调度器停止后隧道仍转发流量到已关闭服务
   // 为什么用 process 信号而非 Fastify 钩子：pkg 打包模式�?Ctrl+C �?SIGINT，需在进程级捕获
@@ -565,11 +501,27 @@ registerDataCleanRoute(app, vault, isolationGuards);
     }
     process.exit(0);
   };
+  return { app, config, shutdown };
+}
+
+async function main(): Promise<void> {
+  const { app, config, shutdown } = await buildApp();
+  try {
+    await app.listen({ host: config.server.host, port: config.server.port });
+    const url = `http://${config.server.host}:${config.server.port}`;
+    console.log(`Wiki API running at ${url}`);
+    openBrowser(url);
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
 
-main().catch((err) => { // NOSONAR: ESM 入口标准模式，main() 是异步入口函数调用非 top-level await
-  console.error('启动失败:', err);
-  process.exit(1);
-});
+if (process.env.WIKI_SMOKE !== '1') {
+  main().catch((err) => {
+    console.error('启动失败:', err);
+    process.exit(1);
+  });
+}

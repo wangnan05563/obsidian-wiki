@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+﻿import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { watch, type FSWatcher } from 'chokidar';
@@ -136,7 +136,7 @@ export class VaultService {
   // 为什么独立于 _linkGraphCache：跨 TTL 失效保留，仅文件 mtime 变化时清除对应条目
   // rawLinks = 文件中所有 [[target]] 的 target 字符串列表（未解析为 path）
   // 为什么缓存 rawLinks 而非 edges：edges 依赖 nameToPath 完整映射，节点增删时需重新解析
-  private _fileLinksCache = new Map<string, { mtime: number; rawLinks: string[] }>();
+  private readonly _fileLinksCache = new Map<string, { mtime: number; rawLinks: string[] }>();
 
   // 文件内容二级缓存（P2-7 inode 缓存）
   // 为什么需要：listAllPages/healthCheck 等多次 readFile 同一文件，stat 比 readFile 快 10-100 倍
@@ -731,3 +731,4 @@ export class VaultService {
 function ensureStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
+

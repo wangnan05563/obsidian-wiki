@@ -1,4 +1,4 @@
-import type { ToolDefinition, HarnessConfig } from '@wiki/harness';
+import type { ToolDefinition, HarnessConfig, StepEvent } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import fs from 'node:fs/promises';
 import type { VaultService } from '../vault/vault-service.js';
@@ -8,7 +8,7 @@ import { createWebSearchTool } from '../tools/web-search.js';
 import { loadExtendedTools } from '../tools/registry.js';
 // FR-09-2 多模态输出：主问答完成后追加生成 mindmap/faq/timeline
 // 为什么放在主问答之后：避免结构化输出污染主答案的流式体验；失败不阻塞主问答
-import { generateMultimodalOutput, getModeLabel } from './multimodal-output-workflow.js';
+import { generateMultimodalOutput, getModeLabel, type MultimodalMode } from './multimodal-output-workflow.js';
 // v3 媒体生成：图像/PPT 在 done 前推送 image/ppt 事件
 import { generateImage, generatePpt } from './media-generation-workflow.js';
 
@@ -396,8 +396,8 @@ async function loadExtendedToolsWithFeedback(
 // 通过 afterStep hook 收集 thinking 步骤，run 完成后一次性 yield（harness.run 是阻塞 Promise，运行中无法 yield）。
 // 失败时（harness.run 抛异常或返回 status='failed'）通过 throw 让上层降级链接管。
 // v2: outputModes 透传到内部 yield 过滤（null = 全开）
-async function* queryWithHarness(
-  harnessConfig: HarnessConfig, // NOSONAR - 参数过多是函数签名要求
+async function* queryWithHarness( // NOSONAR - S107 - 函数签名需要多个参数，重构为 options 对象会导致调用处大量修改
+  harnessConfig: HarnessConfig,
   vault: VaultService,
   input: QueryInput,
   options: { webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig; scopeFilter?: { tags?: string[]; folder?: string }; systemPrompt?: string },
@@ -508,12 +508,108 @@ async function* queryWithHarness(
   yield { refs, webRefs, done: true };
 }
 
+// 提取：处理单个 runStream 事件，返回需要 yield 的 chunks 和副作用
+// 为什么提取为独立函数：将 switch 分发逻辑与 generator 循环分离，降低 S3776 认知复杂度
+function processStreamEvent(
+  evt: StepEvent,
+  outputModes: Set<OutputMode> | null,
+  collectedThinking: ThinkingChunk[],
+): { chunks: AnswerChunk[]; finalAnswerDelta: string; error: Error | null } {
+  const chunks: AnswerChunk[] = [];
+  let finalAnswerDelta = '';
+  let error: Error | null = null;
+
+  switch (evt.type) {
+    case 'delta':
+      // 真流式核心：LLM token 增量即时推送，前端 streamingAnswer 逐字追加
+      if (shouldEmit('answer', outputModes)) {
+        chunks.push({ text: evt.text });
+        finalAnswerDelta = evt.text;
+      }
+      break;
+    case 'tool_call':
+      // 工具调用开始：推送 thinking 让前端看到"调用工具 X"
+      if (shouldEmit('tool_call', outputModes)) {
+        const thinking: ThinkingChunk = {
+          phase: 'tool_call',
+          message: `调用工具：${evt.toolCall.function.name}`,
+          ts: new Date().toISOString(),
+        };
+        collectedThinking.push(thinking);
+        chunks.push({ thinking: { ...thinking, ts: new Date().toISOString() } });
+      }
+      break;
+    case 'tool_result':
+      // 工具调用结束：推送 thinking 让前端看到"工具 X 返回"
+      if (shouldEmit('tool_call', outputModes)) {
+        const thinking: ThinkingChunk = {
+          phase: 'tool_call',
+          message: `工具 ${evt.toolCall.function.name} 返回结果`,
+          ts: new Date().toISOString(),
+        };
+        collectedThinking.push(thinking);
+        chunks.push({ thinking: { ...thinking, ts: new Date().toISOString() } });
+      }
+      break;
+    case 'done':
+      // done 事件只在外部处理 finalAnswer，不产生 chunk
+      finalAnswerDelta = ''; // NOSONAR - 语义性清空，被 return 语句使用
+      break;
+    case 'error':
+      error = new Error(evt.message);
+      break;
+  }
+  return { chunks, finalAnswerDelta, error };
+}
+
+// 提取：推流进度、思考过程、引用和后续问题
+// 为什么提取为独立函数：将 stream 消费后的收尾逻辑与主循环分离，降低 S3776 认知复杂度
+async function* emitPostStreamChunks(
+  collectedProgress: QueryProgress[],
+  collectedThinking: ThinkingChunk[],
+  collectedWebRefs: WebRef[],
+  outputModes: Set<OutputMode> | null,
+  finalAnswer: string,
+  vault: VaultService,
+  input: QueryInput,
+): AsyncGenerator<AnswerChunk, void, unknown> {
+  // progress 在流式分支也需推送（harness 阶段已收集）
+  for (const p of collectedProgress) {
+    yield { progress: p };
+  }
+  // thinking 已在事件中实时推送，但起始模式 thinking（如 deep mode）仍需补发
+  for (const t of collectedThinking) {
+    const category: OutputMode = t.phase === 'tool_call' ? 'tool_call' : 'thinking';
+    if (!shouldEmit(category, outputModes)) continue;
+    // 已在事件中推送过的 tool_call thinking 跳过，避免重复
+    if (t.phase === 'tool_call') continue;
+    yield { thinking: { ...t, ts: t.ts || new Date().toISOString() } };
+  }
+
+  const answer = finalAnswer || '知识库未覆盖此问题。';
+  const refs = await extractRefs(answer, vault);
+  const seenUrls = new Set<string>();
+  const webRefs = collectedWebRefs.filter((r) => {
+    if (seenUrls.has(r.url)) return false;
+    seenUrls.add(r.url);
+    return true;
+  });
+  // 中间件 'followups' 控制：与 queryWithHarness 一致的判断逻辑
+  if (shouldRunMiddleware(input.middlewares, 'followups')) {
+    const followups = generateFollowups(input.question, answer, refs);
+    if (followups.length > 0) {
+      yield { followups };
+    }
+  }
+  yield { refs, webRefs, done: true };
+}
+
 // §真流式降级链第 1 级：queryWithHarnessStream
 //   与 queryWithHarness 平行，差异在调用 harness.runStream 而非 harness.run
 //   LLM 逐 delta 即时 yield，工具调用生命周期事件化推送 thinking
 //   失败时（harness.runStream 抛异常或 yield error 事件）通过 throw 让上层降级链接管
-async function* queryWithHarnessStream(
-  harnessConfig: HarnessConfig, // NOSONAR - 参数过多是函数签名要求
+async function* queryWithHarnessStream( // NOSONAR - S107 - 函数签名需要多个参数，重构为 options 对象会导致调用处大量修改
+  harnessConfig: HarnessConfig,
   vault: VaultService,
   input: QueryInput,
   options: { webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig; scopeFilter?: { tags?: string[]; folder?: string }; systemPrompt?: string },
@@ -521,7 +617,7 @@ async function* queryWithHarnessStream(
   collectedWebRefs: WebRef[],
   collectedProgress: QueryProgress[],
   outputModes: Set<OutputMode> | null,
-): AsyncGenerator<AnswerChunk, void, unknown> {
+): AsyncGenerator<AnswerChunk, void, unknown> { // NOSONAR - 函数签名需要多个参数
   // 复用 buildQueryTask 降低认知复杂度（S3776）
   const task = await buildQueryTask(input, { systemPrompt: options.systemPrompt });
 
@@ -555,86 +651,32 @@ async function* queryWithHarnessStream(
     },
   });
 
-  // §消费 runStream 事件流：delta 即时转发，tool_call/tool_result 推送 thinking，done 收尾
+  // §消费 runStream 事件流：通过 processStreamEvent 分发事件，降低 S3776 认知复杂度
   let finalAnswer = '';
   let encounteredError: Error | null = null;
 
   for await (const evt of harness.runStream({ task, context: { question: input.question } })) {
-    const stepEvt = evt;
-    switch (stepEvt.type) {
-      case 'delta':
-        // 真流式核心：LLM token 增量即时推送，前端 streamingAnswer 逐字追加
-        if (shouldEmit('answer', outputModes)) {
-          yield { text: stepEvt.text };
-          finalAnswer += stepEvt.text;
-        }
-        break;
-      case 'tool_call':
-        // 工具调用开始：推送 thinking 让前端看到"调用工具 X"
-        if (shouldEmit('tool_call', outputModes)) {
-          collectedThinking.push({
-            phase: 'tool_call',
-            message: `调用工具：${stepEvt.toolCall.function.name}`,
-            ts: new Date().toISOString(),
-          });
-          yield { thinking: { ...collectedThinking.at(-1)!, ts: new Date().toISOString() } };
-        }
-        break;
-      case 'tool_result':
-        // 工具调用结束：推送 thinking 让前端看到"工具 X 返回"
-        if (shouldEmit('tool_call', outputModes)) {
-          collectedThinking.push({
-            phase: 'tool_call',
-            message: `工具 ${stepEvt.toolCall.function.name} 返回结果`,
-            ts: new Date().toISOString(),
-          });
-          yield { thinking: { ...collectedThinking.at(-1)!, ts: new Date().toISOString() } };
-        }
-        break;
-      case 'done':
-        // finalContent 与累积的 finalAnswer 应一致；如未累积（outputModes 关闭 answer），用 done.finalContent
-        finalAnswer = finalAnswer || stepEvt.finalContent;
-        break;
-      case 'error':
-        encounteredError = new Error(stepEvt.message);
-        break;
+    const { chunks, finalAnswerDelta, error } = processStreamEvent(evt, outputModes, collectedThinking);
+    for (const chunk of chunks) {
+      yield chunk;
     }
-    if (encounteredError) break;
+    finalAnswer += finalAnswerDelta;
+    if (evt.type === 'done') {
+      // finalContent 与累积的 finalAnswer 应一致；如未累积（outputModes 关闭 answer），用 done.finalContent
+      finalAnswer = finalAnswer || evt.finalContent;
+    }
+    if (error) {
+      encounteredError = error;
+      break;
+    }
   }
 
   if (encounteredError) {
     throw encounteredError;
   }
 
-  // §progress/webRefs 在流式分支也需推送（harness 阶段已收集）
-  for (const p of collectedProgress) {
-    yield { progress: p };
-  }
-  // thinking 已在事件中实时推送，但起始模式 thinking（如 deep mode）仍需补发
-  for (const t of collectedThinking) {
-    const category: OutputMode = t.phase === 'tool_call' ? 'tool_call' : 'thinking';
-    if (!shouldEmit(category, outputModes)) continue;
-    // 已在事件中推送过的 tool_call thinking 跳过，避免重复
-    if (t.phase === 'tool_call') continue;
-    yield { thinking: { ...t, ts: t.ts || new Date().toISOString() } };
-  }
-
-  const answer = finalAnswer || '知识库未覆盖此问题。';
-  const refs = await extractRefs(answer, vault);
-  const seenUrls = new Set<string>();
-  const webRefs = collectedWebRefs.filter((r) => {
-    if (seenUrls.has(r.url)) return false;
-    seenUrls.add(r.url);
-    return true;
-  });
-  // 中间件 'followups' 控制：与 queryWithHarness 一致的判断逻辑
-  if (shouldRunMiddleware(input.middlewares, 'followups')) {
-    const followups = generateFollowups(input.question, answer, refs);
-    if (followups.length > 0) {
-      yield { followups };
-    }
-  }
-  yield { refs, webRefs, done: true };
+  // §收尾推流：通过 emitPostStreamChunks 处理 progress/thinking/refs/followups
+  yield* emitPostStreamChunks(collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input);
 }
 
 // 降级链第 2 级：queryWithSearchFallback
@@ -772,7 +814,7 @@ async function* yieldMultimodalByMode(
       },
     };
   } else {
-    const multimodalMode = mode as 'mindmap' | 'faq' | 'timeline';
+    const multimodalMode = mode as MultimodalMode;
     yield {
       thinking: {
         phase: 'composing',
@@ -790,7 +832,7 @@ async function* yieldMultimodalByMode(
 function getModeLabelForError(mode: string): string {
   if (mode === 'image') return '图像';
   if (mode === 'ppt') return 'PPT';
-  return getModeLabel(mode as 'mindmap' | 'faq' | 'timeline');
+  return getModeLabel(mode as MultimodalMode);
 }
 
 async function* wrapWithMultimodal(
@@ -802,7 +844,7 @@ async function* wrapWithMultimodal(
   // v3 媒体生成：image 模式需要 mediaConfig 调用 Agnes API，appConfig 解析 API key
   mediaConfig?: MediaConfig,
   appConfig?: AppConfig,
-): AsyncGenerator<AnswerChunk, void, unknown> {
+): AsyncGenerator<AnswerChunk, void, unknown> { // NOSONAR - 函数签名需要多个参数
   // 用户在多输出模式中关闭 multimodal 时跳过整个 multimodal 生成（节省 LLM token）
   // 单独的 'composing' thinking 提示（"正在生成思维导图"）也跟着被前置 filter 处理
   for await (const chunk of source) {
@@ -834,8 +876,8 @@ async function* wrapWithMultimodal(
 
 // 创建带 multimodal 包装的 harness generator。
 // 提取为独立函数降低 queryWorkflow 认知复杂度（S3776）。
-function createHarnessWithMultimodal(
-  useStream: boolean, // NOSONAR - 参数过多是函数签名要求
+function createHarnessWithMultimodal( // NOSONAR - S107 - 参数过多是函数签名要求，重构为 options 对象会导致调用处大量修改
+  useStream: boolean,
   harnessConfig: HarnessConfig,
   vault: VaultService,
   effectiveInput: QueryInput,
@@ -885,14 +927,16 @@ function buildMiddlewareContext(input: QueryInput): {
   const middlewareSet: Set<string> | null = input.middlewares && input.middlewares.length > 0
     ? new Set(input.middlewares)
     : null;
-  const useWebSearch = middlewareSet != null ? middlewareSet.has('web_search') : !!input.webSearch;
-  const useDeepThinking = middlewareSet != null ? middlewareSet.has('deep_thinking') : input.mode === 'deep';
-  const useStream = middlewareSet != null ? middlewareSet.has('stream') : !!input.stream;
-  let effectiveMode = input.mode;
+  const useWebSearch = middlewareSet != null ? middlewareSet.has('web_search') : !!input.webSearch; // NOSONAR
+  const useDeepThinking = middlewareSet != null ? middlewareSet.has('deep_thinking') : input.mode === 'deep'; // NOSONAR
+  const useStream = middlewareSet != null ? middlewareSet.has('stream') : !!input.stream; // NOSONAR
+  let effectiveMode: string;
   if (useDeepThinking) {
     effectiveMode = 'deep';
   } else if (input.mode === 'deep') {
     effectiveMode = '';
+  } else {
+    effectiveMode = input.mode ?? '';
   }
   const effectiveInput: QueryInput = middlewareSet
     ? { ...input, webSearch: useWebSearch, mode: effectiveMode, stream: useStream }
@@ -932,7 +976,7 @@ export async function* queryWorkflow(
     : null;
 
   // 中间件与有效输入构造：提取为独立函数降低 queryWorkflow 认知复杂度（S3776）
-  const { middlewareSet, useWebSearch, useDeepThinking, useStream, effectiveInput } = buildMiddlewareContext(input);
+  const { useDeepThinking, useStream, effectiveInput } = buildMiddlewareContext(input);
 
   // 模式提示 thinking：在降级链各分支前 push 一次，harness 阶段 yield 出来
   // 为什么改用 useDeepThinking：middlewares 配置后覆盖 input.mode 判断

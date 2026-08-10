@@ -42,6 +42,53 @@ interface PageMetadata {
   wikilinks: Set<string>; // 该页面正文中已存在的 [[页面名]] 双链目标
 }
 
+// 提取：抽取正文中所有 [[页面名]] 双链
+// 为什么提取为独立函数：降低 S3776 认知复杂度，同时复用于其他场景
+function extractWikilinks(raw: string): Set<string> {
+  const wikilinks = new Set<string>();
+  const wikilinkRe = /\[\[([^\]]+)\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = wikilinkRe.exec(raw)) !== null) {
+    wikilinks.add(m[1].trim());
+  }
+  return wikilinks;
+}
+
+// 提取：读取单个目录下的所有 md 文件元数据
+// 为什么提取为独立函数：将目录级别的读取逻辑与文件级处理分离，降低 S3776 认知复杂度
+async function readDirectoryPages(vault: VaultService, vaultPath: string, dir: string): Promise<PageMetadata[]> {
+  const dirFull = path.join(vaultPath, dir);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dirFull);
+  } catch {
+    // 目录不存在或无权访问时跳过，不阻塞整体推荐流程
+    return [];
+  }
+  const pages: PageMetadata[] = [];
+  for (const f of entries) {
+    if (!f.endsWith('.md')) continue;
+    const rel = `${dir}/${f}`;
+    const pageName = f.slice(0, -3);
+    try {
+      const raw = await vault.readFile(rel);
+      const parsed = matter(raw);
+      pages.push({
+        path: rel,
+        title: typeof parsed.data.title === 'string' ? parsed.data.title : pageName,
+        tags: ensureStringArray(parsed.data.tags),
+        author: typeof parsed.data.author === 'string' ? parsed.data.author : null,
+        dir,
+        pageName,
+        wikilinks: extractWikilinks(raw),
+      });
+    } catch {
+      // 跳过读取失败的页面，不阻塞整体流程
+    }
+  }
+  return pages;
+}
+
 // 一次性收集所有页面元数据，供推荐算法使用
 // 为什么一次性收集：避免对每个候选页面都重复扫描整个 vault（O(n²) → O(n)）
 async function collectAllPageMetadata(vault: VaultService): Promise<PageMetadata[]> {
@@ -49,38 +96,30 @@ async function collectAllPageMetadata(vault: VaultService): Promise<PageMetadata
   const pages: PageMetadata[] = [];
 
   for (const dir of PAGE_DIRS) {
-    const dirFull = path.join(vaultPath, dir);
-    let entries: string[] = [];
-    try {
-      entries = await fs.readdir(dirFull);
-    } catch {
-      // 目录不存在或无权访问时跳过，不阻塞整体推荐流程
-      continue;
-    }
-    for (const f of entries) {
-      if (!f.endsWith('.md')) continue;
-      const rel = `${dir}/${f}`;
-      const pageName = f.slice(0, -3);
-      try {
-        const raw = await vault.readFile(rel);
-        const parsed = matter(raw);
-        const tags = ensureStringArray(parsed.data.tags);
-        const author = typeof parsed.data.author === 'string' ? parsed.data.author : null;
-        const title = typeof parsed.data.title === 'string' ? parsed.data.title : pageName;
-        // 抽取正文中所有 [[页面名]] 双链，用于排除已建立连接的页面
-        const wikilinks = new Set<string>();
-        const wikilinkRe = /\[\[([^\]]+)\]\]/g;
-        let m: RegExpExecArray | null;
-        while ((m = wikilinkRe.exec(raw)) !== null) {
-          wikilinks.add(m[1].trim());
-        }
-        pages.push({ path: rel, title, tags, author, dir, pageName, wikilinks });
-      } catch {
-        // 跳过读取失败的页面，不阻塞整体流程
-      }
-    }
+    const dirPages = await readDirectoryPages(vault, vaultPath, dir);
+    pages.push(...dirPages);
   }
   return pages;
+}
+
+// 提取：计算候选页面与目标页面的匹配维度
+// 为什么提取为独立函数：将匹配逻辑与遍历逻辑分离，降低 S3776 认知复杂度
+function calculateMatchScore(candidate: PageMetadata, target: PageMetadata): { reasons: string[]; score: number } {
+  const reasons: string[] = [];
+  if (candidate.dir === target.dir) reasons.push('同目录');
+
+  // 同标签：取交集，仅展示共享的标签
+  const sharedTags = candidate.tags.filter((t) => target.tags.includes(t));
+  if (sharedTags.length > 0) {
+    reasons.push(`同标签: ${sharedTags.join(', ')}`);
+  }
+
+  // 同作者（仅当双方都有 author 字段时才匹配）
+  if (target.author && candidate.author && candidate.author === target.author) {
+    reasons.push(`同作者: ${target.author}`);
+  }
+
+  return { reasons, score: reasons.length };
 }
 
 // 为指定页面推荐相关笔记
@@ -114,29 +153,15 @@ export async function recommendPages(
     if (target.wikilinks.has(candidate.pageName)) continue;
     if (candidate.wikilinks.has(target.pageName)) continue;
 
-    // 计算匹配维度
-    const reasons: string[] = [];
-    if (candidate.dir === target.dir) reasons.push('同目录');
-
-    // 同标签：取交集，仅展示共享的标签
-    const sharedTags = candidate.tags.filter((t) => target.tags.includes(t));
-    if (sharedTags.length > 0) {
-      reasons.push(`同标签: ${sharedTags.join(', ')}`);
-    }
-
-    // 同作者（仅当双方都有 author 字段时才匹配）
-    if (target.author && candidate.author && candidate.author === target.author) {
-      reasons.push(`同作者: ${target.author}`);
-    }
-
-    // 仅保留至少一个匹配维度的候选
-    if (reasons.length === 0) continue;
+    // 计算匹配维度（提取为独立函数以降低 S3776 认知复杂度）
+    const match = calculateMatchScore(candidate, target);
+    if (match.reasons.length === 0) continue;
 
     candidates.push({
       path: candidate.path,
       title: candidate.title,
-      reasons,
-      score: reasons.length,
+      reasons: match.reasons,
+      score: match.score,
     });
   }
 

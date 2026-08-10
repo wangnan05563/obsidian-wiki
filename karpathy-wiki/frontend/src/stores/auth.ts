@@ -5,6 +5,15 @@ import type { UserInfo, LoginRequest, LoginResponse, RegisterRequest, CreateUser
 import { STORAGE_KEYS } from '../constants/storageKeys';
 import { unlock as unlockVault, lock as lockVault, restoreKeyFromSession } from '../services/localVault';
 
+// 登录/注册请求超时（ms）：裸 fetch 不设超时会在后端首登慢（如创建默认用户）/网络异常时
+// 永久挂起，导致前端卡在「登录中…」且 loading 永不复位（async-reliability-rule）。
+// 集中配置避免散落硬编码（config-timeout-rule）。
+// 为什么 60s 而非更短：登录是一次性安全操作（含 PBKDF2 ~200ms + JWT），经 Tailscale funnel
+// 隧道/弱网访问时 RTT 叠加可能达数秒甚至十几秒；15s 阈值会误杀"慢但能成功"的请求，
+// 反而让用户看到「登录超时」。放宽到 60s 作为安全垫——既避免永久卡死，也不再误杀慢网络
+// （真断连/服务器不可达仍会在 60s 后明确报超时，而非无限挂起）。
+const AUTH_REQUEST_TIMEOUT_MS = 60_000;
+
 // 认证状态管理 store
 // 职责：
 //   1. 维护当前登录用户（token + 用户信息）
@@ -93,11 +102,15 @@ export const useAuthStore = defineStore('auth', () => {
   // 登录
   async function login(params: LoginRequest): Promise<boolean> {
     error.value = '';
+    // 超时兜底：避免后端首登慢/网络异常时请求永久挂起（前端卡「登录中」）
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
     try {
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
+        signal: controller.signal,
       });
       const data = await res.json() as LoginResponse;
       if (!res.ok || !data.ok) {
@@ -119,8 +132,13 @@ export const useAuthStore = defineStore('auth', () => {
       error.value = '登录响应缺少 token 或用户信息';
       return false;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      // 超时（controller.signal.aborted）与网络错误区分文案，给用户可恢复提示
+      error.value = controller.signal.aborted
+        ? '登录超时，请检查网络或服务器后重试'
+        : (err instanceof Error ? err.message : String(err));
       return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -128,11 +146,15 @@ export const useAuthStore = defineStore('auth', () => {
   // 成功后自动登录（后端返回 token + user），与 login 行为一致
   async function register(params: RegisterRequest): Promise<boolean> {
     error.value = '';
+    // 超时兜底：同 login
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
     try {
       const res = await fetch(`${API_BASE}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
+        signal: controller.signal,
       });
       const data = await res.json() as LoginResponse & { error?: string };
       if (!res.ok || !data.ok) {
@@ -154,8 +176,12 @@ export const useAuthStore = defineStore('auth', () => {
       error.value = '注册响应缺少 token 或用户信息';
       return false;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = controller.signal.aborted
+        ? '注册超时，请检查网络或服务器后重试'
+        : (err instanceof Error ? err.message : String(err));
       return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

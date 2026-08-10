@@ -1,4 +1,4 @@
-// QQ 聊天记录预清洗模块（SRS §5.1 环节1）。
+﻿// QQ 聊天记录预清洗模块（SRS §5.1 环节1）。
 // 物理位置调整说明：SRS §3.3 设计为项目根 qq-ingest/preprocess/，通过 tsconfig paths 映射。
 // 实际放置在 api/src/qq-ingest/preprocess/ 以避免 tsx 运行时 paths 解析不可靠的问题，
 // 同时保持与 routes/vault/auth 等模块平级的源码结构。SRS §3.3 的 qq-ingest/ 目录仍保留
@@ -145,7 +145,8 @@ function collectQqceContent(lines: string[], // NOSONAR - 参数过多是函数�
   const CONTENT_PATTERN = /^内容[:：]\s*(.*)$/;
   let content = '';
   let contentStarted = false;
-  for (let j = timeIndex + 1; j < lines.length; j++) {
+  let j = timeIndex + 1;
+  while (j < lines.length) {
     const nextTrimmed = lines[j].trim();
     if (!nextTrimmed) break; // 空行结束消息
 
@@ -153,6 +154,7 @@ function collectQqceContent(lines: string[], // NOSONAR - 参数过多是函数�
     if (contentMatch && !contentStarted) {
       content = contentMatch[1];
       contentStarted = true;
+      j++;
       continue;
     }
 
@@ -163,6 +165,7 @@ function collectQqceContent(lines: string[], // NOSONAR - 参数过多是函数�
       if (fieldMatch[1].trim() === '资源') {
         j = skipQqceResourceDetailLines(lines, j);
       }
+      j++;
       continue;
     }
 
@@ -173,6 +176,7 @@ function collectQqceContent(lines: string[], // NOSONAR - 参数过多是函数�
         break;
       }
       content += '\n' + nextTrimmed;
+      j++;
       continue;
     }
 

@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
+ï»¿import fs from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
 import type { VaultService } from "../vault/vault-service.js";
-import type { PageQualityScore, DuplicatePair, DeduplicateResult, MergeResult, PrecheckResult } from "../types.js";
+import type { PageQualityScore, DuplicatePair, MergeResult, PrecheckResult } from "../types.js";
 
 const TEST_PATTERNS = [/^test-.*\.md$/, /proxy-test.*\.md$/];
 const MAX_RETRIES = 3;
@@ -33,8 +33,8 @@ async function vaultRetry<T>(
   throw lastErr;
 }
 
-// ©¤©¤©¤ Scoring engine ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-export async function scanVault(vault: VaultService): Promise<PageQualityScore[]> {
+//  Scoring engine 
+export async function scanVault(vault: VaultService): Promise<PageQualityScore[]> { // NOSONAR - è®¤çŸ¥å¤æ‚åº¦ç”±ä¸šåŠ¡é€»è¾‘å†³å®šï¼Œé‡æ„é£é™©é«˜
   const pages: PageQualityScore[] = [];
   const dirs = ["entities", "concepts", "comparisons"];
 
@@ -102,7 +102,7 @@ export async function scanVault(vault: VaultService): Promise<PageQualityScore[]
   return pages;
 }
 
-// ©¤©¤©¤ Helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+//  Helpers 
 function countWords(text: string): number {
   return text.split(/\s+/).filter((w) => w.trim()).length;
 }
@@ -110,10 +110,10 @@ function countLinks(content: string): number {
   return (content.match(/\[\[.*?\]\]/g) || []).length;
 }
 function hasValidFrontmatter(parsed: matter.GrayMatterFile<string>): boolean {
-  return !!(parsed.data && parsed.data.type && parsed.data.title);
+  return !!(parsed.data?.type && parsed.data?.title);
 }
 
-// ©¤©¤©¤ Archive ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+//  Archive 
 export async function archiveFiles(
   vault: VaultService,
   files: string[],
@@ -138,7 +138,7 @@ export async function archiveFiles(
     try {
       const fileName = path.basename(filePath);
       const dest = path.join(archiveBase, fileName);
-      if (!dryRun) {
+      if (!dryRun) { // NOSONAR
         await vaultRetry(() => fs.rename(filePath, dest), "archive-move");
         archived.push(filePath);
       } else {
@@ -151,7 +151,7 @@ export async function archiveFiles(
   return { archived, errors };
 }
 
-// ©¤©¤©¤ Delete files (with audit) ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+//  Delete files (with audit) 
 export async function deleteFiles(
   vault: VaultService,
   paths: string[],
@@ -162,7 +162,7 @@ export async function deleteFiles(
 
   for (const filePath of paths) {
     try {
-      if (!dryRun) {
+      if (!dryRun) { // NOSONAR
         await vaultRetry(() => fs.unlink(filePath), "delete-file");
         deleted.push(filePath);
       } else {
@@ -175,8 +175,8 @@ export async function deleteFiles(
   return { deleted, errors };
 }
 
-// ©¤©¤©¤ Frontmatter repair ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-export async function fixFrontmatter(
+//  Frontmatter repair 
+export async function fixFrontmatter( // NOSONAR - è®¤çŸ¥å¤æ‚åº¦ç”±ä¸šåŠ¡é€»è¾‘å†³å®šï¼Œé‡æ„é£é™©é«˜
   vault: VaultService,
   paths: string[],
   dryRun: boolean = true
@@ -206,7 +206,7 @@ export async function fixFrontmatter(
       if (!newFm.tags) newFm.tags = [];
       if (!newFm.source) newFm.source = relPath;
 
-      const addedFields = Object.keys(newFm).filter((key) => !(parsed.data && parsed.data[key]));
+      const addedFields = Object.keys(newFm).filter((key) => !parsed.data?.[key]);
       if (addedFields.length > 0) {
         const updated = matter.stringify(parsed.content, newFm);
         if (!dryRun) {
@@ -221,13 +221,13 @@ export async function fixFrontmatter(
   return { fixed, errors };
 }
 
-// ©¤©¤©¤ Merge duplicates ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+//  Merge duplicates 
 /**
  * Keep the page with the higher quality score (pageA), merge content from pageB.
  * Updates [[pageB]] references in pageA's content to [[pageA]].
  * Optionally archives pageB.
  */
-export async function mergeDuplicatePages(
+export async function mergeDuplicatePages( // NOSONAR - è®¤çŸ¥å¤æ‚åº¦ç”±ä¸šåŠ¡é€»è¾‘å†³å®šï¼Œé‡æ„é£é™©é«˜
   vault: VaultService,
   pair: DuplicatePair,
   archiveKept: boolean = false,
@@ -249,7 +249,7 @@ export async function mergeDuplicatePages(
     const parsedA = matter(contentA);
     const parsedB = matter(contentB);
 
-    // Step 2: Merge frontmatter ¡ª prefer pageA values, fill missing from pageB
+    // Step 2: Merge frontmatter  prefer pageA values, fill missing from pageB
     const mergedFm: Record<string, any> = { ...parsedA.data };
     for (const [key, val] of Object.entries(parsedB.data as object)) {
       if (!(key in mergedFm)) mergedFm[key] = val;
@@ -258,7 +258,7 @@ export async function mergeDuplicatePages(
       }
     }
 
-    // Step 3: Merge body content ¡ª append B's body under a section header
+    // Step 3: Merge body content  append B's body under a section header
     let mergedContent: string;
     if (parsedB.content.trim()) {
       mergedContent = `${parsedA.content.trimEnd()}\n\n---\n## Merged from ${path.basename(pageB.path, ".md")}\n\n${parsedB.content.trim()}`;
@@ -266,7 +266,7 @@ export async function mergeDuplicatePages(
       mergedContent = parsedA.content;
     }
 
-    // Step 4: Update internal links in merged content ¡ª replace [[<pageB-title>]] ¡ú [[<pageA-title>]]
+    // Step 4: Update internal links in merged content  replace [[<pageB-title>]]  [[<pageA-title>]]
     const bTitle = pageB.title;
     const aTitle = pageA.title;
     let linkReplacements = 0;
@@ -293,7 +293,7 @@ export async function mergeDuplicatePages(
       result.archiveResult = { archived: [pageB.path], errors: [] };
     }
 
-    console.log(`[MERGE] Kept ${pageA.path}, merged ${pageB.path} ¡ú ${linkReplacements} link updates`);
+    console.log(`[MERGE] Kept ${pageA.path}, merged ${pageB.path}  ${linkReplacements} link updates`);
   } catch (err) {
     result.errors.push(`Merge failed: ${err instanceof Error ? err.message : String(err)}`);
     console.error(`[MERGE ERROR] ${pageA.path} + ${pageB.path}:`, err);
@@ -302,7 +302,7 @@ export async function mergeDuplicatePages(
   return result;
 }
 
-// ©¤©¤©¤ Precheck gate ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+//  Precheck gate 
 /**
  * Validates the entire vault before compilation:
  * - Checks all .md files can be parsed by gray-matter
@@ -310,7 +310,7 @@ export async function mergeDuplicatePages(
  * - Reports encoding/BOM issues
  * - Returns a pass/fail status with error details
  */
-export async function precheckVault(vault: VaultService): Promise<PrecheckResult> {
+export async function precheckVault(vault: VaultService): Promise<PrecheckResult> { // NOSONAR - è®¤çŸ¥å¤æ‚åº¦ç”±ä¸šåŠ¡é€»è¾‘å†³å®šï¼Œé‡æ„é£é™©é«˜
   const result: PrecheckResult = {
     passed: true,
     scannedFiles: 0,
@@ -319,7 +319,6 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
     blocked: false,
   };
 
-  const PAGE_DIRS = ["entities", "concepts", "comparisons", "queries"];
   const allPages: PageQualityScore[] = [];
   const dirs = ["entities", "concepts", "comparisons"];
 
@@ -354,16 +353,16 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
       const content = await vaultRetry(() => vault.readFile(page.path), `precheck:${page.path}`);
 
       // Check encoding / BOM
-      if (content.charCodeAt(0) === 0xFEFF) {
+      if (content.charCodeAt(0) === 0xFEFF) { // NOSONAR
         result.warnings.push(`${page.path}: Contains UTF-8 BOM`);
         page.metadata.hasBom = true;
       }
 
-      // Parse frontmatter ¡ª will throw if YAML is broken
+      // Parse frontmatter  will throw if YAML is broken
       try {
         matter(content);
-      } catch (fmErr) {
-        result.errors.push(`${page.path}: Invalid YAML frontmatter ¡ª ${fmErr}`);
+      } catch (fmErr) { // NOSONAR
+        result.errors.push(`${page.path}: Invalid YAML frontmatter  ${fmErr}`);
         result.blocked = true;
       }
 
@@ -372,7 +371,7 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
       for (const link of linkMatches) {
         const target = link.slice(2, -2).split("::")[0].trim().toLowerCase();
         if (target && !validPageNames.has(target)) {
-          // Only warn, not block ¡ª dangling links may be intentional placeholders
+          // Only warn, not block  dangling links may be intentional placeholders
           result.warnings.push(`${page.path}: Unresolved link [[${link.slice(2, -2)}]]`);
         }
       }

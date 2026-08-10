@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>移动端可交互原型 · Karpathy AI 知识库</title>
+<style>
+  :root{
+    --bg:#0d0420; --bg2:#1a0533; --card:rgba(255,255,255,.06);
+    --card-strong:rgba(255,255,255,.1); --line:rgba(255,255,255,.12);
+    --txt:#f3eefb; --sub:#b9a9d6; --muted:#8a7aa8;
+    --acc:#a855f7; --acc2:#7c3aed; --acc3:#22d3ee;
+    --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+    --r:18px; --tap:44px; --sb:env(safe-area-inset-bottom,0px);
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;font-family:var(--font);background:#05010d;color:var(--txt)}
+  body{display:flex;gap:28px;flex-wrap:wrap;justify-content:center;align-items:flex-start;padding:28px 16px}
+  .hint{max-width:260px;font-size:13px;color:var(--sub);line-height:1.7;align-self:center}
+  .hint h2{color:var(--txt);font-size:16px;margin:0 0 8px}
+  .hint code{background:rgba(255,255,255,.08);padding:1px 6px;border-radius:6px;color:var(--acc3)}
+  .hint .kbd{display:inline-block;border:1px solid var(--line);border-radius:6px;padding:1px 7px;margin:2px 2px 0 0;font-size:12px}
+
+  /* ===== phone frame ===== */
+  .phone{width:390px;height:844px;border-radius:46px;background:linear-gradient(160deg,#2a0f4d,#120626);
+    padding:12px;box-shadow:0 30px 80px rgba(0,0,0,.6),inset 0 0 0 2px rgba(255,255,255,.06);position:relative;flex:0 0 auto}
+  .screen{width:100%;height:100%;border-radius:36px;background:radial-gradient(120% 80% at 50% -10%,#2c1156 0%,var(--bg) 55%);
+    overflow:hidden;position:relative;display:flex;flex-direction:column}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:120px;height:26px;background:#000;border-radius:0 0 16px 16px;z-index:60}
+  .statusbar{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font-size:13px;font-weight:600;color:var(--txt);z-index:55;flex:0 0 auto}
+  .statusbar .icons{display:flex;gap:6px;align-items:center}
+  .statusbar .icons svg{opacity:.9}
+
+  /* ===== views ===== */
+  .view{flex:1;display:none;flex-direction:column;min-height:0}
+  .view.active{display:flex;animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  .appbar{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:6px 16px 10px;
+    border-bottom:1px solid var(--line);background:rgba(13,4,32,.4);backdrop-filter:blur(8px)}
+  .appbar .title{font-size:17px;font-weight:700}
+  .appbar .title small{display:block;font-size:11px;color:var(--muted);font-weight:500}
+  .appbar .sp{flex:1}
+  .iconbtn{width:var(--tap);height:var(--tap);border:none;background:transparent;color:var(--sub);
+    display:grid;place-items:center;border-radius:12px;font-size:20px}
+  .iconbtn:active{background:var(--card)}
+
+  .scroll{flex:1;overflow-y:auto;padding:14px 14px calc(78px + var(--sb));-webkit-overflow-scrolling:touch}
+
+  /* ===== login ===== */
+  #login{flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 30px}
+  .logo{width:74px;height:74px;border-radius:22px;margin:0 auto 18px;
+    background:conic-gradient(from 200deg,var(--acc),var(--acc2),var(--acc3),var(--acc));display:grid;place-items:center;font-size:34px;box-shadow:0 10px 30px rgba(168,85,247,.4)}
+  #login h1{text-align:center;font-size:22px;margin:0 0 4px}
+  #login .tag{text-align:center;color:var(--muted);font-size:12px;letter-spacing:3px;margin-bottom:26px}
+  .field{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+  .field input{flex:1;background:none;border:none;outline:none;color:var(--txt);font-size:15px;font-family:inherit}
+  .field svg{color:var(--sub);flex:0 0 auto}
+  .btn{width:100%;height:50px;border:none;border-radius:14px;font-size:16px;font-weight:700;color:#fff;
+    background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 8px 22px rgba(124,58,237,.45);margin-top:6px}
+  .btn:active{transform:scale(.98)}
+  .btn.ghost{background:var(--card);color:var(--sub);box-shadow:none;border:1px solid var(--line)}
+  .switch{text-align:center;color:var(--sub);font-size:13px;margin-top:16px}
+  .switch b{color:var(--acc3);cursor:pointer}
+  .byok-note{margin-top:20px;font-size:11px;color:var(--muted);text-align:center;line-height:1.6;border-top:1px dashed var(--line);padding-top:14px}
+  .err{color:var(--err);font-size:13px;text-align:center;min-height:18px;margin-top:8px}
+
+  /* ===== chat ===== */
+  .msg{display:flex;gap:8px;margin-bottom:16px;align-items:flex-start}
+  .msg .av{width:30px;height:30px;border-radius:10px;flex:0 0 auto;display:grid;place-items:center;font-size:15px}
+  .msg.user{flex-direction:row-reverse}
+  .bubble{max-width:78%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;font-size:14px;line-height:1.6;word-break:break-word}
+  .msg.user .bubble{background:linear-gradient(135deg,var(--acc2),var(--acc));border:none}
+  .bubble .think{font-size:12px;color:var(--muted);border-left:2px solid var(--acc);padding-left:8px;margin-bottom:6px}
+  .bubble pre{background:rgba(0,0,0,.3);border-radius:8px;padding:8px;overflow:auto;font-size:12px}
+  .refs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .ref{font-size:11px;background:rgba(34,211,238,.12);color:var(--acc3);border:1px solid rgba(34,211,238,.3);padding:3px 8px;border-radius:20px;display:flex;align-items:center;gap:4px}
+  .followups{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{font-size:12px;background:var(--card-strong);border:1px solid var(--line);color:var(--sub);padding:6px 10px;border-radius:20px}
+  .chip:active{background:var(--acc)}
+  .mtools{display:flex;gap:4px;margin-top:6px;opacity:.7}
+  .mtools span{font-size:11px;color:var(--sub);padding:2px 6px}
+  .dots span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--sub);margin:0 2px;animation:b 1s infinite}
+  .dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
+  @keyframes b{0%,60%,100%{opacity:.25}30%{opacity:1}}
+
+  .inputbar{flex:0 0 auto;padding:8px 12px calc(8px + var(--sb));border-top:1px solid var(--line);background:rgba(13,4,32,.6);backdrop-filter:blur(8px)}
+  .modebar{display:flex;gap:8px;margin-bottom:8px}
+  .mode{font-size:12px;padding:5px 12px;border-radius:20px;background:var(--card);border:1px solid var(--line);color:var(--sub)}
+  .mode.on{background:var(--acc);color:#fff;border:none}
+  .inputrow{display:flex;gap:8px;align-items:flex-end}
+  .ta{flex:1;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:11px 12px;color:var(--txt);font-size:15px;font-family:inherit;resize:none;max-height:110px;outline:none;min-height:44px}
+  .send{width:44px;height:44px;border:none;border-radius:14px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-size:20px;flex:0 0 auto}
+  .attach{width:44px;height:44px;border:none;border-radius:14px;background:var(--card);border:1px solid var(--line);color:var(--sub);font-size:18px}
+  .byok-warn{font-size:12px;color:var(--warn);background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);padding:7px 10px;border-radius:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+  .byok-warn b{color:var(--acc3);cursor:pointer}
+
+  /* ===== browse ===== */
+  .seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:14px}
+  .seg div{flex:1;text-align:center;font-size:13px;padding:8px 0;border-radius:9px;color:var(--sub);cursor:pointer}
+  .seg div.on{background:var(--acc);color:#fff}
+  .search{display:flex;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:14px}
+  .search input{flex:1;background:none;border:none;outline:none;color:var(--txt);font-size:14px;font-family:inherit}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+  .card .dir{font-size:11px;color:var(--acc3);background:rgba(34,211,238,.1);padding:2px 8px;border-radius:20px;display:inline-block;margin-bottom:8px}
+  .card h3{margin:0 0 6px;font-size:15px}
+  .card p{margin:0;font-size:13px;color:var(--sub);line-height:1.6}
+  .card .meta{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:11px;color:var(--muted)}
+  .card .read{color:var(--acc);font-size:12px;cursor:pointer}
+  .stat-row{display:flex;gap:10px;margin-bottom:14px}
+  .stat{flex:1;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
+  .stat b{display:block;font-size:20px;color:var(--acc3)}
+  .stat span{font-size:11px;color:var(--muted)}
+
+  /* reader overlay */
+  .reader{position:absolute;inset:0;background:var(--bg);z-index:40;display:none;flex-direction:column}
+  .reader.show{display:flex;animation:fade .2s}
+  .reader .scroll{padding-top:6px}
+  .reader h2{font-size:18px;margin:4px 0 12px}
+  .reader .body{font-size:14px;line-height:1.8;color:var(--txt)}
+  .reader .body h3{color:var(--acc3)}
+  .reader .body code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:5px}
+  .reader .listen-add{margin-top:18px;width:100%;height:46px;border:none;border-radius:14px;background:var(--acc);color:#fff;font-weight:700;font-size:15px}
+
+  /* ===== listen ===== */
+  .now{background:linear-gradient(160deg,var(--acc2),#3b1466);border-radius:22px;padding:20px;margin-bottom:16px;box-shadow:0 12px 30px rgba(124,58,237,.4)}
+  .now .cover{width:100%;height:150px;border-radius:16px;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,.25),transparent),linear-gradient(135deg,var(--acc),var(--acc3));display:grid;place-items:center;font-size:46px;margin-bottom:14px}
+  .now h3{margin:0 0 2px;font-size:17px}
+  .now .src{font-size:12px;color:rgba(255,255,255,.7)}
+  .prog{height:5px;background:rgba(255,255,255,.2);border-radius:3px;margin:16px 0 8px;overflow:hidden}
+  .prog i{display:block;height:100%;width:38%;background:#fff;border-radius:3px}
+  .prog-time{display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.7)}
+  .ctrls{display:flex;align-items:center;justify-content:center;gap:26px;margin-top:14px}
+  .ctrls button{background:none;border:none;color:#fff;font-size:26px}
+  .ctrls .play{width:58px;height:58px;border-radius:50%;background:#fff;color:var(--acc2);font-size:28px;display:grid;place-items:center}
+  .speed{position:absolute;right:18px;top:18px;background:rgba(0,0,0,.3);border-radius:20px;padding:4px 10px;font-size:12px}
+  .pl-title{font-size:13px;color:var(--sub);margin:6px 2px 8px}
+  .pl-item{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:11px 12px;margin-bottom:8px}
+  .pl-item.playing{border-color:var(--acc)}
+  .pl-item .ic{width:34px;height:34px;border-radius:10px;background:var(--card-strong);display:grid;place-items:center;font-size:16px;flex:0 0 auto}
+  .pl-item .t{flex:1;font-size:13px}
+  .pl-item .t small{display:block;color:var(--muted);font-size:11px}
+  .pl-item .x{color:var(--muted);font-size:18px;padding:0 4px}
+
+  /* ===== ingest ===== */
+  .ing-card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:14px}
+  .ing-card textarea,.ing-card input{width:100%;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:12px;color:var(--txt);font-size:14px;font-family:inherit;padding:11px;outline:none;resize:none}
+  .cam{margin-top:10px;border:2px dashed var(--line);border-radius:14px;height:140px;display:grid;place-items:center;color:var(--sub);font-size:13px;text-align:center;cursor:pointer;overflow:hidden;position:relative}
+  .cam img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .filebox{margin-top:10px;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--sub)}
+  .recent{font-size:13px;color:var(--sub);margin:4px 2px 10px}
+  .recent-item{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:11px 12px;margin-bottom:8px;font-size:13px}
+  .recent-item .ok{color:var(--ok);margin-left:auto;font-size:18px}
+
+  /* ===== sheet ===== */
+  .sheet-mask{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:45;display:none}
+  .sheet-mask.show{display:block;animation:fade .2s}
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg2);border-radius:22px 22px 0 0;z-index:46;padding:14px 16px calc(20px + var(--sb));transform:translateY(100%);transition:transform .28s ease;max-height:72%}
+  .sheet.show{transform:translateY(0)}
+  .sheet .grip{width:40px;height:4px;background:var(--line);border-radius:3px;margin:0 auto 12px}
+  .sheet h4{margin:0 0 12px;font-size:15px}
+  .conv{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:8px;font-size:13px}
+  .conv .pin{margin-left:auto;color:var(--acc)}
+  .conv .del{color:var(--err)}
+
+  /* ===== me ===== */
+  .me-card{display:flex;align-items:center;gap:14px;background:linear-gradient(135deg,var(--acc2),#3b1466);border-radius:20px;padding:18px;margin-bottom:16px}
+  .me-card .av{width:54px;height:54px;border-radius:16px;background:rgba(255,255,255,.2);display:grid;place-items:center;font-size:26px}
+  .me-card .nm{font-size:17px;font-weight:700}
+  .me-card .role{font-size:11px;background:rgba(255,255,255,.2);padding:2px 8px;border-radius:20px;display:inline-block;margin-top:4px}
+  .row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;margin-bottom:10px;font-size:14px}
+  .row .ic{width:34px;height:34px;border-radius:10px;background:var(--card-strong);display:grid;place-items:center;font-size:16px;flex:0 0 auto}
+  .row .sp{flex:1}
+  .row .badge{font-size:11px;padding:3px 9px;border-radius:20px}
+  .badge.set{background:rgba(52,211,153,.15);color:var(--ok);border:1px solid rgba(52,211,153,.4)}
+  .badge.unset{background:rgba(248,113,113,.15);color:var(--err);border:1px solid rgba(248,113,113,.4)}
+  .row .arr{color:var(--muted)}
+  .theme-toggle{display:flex;gap:8px}
+  .theme-toggle span{font-size:12px;padding:6px 14px;border-radius:20px;background:var(--card);border:1px solid var(--line);color:var(--sub)}
+  .theme-toggle span.on{background:var(--acc);color:#fff;border:none}
+
+  /* ===== tabbar ===== */
+  .tabbar{flex:0 0 auto;display:flex;background:rgba(13,4,32,.85);backdrop-filter:blur(12px);
+    border-top:1px solid var(--line);padding-bottom:var(--sb)}
+  .tab{flex:1;height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    color:var(--muted);font-size:10px;border:none;background:none;cursor:pointer}
+  .tab .ti{font-size:20px}
+  .tab.on{color:var(--acc)}
+  .tab.on .ti{transform:translateY(-1px)}
+
+  .mini-tts{position:absolute;left:12px;right:12px;bottom:calc(70px + var(--sb));background:rgba(124,58,237,.95);
+    border-radius:14px;padding:9px 12px;display:none;align-items:center;gap:10px;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .mini-tts.show{display:flex}
+  .mini-tts .t{font-size:12px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mini-tts button{background:none;border:none;color:#fff;font-size:18px}
+</style>
+</head>
+<body>
+  <div class="hint">
+    <h2>📱 移动端可交互原型</h2>
+    下方是 <b>Karpathy AI 知识库</b> 的移动端高保真原型（纯演示，非生产代码）。<br><br>
+    试试这些交互：
+    <div><span class="kbd">登录</span> 点「登录」进入主页</div>
+    <div><span class="kbd">切换</span> 底部 5 个 Tab</div>
+    <div><span class="kbd">问答</span> 输入问题 → 发送看流式回答</div>
+    <div><span class="kbd">浏览</span> 点卡片看笔记详情</div>
+    <div><span class="kbd">聆听</span> 播放/暂停/倍速</div>
+    <div><span class="kbd">投递</span> 链接/文字提交看进度</div>
+    <div><span class="kbd">历史</span> 问答页右上「≡」展开对话历史</div>
+    <br>
+    在真实手机预览：用本地服务器打开本文件，或「添加到主屏幕」体验 PWA 风格。
+  </div>
+
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="screen">
+      <div class="statusbar">
+        <span id="clock">9:41</span>
+        <span class="icons">
+          <svg width="17" height="12" viewBox="0 0 17 12"><rect x="0" y="7" width="3" height="5" rx="1" fill="#fff"/><rect x="4.5" y="4.5" width="3" height="7.5" rx="1" fill="#fff"/><rect x="9" y="2" width="3" height="10" rx="1" fill="#fff"/><rect x="13.5" y="0" width="3" height="12" rx="1" fill="#fff" opacity=".4"/></svg>
+          <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.5c2 0 3.8.8 5.2 2.1l1.1-1.2A9.5 9.5 0 0 0 8 .8 9.5 9.5 0 0 0 1.7 3.4l1.1 1.2A7.7 7.7 0 0 1 8 2.5z" fill="#fff"/><path d="M8 6c1.1 0 2.1.4 2.9 1.1l1.1-1.2A6 6 0 0 0 8 4.3 6 6 0 0 0 4 5.9l1.1 1.2A4 4 0 0 1 8 6z" fill="#fff"/><circle cx="8" cy="10" r="1.6" fill="#fff"/></svg>
+          <svg width="26" height="12" viewBox="0 0 26 12"><rect x="1" y="1.5" width="21" height="9" rx="2.5" fill="none" stroke="#fff" stroke-opacity=".5"/><rect x="2.5" y="3" width="16" height="6" rx="1" fill="#fff"/><rect x="23.5" y="4" width="2" height="4" rx="1" fill="#fff" fill-opacity=".5"/></svg>
+        </span>
+      </div>
+
+      <!-- ============ LOGIN ============ -->
+      <div id="login">
+        <div class="logo">🤖</div>
+        <h1>AI 知识库</h1>
+        <div class="tag">KARPATHY&nbsp;WIKI</div>
+        <div class="field">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <input id="li-user" placeholder="用户名" value="alice" />
+        </div>
+        <div class="field">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="4" y="10" width="16" height="11" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="2"/></svg>
+          <input id="li-pass" type="password" placeholder="密码" value="••••••" />
+        </div>
+        <div class="err" id="li-err"></div>
+        <button class="btn" onclick="doLogin()">登 录</button>
+        <div class="switch" id="li-switch">还没有账号？<b onclick="toggleReg()">注册一个</b></div>
+        <div class="byok-note">🔐 本知识库采用 BYOK（自带密钥）模式：问答需在你「我的 → API Key」中填写自己的 LLM 密钥，密钥仅随请求发送、绝不落服务端。</div>
+      </div>
+
+      <!-- ============ APP ============ -->
+      <div id="app" style="display:none;flex:1;min-height:0;flex-direction:column">
+        <!-- QUERY -->
+        <div class="view" id="view-query">
+          <div class="appbar">
+            <div class="title">知识问答<small>随时向知识库提问</small></div>
+            <div class="sp"></div>
+            <button class="iconbtn" onclick="openHistory()">≡</button>
+            <button class="iconbtn" onclick="newChat()">✎</button>
+          </div>
+          <div class="scroll" id="chat-scroll">
+            <div class="msg"><div class="av" style="background:rgba(124,58,237,.3)">🤖</div>
+              <div class="bubble">你好 👋 我是你的 AI 知识库助手。问我关于 Karpathy 的任意内容，或点击下方建议开始。
+                <div class="followups">
+                  <span class="chip" onclick="fillQ(this)">什么是 Software 2.0？</span>
+                  <span class="chip" onclick="fillQ(this)">解释 autopilot 数据引擎</span>
+                  <span class="chip" onclick="fillQ(this)">如何构建个人知识库？</span>
+                </div>
+              </div>
+            </div>
+            <div class="msg user"><div class="av" style="background:var(--acc)">🙂</div>
+              <div class="bubble">Software 2.0 是什么意思？</div>
+            </div>
+            <div class="msg"><div class="av" style="background:rgba(124,58,237,.3)">🤖</div>
+              <div class="bubble">
+                <div class="think">💭 正在检索知识库与联网资料…</div>
+                <b>Software 2.0</b> 是 Karpathy 提出的概念：传统「Software 1.0」由人写显式代码；而 Software 2.0 中，程序员只定义<b>目标与数据结构</b>，<b>权重（参数）</b>由优化器在数据中自动学习得到。典型例子是神经网络替代手写逻辑。
+                <div class="refs">
+                  <span class="ref">📚 Software 2.0.md</span>
+                  <span class="ref">🌐 karpathy.medium.com</span>
+                </div>
+                <div class="mtools"><span>📋 复制</span><span onclick="addToListen('Software 2.0 讲解')">🔊 加入聆听</span><span>🔄 重生成</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="inputbar">
+            <div class="byok-warn" id="byok-warn" style="display:none">⚠️ 未配置 API Key，问答将不可用 <b onclick="goMe()">去配置 ›</b></div>
+            <div class="modebar">
+              <div class="mode on" onclick="toggleMode(this)">💬 普通</div>
+              <div class="mode" onclick="toggleMode(this)">🌐 联网</div>
+              <div class="mode" onclick="toggleMode(this)">🧠 深度</div>
+            </div>
+            <div class="inputrow">
+              <button class="attach" onclick="alert('移动端附件：可拍照/选图作为视觉上下文')">＋</button>
+              <textarea class="ta" id="q-input" rows="1" placeholder="问点什么…" oninput="autoGrow(this)"></textarea>
+              <button class="send" onclick="sendQ()">↑</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- BROWSE -->
+        <div class="view" id="view-browse">
+          <div class="appbar">
+            <div class="title">知识浏览<small>读笔记 · 搜资料</small></div>
+            <div class="sp"></div>
+            <button class="iconbtn" onclick="alert('筛选：按目录/标签')">⚙</button>
+          </div>
+          <div class="scroll">
+            <div class="seg" id="browse-seg">
+              <div class="on" onclick="switchBrowse(this,'rec')">推荐</div>
+              <div onclick="switchBrowse(this,'search')">搜索</div>
+            </div>
+            <div id="browse-rec">
+              <div class="stat-row">
+                <div class="stat"><b>1,284</b><span>知识页</span></div>
+                <div class="stat"><b>3.9k</b><span>双向链接</span></div>
+                <div class="stat"><b>42</b><span>概念</span></div>
+              </div>
+              <div class="card" onclick="openReader('Software 2.0','entities','用神经网络权重替代手写逻辑：程序员定义目标与数据结构，优化器从数据中学习参数。',['## 核心思想','传统 Software 1.0 由人写显式规则；Software 2.0 把程序「编写」转化为「优化」——你给出输入输出样本与损失函数，梯度下降负责填充数百万参数。'])">
+                <span class="dir">entities</span>
+                <h3>Software 2.0</h3>
+                <p>用神经网络权重替代手写逻辑：程序员定义目标与数据结构，优化器从数据中学习参数。</p>
+                <div class="meta"><span>更新于 3 天前</span><span class="read">阅读 ›</span></div>
+              </div>
+              <div class="card" onclick="openReader('Autopilot 数据引擎','concepts','以海量真实驾驶数据驱动模型迭代的闭环：部署→发现缺陷→针对性采集→重新训练。',['## 数据引擎','Tesla Autopilot 的数据引擎是一个闭环：1) 车辆部署模型；2) 自动发现长尾缺陷；3) 针对缺陷主动采集相似场景；4) 重新训练并验证。'])">
+                <span class="dir">concepts</span>
+                <h3>Autopilot 数据引擎</h3>
+                <p>以海量真实驾驶数据驱动模型迭代的闭环：部署 → 发现缺陷 → 针对性采集 → 重新训练。</p>
+                <div class="meta"><span>更新于 1 周前</span><span class="read">阅读 ›</span></div>
+              </div>
+              <div class="card" onclick="openReader('构建个人知识库','queries','从 Obsidian + LLM 编译流水线的实践：投递→编译→问答的本地优先闭环。',['## 实践路径','将零散笔记、文章、聊天记录经 Agent 编译为结构化 Wiki，再叠加向量检索与问答。'])">
+                <span class="dir">queries</span>
+                <h3>构建个人知识库</h3>
+                <p>从 Obsidian + LLM 编译流水线的实践：投递 → 编译 → 问答的本地优先闭环。</p>
+                <div class="meta"><span>更新于 2 周前</span><span class="read">阅读 ›</span></div>
+              </div>
+            </div>
+            <div id="browse-search" style="display:none">
+              <div class="search">
+                <span>🔍</span><input placeholder="搜索知识库…" oninput="mockSearch(this.value)" />
+              </div>
+              <div id="search-result"></div>
+            </div>
+          </div>
+
+          <!-- reader overlay -->
+          <div class="reader" id="reader">
+            <div class="appbar">
+              <button class="iconbtn" onclick="closeReader()">‹</button>
+              <div class="title" id="reader-title" style="font-size:15px">标题</div>
+              <div class="sp"></div>
+            </div>
+            <div class="scroll">
+              <div class="body" id="reader-body"></div>
+              <button class="listen-add" onclick="readerAddListen()">🔊 朗读此篇（加入聆听）</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- LISTEN -->
+        <div class="view" id="view-listen">
+          <div class="appbar">
+            <div class="title">聆听<small>TTS 语音播放 · 通勤听知识</small></div>
+            <div class="sp"></div>
+            <button class="iconbtn" onclick="alert('Media Session：锁屏控制（增强项）')">⏏</button>
+          </div>
+          <div class="scroll">
+            <div class="now">
+              <span class="speed" id="speed-btn" onclick="cycleSpeed()">1.0×</span>
+              <div class="cover">🎧</div>
+              <h3 id="np-title">Software 2.0</h3>
+              <div class="src" id="np-src">来自 知识浏览 · entities</div>
+              <div class="prog"><i id="np-prog"></i></div>
+              <div class="prog-time"><span id="np-cur">1:12</span><span id="np-dur">3:05</span></div>
+              <div class="ctrls">
+                <button onclick="alert('上一首')">⏮</button>
+                <button class="play" id="np-play" onclick="togglePlay()">⏸</button>
+                <button onclick="alert('下一首')">⏭</button>
+              </div>
+            </div>
+            <div class="pl-title">播放列表（<span id="pl-count">3</span>）</div>
+            <div id="playlist">
+              <div class="pl-item playing" onclick="playItem(this)"><div class="ic">📄</div><div class="t">Software 2.0<small>entities · 3:05</small></div><div class="x" onclick="delItem(event,this)">✕</div></div>
+              <div class="pl-item" onclick="playItem(this)"><div class="ic">📄</div><div class="t">Autopilot 数据引擎<small>concepts · 4:20</small></div><div class="x" onclick="delItem(event,this)">✕</div></div>
+              <div class="pl-item" onclick="playItem(this)"><div class="ic">💬</div><div class="t">问答：Software 2.0 讲解<small>来自 知识问答 · 2:40</small></div><div class="x" onclick="delItem(event,this)">✕</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- INGEST -->
+        <div class="view" id="view-ingest">
+          <div class="appbar">
+            <div class="title">投递采集<small>链接 · 文件 · 文字 · 拍照</small></div>
+          </div>
+          <div class="scroll">
+            <div class="seg" id="ingest-seg">
+              <div class="on" onclick="switchIngest(this,'url')">🔗 链接</div>
+              <div onclick="switchIngest(this,'file')">📄 文件</div>
+              <div onclick="switchIngest(this,'text')">✏️ 文字</div>
+              <div onclick="switchIngest(this,'photo')">📷 拍照</div>
+            </div>
+            <div class="ing-card" id="ing-url">
+              <textarea rows="3" placeholder="粘贴网页链接，例如 https://karpathy.medium.com/..."></textarea>
+            </div>
+            <div class="ing-card" id="ing-file" style="display:none">
+              <div class="filebox" onclick="alert('选择文档：md/txt/pdf/html/docx/xlsx/pptx…')">📎 点击选择文档文件</div>
+            </div>
+            <div class="ing-card" id="ing-text" style="display:none">
+              <textarea rows="5" placeholder="粘贴或写下要入库的文字内容…"></textarea>
+            </div>
+            <div class="ing-card" id="ing-photo" style="display:none">
+              <div class="cam" onclick="pickPhoto(this)">📷<br>点击拍照 / 从相册选择<br><small>图片将作为视觉上下文，由 AI 转写摘要后归档</small></div>
+            </div>
+            <button class="btn" onclick="submitIngest()">提交采集</button>
+            <div class="recent">最近采集</div>
+            <div class="recent-item"><div class="ic" style="font-size:16px">📄</div>深度学习食谱.md<div class="ok">✓</div></div>
+            <div class="recent-item"><div class="ic" style="font-size:16px">🌐</div>karpathy.medium.com/...<div class="ok">✓</div></div>
+          </div>
+        </div>
+
+        <!-- ME -->
+        <div class="view" id="view-me">
+          <div class="appbar">
+            <div class="title">我的</div>
+            <div class="sp"></div>
+            <button class="iconbtn" onclick="alert('关于：版本 v0.1.0 · BYOK 隐私说明')">ⓘ</button>
+          </div>
+          <div class="scroll">
+            <div class="me-card">
+              <div class="av">🙂</div>
+              <div><div class="nm">alice</div><div class="role">user</div></div>
+            </div>
+            <div class="row" onclick="goApiKey()">
+              <div class="ic">🔑</div><div class="sp">API Key 设置（BYOK）</div>
+              <span class="badge set" id="byok-badge">已配置</span><span class="arr">›</span>
+            </div>
+            <div class="row" onclick="alert('TTS 设置：音色 / 语速 / 风格 / provider')">
+              <div class="ic">🔊</div><div class="sp">TTS 语音设置</div><span class="arr">›</span>
+            </div>
+            <div class="row">
+              <div class="ic">🌗</div><div class="sp">主题</div>
+              <div class="theme-toggle"><span class="on">深色</span><span onclick="alert('浅色主题（复用 ThemeSwitcher）')">浅色</span></div>
+            </div>
+            <div class="row" onclick="alert('只读概览：总页数 / 链接数 / 分类计数')">
+              <div class="ic">📊</div><div class="sp">知识概览</div><span class="arr">›</span>
+            </div>
+            <button class="btn ghost" style="margin-top:18px" onclick="doLogout()">退出登录</button>
+          </div>
+        </div>
+
+        <!-- TABBAR -->
+        <div class="tabbar">
+          <button class="tab on" onclick="switchTab('query')"><span class="ti">💬</span>问答</button>
+          <button class="tab" onclick="switchTab('browse')"><span class="ti">📚</span>浏览</button>
+          <button class="tab" onclick="switchTab('listen')"><span class="ti">🎧</span>聆听</button>
+          <button class="tab" onclick="switchTab('ingest')"><span class="ti">📥</span>投递</button>
+          <button class="tab" onclick="switchTab('me')"><span class="ti">👤</span>我的</button>
+        </div>
+
+        <!-- mini tts -->
+        <div class="mini-tts" id="mini-tts">
+          <span>🔊</span><span class="t" id="mini-tts-t">正在朗读：Software 2.0</span>
+          <button onclick="alert('暂停')">⏸</button><button onclick="hideMini()">✕</button>
+        </div>
+      </div>
+
+      <!-- history sheet -->
+      <div class="sheet-mask" id="hist-mask" onclick="closeHistory()"></div>
+      <div class="sheet" id="hist-sheet">
+        <div class="grip"></div>
+        <h4>对话历史</h4>
+        <div class="conv"><span>💬</span> Software 2.0 是什么意思 <span class="pin">📌</span></div>
+        <div class="conv"><span>💬</span> 如何训练自己的模型 <span class="del" onclick="alert('删除会话')">🗑</span></div>
+        <div class="conv"><span>💬</span> 解释反向传播 <span class="del" onclick="alert('删除会话')">🗑</span></div>
+        <div class="conv" style="border-style:dashed;color:var(--sub);justify-content:center" onclick="newChat();closeHistory()">＋ 新建对话</div>
+      </div>
+
+      <!-- ingest progress sheet -->
+      <div class="sheet-mask" id="ing-mask" onclick="closeIng()"></div>
+      <div class="sheet" id="ing-sheet">
+        <div class="grip"></div>
+        <h4 id="ing-title">采集进度</h4>
+        <div id="ing-steps"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // clock
+  function tick(){const d=new Date();document.getElementById('clock').textContent=d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');}
+  tick();setInterval(tick,10000);
+
+  const $ = s=>document.querySelector(s);
+  function show(id){document.getElementById(id).style.display='flex';}
+  function hide(id){document.getElementById(id).style.display='none';}
+
+  // login
+  function toggleReg(){
+    const s=$('#li-switch');
+    if(s.dataset.reg!=='1'){s.dataset.reg='1';s.innerHTML='已有账号？<b onclick="toggleReg()">去登录</b>';$('.btn').textContent='注 册';$('#li-user').value='';$('#li-pass').value='';$('#li-pass').type='password';}
+    else{s.dataset.reg='0';s.innerHTML='还没有账号？<b onclick="toggleReg()">注册一个</b>';$('.btn').textContent='登 录';}
+  }
+  function doLogin(){
+    const u=$('#li-user').value.trim(),p=$('#li-pass').value.trim();
+    if(!u||!p){$('#li-err').textContent='请输入用户名和密码';return;}
+    $('#li-err').textContent='';
+    hide('login');show('app');
+    switchTab('query');
+  }
+  function doLogout(){hide('app');show('login');}
+
+  // tabs
+  function switchTab(name){
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    $('#view-'+name).classList.add('active');
+    const map={query:0,browse:1,listen:2,ingest:3,me:4};
+    document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('on',i===map[name]));
+  }
+
+  // query
+  function autoGrow(t){t.style.height='auto';t.style.height=Math.min(t.scrollHeight,110)+'px';}
+  function fillQ(el){$('#q-input').value=el.textContent;$('#q-input').focus();autoGrow($('#q-input'));}
+  function toggleMode(el){document.querySelectorAll('#view-query .mode').forEach(m=>m.classList.remove('on'));el.classList.add('on');}
+  function newChat(){
+    $('#chat-scroll').innerHTML='<div class="msg"><div class="av" style="background:rgba(124,58,237,.3)">🤖</div><div class="bubble">新的对话已开始，问我点什么吧 ✨</div></div>';
+  }
+  function sendQ(){
+    const v=$('#q-input').value.trim();if(!v)return;
+    const sc=$('#chat-scroll');
+    sc.insertAdjacentHTML('beforeend',`<div class="msg user"><div class="av" style="background:var(--acc)">🙂</div><div class="bubble">${esc(v)}</div></div>
+      <div class="msg" id="streaming"><div class="av" style="background:rgba(124,58,237,.3)">🤖</div><div class="bubble"><span class="dots"><span></span><span></span><span></span></span></div></div>`);
+    $('#q-input').value='';autoGrow($('#q-input'));
+    sc.scrollTop=sc.scrollHeight;
+    const ans='<b>'+v.replace(/什么|吗|\?|\？/g,'')+'</b> —— 这是一个很好的问题。基于知识库，我整理出三点：① 概念定义；② 与既有体系的关联；③ 实践建议。下方引用了相关页面，你可以点开深入阅读。';
+    setTimeout(()=>{
+      $('#streaming .bubble').innerHTML=`<div class="think">💭 已检索 3 个相关页面</div>${ans}
+        <div class="refs"><span class="ref">📚 Software 2.0.md</span><span class="ref">📚 Autopilot 数据引擎.md</span></div>
+        <div class="followups"><span class="chip" onclick="fillQ(this)">能举个代码例子吗？</span><span class="chip" onclick="fillQ(this)">和传统方法对比？</span></div>
+        <div class="mtools"><span>📋 复制</span><span onclick="addToListen('问答回答')">🔊 加入聆听</span><span>🔄 重生成</span></div>`;
+      sc.scrollTop=sc.scrollHeight;
+    },900);
+  }
+  function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+  function addToListen(t){showMini(t);}
+  function showMini(t){$('#mini-tts-t').textContent='正在朗读：'+t;$('#mini-tts').classList.add('show');}
+  function hideMini(){$('#mini-tts').classList.remove('show');}
+  function goMe(){switchTab('me');}
+
+  // browse
+  function switchBrowse(el,mode){
+    document.querySelectorAll('#browse-seg div').forEach(d=>d.classList.remove('on'));el.classList.add('on');
+    $('#browse-rec').style.display=mode==='rec'?'block':'none';
+    $('#browse-search').style.display=mode==='search'?'block':'none';
+  }
+  function mockSearch(q){
+    const r=$('#search-result');
+    if(!q){r.innerHTML='';return;}
+    r.innerHTML=`<div class="card"><span class="dir">entities</span><h3>Software 2.0</h3><p>…神经网络权重替代手写逻辑…（命中 5 处）</p></div>
+      <div class="card"><span class="dir">concepts</span><h3>数据引擎</h3><p>…以数据驱动模型迭代的闭环…（命中 3 处）</p></div>`;
+  }
+  let readerTitle='';
+  function openReader(title,dir,summary,sections){
+    readerTitle=title;
+    $('#reader-title').textContent=title;
+    let html=`<p style="color:var(--sub)">${summary}</p>`;
+    (sections||[]).forEach(s=>{html+=`<h3>${s[0]}</h3><p>${s[1]}</p>`;});
+    html+=`<p style="color:var(--muted);font-size:12px">📂 ${dir} · 由 AI 编译自原始资料</p>`;
+    $('#reader-body').innerHTML=html;
+    $('#reader').classList.add('show');
+  }
+  function closeReader(){$('#reader').classList.remove('show');}
+  function readerAddListen(){closeReader();switchTab('listen');showMini(readerTitle);}
+
+  // listen
+  let playing=true,speed=1;const speeds=[1,1.25,1.5,0.75,2];
+  function togglePlay(){playing=!playing;$('#np-play').textContent=playing?'⏸':'▶';}
+  function cycleSpeed(){speed=speeds[(speeds.indexOf(speed)+1)%speeds.length];$('#speed-btn').textContent=speed+'×';}
+  function playItem(el){document.querySelectorAll('.pl-item').forEach(p=>p.classList.remove('playing'));el.classList.add('playing');$('#np-title').textContent=el.querySelector('.t').childNodes[0].textContent.trim();}
+  function delItem(e,el){e.stopPropagation();el.remove();$('#pl-count').textContent=document.querySelectorAll('.pl-item').length;}
+
+  // ingest
+  function switchIngest(el,mode){
+    document.querySelectorAll('#ingest-seg div').forEach(d=>d.classList.remove('on'));el.classList.add('on');
+    ['url','file','text','photo'].forEach(m=>$('#ing-'+m).style.display=m===mode?'block':'none');
+  }
+  function pickPhoto(el){
+    const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.capture='environment';
+    inp.onchange=()=>{const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{el.innerHTML=`<img src="${r.result}">`;};r.readAsDataURL(f);};
+    inp.click();
+  }
+  function submitIngest(){
+    const steps=[
+      ['📥 接收采集','done'],
+      ['🔍 解析与去重','done'],
+      ['🤖 AI 编译为结构化页面','running'],
+      ['✅ 写入 Vault','pending']
+    ];
+    let html='';steps.forEach(s=>{html+=`<div class="conv"><span>${s[1]==='done'?'✅':s[1]==='running'?'⏳':'⬜'}</span> ${s[0]}</div>`;});
+    $('#ing-steps').innerHTML=html;$('#ing-title').textContent='采集进度（SSE）';
+    $('#ing-mask').classList.add('show');$('#ing-sheet').classList.add('show');
+    setTimeout(()=>{$('#ing-steps').innerHTML=`<div class="conv"><span>✅</span> 📥 接收采集</div><div class="conv"><span>✅</span> 🔍 解析与去重</div><div class="conv"><span>✅</span> 🤖 AI 编译为结构化页面</div><div class="conv"><span>✅</span> ✅ 写入 Vault · 生成页：新条目.md</div><div class="conv" style="border-style:dashed;color:var(--acc);justify-content:center" onclick="closeIng();switchTab('browse')">👉 查看生成页面</div>`;},1600);
+  }
+  function closeIng(){$('#ing-mask').classList.remove('show');$('#ing-sheet').classList.remove('show');}
+
+  // history sheet
+  function openHistory(){$('#hist-mask').classList.add('show');$('#hist-sheet').classList.add('show');}
+  function closeHistory(){$('#hist-mask').classList.remove('show');$('#hist-sheet').classList.remove('show');}
+
+  // me
+  function goApiKey(){
+    const set=confirm('模拟：当前 API Key 状态切换？\n确定=标记为未配置（演示 BYOK 缺失兜底）');
+    const b=$('#byok-badge');
+    if(set){b.textContent='未配置';b.className='badge unset';$('#byok-warn').style.display='block';}
+    else{b.textContent='已配置';b.className='badge set';$('#byok-warn').style.display='none';}
+  }
+</script>
+</body>
+</html>

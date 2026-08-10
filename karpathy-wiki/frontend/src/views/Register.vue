@@ -52,15 +52,19 @@ async function handleRegister() {
   if (!validate()) return;
   loading.value = true;
   errorMsg.value = '';
-  const ok = await authStore.register({
-    username: username.value,
-    password: password.value,
-    confirmPassword: confirmPassword.value || undefined,
-  });
-  loading.value = false;
-  // 注册成功：auth store 已写入 token + user，App.vue 的 isLoggedIn 自动切换为主应用
-  if (!ok) {
-    errorMsg.value = authStore.error || '注册失败';
+  try {
+    const ok = await authStore.register({
+      username: username.value,
+      password: password.value,
+      confirmPassword: confirmPassword.value || undefined,
+    });
+    // 注册成功：auth store 已写入 token + user，App.vue 的 isLoggedIn 自动切换为主应用
+    if (!ok) {
+      errorMsg.value = authStore.error || '注册失败';
+    }
+  } finally {
+    // 无论成功/失败/异常都复位 loading，避免卡在「注册中…」（state-machine-simplify-rule）
+    loading.value = false;
   }
 }
 

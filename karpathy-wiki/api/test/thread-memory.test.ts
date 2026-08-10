@@ -135,7 +135,7 @@ describe('ThreadMemoryStore - 记忆 读/写/清', () => {
     // 保留的是最近的：最后写入的 m59 仍在
     expect(mem?.entries[mem.entries.length - 1].content).toBe('m59');
     expect(mem?.entries[0].content).toBe('m20'); // 60-40 = 20 起
-  });
+  }, 30000); // 沙箱磁盘慢：60 次 appendMemory 落盘，默认 5s 在高负载下超时
 });
 
 describe('ThreadMemoryStore - 会话生命周期', () => {

@@ -1,4 +1,4 @@
-﻿// QQ 聊天记录导入子系统路由（SRS §6.1 路由族）
+// QQ 聊天记录导入子系统路由（SRS §6.1 路由族）
 // 注册 6 个端点：upload/preview/extract/drafts/compile/compile/batch
 // M1 阶段实现：upload（完整）、preview（完整）、drafts（完整）、compile（复用 adapter）
 // M1 桩实现：extract（501，待 M2 实现 LLM 抽取）、compile/batch（501，待 M2 实现）
@@ -146,7 +146,7 @@ export function registerQqIngestRoute(
         return void reply.send(parsed);
       } catch (err: unknown) {
         request.log.error({ err, rawId }, 'qq-ingest preview error');
-        return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+        return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
       }
     },
   );
@@ -224,7 +224,7 @@ export function registerQqIngestRoute(
       return void reply.send({ drafts });
     } catch (err: unknown) {
       request.log.error({ err }, 'qq-ingest drafts list error');
-      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -483,10 +483,10 @@ export function registerQqIngestRoute(
         extract_base_url: '',
         extract_token_budget: 50000,
       };
-      return void reply.send({ qq });
+      await reply.send({ qq });
     } catch (err: unknown) {
       request.log.error({ err }, 'qq-ingest config get error');
-      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      await reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -516,7 +516,7 @@ export function registerQqIngestRoute(
       return void reply.send({ qq: updated.qq });
     } catch (err: unknown) {
       request.log.error({ err }, 'qq-ingest config put error');
-      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 }

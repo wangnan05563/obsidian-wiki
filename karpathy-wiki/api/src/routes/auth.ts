@@ -96,11 +96,15 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const clientIp = clientIpFromRequest(request);
     // 可选链合并 body nullish 守卫与字段访问（S6582）
     if (!body?.username || !body?.password) {
-      reply.code(400).send({ ok: false, message: '用户名和密码不能为空' });
+      return reply.code(400).send({ ok: false, message: '用户名和密码不能为空' });
     }
 
     // FR-RM-10 登录限流（复用同一框架）：单 IP 10 次/分钟、单用户名 5 次/分钟（防爆破）
-    const loginRl = checkAuthRateLimit({ ip: clientIp, username: body.username, kind: 'login' });
+    // PERF-TEST HOOK: WIKI_DISABLE_RATE_LIMIT=1 跳过登录限流，便于高并发登录压测
+    const rlDisabled = process.env.WIKI_DISABLE_RATE_LIMIT === '1';
+    const loginRl = rlDisabled
+      ? { allowed: true, limit: 0, remaining: 0, retryAfterSec: 0 }
+      : checkAuthRateLimit({ ip: clientIp, username: body.username, kind: 'login' });
     if (!loginRl.allowed) {
       // BR-057-4 错误双日志：限流拒绝属潜在暴力破解/枚举，须留痕便于审计与溯源
       request.log.warn({ ip: clientIp, username: body.username, kind: 'login' }, 'auth rate limit exceeded');
@@ -156,7 +160,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
           message: '账户已禁用',
         }),
       );
-      reply.code(403).send({ ok: false, message: '账户已禁用，请联系管理员' });
+      return reply.code(403).send({ ok: false, message: '账户已禁用，请联系管理员' });
     }
 
     // 创建会话
@@ -168,8 +172,10 @@ export function registerAuthRoute(app: FastifyInstance): void {
       ttlMs: cfg.sessionTtlHours * 60 * 60 * 1000,
     });
 
-    // 更新最后登录时间
-    await updateLastLogin(user.id);
+    // 更新最后登录时间（非关键写：与审计日志同策略，fire-and-forget 不阻塞响应）
+    // 内部已 try/catch 降级告警，写盘失败不影响登录成功返回；去掉 await 让
+    // 响应更快返回，避免慢盘/隧道叠加放大登录时延（state-machine-simplify-rule）。
+    updateLastLogin(user.id).catch(() => {});
 
     // 记录审计日志：登录成功
     writeAuditLog(
@@ -218,7 +224,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
     // 1. 同步格式校验（不访问存储）
     const validation = validateRegistrationInput(body);
     if (!validation.ok) {
-      reply.code(validation.status).send({ error: validation.error });
+      return reply.code(validation.status).send({ error: validation.error });
     }
     const username = body.username;
 
@@ -247,7 +253,7 @@ export function registerAuthRoute(app: FastifyInstance): void {
           message: '用户名已存在',
         }),
       );
-      reply.code(409).send({ error: '用户名已存在' });
+      return reply.code(409).send({ error: '用户名已存在' });
     }
 
     // 3. 创建用户（PBKDF2 哈希），角色强制为 user

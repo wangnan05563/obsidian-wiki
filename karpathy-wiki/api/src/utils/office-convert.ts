@@ -42,7 +42,7 @@ function escapeMarkdownPipe(text: string): string {
 // 提取段落文本解析逻辑，降低 convertDocxToMarkdown 的认知复杂度
 function parseDocxParagraph(paraContent: string): { text: string; isHeading: boolean; isBold: boolean; headingLevel: number } {
   const isHeading = /pStyle[^"]*"Heading\d"/i.test(paraContent);
-  const isBold = /<w:b([ >\/])/i.test(paraContent);
+  const isBold = paraContent.includes('<w:b ') || paraContent.includes('<w:b/>') || paraContent.includes('<w:b>');
   const textMatches = paraContent.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [];
   let paraText = '';
   for (const t of textMatches) {
@@ -108,13 +108,13 @@ function parseSheetCells(
     const rowNum = parseInt(cellMatch[2], 10);
     const cellContent = cellMatch[3];
     const colNum = colToNumber(colStr);
-    let value = '';
+    let value = ''; // NOSONAR - 变量在下文 if/else 分支中赋值和使用
     const vMatch = cellContent.match(/<v>([^<]*)<\/v>/);
-    if (vMatch?.[1] !== undefined) {
-      value = stringCache.get(parseInt(vMatch[1], 10)) ?? vMatch[1];
-    } else {
+    if (vMatch?.[1] === undefined) {
       const tMatch = cellContent.match(/<t[^>]*>([^<]*)<\/t>/);
       if (tMatch?.[1] !== undefined) value = decodeXmlEntities(tMatch[1]);
+    } else {
+      value = stringCache.get(parseInt(vMatch[1], 10)) ?? vMatch[1];
     }
     if (!rows.has(rowNum)) rows.set(rowNum, []);
     rows.get(rowNum)!.push({ col: colNum, value: escapeMarkdownPipe(value) });
