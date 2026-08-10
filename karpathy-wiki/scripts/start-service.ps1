@@ -42,16 +42,22 @@ $apiPort = [int]$Config.ports.api
 $webPort = [int]$Config.ports.web
 
 # 清理 API 端口上的进程
+# 注意：必须用 Stop-Process（PowerShell 原生）而非裸 taskkill。
+# 原因：$ErrorActionPreference='Stop' 下，taskkill 的 stderr（如"进程已退出 / 属于子进程"）
+# 会被 PowerShell 包装成 NativeCommandError 并中止整个脚本（即本次报的 [ERROR] Start failed）；
+# 且 taskkill /F /T 对"属于其他进程子进程"的 PID 会直接拒绝（"无法终止 PID X (属于 PID Y 子进程)"）。
+# Stop-Process -Force 无此限制，配合 try/catch 保证"清理旧进程"为非致命步骤——
+# 进程已退出或被回收时静默跳过即可，端口稍后由下方 Wait-PortReady 探测确认。
 $apiPids = Get-PidOnPort -Port $apiPort
 foreach ($procId in $apiPids) {
-    taskkill /F /T /PID $procId >$null 2>&1
+    try { Stop-Process -Id $procId -Force -ErrorAction Stop } catch { }
     Write-Log "已清理 API 端口 $apiPort 上的进程 (PID $procId)" -Level OK -Step "1/4"
 }
 
 # 清理 Web 端口上的进程
 $webPids = Get-PidOnPort -Port $webPort
 foreach ($procId in $webPids) {
-    taskkill /F /T /PID $procId >$null 2>&1
+    try { Stop-Process -Id $procId -Force -ErrorAction Stop } catch { }
     Write-Log "已清理 Web 端口 $webPort 上的进程 (PID $procId)" -Level OK -Step "1/4"
 }
 
