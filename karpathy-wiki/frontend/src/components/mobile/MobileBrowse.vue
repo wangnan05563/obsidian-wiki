@@ -128,6 +128,30 @@ function scrollListTo(where: 'top' | 'bottom') {
   sc.scrollTo({ top: where === 'top' ? 0 : sc.scrollHeight, behavior: 'smooth' });
 }
 
+// 是否可滚动：仅当内容超出视口高度时才显示悬浮定位图标，避免无滚动时多余控件
+const listScrollable = ref(false);
+let scrollObserver: ResizeObserver | null = null;
+function updateScrollable() {
+  const sc = findScrollContainer();
+  listScrollable.value = !!sc && sc.scrollHeight - sc.clientHeight > 4;
+}
+function setupScrollWatch() {
+  updateScrollable();
+  if (scrollObserver) scrollObserver.disconnect();
+  const root = rootRef.value;
+  if (root && 'ResizeObserver' in window) {
+    scrollObserver = new ResizeObserver(() => updateScrollable());
+    scrollObserver.observe(root);
+  }
+  window.addEventListener('resize', updateScrollable);
+}
+function teardownScrollWatch() {
+  if (scrollObserver) scrollObserver.disconnect();
+  scrollObserver = null;
+  window.removeEventListener('resize', updateScrollable);
+}
+
+
 // ---------- 打开条目详情 ----------
 async function openPath(path: string) {
   view.value = 'detail';
@@ -172,9 +196,11 @@ onMounted(async () => {
       await openPath(props.jumpPath);
     }
   }
+  setupScrollWatch();
 });
 onBeforeUnmount(() => {
   if (searchTimer) window.clearTimeout(searchTimer);
+  teardownScrollWatch();
 });
 </script>
 
@@ -257,10 +283,10 @@ onBeforeUnmount(() => {
     <div v-if="errorMsg && view !== 'detail'" class="mb-error">{{ errorMsg }}</div>
 
     <!-- 快速定位：悬浮常驻，顶部→滚到内容最上方，底部→滚到内容最下方（不影响阅读） -->
-    <button class="mb-scroll-fab mb-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
+    <button v-if="listScrollable" class="mb-scroll-fab mb-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6" /></svg>
     </button>
-    <button class="mb-scroll-fab mb-scroll-bottom" title="滚动到底部" aria-label="滚动到底部" @click="scrollListTo('bottom')">
+    <button v-if="listScrollable" class="mb-scroll-fab mb-scroll-bottom" title="滚动到底部" aria-label="滚动到底部" @click="scrollListTo('bottom')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
     </button>
   </div>
