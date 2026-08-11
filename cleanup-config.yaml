@@ -1,0 +1,227 @@
+# ============================================================
+# Workspace Cleanup - 项目专属配置 (19_Karpathy-AI+Obsidian知识库)
+# 派生自 skill examples/cleanup-config.example.yaml，按本工作空间实际垃圾模式裁剪
+# 设计原则：零硬编码、配置驱动、安全优先（删前哈希备份、删后验证）
+# ============================================================
+
+workspace:
+  root: "."
+  script_dir: "scripts"
+  docs_dir: "docs"
+  logs_dir: "logs"
+  frontend_dir: "karpathy-wiki/frontend"
+  frontend_src_dir: "src"
+
+# 根目录允许清单：这些文件/扩展名可保留在根目录
+root_allowlist:
+  extensions:
+    - ".md"
+    - ".txt"
+    - ".yaml"
+    - ".yml"
+    - ".toml"
+    - ".json"
+    - ".gitignore"
+    - ".env"
+  files:
+    - "README.md"
+    - "CHANGELOG.md"
+    - "projects.json"
+    - "ce_task.json"
+    - "package.json"
+    - "package-lock.json"
+    - ".gitignore"
+    - ".pre-commit-config.yaml"
+    - "cleanup-config.yaml"
+    - "sonar-project.properties"
+  # 根目录允许的脚本（空 = 根目录不允许任何脚本，散落脚本一律归并/清理）
+  allowed_root_scripts: []
+
+script_extensions:
+  - ".py"
+  - ".ps1"
+  - ".bat"
+  - ".sh"
+  - ".js"
+  - ".vbs"
+
+script_exclude_dirs:
+  - "karpathy-wiki/"
+  - "wiki-harness/"
+  - "scripts/"
+  - "node_modules/"
+  - ".venv/"
+  - "venv/"
+
+# 本工作空间实际垃圾模式
+garbage_patterns:
+  redirect_artifacts:
+    - "/0"
+    - "/<project_name>"
+  tmp_suffixes:
+    - "*.tmp"
+    - "*.bak"
+    - "*.orig"
+  test_outputs:
+    - "/test_result.txt"
+    - "/pytest_output.txt"
+  # SonarQube 调试 Python 脚本（根目录散落）
+  sonar_debug_python:
+    - "/check_sonar.py"
+    - "/check_s6544.py"
+    - "/check_s6544_v2.py"
+    - "/s6544_check.py"
+    - "/check_rule.py"
+    - "/check_rule2.py"
+    - "/check_rule3.py"
+    - "/analyze_issues.py"
+  # 运行时/扫描日志（已被 .gitignore 忽略）
+  runtime_logs:
+    - "/sonar-scan.log"
+    - "/sonar-scan2.log"
+    - "/sonar-scan3.log"
+  # 缓存目录（直接删除，不入归档）
+  cache_dirs:
+    - ".scannerwork/"
+    - ".pytest_cache/"
+    - ".ruff_cache/"
+    - ".mypy_cache/"
+    - "__pycache__/"
+    - "node_modules/.cache/"
+    - ".vite/"
+    - "coverage/"
+  # 构建产物（gitignored，可重建）
+  build_artifacts:
+    - "dist/"
+    - "build/"
+  # 隔离/临时产物目录（上一轮清理遗留的隔离区）
+  quarantine_dirs:
+    - "_deploy_temp_quarantine/"
+    - "_stale_js_quarantine/"
+  # 测试截图/临时产物
+  test_artifacts:
+    - "test_screenshots/"
+  # IDE 配置缓存
+  ide_cache:
+    - ".vscode/"
+
+detection:
+  enabled: true
+  prefix_indicators:
+    - "_"
+    - ".tmp_"
+  name_keywords:
+    - "debug"
+    - "diag"
+    - "investigation"
+    - "trace"
+    - "smoke"
+    - "verify"
+  name_patterns:
+    - "test_*.py"
+    - "run_*.py"
+    - "git_*.py"
+    - "verify_*.py"
+    - "_*.log"
+    - "_*.txt"
+  infer_confidence_threshold: 0.7
+  auto_add_inferred_to_gitignore: true
+
+service_indicators:
+  pid_files:
+    - "karpathy-wiki/logs/web.pid"
+    - "karpathy-wiki/api/logs/app.pid"
+  ports:
+    - 3000
+    - 8080
+  process_names:
+    - "node"
+    - "python"
+  file_occupancy_probes:
+    - "logs/app.log"
+    - "karpathy-wiki/logs/app.log"
+  process_name_patterns:
+    - "node*"
+    - "python*"
+
+stability_check:
+  enabled: true
+  wait_seconds: 5
+  max_recurrence: 3
+  recurrence_patterns:
+    - "sonar-scan*.log"
+    - "*.tmp"
+  recurrence_action: "warn"
+
+platform:
+  current: "windows"
+  list_files:
+    windows: 'Get-ChildItem -Path "{path}" -File | Sort-Object Name'
+    linux: "ls -la {path}"
+    macos: "ls -la {path}"
+  file_hash:
+    windows: 'Get-FileHash -LiteralPath "{path}" -Algorithm SHA256'
+    linux: "sha256sum {path}"
+    macos: "shasum -a 256 {path}"
+  port_check:
+    windows: 'netstat -aon | Select-String ":{port}.*LISTENING"'
+    linux: "ss -tlnp | grep :{port}"
+    macos: "lsof -i :{port}"
+  process_check:
+    windows: 'Get-Process -Name {names} -ErrorAction SilentlyContinue'
+    linux: "ps aux | grep -E '{names}'"
+    macos: "ps aux | grep -E '{names}'"
+  remove_file:
+    windows: 'Remove-Item -LiteralPath "{path}" -Force'
+    linux: "rm -f {path}"
+    macos: "rm -f {path}"
+  remove_dir:
+    windows: 'Remove-Item -LiteralPath "{path}" -Recurse -Force'
+    linux: "rm -rf {path}"
+    macos: "rm -rf {path}"
+  file_occupancy_check:
+    windows: |
+      try {
+        $stream = [System.IO.File]::Open("{path}",'Open','Read','None')
+        $stream.Close()
+        "not locked"
+      } catch { "locked" }
+    linux: 'lsof {path} 2>/dev/null || echo "not locked"'
+    macos: 'lsof {path} 2>/dev/null || echo "not locked"'
+  stop_process:
+    windows: 'Stop-Process -Id {pid} -Force'
+    linux: "kill -9 {pid}"
+    macos: "kill -9 {pid}"
+  venv_python:
+    windows: ".venv/Scripts/python.exe"
+    linux: ".venv/bin/python"
+    macos: ".venv/bin/python"
+
+verification:
+  python_imports:
+    - "import os"
+  command: 'Get-ChildItem -Path "." | Measure-Object | Select-Object -ExpandProperty Count'
+  on_failure:
+    - "检查 cleanup-report.md 中的 hash 记录"
+    - "从 git 历史恢复：git checkout HEAD -- <file>"
+    - "重新生成缓存：npm run build / sonar-scanner"
+
+archive:
+  changelog_path: "docs/CLEANUP-LOG.md"
+  gitignore_path: ".gitignore"
+  precommit_path: ".pre-commit-config.yaml"
+  auto_update_gitignore: true
+  auto_update_precommit: false
+  gitignore_group_comments:
+    - "# ---------- 清理技能自动生成规则 ----------"
+
+safety:
+  require_stopped_service: true
+  backup_log_format: "cleanup-{YYYYMMDD-HHmmss}.log"
+  dry_run: false
+  min_confidence_to_delete: 0.8
+  max_files_per_batch: 50
+  large_file_threshold_mb: 5
+  special_filename_handling: "safe"
+  verify_after_each_batch: true
+  soft_delete_suffix: ".trash"
