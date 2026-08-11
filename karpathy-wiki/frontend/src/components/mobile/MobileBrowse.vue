@@ -110,6 +110,24 @@ function clearSearch() {
   view.value = 'list';
 }
 
+// ---------- 快速定位：滚动内容列表至最上/最下 ----------
+// 滚动容器是外壳的 .mobile-content（overflow-y:auto），向上查找首个可滚动祖先即可。
+const rootRef = ref<HTMLElement | null>(null);
+function findScrollContainer(): HTMLElement | null {
+  let el = rootRef.value?.parentElement ?? null;
+  while (el) {
+    const oy = getComputedStyle(el).overflowY;
+    if (oy === 'auto' || oy === 'scroll') return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+function scrollListTo(where: 'top' | 'bottom') {
+  const sc = findScrollContainer();
+  if (!sc) return;
+  sc.scrollTo({ top: where === 'top' ? 0 : sc.scrollHeight, behavior: 'smooth' });
+}
+
 // ---------- 打开条目详情 ----------
 async function openPath(path: string) {
   view.value = 'detail';
@@ -161,7 +179,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="mb-root">
+  <div class="mb-root" ref="rootRef">
     <!-- 搜索栏（吸顶） -->
     <div class="mb-search">
       <svg class="mb-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -237,6 +255,14 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="errorMsg && view !== 'detail'" class="mb-error">{{ errorMsg }}</div>
+
+    <!-- 快速定位：悬浮常驻，顶部→滚到内容最上方，底部→滚到内容最下方（不影响阅读） -->
+    <button class="mb-scroll-fab mb-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6" /></svg>
+    </button>
+    <button class="mb-scroll-fab mb-scroll-bottom" title="滚动到底部" aria-label="滚动到底部" @click="scrollListTo('bottom')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+    </button>
   </div>
 </template>
 
@@ -452,5 +478,38 @@ onBeforeUnmount(() => {
   color: #ffb4c4;
   background: rgba(255, 0, 80, 0.1);
   border: 1px solid rgba(255, 0, 80, 0.3);
+}
+
+/* 快速定位 FAB：常驻悬浮，半透明不挡阅读；左缘上下分布，避开顶部搜索栏与底部 Tab */
+.mb-scroll-fab {
+  position: fixed;
+  left: 12px;
+  z-index: 20;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 0, 16, 0.82);
+  border: 1px solid var(--neon-cyan, #00f5ff);
+  color: var(--neon-cyan, #00f5ff);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+.mb-scroll-fab:active {
+  transform: scale(0.92);
+}
+.mb-scroll-top {
+  top: calc(52px + env(safe-area-inset-top, 0) + 10px);
+}
+.mb-scroll-bottom {
+  bottom: calc(56px + env(safe-area-inset-bottom, 0) + 14px);
+}
+.mb-scroll-fab svg {
+  width: 20px;
+  height: 20px;
 }
 </style>
