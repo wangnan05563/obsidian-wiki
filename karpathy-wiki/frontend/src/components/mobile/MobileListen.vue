@@ -224,6 +224,10 @@ async function synthAndPlay(item: QueueItem) {
 
   loading.value = true;
   errorMsg.value = '';
+  position.value = 0; // S1：切换曲目时重置进度，避免沿用上一条的进度显示
+  duration.value = 0;
+  // 阶段一：请求合成并准备好 <audio> 源（失败即「合成失败」）
+  let synthOk = false;
   try {
     const useVoice = item.voice || voice; // 支持每曲目独立朗读者（演唱者）
     const res = await apiFetch(`${API_BASE}/tts/synthesize`, {
@@ -240,15 +244,23 @@ async function synthAndPlay(item: QueueItem) {
     objectUrl = URL.createObjectURL(blob);
     a.src = objectUrl;
     a.playbackRate = speed.value;
-    await a.play();
-    isPlaying.value = true;
-    updateMediaMetadata(item);
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    synthOk = true;
   } catch (e) {
     errorMsg.value = '语音合成失败：' + (e as Error).message;
     isPlaying.value = false;
   } finally {
     loading.value = false;
+  }
+  if (!synthOk) return;
+  // 阶段二：触发播放（失败多为自动播放策略拦截，文案需与合成失败区分）
+  try {
+    await a.play();
+    isPlaying.value = true;
+    updateMediaMetadata(item);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+  } catch (e) {
+    errorMsg.value = '播放被浏览器拦截（自动播放策略），请点按播放按钮继续';
+    isPlaying.value = false;
   }
 }
 
@@ -409,11 +421,50 @@ function locateCurrent() {
   });
 }
 
+// 快速定位：滚动内容列表至最上/最下（与 locateCurrent 解耦，仅滚动外壳滚动容器）。
+// 向上查找首个 overflow-y:auto/scroll 的祖先（即 MobileShell 的 .mobile-content）。
+function findScrollContainer(): HTMLElement | null {
+  let el = rootRef.value?.parentElement ?? null;
+  while (el) {
+    const oy = getComputedStyle(el).overflowY;
+    if (oy === 'auto' || oy === 'scroll') return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+function scrollListTo(where: 'top' | 'bottom') {
+  const sc = findScrollContainer();
+  if (!sc) return;
+  sc.scrollTo({ top: where === 'top' ? 0 : sc.scrollHeight, behavior: 'smooth' });
+}
+
 // 切回聆听页（visible 由 false→true）时自动定位到当前播放条目
 watch(
   () => props.visible,
   (v) => {
     if (v) locateCurrent();
+  },
+);
+
+// 账户切换（含登录/登出）：重置聆听 transient 状态并加载当前账户默认音色，
+// 对齐 MobileShell「切换账户须重置会话作用域状态」约定，避免上一账户音色/队列残留。
+watch(
+  () => authStore.user?.id,
+  async (newId, oldId) => {
+    if (newId === oldId) return;
+    audioEl.value?.pause();
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    }
+    isPlaying.value = false;
+    currentIndex.value = -1;
+    queue.value = [];
+    position.value = 0;
+    duration.value = 0;
+    const cfg = await loadTtsConfig(newId ?? 'guest');
+    voice = cfg.voice || 'zh-CN-XiaoxiaoNeural';
+    if (cfg.rate >= 0.5 && cfg.rate <= 2) speed.value = cfg.rate;
   },
 );
 
@@ -450,91 +501,97 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ml-root" ref="rootRef">
-    <!-- 正文预览视图（点击标题进入，仅查看文字） -->
-    <section v-if="previewPath" class="ml-preview">
-      <div class="ml-preview-head">
-        <button class="ml-back" @click="closePreview">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
-          返回
-        </button>
-        <span class="ml-preview-path">{{ previewPath }}</span>
-      </div>
-      <div v-if="previewLoading" class="ml-hint">读取内容中…</div>
+    <!-- 正文预览 + 可朗读内容列表：仅聆听 Tab 激活（visible）时渲染重型 DOM，
+         降低 v-show 常驻导致的 1000+ 页面节点常驻内存/重排成本；
+         切走时仅保留 <audio> 与响应式状态以支持后台播放。 -->
+    <template v-if="visible">
+      <!-- 正文预览视图（点击标题进入，仅查看文字） -->
+      <section v-if="previewPath" class="ml-preview">
+        <div class="ml-preview-head">
+          <button class="ml-back" @click="closePreview">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            返回
+          </button>
+          <span class="ml-preview-path">{{ previewPath }}</span>
+        </div>
+        <div v-if="previewLoading" class="ml-hint">读取内容中…</div>
+        <template v-else>
+          <h2 class="ml-preview-title">{{ previewTitle }}</h2>
+          <div class="ml-preview-actions">
+            <button class="ml-mini" :disabled="!!(currentPreviewPage && inQueue(currentPreviewPage))" @click="enqueuePreview">＋ 队列</button>
+            <button class="ml-mini play" @click="playPreview">▶ 播放</button>
+          </div>
+          <MarkdownRenderer :content="previewBody" />
+        </template>
+      </section>
+
+      <!-- 可朗读内容列表（预览以外的浏览态） -->
       <template v-else>
-        <h2 class="ml-preview-title">{{ previewTitle }}</h2>
-        <div class="ml-preview-actions">
-          <button class="ml-mini" :disabled="!!(currentPreviewPage && inQueue(currentPreviewPage))" @click="enqueuePreview">＋ 队列</button>
-          <button class="ml-mini play" @click="playPreview">▶ 播放</button>
+      <!-- 搜索栏：与播放状态完全解耦，仅检索知识库内容，不打断当前朗读 -->
+      <div class="ml-search">
+        <svg class="ml-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M21 21l-4.3-4.3" />
+        </svg>
+        <input
+          v-model="searchQuery"
+          class="ml-search-input"
+          type="search"
+          enterkeyhint="search"
+          placeholder="搜索内容…"
+          @input="onSearchInput"
+        />
+        <button v-if="searchQuery" class="ml-search-clear" @click="clearSearch">取消</button>
+      </div>
+
+      <!-- 搜索结果（有搜索词时显示；不影响 queue/currentIndex/audio） -->
+      <section v-if="searchQuery.trim()" class="ml-section">
+        <h3 class="ml-h3">搜索结果（{{ searchHits.length }}）</h3>
+        <div v-if="searching" class="ml-hint">搜索中…</div>
+        <div v-else-if="!searchHits.length" class="ml-hint">未找到与「{{ searchQuery }}」相关的内容</div>
+        <div
+          v-for="h in searchHits"
+          :key="h.path"
+          class="ml-page"
+          :class="{ playing: h.path === currentItem?.path }"
+          :data-page-playing="h.path === currentItem?.path ? 'true' : 'false'"
+        >
+          <div class="ml-page-main">
+            <span class="ml-page-title" @click="openPreview(hitToPage(h))">{{ h.title || h.path }}</span>
+            <span v-if="h.path === currentItem?.path && isPlaying" class="ml-page-tag">播放中</span>
+            <p class="ml-snippet">{{ h.snippet }}</p>
+          </div>
+          <span class="ml-page-actions">
+            <span class="ml-mini" @click.stop="enqueue(hitToPage(h))" title="加入队列">＋</span>
+            <span class="ml-mini play" @click.stop="playPage(hitToPage(h))" title="播放">▶</span>
+          </span>
         </div>
-        <MarkdownRenderer :content="previewBody" />
+      </section>
+
+      <!-- 知识库内容（无搜索时显示全部） -->
+      <section v-else class="ml-section" data-catalog>
+        <h3 class="ml-h3">知识库内容</h3>
+        <div v-if="pages.length === 0 && !errorMsg" class="ml-hint">加载中…</div>
+        <div
+          v-for="p in pages"
+          :key="p.path"
+          class="ml-page"
+          :class="{ playing: p.path === currentItem?.path }"
+          :data-page-playing="p.path === currentItem?.path ? 'true' : 'false'"
+        >
+          <span class="ml-page-title" @click="openPreview(p)">{{ titleOf(p) }}</span>
+          <span v-if="p.path === currentItem?.path && isPlaying" class="ml-page-tag">播放中</span>
+          <span class="ml-page-actions">
+            <span v-if="inQueue(p)" class="ml-mini in-queue" title="已在队列">✓</span>
+            <span class="ml-mini" @click.stop="enqueue(p)" title="加入队列">＋</span>
+            <span class="ml-mini play" @click.stop="playPage(p)" title="播放">▶</span>
+          </span>
+        </div>
+      </section>
       </template>
-    </section>
+    </template>
 
-    <!-- 可朗读内容列表 + 播放队列 -->
-    <template v-else>
-    <!-- 搜索栏：与播放状态完全解耦，仅检索知识库内容，不打断当前朗读 -->
-    <div class="ml-search">
-      <svg class="ml-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="11" cy="11" r="7" />
-        <path d="M21 21l-4.3-4.3" />
-      </svg>
-      <input
-        v-model="searchQuery"
-        class="ml-search-input"
-        type="search"
-        enterkeyhint="search"
-        placeholder="搜索内容…"
-        @input="onSearchInput"
-      />
-      <button v-if="searchQuery" class="ml-search-clear" @click="clearSearch">取消</button>
-    </div>
-
-    <!-- 搜索结果（有搜索词时显示；不影响 queue/currentIndex/audio） -->
-    <section v-if="searchQuery.trim()" class="ml-section">
-      <h3 class="ml-h3">搜索结果（{{ searchHits.length }}）</h3>
-      <div v-if="searching" class="ml-hint">搜索中…</div>
-      <div v-else-if="!searchHits.length" class="ml-hint">未找到与「{{ searchQuery }}」相关的内容</div>
-      <div
-        v-for="h in searchHits"
-        :key="h.path"
-        class="ml-page"
-        :class="{ playing: h.path === currentItem?.path }"
-        :data-page-playing="h.path === currentItem?.path ? 'true' : 'false'"
-      >
-        <div class="ml-page-main">
-          <span class="ml-page-title" @click="openPreview(hitToPage(h))">{{ h.title || h.path }}</span>
-          <span v-if="h.path === currentItem?.path && isPlaying" class="ml-page-tag">播放中</span>
-          <p class="ml-snippet">{{ h.snippet }}</p>
-        </div>
-        <span class="ml-page-actions">
-          <span class="ml-mini" @click.stop="enqueue(hitToPage(h))" title="加入队列">＋</span>
-          <span class="ml-mini play" @click.stop="playPage(hitToPage(h))" title="播放">▶</span>
-        </span>
-      </div>
-    </section>
-
-    <!-- 知识库内容（无搜索时显示全部） -->
-    <section v-else class="ml-section" data-catalog>
-      <h3 class="ml-h3">知识库内容</h3>
-      <div v-if="pages.length === 0 && !errorMsg" class="ml-hint">加载中…</div>
-      <div
-        v-for="p in pages"
-        :key="p.path"
-        class="ml-page"
-        :class="{ playing: p.path === currentItem?.path }"
-        :data-page-playing="p.path === currentItem?.path ? 'true' : 'false'"
-      >
-        <span class="ml-page-title" @click="openPreview(p)">{{ titleOf(p) }}</span>
-        <span v-if="p.path === currentItem?.path && isPlaying" class="ml-page-tag">播放中</span>
-        <span class="ml-page-actions">
-          <span v-if="inQueue(p)" class="ml-mini in-queue" title="已在队列">✓</span>
-          <span class="ml-mini" @click.stop="enqueue(p)" title="加入队列">＋</span>
-          <span class="ml-mini play" @click.stop="playPage(p)" title="播放">▶</span>
-        </span>
-      </div>
-    </section>
-
-    <!-- 播放列表（完整增删改查模块） -->
+    <!-- 播放列表（完整增删改查模块，轻量，保持在 v-show 容器内随时可访问） -->
     <section v-if="queue.length" class="ml-section">
       <h3 class="ml-h3">
         <span>播放列表（{{ queue.length }}）</span>
@@ -576,6 +633,8 @@ onBeforeUnmount(() => {
             @change="onVoiceChange($event, i)"
           >
             <option v-for="v in voices" :key="v.shortName" :value="v.shortName">{{ v.name }}</option>
+            <!-- S3：音色列表为空（加载失败/网络异常）时仍展示当前朗读者，避免下拉无选项 -->
+            <option v-if="voices.length === 0" :value="q.voice || voice">{{ voiceName(q.voice) }}</option>
           </select>
           <button class="ml-q-btn" type="button" :disabled="i === 0" title="上移" @click.stop="moveQueueItem(i, i - 1)"><Top /></button>
           <button class="ml-q-btn" type="button" :disabled="i === queue.length - 1" title="下移" @click.stop="moveQueueItem(i, i + 1)"><Bottom /></button>
@@ -583,7 +642,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </section>
-    </template>
 
     <p v-if="errorMsg" class="ml-error">{{ errorMsg }}</p>
     <p v-if="synthWarn" class="ml-warn">{{ synthWarn }}</p>
@@ -625,6 +683,20 @@ onBeforeUnmount(() => {
       @click="locateCurrent"
     >
       <Aim />
+    </button>
+
+    <!-- 快速定位：悬浮常驻，顶部→滚到内容最上方，底部→滚到内容最下方（播放器可见时隐藏底部，避免冲突） -->
+    <button class="ml-scroll-fab ml-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6" /></svg>
+    </button>
+    <button
+      v-if="!(currentItem || queue.length)"
+      class="ml-scroll-fab ml-scroll-bottom"
+      title="滚动到底部"
+      aria-label="滚动到底部"
+      @click="scrollListTo('bottom')"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
     </button>
 
     <!-- 操作状态反馈（轻量 toast） -->
@@ -1177,5 +1249,38 @@ onBeforeUnmount(() => {
 @keyframes ml-locate-pulse {
   0%, 100% { box-shadow: 0 6px 18px rgba(0, 245, 255, 0.35); }
   50% { box-shadow: 0 6px 26px rgba(0, 245, 255, 0.7); }
+}
+
+/* 快速定位 FAB：常驻悬浮，半透明不挡阅读；左缘上下分布，避开顶部搜索栏与底部 Tab/播放器 */
+.ml-scroll-fab {
+  position: fixed;
+  left: 12px;
+  z-index: 20;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 0, 16, 0.82);
+  border: 1px solid var(--neon-cyan, #00f5ff);
+  color: var(--neon-cyan, #00f5ff);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+.ml-scroll-fab:active {
+  transform: scale(0.92);
+}
+.ml-scroll-top {
+  top: calc(52px + env(safe-area-inset-top, 0) + 10px);
+}
+.ml-scroll-bottom {
+  bottom: calc(56px + env(safe-area-inset-bottom, 0) + 14px);
+}
+.ml-scroll-fab svg {
+  width: 20px;
+  height: 20px;
 }
 </style>
