@@ -171,7 +171,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   // 持久化当前对话到 IndexedDB（本地优先，FR-RM-05）
   // 为什么只写 IndexedDB、不再 PUT 后端：会话内容仅存客户端，避免落盘服务端（D-1/FR-RM-05）。
   // 每次问答完成后落盘，支持侧栏历史列表与会话恢复；按 ownerId 归属当前用户实现多账户隔离（FR-RM-06）。
-  async function persistConversation(messages: ChatMessage[]) {
+  async function persistConversation(messages: ChatMessage[], threadId?: string | null) {
     if (messages.length === 0) return;
 
     let id = currentConversationId.value || crypto.randomUUID();
@@ -206,7 +206,8 @@ export const useConversationsStore = defineStore('conversations', () => {
       preview: plainMessages.at(-1)!.content.slice(0, 60),
       messages: plainMessages,
       // 线程隔离键落盘：重开会话时可恢复本地记忆归属，续接上下文
-      threadId: useQueryStore().currentThreadId ?? existing?.threadId,
+      // 显式传入的 threadId 优先（移动端按会话持久化时携带该会话真实 threadId，避免取到 active 缓冲的错值）
+      threadId: threadId ?? useQueryStore().currentThreadId ?? existing?.threadId,
       // 本地多账户隔离键（FR-RM-06）：归属当前用户；未登录时留空（升级前老数据兼容）
       ownerId: currentOwnerId(),
     };

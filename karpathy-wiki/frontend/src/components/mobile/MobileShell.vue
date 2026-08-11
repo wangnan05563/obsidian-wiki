@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useAuthStore } from '../../stores/auth';
+import { useQueryStore } from '../../stores/query';
+import { useConversationsStore } from '../../stores/conversations';
 import MobileLogin from './MobileLogin.vue';
 import MobileMe from './MobileMe.vue';
 import MobileQuery from './MobileQuery.vue';
@@ -12,6 +14,31 @@ import MobilePlaceholder from './MobilePlaceholder.vue';
 // 移动端外壳：底部 5 Tab 导航 + 登录门 + 内容切换（SRS FR-MOB-NAV）。
 // 完全复用桌面端 stores/services，不引入 vue-router（与项目单 SPA 约定一致）。
 const authStore = useAuthStore();
+const queryStore = useQueryStore();
+const conversationsStore = useConversationsStore();
+
+// 移动端多账户隔离（对齐桌面 Query.vue:136 的 watch）：登录态（账户 id）变化时，
+// 必须先作废上一账户的会话作用域并清空内存问答，否则会跨用户泄漏：
+//   1) useQueryStore 是模块级单例，不清理则下一用户仍看到上一用户的 messages 历史；
+//   2) currentThreadId 残留会导致下一用户的问题复用上一用户的 threadId 发给后端，
+//      后端据 threadId 注入上一用户的本地记忆上下文 -> 跨用户会话串台（记忆/答案互串）。
+// 触发覆盖三种场景：登录( null->A )、登出( A->null )、切换账户( A->B )。
+watch(
+  () => authStore.user?.id,
+  async (newId, oldId) => {
+    if (newId === oldId) return;
+    // 1) 清空内存问答（messages + currentThreadId），阻断历史可见与 threadId 串台
+    queryStore.reset();
+    // 2) 作废会话作用域（currentConversationId / scopedOwnerId），按新 ownerId 隔离 IndexedDB 历史
+    conversationsStore.resetSession();
+    // 3) 以新身份重新按 ownerId 隔离加载本地会话（未登录返回空，安全）
+    try {
+      await conversationsStore.loadConversations();
+    } catch {
+      /* IndexedDB 不可用时静默降级，仅内存态 */
+    }
+  },
+);
 
 type TabKey = 'query' | 'browse' | 'listen' | 'ingest' | 'me';
 

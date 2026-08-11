@@ -3,17 +3,37 @@
 // 为什么独立成模块：消除三处重复实现，并通过对象映射降低认知复杂度（S3776）
 
 import { ElMessage } from 'element-plus';
-import type { ThinkingStep, MultimodalOutput } from '../types';
+import type { ThinkingStep, MultimodalOutput, ChatMessage, Reference } from '../types';
 
-// Query SSE 事件处理器签名：接收已 JSON.parse 的数据，调用 store 对应方法
-type QueryEventHandler = (parsed: any, store: any) => void;
+// §按会话隔离（v4）：SSE 写入目标抽象为 SSEWriter，由调用方决定路由到哪个会话缓冲。
+// 桌面端传入 store.getSessionWriter()（默认 active 缓冲）；移动端传入
+// store.getSessionWriter(conversationId)（按会话动态路由，支持后台并行流式）。
+export interface SSEWriter {
+  appendAnswer(text: string): void;
+  setRefs(refs: string[] | Reference[], webRefs?: Array<{ title: string; url: string; snippet: string }>): void;
+  setFollowups(followups: string[]): void;
+  appendThinking(step: ThinkingStep): void;
+  setProgress(step: string, count?: number): void;
+  setMultimodal(payload: MultimodalOutput): void;
+  setImage(payload: NonNullable<ChatMessage['image']>): void;
+  setPpt(payload: NonNullable<ChatMessage['ppt']>): void;
+  setThreadId(id: string | null): void;
+  finalizeAnswer(sessionId?: string, messageIndex?: number, threadId?: string, followups?: string[]): void;
+  handleError(message: string): void;
+  // 供 consumeQuerySSE 做「流结束但未收到 done」的兜底判定
+  readonly isLoading: boolean;
+  readonly streamingAnswer: string;
+}
+
+// Query SSE 事件处理器签名：接收已 JSON.parse 的数据，调用 writer 对应方法
+type QueryEventHandler = (parsed: any, writer: SSEWriter) => void;
 
 // 事件类型 → 处理函数映射表
 // 为什么用对象映射而非 if/else 链：避免 S3776 认知复杂度超阈（<15）
 const QUERY_EVENT_HANDLERS: Record<string, QueryEventHandler> = {
-  answer: (parsed, store) => store.appendAnswer(parsed.text || ''),
-  refs: (parsed, store) => store.setRefs(parsed.refs || [], parsed.webRefs || []),
-  thinking: (parsed, store) => {
+  answer: (parsed, writer) => writer.appendAnswer(parsed.text || ''),
+  refs: (parsed, writer) => writer.setRefs(parsed.refs || [], parsed.webRefs || []),
+  thinking: (parsed, writer) => {
     // ts 字段优先用后端提供的（query-workflow 中在 yield 时补齐），
     // 后端未传时降级到前端接收时间（保持类型必填约束）
     const step: ThinkingStep = {
@@ -23,23 +43,23 @@ const QUERY_EVENT_HANDLERS: Record<string, QueryEventHandler> = {
       args: parsed.args,
       ts: parsed.ts || new Date().toISOString(),
     };
-    store.appendThinking(step);
+    writer.appendThinking(step);
   },
-  progress: (parsed, store) => store.setProgress(parsed.step, parsed.count),
-  followups: (parsed, store) => store.setFollowups(parsed.followups || []),
+  progress: (parsed, writer) => writer.setProgress(parsed.step, parsed.count),
+  followups: (parsed, writer) => writer.setFollowups(parsed.followups || []),
   // FR-09-2 多模态输出：mindmap/faq/timeline 结构化输出，渲染为独立卡片
   // 为什么独立事件：与 answer 解耦，前端按 type 分别渲染（mindmap 用 mermaid.js，faq/timeline 用 markdown）
-  multimodal: (parsed, store) => {
+  multimodal: (parsed, writer) => {
     const payload: MultimodalOutput = {
       type: parsed.type,
       content: parsed.content || '',
     };
-    store.setMultimodal(payload);
+    writer.setMultimodal(payload);
   },
-  // v3 图像生成结果：在 done 之前到达，store.setImage 暂存，finalizeAnswer 时附加到消息
+  // v3 图像生成结果：在 done 之前到达，writer.setImage 暂存，finalizeAnswer 时附加到消息
   // 为什么独立事件：image 与 multimodal 结构不同（含 url/alt/archivePath），需独立处理器
-  image: (parsed, store) => {
-    store.setImage({
+  image: (parsed, writer) => {
+    writer.setImage({
       url: parsed.url || '',
       alt: parsed.alt || '',
       archivePath: parsed.archivePath,
@@ -47,20 +67,20 @@ const QUERY_EVENT_HANDLERS: Record<string, QueryEventHandler> = {
   },
   // v3 PPT 生成结果：Marp Markdown 源码，前端用 @marp-team/marp-core 渲染为幻灯片
   // 为什么独立事件：ppt 与 multimodal 结构不同（含 markdown/title/archivePath），需独立处理器
-  ppt: (parsed, store) => {
-    store.setPpt({
+  ppt: (parsed, writer) => {
+    writer.setPpt({
       markdown: parsed.markdown || '',
       title: parsed.title || '',
       archivePath: parsed.archivePath || '',
     });
   },
-  done: (parsed, store) => {
+  done: (parsed, writer) => {
     // 记录线程隔离键（与 sessionId 同源），供后续问答续接本地记忆
-    if (parsed.threadId) store.setThreadId(parsed.threadId);
-    store.finalizeAnswer(parsed.sessionId, parsed.messageIndex, parsed.threadId);
+    if (parsed.threadId) writer.setThreadId(parsed.threadId);
+    writer.finalizeAnswer(parsed.sessionId, parsed.messageIndex, parsed.threadId);
   },
-  error: (parsed, store) => {
-    store.handleError(parsed.message || '问答出错');
+  error: (parsed, writer) => {
+    writer.handleError(parsed.message || '问答出错');
     ElMessage.warning(parsed.message || '问答出错');
   },
 };
@@ -79,33 +99,40 @@ export function parseSSEEvent(evt: string): { eventType: string; data: string } 
   return { eventType, data };
 }
 
-// 分发 query 类 SSE 事件到 store
+// 分发 query 类 SSE 事件到 writer
 // 非 JSON 数据或未知事件类型静默跳过，不抛异常打断流
-export function dispatchQuerySSEEvent(eventType: string, data: string, store: any): void {
+export function dispatchQuerySSEEvent(eventType: string, data: string, writer: SSEWriter): void {
   const handler = QUERY_EVENT_HANDLERS[eventType];
   if (!handler) return;
   try {
-    handler(JSON.parse(data), store);
+    handler(JSON.parse(data), writer);
   } catch {
     // 非 JSON 数据跳过：部分心跳/keepalive 事件无 payload
   }
 }
 
 // 批量处理 SSE 事件数组
-export function processQuerySSEEvents(events: string[], store: any): void {
+export function processQuerySSEEvents(events: string[], writer: SSEWriter): void {
   for (const evt of events) {
     const parsed = parseSSEEvent(evt);
     if (!parsed) continue;
-    dispatchQuerySSEEvent(parsed.eventType, parsed.data, store);
+    dispatchQuerySSEEvent(parsed.eventType, parsed.data, writer);
   }
 }
 
-// 从 Response 读取并消费 SSE 流，逐事件分发到 store
+// 从 Response 读取并消费 SSE 流，逐事件分发到 writer
 // 封装 reader/decoder/buffer 的样板代码，避免各页面重复实现
 // 主动取消（signal.abort）时不抛 AbortError，正常返回让调用方在 finally 中处理停止态
 // 为什么不抛 AbortError：调用方需要在 catch 中区分"用户停止"和"真实错误"，
 // 抛 AbortError 会让调用方走错误处理分支，污染 errorMessage 状态
-export async function consumeQuerySSE(response: Response, store: any, signal?: AbortSignal): Promise<void> {
+// onActivity：每次从网络读取到数据块时回调，供调用方实现"滑动窗口"超时判定
+//   （只收到字节即视为有活动，即便该块是心跳注释而非完整事件，也能重置 watchdog）。
+export async function consumeQuerySSE(
+  response: Response,
+  writer: SSEWriter,
+  signal?: AbortSignal,
+  onActivity?: () => void,
+): Promise<void> {
   if (!response.body) throw new Error('Response body is empty');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -114,15 +141,17 @@ export async function consumeQuerySSE(response: Response, store: any, signal?: A
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      // 网络层收到任意字节即视为"有响应"，重置前端超时滑动窗口
+      onActivity?.();
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split('\n\n');
       // 最后一段可能不完整，留到下次拼接
       buffer = events.pop() || '';
-      processQuerySSEEvents(events, store);
+      processQuerySSEEvents(events, writer);
     }
     // 流正常结束但未收到 done 事件时兜底
-    if (store.isLoading && store.streamingAnswer) {
-      store.finalizeAnswer();
+    if (writer.isLoading && writer.streamingAnswer) {
+      writer.finalizeAnswer();
     }
   } catch (err: unknown) {
     // AbortError 是主动取消的正常路径，吞掉避免污染调用方错误处理

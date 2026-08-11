@@ -109,7 +109,7 @@ async function sendQuestion(question: string) {
     }
 
     // SSE 流消费统一委托给 utils/sse.ts，降低本函数认知复杂度（S3776）
-    await consumeQuerySSE(response, store, abortController.signal);
+    await consumeQuerySSE(response, store.getSessionWriter(), abortController.signal);
   } catch (err: unknown) {
     if ((err as Error).name === 'AbortError') return;
     const msg = (err as Error).message;
