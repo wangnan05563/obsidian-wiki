@@ -92,6 +92,8 @@ debug_*.png
 # 隔离/备份目录（旧 JS 编译产物临时隔离，非源码）
 _stale_js_quarantine/
 _shadow_js_trash_bak/
+_deploy_temp_quarantine/
+test_screenshots/
 # 根目录临时脚本与调试文件
 temp_*.ps1
 tmp_*.ps1
