@@ -7,6 +7,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { apiFetch, API_BASE } from '../../utils/apiBase';
 import { loadTtsConfig } from '../../services/ttsConfig';
 import { useAuthStore } from '../../stores/auth';
+import MarkdownRenderer from '../MarkdownRenderer.vue';
 import type { PageItem } from '../../types';
 
 const authStore = useAuthStore();
@@ -28,6 +29,13 @@ const loading = ref(false);
 const errorMsg = ref('');
 const synthWarn = ref('');
 const SPEEDS = [0.75, 1, 1.25, 1.5];
+
+// 预览视图（点击标题进入，查看文章正文文字；与播放/入列解耦）
+const previewPath = ref('');
+const previewTitle = ref('');
+const previewBody = ref('');
+const previewLoading = ref(false);
+const currentPreviewPage = ref<PageItem | null>(null);
 
 const audioEl = ref<HTMLAudioElement | null>(null);
 let voice = 'zh-CN-XiaoxiaoNeural';
@@ -61,6 +69,36 @@ async function fetchBody(path: string): Promise<string> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = (await res.json()) as { body?: string; content?: string };
   return data.body || data.content || '';
+}
+
+// 点击标题 → 打开正文预览（仅查看文字，不触发播放/入列）
+async function openPreview(p: PageItem) {
+  currentPreviewPage.value = p;
+  previewPath.value = p.path;
+  previewTitle.value = titleOf(p);
+  previewBody.value = '';
+  previewLoading.value = true;
+  errorMsg.value = '';
+  try {
+    previewBody.value = await fetchBody(p.path);
+  } catch (e) {
+    errorMsg.value = '读取内容失败：' + (e as Error).message;
+  } finally {
+    previewLoading.value = false;
+  }
+}
+function closePreview() {
+  previewPath.value = '';
+  currentPreviewPage.value = null;
+}
+function inQueue(p: PageItem): boolean {
+  return queue.value.some((q) => q.path === p.path);
+}
+function enqueuePreview() {
+  if (currentPreviewPage.value) void enqueue(currentPreviewPage.value);
+}
+function playPreview() {
+  if (currentPreviewPage.value) void playPage(currentPreviewPage.value);
 }
 
 // 播放某条目：确保已在队列，并从该条开始
@@ -259,23 +297,39 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ml-root">
-    <!-- 可朗读内容列表 -->
+    <!-- 正文预览视图（点击标题进入，仅查看文字） -->
+    <section v-if="previewPath" class="ml-preview">
+      <div class="ml-preview-head">
+        <button class="ml-back" @click="closePreview">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+          返回
+        </button>
+        <span class="ml-preview-path">{{ previewPath }}</span>
+      </div>
+      <div v-if="previewLoading" class="ml-hint">读取内容中…</div>
+      <template v-else>
+        <h2 class="ml-preview-title">{{ previewTitle }}</h2>
+        <div class="ml-preview-actions">
+          <button class="ml-mini" :disabled="!!(currentPreviewPage && inQueue(currentPreviewPage))" @click="enqueuePreview">＋ 队列</button>
+          <button class="ml-mini play" @click="playPreview">▶ 播放</button>
+        </div>
+        <MarkdownRenderer :content="previewBody" />
+      </template>
+    </section>
+
+    <!-- 可朗读内容列表 + 播放队列 -->
+    <template v-else>
     <section class="ml-section">
       <h3 class="ml-h3">知识库内容</h3>
       <div v-if="pages.length === 0 && !errorMsg" class="ml-hint">加载中…</div>
-      <button v-for="p in pages" :key="p.path" class="ml-page" @click="playPage(p)">
-        <span class="ml-page-title">{{ titleOf(p) }}</span>
+      <div v-for="p in pages" :key="p.path" class="ml-page">
+        <span class="ml-page-title" @click="openPreview(p)">{{ titleOf(p) }}</span>
         <span class="ml-page-actions">
-          <span
-            v-if="queue.some((q) => q.path === p.path)"
-            class="ml-mini in-queue"
-            title="已在队列"
-            @click.stop="enqueue(p)"
-          >✓ 队列</span>
+          <span v-if="inQueue(p)" class="ml-mini in-queue" title="已在队列">✓</span>
           <span class="ml-mini" @click.stop="enqueue(p)" title="加入队列">＋</span>
-          <span class="ml-mini play" title="播放">▶</span>
+          <span class="ml-mini play" @click.stop="playPage(p)" title="播放">▶</span>
         </span>
-      </button>
+      </div>
     </section>
 
     <!-- 播放队列 -->
@@ -293,6 +347,7 @@ onBeforeUnmount(() => {
         <span class="ml-q-del" @click.stop="removeFromQueue(i)" title="移除">✕</span>
       </div>
     </section>
+    </template>
 
     <p v-if="errorMsg" class="ml-error">{{ errorMsg }}</p>
     <p v-if="synthWarn" class="ml-warn">{{ synthWarn }}</p>
@@ -453,6 +508,60 @@ onBeforeUnmount(() => {
   color: #ffd27a;
   font-size: 12px;
   margin: 0;
+}
+
+/* 预览视图（阅读型） */
+.ml-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.ml-preview-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 8px;
+  background: var(--bg-void);
+}
+.ml-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: var(--neon-cyan);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ml-back svg {
+  width: 18px;
+  height: 18px;
+}
+.ml-preview-path {
+  font-size: 11px;
+  color: var(--text-soft);
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ml-preview-title {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.4;
+  margin: 4px 0 10px;
+  color: var(--text-bright);
+}
+.ml-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 /* 播放器 */
