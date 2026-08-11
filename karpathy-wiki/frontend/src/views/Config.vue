@@ -352,20 +352,22 @@ async function loadPresets() {
   }
 }
 
-// 应用预设：切换标签时返显该预设上次保存的 baseUrl/model。
-// apiKey 不从 localStorage 缓存读取，而是从后端 config.json 读取当前脱敏值。
-// 为什么切换时同步后端：后端 config.json 只有一份全局配置，
-//   切换预设后需同步到后端，确保 Query 页面等使用当前预设的配置。
-//   不传 apiKey：后端收到 undefined 表示保留现有 key，避免切换预设清空 key。
-//   携带 apiKeyRef：预设切换时同步环境变量名，后端据此更新 apiKeyRef 字段。
-//   后端检测 provider 变化时自动迁移当前 apiKey 到 apiKeys[旧provider]，并从 apiKeys[新provider] 恢复 key。
-async function applyPreset(preset: LlmPreset) {
+// 应用预设：切换标签时返显该预设"上次保存"的 baseUrl/model。
+// 设计边界（single-source-rule）：
+//   - 权威持久化源为按用户隔离的本地 IndexedDB（saveAiConfig 写入的 aiUserConfig），保存即落盘；
+//   - 本地另维护一份"按预设"的非敏感 UI 缓存（localStorage 下 llmPresetConfig:<presetKey>），
+//     仅缓存 baseUrl/model，作为切换预设时快速回显"该预设上次填过的值"，避免切换即被模板默认值覆盖。
+// 优先级：持久化缓存（该预设已保存过）→ 预设模板默认值（首次使用）。
+// apiKey 不从缓存读取、也不覆盖：用户已填的明文 key 保留在表单，用户仍需自行保存自己的密钥。
+function applyPreset(preset: LlmPreset) {
   selectedPresetKey.value = preset.key;
-  // 按用户隔离：预设仅作为"模板"填充 provider/baseUrl/model，不写服务端共享配置。
+  // 优先恢复该预设持久化的 baseUrl/model；无缓存（首次）则回退预设模板默认值。
+  const cached = loadPresetCache(preset.key);
+  // 按用户隔离：预设仅作为"模板"填充 provider；baseUrl/model 优先用持久化值。
   // apiKey 保留用户已填内容（不覆盖），用户仍需填写并保存自己的密钥。
   aiForm.value.provider = preset.provider;
-  aiForm.value.baseUrl = preset.baseUrl;
-  aiForm.value.model = preset.model;
+  aiForm.value.baseUrl = cached?.baseUrl ?? preset.baseUrl;
+  aiForm.value.model = cached?.model ?? preset.model;
   ElMessage.success(`已套用 ${preset.label} 预设（请填写并保存你的 API Key）`);
 }
 
@@ -388,6 +390,15 @@ async function saveAiConfig() {
       model: aiForm.value.model,
       apiKey: aiForm.value.apiKey,
     });
+    // 同步持久化"按预设"的 UI 缓存（baseUrl/model），确保下次切换回该预设时
+    // 返显的是上次保存的配置，而非被模板默认值覆盖（见 applyPreset 的 loadPresetCache）。
+    // 仅当当前表单确实对应某个预设时才写缓存，避免写入空 key 的脏记录。
+    if (selectedPresetKey.value) {
+      savePresetCache(selectedPresetKey.value, {
+        baseUrl: aiForm.value.baseUrl,
+        model: aiForm.value.model,
+      });
+    }
     // 更新本地派生状态摘要
     aiConfig.value = {
       ...aiConfig.value,
@@ -423,6 +434,8 @@ async function resetAiConfig() {
   resettingAi.value = true;
   try {
     await saveAiUserConfig(currentUserId.value, { ...DEFAULT_AI_USER_CONFIG });
+    // 同时清空按预设的 UI 缓存，避免重置后切换预设仍回显旧的 baseUrl/model。
+    clearAllPresetCache();
     aiForm.value = {
       provider: DEFAULT_AI_USER_CONFIG.provider,
       baseUrl: DEFAULT_AI_USER_CONFIG.baseUrl,

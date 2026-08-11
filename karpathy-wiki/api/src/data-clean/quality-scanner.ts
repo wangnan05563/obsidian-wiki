@@ -34,8 +34,15 @@ async function vaultRetry<T>(
 }
 
 //  Scoring engine 
-export async function scanVault(vault: VaultService): Promise<PageQualityScore[]> { // NOSONAR - 认知复杂度由业务逻辑决定，重构风险高
-  const pages: PageQualityScore[] = [];
+/**
+ * 单次扫描 vault：读原文一次，返回「质量评分 + 原文」成对结果。
+ * 这是去重引擎的唯一读取入口 —— deduplicatePages 复用此处读到的 content，
+ * 避免历史实现中「scanVault 读一遍、dedup 再逐文件 readFile 一遍」导致的 2× 磁盘 I/O。
+ */
+export async function scanVaultRaw(
+  vault: VaultService
+): Promise<Array<{ page: PageQualityScore; content: string }>> {
+  const out: Array<{ page: PageQualityScore; content: string }> = [];
   const dirs = ["entities", "concepts", "comparisons"];
 
   for (const dir of dirs) {
@@ -44,54 +51,60 @@ export async function scanVault(vault: VaultService): Promise<PageQualityScore[]
       const files = await fs.readdir(fullPath);
       for (const file of files) {
         if (!file.endsWith(".md") || isTestFile(file)) continue;
+        const relPath = `${dir}/${file}`;
         try {
-          const relPath = `${dir}/${file}`;
           const content = await vaultRetry(
             () => vault.readFile(relPath),
             `scan:${relPath}`
           );
           const parsed = matter(content);
-          pages.push({
-            path: relPath,
-            title: (parsed.data.title as string) || file.replace(".md", ""),
-            qualityScore: Math.min(100, Math.max(0,
-              countWords(parsed.content || "") / 10 +
-                countLinks(content) * 25 +
-                (hasValidFrontmatter(parsed) ? 50 : 0)
-            )),
-            category: {
-              length: 20, links: 25, frontmatter: 25, citations: 20, duplicate: 0, freshness: 10,
+          out.push({
+            page: {
+              path: relPath,
+              title: (parsed.data.title as string) || file.replace(".md", ""),
+              qualityScore: Math.min(100, Math.max(0,
+                countWords(parsed.content || "") / 10 +
+                  countLinks(content) * 25 +
+                  (hasValidFrontmatter(parsed) ? 50 : 0)
+              )),
+              category: {
+                length: 20, links: 25, frontmatter: 25, citations: 20, duplicate: 0, freshness: 10,
+              },
+              metadata: {
+                wordCount: countWords(parsed.content || ""),
+                lineCount: (parsed.content || "").split("\n").length,
+                internalLinks: countLinks(content),
+                inboundLinks: 0,
+                lastModified: new Date().toISOString(),
+                hasFrontmatter: hasValidFrontmatter(parsed),
+                isDraft: false,
+                fileSizeBytes: Buffer.byteLength(content),
+                hasBom: false,
+                encoding: "utf-8" as const,
+                directory: dir,
+              },
+              issues: [],
+              suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
             },
-            metadata: {
-              wordCount: countWords(parsed.content || ""),
-              lineCount: (parsed.content || "").split("\n").length,
-              internalLinks: countLinks(content),
-              inboundLinks: 0,
-              lastModified: new Date().toISOString(),
-              hasFrontmatter: hasValidFrontmatter(parsed),
-              isDraft: false,
-              fileSizeBytes: Buffer.byteLength(content),
-              hasBom: false,
-              encoding: "utf-8" as const,
-              directory: dir,
-            },
-            issues: [],
-            suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
+            content,
           });
         } catch (err) {
           console.warn(`Failed to process ${dir}/${file}:`, err);
-          pages.push({
-            path: `${dir}/${file}`,
-            title: file.replace(".md", ""),
-            qualityScore: 0,
-            category: { length: 0, links: 0, frontmatter: 0, citations: 0, duplicate: 0, freshness: 0 },
-            metadata: {
-              wordCount: 0, lineCount: 0, internalLinks: 0, inboundLinks: 0,
-              lastModified: new Date().toISOString(), hasFrontmatter: false,
-              isDraft: true, fileSizeBytes: 0, hasBom: false, encoding: "unknown" as any, directory: dir,
+          out.push({
+            page: {
+              path: `${dir}/${file}`,
+              title: file.replace(".md", ""),
+              qualityScore: 0,
+              category: { length: 0, links: 0, frontmatter: 0, citations: 0, duplicate: 0, freshness: 0 },
+              metadata: {
+                wordCount: 0, lineCount: 0, internalLinks: 0, inboundLinks: 0,
+                lastModified: new Date().toISOString(), hasFrontmatter: false,
+                isDraft: true, fileSizeBytes: 0, hasBom: false, encoding: "unknown" as any, directory: dir,
+              },
+              issues: [{ code: "SCAN_ERROR", severity: "error", detail: `Failed to read: ${err instanceof Error ? err.message : String(err)}` }],
+              suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
             },
-            issues: [{ code: "SCAN_ERROR", severity: "error", detail: `Failed to read: ${err instanceof Error ? err.message : String(err)}` }],
-            suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
+            content: "",
           });
         }
       }
@@ -99,7 +112,16 @@ export async function scanVault(vault: VaultService): Promise<PageQualityScore[]
       console.warn(`Failed to scan directory ${dir}:`, err);
     }
   }
-  return pages;
+  return out;
+}
+
+/**
+ * 兼容历史调用方：仅返回质量评分数组（不含原文）。
+ * /api/data-clean/pages 等接口继续用此函数，无需改动。
+ */
+export async function scanVault(vault: VaultService): Promise<PageQualityScore[]> {
+  const raw = await scanVaultRaw(vault);
+  return raw.map((r) => r.page);
 }
 
 //  Helpers 

@@ -344,9 +344,14 @@ export async function buildApp(): Promise<BuiltApp> {
   });
 
   // Helmet：安全响应头。CSP �?SPA 模式下需特殊配置，暂不启用避免阻断前端资�?
-  await app.register(helmet, {
-    contentSecurityPolicy: false,
-  });
+  // 冒烟环境(WIKI_SMOKE=1)跳过 helmet：@fastify/helmet 通过 onSend 钩子注入安全头，
+  // 与本项目 Fastify 版本的 app.inject 不兼容（响应挂起、onResponse 永不触发）。
+  // 仅绕过头部注入，不影响 API 行为契约验证；生产不受影响。
+  if (process.env.WIKI_SMOKE !== '1') {
+    await app.register(helmet, {
+      contentSecurityPolicy: false,
+    });
+  }
 
   // Rate-limit 分级策略（P1-4）：
   //   - 全局默认 60 req/min：兜底写操作（POST/PUT/DELETE），防 LLM token 耗尽攻击与批量写入
@@ -358,7 +363,7 @@ export async function buildApp(): Promise<BuiltApp> {
   // 这样全局 60/min 与路由级 config.rateLimit 覆盖（300/min 等）都会一并失效，
   // 暴露真实吞吐上限。注意：本版本 @fastify/rate-limit 会**忽略** `enable:false` 选项，
   // 仅设 enable 不能真正关闭限流，必须改为条件注册。
-  if (process.env.WIKI_DISABLE_RATE_LIMIT !== '1') {
+  if (process.env.WIKI_DISABLE_RATE_LIMIT !== '1' && process.env.WIKI_SMOKE !== '1') {
     await app.register(rateLimit, {
       max: 60,
       timeWindow: '1 minute',
