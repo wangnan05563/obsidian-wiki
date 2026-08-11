@@ -8,7 +8,7 @@ import { apiFetch, API_BASE } from '../../utils/apiBase';
 import { loadTtsConfig } from '../../services/ttsConfig';
 import { useAuthStore } from '../../stores/auth';
 import MarkdownRenderer from '../MarkdownRenderer.vue';
-import { Aim } from '@element-plus/icons-vue';
+import { Aim, Top, Bottom, Refresh, Delete, Plus } from '@element-plus/icons-vue';
 import type { PageItem, SearchHit, SearchResponse } from '../../types';
 
 const authStore = useAuthStore();
@@ -20,6 +20,7 @@ interface QueueItem {
   path: string;
   title: string;
   body: string;
+  voice?: string; // 每曲目可选朗读者（演唱者），缺省用全局默认音色
 }
 
 const pages = ref<PageItem[]>([]);
@@ -33,6 +34,20 @@ const loading = ref(false);
 const errorMsg = ref('');
 const synthWarn = ref('');
 const SPEEDS = [0.75, 1, 1.25, 1.5];
+
+// 可选朗读者（演唱者）音色列表（来自 /api/tts/voices）
+const voices = ref<{ shortName: string; name: string; gender: string; locale: string }[]>([]);
+
+// 操作状态反馈（轻量 toast）：增删改查/刷新均有清晰提示
+const statusMsg = ref('');
+let statusTimer: number | undefined;
+function showStatus(msg: string) {
+  statusMsg.value = msg;
+  if (statusTimer) window.clearTimeout(statusTimer);
+  statusTimer = window.setTimeout(() => {
+    statusMsg.value = '';
+  }, 2000);
+}
 
 // 搜索（复用 /api/search，与 MobileBrowse 同源）。搜索状态与播放状态完全解耦：
 // 仅修改 searchQuery/searchHits/searching，绝不触碰 queue/currentIndex/audio，故搜索不打断当前朗读。
@@ -169,13 +184,14 @@ async function playPage(p: PageItem) {
   await startAt(idx);
 }
 
-// 把整页内容加入队列（不立即播放）
+// 把整页内容加入队列（不立即播放）—— 播放列表「新增曲目」入口
 async function enqueue(p: PageItem) {
   if (queue.value.some((q) => q.path === p.path)) return;
   loading.value = true;
   try {
     const body = await fetchBody(p.path);
     queue.value.push({ path: p.path, title: titleOf(p), body });
+    showStatus('已加入队列：' + titleOf(p));
   } catch (e) {
     errorMsg.value = '获取正文失败：' + (e as Error).message;
   } finally {
@@ -209,10 +225,11 @@ async function synthAndPlay(item: QueueItem) {
   loading.value = true;
   errorMsg.value = '';
   try {
+    const useVoice = item.voice || voice; // 支持每曲目独立朗读者（演唱者）
     const res = await apiFetch(`${API_BASE}/tts/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: toSynth, voice, rate: '+0%' }),
+      body: JSON.stringify({ text: toSynth, voice: useVoice, rate: '+0%' }),
     });
     if (!res.ok) {
       const msg = await res.text().catch(() => '');
@@ -266,6 +283,7 @@ function prev() {
 
 function removeFromQueue(idx: number) {
   const wasCurrent = idx === currentIndex.value;
+  const title = queue.value[idx]?.title ?? '';
   queue.value.splice(idx, 1);
   if (wasCurrent) {
     audioEl.value?.pause();
@@ -274,6 +292,61 @@ function removeFromQueue(idx: number) {
   } else if (idx < currentIndex.value) {
     currentIndex.value -= 1;
   }
+  showStatus('已移除：' + title);
+}
+
+// 朗读者（演唱者）友好名：优先匹配音色列表，缺省回退全局音色短名
+function voiceName(v?: string): string {
+  const key = v || voice;
+  const found = voices.value.find((x) => x.shortName === key);
+  return found ? found.name : key || '默认音色';
+}
+
+// 估算朗读时长（详情展示）：按中文叙事约 250 字/分钟粗算
+function estMinutes(body: string): string {
+  const len = (body || '').length;
+  if (!len) return '时长未知';
+  const mins = Math.max(1, Math.ceil(len / 250 / 60));
+  return `约 ${mins} 分钟`;
+}
+
+// 重排队列：物理移动后按 path 重新定位当前播放项，保证播放不中断
+function moveQueueItem(from: number, to: number) {
+  if (to < 0 || to >= queue.value.length) return;
+  const playingPath = currentItem.value?.path ?? null;
+  const item = queue.value[from];
+  queue.value.splice(from, 1);
+  queue.value.splice(to, 0, item);
+  if (playingPath) currentIndex.value = queue.value.findIndex((q) => q.path === playingPath);
+  showStatus(`已移动：${item.title}`);
+}
+
+// 修改曲目属性（朗读者/演唱者）：若正在播放该曲则立即以新音色重合成
+function setItemVoice(idx: number, v: string) {
+  const item = queue.value[idx];
+  if (!item) return;
+  item.voice = v;
+  showStatus(`朗读者已设为 ${voiceName(v)}`);
+  if (idx === currentIndex.value && isPlaying.value) void synthAndPlay(item);
+}
+function onVoiceChange(e: Event, i: number) {
+  const v = (e.target as HTMLSelectElement).value;
+  setItemVoice(i, v);
+}
+
+// 刷新：重新载入知识库目录与音色列表，并更新状态反馈
+async function refreshQueue() {
+  await Promise.all([loadPages(), loadVoices()]);
+  showStatus('播放列表已刷新');
+}
+
+// 从知识库添加曲目：清空搜索并滚动到目录区（目录项的 ＋ 即加入队列）
+function scrollToCatalog() {
+  clearSearch();
+  nextTick(() => {
+    rootRef.value?.querySelector('[data-catalog]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  showStatus('从下方「知识库内容」点 ＋ 加入队列');
 }
 
 function setSpeed(s: number) {
@@ -299,7 +372,7 @@ function updateMediaMetadata(item: QueueItem) {
   if (!('mediaSession' in navigator) || typeof window.MediaMetadata === 'undefined') return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: item.title,
-    artist: '知识库聆听',
+    artist: voiceName(item.voice), // 演唱者 = 当前朗读者
     album: 'Karpathy Wiki',
   });
 }
@@ -349,8 +422,19 @@ onMounted(async () => {
   voice = cfg.voice || 'zh-CN-XiaoxiaoNeural';
   if (cfg.rate >= 0.5 && cfg.rate <= 2) speed.value = cfg.rate;
   registerMediaSession();
-  await loadPages();
+  await Promise.all([loadPages(), loadVoices()]);
 });
+
+async function loadVoices() {
+  try {
+    const res = await apiFetch(`${API_BASE}/tts/voices`);
+    if (!res.ok) return;
+    const data = (await res.json()) as { voices?: { shortName: string; name: string; gender: string; locale: string }[] };
+    voices.value = data.voices ?? [];
+  } catch {
+    /* 静默降级：音色列表不可用则沿用全局默认音色 */
+  }
+}
 
 onBeforeUnmount(() => {
   audioEl.value?.pause();
@@ -430,7 +514,7 @@ onBeforeUnmount(() => {
     </section>
 
     <!-- 知识库内容（无搜索时显示全部） -->
-    <section v-else class="ml-section">
+    <section v-else class="ml-section" data-catalog>
       <h3 class="ml-h3">知识库内容</h3>
       <div v-if="pages.length === 0 && !errorMsg" class="ml-hint">加载中…</div>
       <div
@@ -450,20 +534,53 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <!-- 播放队列 -->
+    <!-- 播放列表（完整增删改查模块） -->
     <section v-if="queue.length" class="ml-section">
-      <h3 class="ml-h3">播放队列（{{ queue.length }}）</h3>
+      <h3 class="ml-h3">
+        <span>播放列表（{{ queue.length }}）</span>
+        <span class="ml-pl-actions">
+          <button class="ml-pl-btn" type="button" title="从知识库添加曲目" @click="scrollToCatalog">
+            <Plus /><span>添加</span>
+          </button>
+          <button class="ml-pl-btn" type="button" title="刷新列表" @click="refreshQueue">
+            <Refresh />
+          </button>
+        </span>
+      </h3>
       <div
         v-for="(q, i) in queue"
         :key="q.path"
         class="ml-qitem"
         :class="{ active: i === currentIndex, playing: i === currentIndex && isPlaying }"
         :data-q-active="i === currentIndex ? 'true' : 'false'"
-        @click="startAt(i)"
       >
-        <span class="ml-q-icon">{{ i === currentIndex && isPlaying ? '🔊' : '🔈' }}</span>
-        <span class="ml-q-title">{{ q.title }}</span>
-        <span class="ml-q-del" @click.stop="removeFromQueue(i)" title="移除">✕</span>
+        <!-- 主区：排序序号 + 播放指示 + 曲目名称/演唱者/时长；点击播放 -->
+        <div class="ml-q-main" @click="startAt(i)">
+          <span class="ml-q-order">{{ i + 1 }}</span>
+          <span class="ml-q-icon">{{ i === currentIndex && isPlaying ? '🔊' : '🔈' }}</span>
+          <div class="ml-q-text">
+            <span class="ml-q-title">{{ q.title }}</span>
+            <span class="ml-q-meta">
+              <span class="ml-q-artist" :title="`朗读者（演唱者）：${voiceName(q.voice)}`">{{ voiceName(q.voice) }}</span>
+              <span class="ml-q-dot">·</span>
+              <span>{{ estMinutes(q.body) }}</span>
+            </span>
+          </div>
+        </div>
+        <!-- 工具区：朗读者(属性) / 上移 / 下移 / 移除 -->
+        <div class="ml-q-tools">
+          <select
+            class="ml-voice"
+            :value="q.voice || voice"
+            :title="`朗读者（演唱者）：${voiceName(q.voice)}`"
+            @change="onVoiceChange($event, i)"
+          >
+            <option v-for="v in voices" :key="v.shortName" :value="v.shortName">{{ v.name }}</option>
+          </select>
+          <button class="ml-q-btn" type="button" :disabled="i === 0" title="上移" @click.stop="moveQueueItem(i, i - 1)"><Top /></button>
+          <button class="ml-q-btn" type="button" :disabled="i === queue.length - 1" title="下移" @click.stop="moveQueueItem(i, i + 1)"><Bottom /></button>
+          <button class="ml-q-btn del" type="button" title="移除" @click.stop="removeFromQueue(i)"><Delete /></button>
+        </div>
       </div>
     </section>
     </template>
@@ -510,6 +627,11 @@ onBeforeUnmount(() => {
       <Aim />
     </button>
 
+    <!-- 操作状态反馈（轻量 toast） -->
+    <transition name="ml-toast">
+      <div v-if="statusMsg" class="ml-toast">{{ statusMsg }}</div>
+    </transition>
+
     <!-- 隐藏音频元素：承载 TTS MP3 流 -->
     <audio
       ref="audioEl"
@@ -534,6 +656,9 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 .ml-h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 13px;
   font-weight: 700;
   color: var(--text-soft);
@@ -663,13 +788,12 @@ onBeforeUnmount(() => {
 }
 .ml-qitem {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   border: 1px solid transparent;
   background: rgba(0, 0, 0, 0.25);
   border-radius: 10px;
   padding: 9px 11px;
-  cursor: pointer;
   color: var(--text-soft);
 }
 .ml-qitem.active {
@@ -677,24 +801,171 @@ onBeforeUnmount(() => {
   background: rgba(0, 245, 255, 0.08);
   color: var(--text-bright);
 }
+.ml-q-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  min-width: 0;
+}
+.ml-q-order {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.08);
+}
+.ml-qitem.active .ml-q-order {
+  color: #04121a;
+  background: var(--neon-cyan);
+}
 .ml-q-icon {
   font-size: 15px;
   flex-shrink: 0;
 }
-.ml-q-title {
+.ml-q-text {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ml-q-title {
   font-size: 13px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ml-q-del {
+.ml-q-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
   color: var(--text-soft);
-  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ml-q-artist {
+  font-weight: 600;
+  color: var(--neon-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+.ml-q-dot {
+  opacity: 0.6;
+}
+.ml-q-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ml-voice {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-purple-a30);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text-bright);
+  font-size: 12px;
+  font-family: var(--font-body);
+  padding: 0 6px;
+  outline: none;
+}
+.ml-voice:focus {
+  border-color: var(--neon-cyan);
+}
+.ml-q-btn {
   flex-shrink: 0;
-  padding: 0 4px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-purple-a30);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text-bright);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.ml-q-btn:active {
+  transform: scale(0.92);
+}
+.ml-q-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.ml-q-btn.del:hover {
+  color: #ff6b8a;
+  border-color: rgba(255, 107, 138, 0.4);
+}
+.ml-q-btn svg {
+  width: 16px;
+  height: 16px;
+}
+/* 播放列表头：标题 + 添加/刷新操作 */
+.ml-pl-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.ml-pl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  color: var(--neon-cyan);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ml-pl-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.ml-pl-btn:active {
+  transform: scale(0.95);
+}
+/* 操作状态反馈 toast */
+.ml-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(56px + env(safe-area-inset-bottom, 0) + 170px);
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: 80vw;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: rgba(5, 0, 16, 0.92);
+  border: 1px solid var(--neon-cyan);
+  color: var(--text-bright);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+.ml-toast-enter-active,
+.ml-toast-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.ml-toast-enter-from,
+.ml-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 8px);
 }
 .ml-error {
   color: #ffb4c4;
