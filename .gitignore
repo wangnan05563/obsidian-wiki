@@ -7,8 +7,9 @@ dist/
 build/
 *.tsbuildinfo
 # SPA 部署产物（按时间戳的 public_live_* 与前端构建输出 builds/，仅运行时/部署用，不入仓）
-public_live_*/
-builds/
+# 用 **/ 覆盖任意深度：真实路径为 karpathy-wiki/api/public_live_* 与 karpathy-wiki/frontend/builds/
+**/public_live_*/
+**/builds/
 
 # 环境变量与密钥（切勿提交）
 .env
