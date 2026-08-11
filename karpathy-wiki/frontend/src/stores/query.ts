@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, watch } from 'vue';
+import { ref, computed, watch } from 'vue';
 import type { ChatMessage, Reference, ThinkingStep, MultimodalOutput } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
 
@@ -33,6 +33,49 @@ export const MIDDLEWARE_LABELS: Record<Middleware, string> = {
   followups: '追问建议',
   stream: '真流式输出',
 };
+
+// §按会话隔离缓冲（v4）：每个会话拥有独立的消息/流式/线程状态，
+// 实现移动端「多会话并行流式」——切走某会话不打断其后台流，回来继续接收。
+// 桌面端（Query.vue / FloatingChat.vue）始终使用默认 __active__ 缓冲，行为不变（向后兼容）。
+// activeId 指向「当前展示/正在操作」的会话缓冲；其余缓冲在后台并行演进。
+export const DEFAULT_ACTIVE = '__active__';
+
+// 单会话缓冲：原本的扁平 ref 全部收拢到这里
+export interface SessionBuffer {
+  messages: ChatMessage[];
+  streamingAnswer: string;
+  currentRefs: Reference[];
+  currentFollowups: string[];
+  currentThinking: ThinkingStep[];
+  searchProgress: { step: string; count?: number } | null;
+  isLoading: boolean;
+  errorMessage: string;
+  // FR-09-2 多模态输出：在 done 之前到达的 multimodal 暂存到此，finalizeAnswer 时附加到消息
+  currentMultimodal: MultimodalOutput | null;
+  // v3 图像/PPT 生成结果：在 done 之前到达的 image/ppt 事件暂存，finalizeAnswer 时附加到消息
+  currentImage: ChatMessage['image'] | null;
+  currentPpt: ChatMessage['ppt'] | null;
+  // 当前问答线程隔离键：本轮会话所属的 threadId。
+  // 后端据此从本地记忆注入历史上下文并持久化会话/记忆；null 表示新会话（后端自动建线程）。
+  currentThreadId: string | null;
+}
+
+function createEmptyBuffer(): SessionBuffer {
+  return {
+    messages: [],
+    streamingAnswer: '',
+    currentRefs: [],
+    currentFollowups: [],
+    currentThinking: [],
+    searchProgress: null,
+    isLoading: false,
+    errorMessage: '',
+    currentMultimodal: null,
+    currentImage: null,
+    currentPpt: null,
+    currentThreadId: null,
+  };
+}
 
 // 从 localStorage 加载用户偏好的多输出模式，解析失败或缺失时回退到全开
 // 为什么需要防御：localStorage 可能是旧版本数据（数组格式/字符串），用 try-catch 兜底
@@ -89,44 +132,241 @@ function loadMiddlewares(): Middleware[] {
   return [...ALL_MIDDLEWARES];
 }
 
+// ===== 缓冲级（buffer-scoped）纯函数：所有写操作都作用在传入的 SessionBuffer 上 =====
+// 为什么独立且 buf 前缀：消费方（UI/桌面）默认作用 active 缓冲；SSE writer 按 conversationId
+// 路由到特定缓冲。buf 前缀避免与 store 内同名对外方法发生作用域遮蔽。
+function bufClearCurrentRound(b: SessionBuffer) {
+  b.streamingAnswer = '';
+  b.currentRefs = [];
+  b.currentFollowups = [];
+  b.currentThinking = [];
+  b.searchProgress = null;
+  // FR-09-2 清理多模态输出暂存，避免下一轮问答残留上一轮的 mindmap/faq/timeline
+  b.currentMultimodal = null;
+  // v3 清理图像/PPT 暂存，避免下一轮问答残留上一轮的生成结果
+  b.currentImage = null;
+  b.currentPpt = null;
+}
+
+function bufFinalizeAnswer(
+  b: SessionBuffer,
+  sessionId?: string,
+  messageIndex?: number,
+  threadId?: string,
+  followups?: string[],
+) {
+  // 记录本轮问答归属的线程（与 sessionId 同源，1 线程 1 会话），供后续续接记忆与归档
+  if (threadId) b.currentThreadId = threadId;
+  if (b.streamingAnswer) {
+    const finalFollowups = followups?.length ? followups : b.currentFollowups;
+    b.messages.push({
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: b.streamingAnswer,
+      refs: b.currentRefs.length ? [...b.currentRefs] : undefined,
+      followups: finalFollowups.length ? [...finalFollowups] : undefined,
+      thinking: b.currentThinking.length ? [...b.currentThinking] : undefined,
+      createdAt: new Date().toISOString(),
+      sessionId,
+      messageIndex,
+      threadId,
+      // FR-RM-09：正常完成标记为 complete（缺省亦视为 complete），供续答判定区分中间态
+      status: 'complete',
+      // FR-09-2 多模态输出：附加 mindmap/faq/timeline 到消息，前端渲染为独立卡片
+      multimodal: b.currentMultimodal ?? undefined,
+      // v3 图像/PPT 生成结果附加到消息
+      image: b.currentImage ?? undefined,
+      ppt: b.currentPpt ?? undefined,
+    });
+  }
+  bufClearCurrentRound(b);
+  b.isLoading = false;
+}
+
+function bufHandleError(b: SessionBuffer, message: string) {
+  b.errorMessage = message;
+  if (b.streamingAnswer) {
+    b.messages.push({
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: `${b.streamingAnswer}\n\n[出错: ${message}]`,
+      refs: b.currentRefs.length ? [...b.currentRefs] : undefined,
+      createdAt: new Date().toISOString(),
+      // FR-RM-09：生成出错 → error，重载后不自动续答
+      status: 'error',
+    });
+  }
+  bufClearCurrentRound(b);
+  b.isLoading = false;
+}
+
+// 用户主动停止或超时停止：保留已收到的部分答案，不显示错误样式
+// 为什么独立于 handleError：停止是用户主动行为或保护性兜底，非错误，
+// 不应污染 errorMessage，消息尾部追加"[已停止]"让用户感知中断点
+// 'edit'：编辑重发场景下终止当前回复——仅清空本轮 + 解除 loading，不追加 [已停止]、
+// 不弹提示，因为调用方（handleConfirmEdit）随后会丢弃该 user 消息及其后续并重发
+function bufStopLoading(b: SessionBuffer, reason: 'user' | 'timeout' | 'edit') {
+  if (reason === 'edit') {
+    bufClearCurrentRound(b);
+    b.isLoading = false;
+    return;
+  }
+  const suffix = reason === 'user' ? '[已停止]' : '[已超时]';
+  if (b.streamingAnswer) {
+    b.messages.push({
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: `${b.streamingAnswer}\n\n${suffix}`,
+      refs: b.currentRefs.length ? [...b.currentRefs] : undefined,
+      thinking: b.currentThinking.length ? [...b.currentThinking] : undefined,
+      createdAt: new Date().toISOString(),
+      // FR-RM-09：用户/超时主动停止 → interrupted，重载后不自动续答
+      status: 'interrupted',
+    });
+  }
+  bufClearCurrentRound(b);
+  b.isLoading = false;
+}
+
+function bufBeginStreaming(b: SessionBuffer) {
+  bufClearCurrentRound(b);
+  b.errorMessage = '';
+  b.isLoading = true;
+}
+
+function bufSubmitQuestion(b: SessionBuffer, question: string) {
+  b.messages.push({
+    id: crypto.randomUUID(),
+    role: 'user',
+    content: question,
+    createdAt: new Date().toISOString(),
+  });
+  bufBeginStreaming(b);
+}
+
+function bufAppendAnswer(b: SessionBuffer, text: string) {
+  b.streamingAnswer += text;
+}
+
+function bufSetMultimodal(b: SessionBuffer, payload: MultimodalOutput) {
+  b.currentMultimodal = payload;
+}
+
+function bufSetImage(b: SessionBuffer, payload: NonNullable<ChatMessage['image']>) {
+  b.currentImage = payload;
+}
+
+function bufSetPpt(b: SessionBuffer, payload: NonNullable<ChatMessage['ppt']>) {
+  b.currentPpt = payload;
+}
+
+function bufSetRefs(
+  b: SessionBuffer,
+  refs: string[] | Reference[],
+  webRefs?: Array<{ title: string; url: string; snippet: string }>,
+) {
+  // §5.2 合并本地引用 + 联网搜索引用为统一 Reference[]。
+  // 本地引用 citeIndex 1..N，联网引用 N+1..M，两类在 RefsList 中差异化渲染
+  const localRefs: Reference[] = refs.map((ref, index) => {
+    if (typeof ref !== 'string') return ref;
+    return {
+      path: ref,
+      title: ref.split('/').pop() || ref,
+      snippet: '',
+      source: 'vault' as const,
+      citeIndex: index + 1,
+    };
+  });
+  const webRefList: Reference[] = (webRefs ?? []).map((r, i) => ({
+    url: r.url,
+    title: r.title || r.url,
+    snippet: r.snippet,
+    source: 'web' as const,
+    citeIndex: localRefs.length + i + 1,
+  }));
+  b.currentRefs = [...localRefs, ...webRefList];
+}
+
+function bufSetFollowups(b: SessionBuffer, followups: string[]) {
+  b.currentFollowups = followups;
+}
+
+function bufAppendThinking(b: SessionBuffer, step: ThinkingStep) {
+  b.currentThinking.push(step);
+}
+
+function bufSetProgress(b: SessionBuffer, step: string, count?: number) {
+  b.searchProgress = { step, count };
+}
+
+function bufSetThreadId(b: SessionBuffer, id: string | null) {
+  b.currentThreadId = id;
+}
+
+function bufSetErrorMessage(b: SessionBuffer, message: string) {
+  b.errorMessage = message;
+}
+
+function bufLoadMessages(b: SessionBuffer, loadedMessages: ChatMessage[]) {
+  b.messages = loadedMessages;
+  bufClearCurrentRound(b);
+  b.errorMessage = '';
+  b.isLoading = false;
+}
+
+function bufRemoveMessagesFrom(b: SessionBuffer, index: number) {
+  b.messages = b.messages.slice(0, index);
+}
+
+function bufRemoveMessage(b: SessionBuffer, index: number) {
+  if (index >= 0 && index < b.messages.length) {
+    b.messages.splice(index, 1);
+  }
+}
+
+function bufMarkArchived(b: SessionBuffer, index: number) {
+  if (b.messages[index]) b.messages[index].archived = true;
+}
+
+function bufSetFeedback(b: SessionBuffer, index: number, feedback: 'up' | 'down') {
+  if (b.messages[index]) b.messages[index].feedback = feedback;
+}
+
+// FR-RM-09 断点续答：返回「可持久化」的消息快照（缓冲级）。
+function bufMessagesWithStreaming(b: SessionBuffer): ChatMessage[] {
+  const arr: ChatMessage[] = [...b.messages];
+  if (b.isLoading && b.streamingAnswer) {
+    arr.push({
+      id: undefined,
+      role: 'assistant',
+      content: b.streamingAnswer,
+      createdAt: new Date().toISOString(),
+      status: 'streaming',
+    });
+  }
+  return arr;
+}
+
 export const useQueryStore = defineStore('query', () => {
-  const messages = ref<ChatMessage[]>([]);
-  const streamingAnswer = ref('');
-  const currentRefs = ref<Reference[]>([]);
-  const currentFollowups = ref<string[]>([]);
-  const currentThinking = ref<ThinkingStep[]>([]);
-  const searchProgress = ref<{ step: string; count?: number } | null>(null);
-  const isLoading = ref(false);
-  const errorMessage = ref('');
-  // FR-09-2 多模态输出：在 done 之前到达的 multimodal 暂存到此，finalizeAnswer 时附加到消息
-  // 为什么独立状态：SSE 顺序为 answer → multimodal → done，store 需在 done 时统一打包到消息
-  const currentMultimodal = ref<MultimodalOutput | null>(null);
-  // v3 图像/PPT 生成结果：在 done 之前到达的 image/ppt 事件暂存，finalizeAnswer 时附加到消息
-  // 为什么独立于 currentMultimodal：image/ppt 通过独立 SSE 事件推送，结构不同，需独立字段
-  const currentImage = ref<ChatMessage['image'] | null>(null);
-  const currentPpt = ref<ChatMessage['ppt'] | null>(null);
-  // 当前问答线程隔离键：本轮会话所属的 threadId。
-  // 后端据此从本地记忆注入历史上下文并持久化会话/记忆；null 表示新会话（后端自动建线程）。
-  const currentThreadId = ref<string | null>(null);
-  // v2: 多输出模式多选状态。默认从 localStorage 加载，缺失时全开
-  // 与单选 outputMode 互不冲突：outputMode 控制多模态结构（mindmap/faq/timeline），
-  // outputModes 控制流式阶段事件的可见性
+  // §按会话隔离：所有会话级状态收进 sessions Map，activeId 选定当前缓冲
+  const sessions = ref<Map<string, SessionBuffer>>(new Map([[DEFAULT_ACTIVE, createEmptyBuffer()]]));
+  const activeId = ref<string>(DEFAULT_ACTIVE);
+
+  // 当前激活缓冲（UI/桌面默认作用对象）。缺失时惰性创建，保证读取永远有对象。
+  function activeBuffer(): SessionBuffer {
+    let b = sessions.value.get(activeId.value);
+    if (!b) {
+      b = createEmptyBuffer();
+      sessions.value.set(activeId.value, b);
+    }
+    return b;
+  }
+
+  // ===== 偏好（全局，非会话级）=====
   const outputModes = ref<OutputMode[]>(loadOutputModes());
-
-  // §真流式偏好：默认从 localStorage 加载，缺失时默认 true（用户需求"改为流式输出"）
-  // 与后端 config.llm.stream 关系：前端偏好覆盖后端默认值，每次请求 body.stream 显式发送
   const streamMode = ref<boolean>(loadStreamMode());
-
-  // 中间件多选状态：默认从 localStorage 加载，缺失时全开（向后兼容）
-  // 与已有 streamMode/outputModes 关系：middlewares 是更高层抽象，
-  // - middlewares 含 'stream' 时覆盖 streamMode=true
-  // - middlewares 不含 'web_search' 时覆盖 webSearch 按钮
-  // - middlewares 不含 'deep_thinking' 时覆盖 deep 模式
-  // 提交请求时 body.middlewares 显式发送，后端按 middlewares 决定功能启用
   const middlewares = ref<Middleware[]>(loadMiddlewares());
 
-  // v2: 持久化多输出模式到 localStorage，用户偏好跨刷新保留
-  // 用 watch deep 跟踪数组变化，比逐个 setter 写更可靠
   watch(
     outputModes,
     (modes) => {
@@ -138,8 +378,6 @@ export const useQueryStore = defineStore('query', () => {
     },
     { deep: true },
   );
-
-  // §真流式偏好持久化：toggle 时立即写入 localStorage，跨刷新保留
   watch(streamMode, (mode) => {
     try {
       localStorage.setItem(STORAGE_KEYS.STREAM_MODE, String(mode));
@@ -147,9 +385,6 @@ export const useQueryStore = defineStore('query', () => {
       // 写入失败静默降级
     }
   });
-
-  // 中间件多选偏好持久化：watch deep 跟踪数组增删，跨刷新保留
-  // 为什么用 deep：middlewares 是数组，splice/push 不会触发浅层 watch
   watch(
     middlewares,
     (list) => {
@@ -162,7 +397,103 @@ export const useQueryStore = defineStore('query', () => {
     { deep: true },
   );
 
-  // v2: 切换多输出模式：有则移除，无则添加。点击同一模式即关闭该模式
+  // ===== 会话级状态：computed 代理到 active 缓冲 =====
+  // 为什么用 computed：缓冲内容随 activeId 切换/后台写入变化，computed 让所有消费方
+  // （桌面 Query/FloatingChat、移动端）零改动地读到「当前会话」的正确状态。
+  const messages = computed(() => sessions.value.get(activeId.value)?.messages ?? []);
+  const streamingAnswer = computed(() => sessions.value.get(activeId.value)?.streamingAnswer ?? '');
+  const currentRefs = computed(() => sessions.value.get(activeId.value)?.currentRefs ?? []);
+  const currentFollowups = computed(() => sessions.value.get(activeId.value)?.currentFollowups ?? []);
+  const currentThinking = computed(() => sessions.value.get(activeId.value)?.currentThinking ?? []);
+  const searchProgress = computed(() => sessions.value.get(activeId.value)?.searchProgress ?? null);
+  const isLoading = computed(() => sessions.value.get(activeId.value)?.isLoading ?? false);
+  const errorMessage = computed(() => sessions.value.get(activeId.value)?.errorMessage ?? '');
+  const currentMultimodal = computed(() => sessions.value.get(activeId.value)?.currentMultimodal ?? null);
+  const currentImage = computed(() => sessions.value.get(activeId.value)?.currentImage ?? null);
+  const currentPpt = computed(() => sessions.value.get(activeId.value)?.currentPpt ?? null);
+  const currentThreadId = computed(() => sessions.value.get(activeId.value)?.currentThreadId ?? null);
+
+  // ===== 多会话路由 / 查询 =====
+  // 读取指定会话缓冲（不创建）。移动端用于判断后台会话是否仍在流式、持久化离开的会话。
+  function getSessionBuffer(id: string): SessionBuffer | undefined {
+    return sessions.value.get(id);
+  }
+
+  // 切换到某会话缓冲：确保缓冲存在；若提供 messages 且该会话未在流式，则载入（用于打开历史会话）；
+  // threadId 显式传入时一并恢复（用于续接本地记忆）。设置 activeId 使后续读写落到该会话。
+  function swapSession(id: string, opts?: { messages?: ChatMessage[]; threadId?: string | null }) {
+    if (!sessions.value.has(id)) sessions.value.set(id, createEmptyBuffer());
+    const buf = sessions.value.get(id)!;
+    if (opts?.messages && !buf.isLoading) {
+      buf.messages = opts.messages;
+      bufClearCurrentRound(buf);
+      buf.errorMessage = '';
+      buf.isLoading = false;
+    }
+    if (opts?.threadId !== undefined) buf.currentThreadId = opts.threadId;
+    activeId.value = id;
+  }
+
+  // 删除某会话缓冲（移动端删除会话时调用）。若删除的是当前激活缓冲，回落到默认空缓冲。
+  function removeSession(id: string) {
+    sessions.value.delete(id);
+    if (activeId.value === id) {
+      sessions.value.set(DEFAULT_ACTIVE, createEmptyBuffer());
+      activeId.value = DEFAULT_ACTIVE;
+    }
+  }
+
+  // 指定会话是否正在流式（active 或后台皆可）。列表动画 / 头部动画据此判断。
+  function isSessionStreaming(id: string): boolean {
+    return sessions.value.get(id)?.isLoading ?? false;
+  }
+
+  // 是否存在任意会话在流式（驱动头部动画）。
+  const anySessionStreaming = computed(() => {
+    for (const b of sessions.value.values()) {
+      if (b.isLoading) return true;
+    }
+    return false;
+  });
+
+  // 生成按 conversationId 路由的 SSEWriter：每次写入都据「当前 activeId」动态解析目标缓冲，
+  // 因此「切走时后台流写 sessions[convId]、切回时同一 writer 自动改写 active 缓冲」无缝衔接。
+  function getSessionWriter(conversationId?: string | null) {
+    const resolve = (): SessionBuffer => {
+      const useActive = !conversationId || conversationId === activeId.value;
+      if (useActive) return activeBuffer();
+      if (!sessions.value.has(conversationId)) sessions.value.set(conversationId, createEmptyBuffer());
+      return sessions.value.get(conversationId)!;
+    };
+    const b = () => resolve();
+    return {
+      get isLoading() {
+        return b().isLoading;
+      },
+      get streamingAnswer() {
+        return b().streamingAnswer;
+      },
+      appendAnswer: (text: string) => bufAppendAnswer(b(), text),
+      setRefs: (refs: string[] | Reference[], webRefs?: Array<{ title: string; url: string; snippet: string }>) =>
+        bufSetRefs(b(), refs, webRefs),
+      setFollowups: (followups: string[]) => bufSetFollowups(b(), followups),
+      appendThinking: (step: ThinkingStep) => bufAppendThinking(b(), step),
+      setProgress: (step: string, count?: number) => bufSetProgress(b(), step, count),
+      setMultimodal: (payload: MultimodalOutput) => bufSetMultimodal(b(), payload),
+      setImage: (payload: NonNullable<ChatMessage['image']>) => bufSetImage(b(), payload),
+      setPpt: (payload: NonNullable<ChatMessage['ppt']>) => bufSetPpt(b(), payload),
+      setThreadId: (id: string | null) => bufSetThreadId(b(), id),
+      finalizeAnswer: (
+        sessionId?: string,
+        messageIndex?: number,
+        threadId?: string,
+        followups?: string[],
+      ) => bufFinalizeAnswer(b(), sessionId, messageIndex, threadId, followups),
+      handleError: (message: string) => bufHandleError(b(), message),
+    };
+  }
+
+  // ===== 对外方法（默认作用 active 缓冲，与旧扁平 API 行为一致）=====
   function toggleOutputMode(mode: OutputMode) {
     const idx = outputModes.value.indexOf(mode);
     if (idx >= 0) {
@@ -172,13 +503,10 @@ export const useQueryStore = defineStore('query', () => {
     }
   }
 
-  // §真流式切换：切换 streamMode 真假值，watch 自动持久化
   function toggleStreamMode() {
     streamMode.value = !streamMode.value;
   }
 
-  // 中间件多选切换：有则移除，无则添加。点击同一项即关闭该中间件
-  // 与 toggleOutputMode 模式一致，watch deep 自动持久化
   function toggleMiddleware(mw: Middleware) {
     const idx = middlewares.value.indexOf(mw);
     if (idx >= 0) {
@@ -188,230 +516,68 @@ export const useQueryStore = defineStore('query', () => {
     }
   }
 
-  function appendAnswer(text: string) {
-    streamingAnswer.value += text;
+  function submitQuestion(q: string) {
+    bufSubmitQuestion(activeBuffer(), q);
   }
 
-  // FR-09-2 设置多模态输出：mindmap/faq/timeline，在 done 之前到达
-  function setMultimodal(payload: MultimodalOutput) {
-    currentMultimodal.value = payload;
-  }
-
-  // v3 设置图像生成结果：在 done 之前到达，finalizeAnswer 时附加到消息
-  function setImage(payload: NonNullable<ChatMessage['image']>) {
-    currentImage.value = payload;
-  }
-
-  // v3 设置 PPT 生成结果：在 done 之前到达，finalizeAnswer 时附加到消息
-  function setPpt(payload: NonNullable<ChatMessage['ppt']>) {
-    currentPpt.value = payload;
-  }
-
-  function setRefs(refs: string[] | Reference[], webRefs?: Array<{ title: string; url: string; snippet: string }>) {
-    // §5.2 合并本地引用 + 联网搜索引用为统一 Reference[]。
-    // 本地引用 citeIndex 1..N，联网引用 N+1..M，两类在 RefsList 中差异化渲染
-    const localRefs: Reference[] = refs.map((ref, index) => {
-      if (typeof ref !== 'string') return ref;
-      return {
-        path: ref,
-        title: ref.split('/').pop() || ref,
-        snippet: '',
-        source: 'vault' as const,
-        citeIndex: index + 1,
-      };
-    });
-    const webRefList: Reference[] = (webRefs ?? []).map((r, i) => ({
-      url: r.url,
-      title: r.title || r.url,
-      snippet: r.snippet,
-      source: 'web' as const,
-      citeIndex: localRefs.length + i + 1,
-    }));
-    currentRefs.value = [...localRefs, ...webRefList];
-  }
-
-  function setFollowups(followups: string[]) {
-    currentFollowups.value = followups;
-  }
-
-  function appendThinking(step: ThinkingStep) {
-    currentThinking.value.push(step);
-  }
-
-  function setProgress(step: string, count?: number) {
-    searchProgress.value = { step, count };
-  }
-
-  function clearCurrentRound() {
-    streamingAnswer.value = '';
-    currentRefs.value = [];
-    currentFollowups.value = [];
-    currentThinking.value = [];
-    searchProgress.value = null;
-    // FR-09-2 清理多模态输出暂存，避免下一轮问答残留上一轮的 mindmap/faq/timeline
-    currentMultimodal.value = null;
-    // v3 清理图像/PPT 暂存，避免下一轮问答残留上一轮的生成结果
-    currentImage.value = null;
-    currentPpt.value = null;
-  }
-
-  function finalizeAnswer(sessionId?: string, messageIndex?: number, threadId?: string, followups?: string[]) {
-    // 记录本轮问答归属的线程（与 sessionId 同源，1 线程 1 会话），供后续续接记忆与归档
-    if (threadId) currentThreadId.value = threadId;
-    if (streamingAnswer.value) {
-      const finalFollowups = followups?.length ? followups : currentFollowups.value;
-      messages.value.push({
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: streamingAnswer.value,
-        refs: currentRefs.value.length ? [...currentRefs.value] : undefined,
-        followups: finalFollowups.length ? [...finalFollowups] : undefined,
-        thinking: currentThinking.value.length ? [...currentThinking.value] : undefined,
-        createdAt: new Date().toISOString(),
-        sessionId,
-        messageIndex,
-        threadId,
-        // FR-RM-09：正常完成标记为 complete（缺省亦视为 complete），供续答判定区分中间态
-        status: 'complete',
-        // FR-09-2 多模态输出：附加 mindmap/faq/timeline 到消息，前端渲染为独立卡片
-        multimodal: currentMultimodal.value ?? undefined,
-        // v3 图像/PPT 生成结果附加到消息
-        image: currentImage.value ?? undefined,
-        ppt: currentPpt.value ?? undefined,
-      });
-    }
-    clearCurrentRound();
-    isLoading.value = false;
-  }
-
-  // 开始一轮问答：清空上一轮暂存（streaming/thinking/refs…）并置 loading
-  // 为什么独立成方法：submitQuestion（首问）与 sendQuestion（含重新生成）都要在进入 SSE 前
-  // 立即标记 isLoading=true，否则重新生成时流式气泡（loading dots / 实时思考 / 流式答案）
-  // 因 isLoading 仍为 false 而完全不渲染，用户要等到 done 事件才看到结果（UX 缺陷）。
   function beginStreaming() {
-    clearCurrentRound();
-    errorMessage.value = '';
-    isLoading.value = true;
-  }
-
-  function submitQuestion(question: string) {
-    messages.value.push({
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: question,
-      createdAt: new Date().toISOString(),
-    });
-    beginStreaming();
+    bufBeginStreaming(activeBuffer());
   }
 
   function handleError(message: string) {
-    errorMessage.value = message;
-    if (streamingAnswer.value) {
-      messages.value.push({
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: `${streamingAnswer.value}\n\n[出错: ${message}]`,
-        refs: currentRefs.value.length ? [...currentRefs.value] : undefined,
-        createdAt: new Date().toISOString(),
-        // FR-RM-09：生成出错 → error，重载后不自动续答
-        status: 'error',
-      });
-    }
-    clearCurrentRound();
-    isLoading.value = false;
+    bufHandleError(activeBuffer(), message);
   }
 
-  // 用户主动停止或超时停止：保留已收到的部分答案，不显示错误样式
-  // 为什么独立于 handleError：停止是用户主动行为或保护性兜底，非错误，
-  // 不应污染 errorMessage，消息尾部追加"[已停止]"让用户感知中断点
-  // 'edit'：编辑重发场景下终止当前回复——仅清空本轮 + 解除 loading，不追加 [已停止]、
-  // 不弹提示，因为调用方（handleConfirmEdit）随后会丢弃该 user 消息及其后续并重发
   function stopLoading(reason: 'user' | 'timeout' | 'edit') {
-    if (reason === 'edit') {
-      clearCurrentRound();
-      isLoading.value = false;
-      return;
-    }
-    const suffix = reason === 'user' ? '[已停止]' : '[已超时]';
-    if (streamingAnswer.value) {
-      messages.value.push({
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: `${streamingAnswer.value}\n\n${suffix}`,
-        refs: currentRefs.value.length ? [...currentRefs.value] : undefined,
-        thinking: currentThinking.value.length ? [...currentThinking.value] : undefined,
-        createdAt: new Date().toISOString(),
-        // FR-RM-09：用户/超时主动停止 → interrupted，重载后不自动续答
-        status: 'interrupted',
-      });
-    }
-    clearCurrentRound();
-    isLoading.value = false;
+    bufStopLoading(activeBuffer(), reason);
   }
 
+  function setErrorMessage(message: string) {
+    bufSetErrorMessage(activeBuffer(), message);
+  }
+
+  // 清空全部缓冲（账户切换 / 登出隔离用）。比旧 reset 更彻底：连后台并行会话一并清除，杜绝串台。
   function reset() {
-    messages.value = [];
-    clearCurrentRound();
-    errorMessage.value = '';
-    isLoading.value = false;
-    // 新会话：清空线程隔离键，下次问答由后端自动创建新线程（记忆不串台）
-    currentThreadId.value = null;
+    sessions.value = new Map([[DEFAULT_ACTIVE, createEmptyBuffer()]]);
+    activeId.value = DEFAULT_ACTIVE;
   }
 
-  // 设置当前线程隔离键（done 事件回写 / 切换历史会话时恢复）
   function setThreadId(id: string | null) {
-    currentThreadId.value = id;
+    bufSetThreadId(activeBuffer(), id);
   }
 
   function markArchived(index: number) {
-    if (messages.value[index]) messages.value[index].archived = true;
+    bufMarkArchived(activeBuffer(), index);
   }
 
   function loadMessages(loadedMessages: ChatMessage[]) {
-    messages.value = loadedMessages;
-    clearCurrentRound();
-    errorMessage.value = '';
-    isLoading.value = false;
-  }
-
-  // FR-RM-09 断点续答：返回「可持久化」的消息快照。
-  // 为什么需要独立方法：流式过程中部分答案仅存在于内存 streamingAnswer（未进入 messages），
-  // 而 persistConversation 只落盘 messages。若直接持久化 messages，刷新/切页时正在生成的部分答案会丢失。
-  // 本方法在 isLoading && streamingAnswer 非空时，把当前部分答案作为一条 status:'streaming' 的
-  // assistant 占位消息追加到末尾，使持久化产物包含中间态；重载后据此判定「需续答」。
-  // 注意：该方法不修改 messages（纯派生），实时 UI 仍由 streamingAnswer 渲染，二者互不干扰。
-  function messagesWithStreaming(): ChatMessage[] {
-    const arr: ChatMessage[] = [...messages.value];
-    if (isLoading.value && streamingAnswer.value) {
-      arr.push({
-        id: undefined,
-        role: 'assistant',
-        content: streamingAnswer.value,
-        createdAt: new Date().toISOString(),
-        status: 'streaming',
-      });
-    }
-    return arr;
+    bufLoadMessages(activeBuffer(), loadedMessages);
   }
 
   function removeMessagesFrom(index: number) {
-    messages.value = messages.value.slice(0, index);
+    bufRemoveMessagesFrom(activeBuffer(), index);
   }
 
-  // 删除单条消息：用于消息工具栏的"删除"按钮
-  // 为什么独立于 removeMessagesFrom：removeMessagesFrom 是"丢弃从 index 起的所有消息"用于重新生成，
-  // removeMessage 是"仅删除当前消息"用于用户手动清理单条内容，语义不同故拆分
   function removeMessage(index: number) {
-    if (index >= 0 && index < messages.value.length) {
-      messages.value.splice(index, 1);
-    }
+    bufRemoveMessage(activeBuffer(), index);
   }
 
   function setFeedback(index: number, feedback: 'up' | 'down') {
-    if (messages.value[index]) messages.value[index].feedback = feedback;
+    bufSetFeedback(activeBuffer(), index, feedback);
+  }
+
+  function messagesWithStreaming(): ChatMessage[] {
+    return bufMessagesWithStreaming(activeBuffer());
+  }
+
+  // 指定会话的可持久化快照（含流式中间态），用于离开后台会话时落盘。
+  function messagesWithStreamingFor(id: string): ChatMessage[] {
+    const b = sessions.value.get(id);
+    return b ? bufMessagesWithStreaming(b) : [];
   }
 
   return {
+    // 会话级状态（computed 代理 active 缓冲）
     messages,
     streamingAnswer,
     currentRefs,
@@ -420,35 +586,44 @@ export const useQueryStore = defineStore('query', () => {
     searchProgress,
     isLoading,
     errorMessage,
-    // FR-09-2 暴露多模态输出状态，供 Query.vue 在 streaming 阶段预览
     currentMultimodal,
-    // v3 暴露图像/PPT 生成状态，供 Query.vue 在 streaming 阶段预览
     currentImage,
     currentPpt,
-    // 当前线程隔离键（供 Query.vue / FloatingChat.vue 发送 threadId 续接本地记忆）
     currentThreadId,
-    // v2: 暴露多输出模式状态与切换方法，供 Query.vue 多选控件使用
+    // 多会话路由
+    activeId,
+    getSessionBuffer,
+    swapSession,
+    removeSession,
+    isSessionStreaming,
+    anySessionStreaming,
+    getSessionWriter,
+    messagesWithStreamingFor,
+    // 偏好（全局）
     outputModes,
-    // §真流式暴露 streamMode 状态与切换方法，供 Query.vue 开关使用
     streamMode,
-    // 中间件多选状态与切换方法，供 Query.vue 高级设置面板使用
     middlewares,
-    appendAnswer,
-    setRefs,
-    setFollowups,
-    appendThinking,
-    setProgress,
-    // FR-09-2 暴露 setMultimodal，供 SSE 处理器调用
-    setMultimodal,
-    // v3 暴露 setImage/setPpt，供 SSE 处理器调用
-    setImage,
-    setPpt,
-    finalizeAnswer,
+    // 缓冲级写方法（默认 active）
+    appendAnswer: (text: string) => bufAppendAnswer(activeBuffer(), text),
+    setRefs: (refs: string[] | Reference[], webRefs?: Array<{ title: string; url: string; snippet: string }>) =>
+      bufSetRefs(activeBuffer(), refs, webRefs),
+    setFollowups: (followups: string[]) => bufSetFollowups(activeBuffer(), followups),
+    appendThinking: (step: ThinkingStep) => bufAppendThinking(activeBuffer(), step),
+    setProgress: (step: string, count?: number) => bufSetProgress(activeBuffer(), step, count),
+    setMultimodal: (payload: MultimodalOutput) => bufSetMultimodal(activeBuffer(), payload),
+    setImage: (payload: NonNullable<ChatMessage['image']>) => bufSetImage(activeBuffer(), payload),
+    setPpt: (payload: NonNullable<ChatMessage['ppt']>) => bufSetPpt(activeBuffer(), payload),
+    finalizeAnswer: (
+      sessionId?: string,
+      messageIndex?: number,
+      threadId?: string,
+      followups?: string[],
+    ) => bufFinalizeAnswer(activeBuffer(), sessionId, messageIndex, threadId, followups),
     submitQuestion,
-    // 进入 SSE 前立即标记 loading，确保重新生成等路径也能即时显示流式 UI
     beginStreaming,
     handleError,
     stopLoading,
+    setErrorMessage,
     reset,
     markArchived,
     loadMessages,
@@ -456,13 +631,9 @@ export const useQueryStore = defineStore('query', () => {
     removeMessage,
     setFeedback,
     setThreadId,
-    // FR-RM-09 暴露 messagesWithStreaming 供 Query.vue 在流式过程中持久化中间态
     messagesWithStreaming,
-    // v2: 多输出模式切换
     toggleOutputMode,
-    // §真流式切换
     toggleStreamMode,
-    // 中间件多选切换
     toggleMiddleware,
   };
 });

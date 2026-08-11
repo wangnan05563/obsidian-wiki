@@ -213,6 +213,18 @@ const editingText = ref('');
 //   导致 AI 实际有回复但前端已超时中断，用户感知"AI 未回复信息"。
 const QUESTION_TIMEOUT_MS = 120_000;
 let questionTimeoutId: ReturnType<typeof setTimeout> | null = null;
+// 以"最近一次收到 SSE 数据"为基准的滑动窗口超时：
+// 每次重置都清空旧定时器并重启一个 120s 定时器；只要连续 120s 无任何数据才触发超时中断。
+// 调用点：请求发起时（resetQuestionTimeout）+ SSE 每收到一个数据块（经由 consumeQuerySSE 的 onActivity）。
+function resetQuestionTimeout() {
+  if (questionTimeoutId) clearTimeout(questionTimeoutId);
+  questionTimeoutId = setTimeout(() => {
+    if (abortController && !abortController.signal.aborted) {
+      abortReason = 'timeout';
+      abortController.abort();
+    }
+  }, QUESTION_TIMEOUT_MS);
+}
 // 标记本次中断的原因，供 finally 分支区分用户停止 / 超时 / 正常完成 / 编辑重发
 let abortReason: 'user' | 'timeout' | 'edit' | null = null;
 // 编辑重发：当前回复被终止后，需丢弃被编辑的 user 消息及其后续并重发的缓存
@@ -516,14 +528,12 @@ async function sendQuestion(question: string) {
       ? undefined
       : store.messages.map((m) => ({ role: m.role, content: m.content }));
 
-  // 启动超时定时器：到达阈值后自动 abort 并标记为 timeout
-  // 为什么用 setTimeout 而非 AbortSignal.timeout：需要同时设置 abortReason 标记
-  questionTimeoutId = setTimeout(() => {
-    if (abortController && !abortController.signal.aborted) {
-      abortReason = 'timeout';
-      abortController.abort();
-    }
-  }, QUESTION_TIMEOUT_MS);
+  // 启动超时定时器：以"最近一次收到 SSE 数据"为基准的滑动窗口，
+  // 连续 QUESTION_TIMEOUT_MS 无任何数据才判定超时中断（见 resetQuestionTimeout）。
+  // 为什么用滑动窗口而非固定墙钟：原实现从请求发起算固定 120s，
+  // 会误杀"慢但正常流式输出"的问答（与下方注释"长时间无响应才中断"的意图相悖），
+  // 例如 agent loop 多次流式 LLM 调用经代理累加延迟后总耗时容易超过 120s。
+  resetQuestionTimeout();
 
   // 先收集附件 base64，再 flush（清空 pendingIds）
   const attachments = await collectAttachments();
@@ -612,8 +622,10 @@ async function sendQuestion(question: string) {
 
     // SSE 流消费统一委托给 utils/sse.ts，降低本函数认知复杂度（S3776）
     // 同时传入 signal 以便主动取消时释放 reader
+    // onActivity=resetQuestionTimeout：每收到一个网络数据块即重置超时滑动窗口，
+    // 保证"慢但正常流式输出"的问答不会被固定墙钟误杀（仍保留对真·挂死的保护）。
     // consumeQuerySSE 在 AbortError 时正常返回，不抛错，由 finally 处理停止态
-    await consumeQuerySSE(response, store, abortController.signal);
+    await consumeQuerySSE(response, store.getSessionWriter(), abortController.signal, resetQuestionTimeout);
     // 持久化对话到 IndexedDB（支持侧栏历史列表）
     await conversationsStore.persistConversation(store.messages);
   } catch (err: unknown) {
