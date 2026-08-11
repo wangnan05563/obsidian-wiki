@@ -438,6 +438,30 @@ function scrollListTo(where: 'top' | 'bottom') {
   sc.scrollTo({ top: where === 'top' ? 0 : sc.scrollHeight, behavior: 'smooth' });
 }
 
+// 是否可滚动：仅当内容超出视口高度时才显示悬浮定位图标，避免无滚动时多余控件
+const listScrollable = ref(false);
+let scrollObserver: ResizeObserver | null = null;
+function updateScrollable() {
+  const sc = findScrollContainer();
+  listScrollable.value = !!sc && sc.scrollHeight - sc.clientHeight > 4;
+}
+function setupScrollWatch() {
+  updateScrollable();
+  if (scrollObserver) scrollObserver.disconnect();
+  const root = rootRef.value;
+  if (root && 'ResizeObserver' in window) {
+    scrollObserver = new ResizeObserver(() => updateScrollable());
+    scrollObserver.observe(root);
+  }
+  window.addEventListener('resize', updateScrollable);
+}
+function teardownScrollWatch() {
+  if (scrollObserver) scrollObserver.disconnect();
+  scrollObserver = null;
+  window.removeEventListener('resize', updateScrollable);
+}
+
+
 // 切回聆听页（visible 由 false→true）时自动定位到当前播放条目
 watch(
   () => props.visible,
@@ -474,6 +498,7 @@ onMounted(async () => {
   if (cfg.rate >= 0.5 && cfg.rate <= 2) speed.value = cfg.rate;
   registerMediaSession();
   await Promise.all([loadPages(), loadVoices()]);
+  setupScrollWatch();
 });
 
 async function loadVoices() {
@@ -496,6 +521,7 @@ onBeforeUnmount(() => {
       ms.setActionHandler(a, null),
     );
   }
+  teardownScrollWatch();
 });
 </script>
 
@@ -686,11 +712,11 @@ onBeforeUnmount(() => {
     </button>
 
     <!-- 快速定位：悬浮常驻，顶部→滚到内容最上方，底部→滚到内容最下方（播放器可见时隐藏底部，避免冲突） -->
-    <button class="ml-scroll-fab ml-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
+    <button v-if="listScrollable" class="ml-scroll-fab ml-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6" /></svg>
     </button>
     <button
-      v-if="!(currentItem || queue.length)"
+      v-if="listScrollable && !(currentItem || queue.length)"
       class="ml-scroll-fab ml-scroll-bottom"
       title="滚动到底部"
       aria-label="滚动到底部"
