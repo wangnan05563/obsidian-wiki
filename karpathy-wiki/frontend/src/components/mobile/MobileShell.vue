@@ -107,18 +107,20 @@ const icons: Record<TabKey, string> = {
     </header>
 
     <!-- 内容区：按激活 Tab 渲染对应移动视图 -->
+    <!-- 聆听页用 v-show 常驻挂载：切走 Tab 时组件不卸载，<audio> 继续后台播放、
+         队列/进度等本地状态不丢失（播放中切页保持播放状态）。其余 Tab 仍用 v-if。 -->
     <main class="mobile-content">
       <MobileQuery v-if="activeTab === 'query'" />
       <MobileBrowse v-else-if="activeTab === 'browse'" :jump-path="vaultJump" />
       <MobileIngest v-else-if="activeTab === 'ingest'" />
-      <MobileListen v-else-if="activeTab === 'listen'" />
+      <MobileMe v-else-if="activeTab === 'me'" />
+      <MobileListen v-show="activeTab === 'listen'" :visible="activeTab === 'listen'" />
       <MobilePlaceholder
-        v-else-if="activeTab !== 'me'"
+        v-if="activeTab !== 'query' && activeTab !== 'browse' && activeTab !== 'ingest' && activeTab !== 'me' && activeTab !== 'listen'"
         :tab="activeTab"
         :label="titleMap[activeTab]"
         :desc="placeholderDesc[activeTab]"
       />
-      <MobileMe v-else />
     </main>
 
     <!-- 底部 Tab 导航栏（固定，含安全区适配） -->
