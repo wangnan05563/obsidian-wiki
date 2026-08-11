@@ -13,6 +13,7 @@ const duplicateGroups = ref<DeduplicateResult['duplicateGroups']>([]);
 // 视图模式：'pairs' 两两配对（默认）/ 'groups' 按等价类聚合
 const dedupViewMode = ref<'pairs' | 'groups'>('pairs');
 const loading = ref(false);
+const deduping = ref(false);
 const scanProgress = ref('');
 const selectedPages = ref<string[]>([]);
 const precheckResult = ref<PrecheckResult | null>(null);
@@ -102,6 +103,7 @@ async function loadPages() {
 }
 
 async function runDeduplication() {
+  deduping.value = true;
   scanProgress.value = '正在检测重复页面（基于内容哈希 + Jaccard 相似度）...';
   try {
     const res = await apiFetch(`${API_BASE}/data-clean/deduplicate`, { method: 'POST' });
@@ -114,6 +116,8 @@ async function runDeduplication() {
   } catch (err) {
     scanProgress.value = '去重失败';
     ElMessage.error(err instanceof Error ? err.message : '去重失败');
+  } finally {
+    deduping.value = false;
   }
 }
 
@@ -231,7 +235,7 @@ onMounted(() => loadPages());
         <el-button-group style="display:flex;gap:8px">
           <el-button class="neon-btn" :loading="loading" @click="loadPages">刷新</el-button>
           <el-button class="neon-btn secondary" @click="runPrecheck">预检</el-button>
-          <el-button class="neon-btn secondary" @click="runDeduplication">去重</el-button>
+          <el-button class="neon-btn secondary" :loading="deduping" @click="runDeduplication">去重</el-button>
         </el-button-group>
       </div>
       

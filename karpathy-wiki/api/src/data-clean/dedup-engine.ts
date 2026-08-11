@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { DeduplicateResult, DuplicatePair, PageQualityScore } from '../types.js';
 import { VaultService } from '../vault/vault-service.js';
-import { scanVault } from './quality-scanner.js';
+import { scanVaultRaw } from './quality-scanner.js';
 
 // ============================================================
 // 去重判定阈值：集中配置便于调优
@@ -147,87 +147,141 @@ interface PageFingerprint {
   tokens: Set<string>;
 }
 
-export async function deduplicatePages(vault: VaultService): Promise<DeduplicateResult> { // NOSONAR - 认知复杂度：去重含多步处理逻辑
-  const pages = await scanVault(vault);
+// 模块级缓存：vault 内容未变时直接复用上次结果，避免重复扫描。
+// 合并操作会改变内容 → 下次调用签名不同 → 自动失效重算。
+let cachedSignature: string | null = null;
+let cachedResult: DeduplicateResult | null = null;
 
-  // 步骤 1：为每个页面计算指纹（哈希 + token 集合）
-  // 为什么独立读文件：scanVault 返回 PageQualityScore 不含原文，
-  // 去重判定需要原文计算 hash 和 token，必须重新读取
+// 根据「path + 内容哈希」构造全局内容签名（排序后拼接，与顺序无关）
+function buildSignature(fps: PageFingerprint[]): string {
+  const parts: string[] = fps.map((f) => `${f.page.path}\u0000${f.contentHash}`);
+  parts.sort();
+  return parts.join('\n');
+}
+
+export async function deduplicatePages(vault: VaultService): Promise<DeduplicateResult> { // NOSONAR - 认知复杂度：去重含多步处理逻辑
+  // 单次扫描：读取原文 + 质量评分，复用同一份磁盘读取，
+  // 避免历史实现中「scanVault 读一遍、dedup 再逐文件 readFile 一遍」的 2× 磁盘 I/O
+  const scanned = await scanVaultRaw(vault);
+  const pages = scanned.map((s) => s.page);
+
+  // 步骤 1：为每个页面计算指纹（哈希 + token 集合），并剔除过短页面
   const fingerprints: PageFingerprint[] = [];
-  for (const page of pages) {
-    let content = '';
-    try {
-      content = await vault.readFile(page.path);
-    } catch {
-      // 读取失败时使用空字符串，token 集合为空，会被 MIN_TOKENS_FOR_DEDUP 跳过
-      content = '';
-    }
+  for (let i = 0; i < scanned.length; i++) {
+    const content = scanned[i].content;
     fingerprints.push({
-      page,
+      page: scanned[i].page,
       contentHash: computeContentHash(content),
       tokens: tokenize(content),
     });
   }
 
-  // 步骤 2：两两判定，生成 matches + 同步 Union-Find 聚合
-  const matches: DuplicatePair[] = [];
-  const uf = new UnionFind();
+  // 内容签名缓存：vault 未变化时秒回；合并后触发的「重新扫描」也几乎瞬时
+  const signature = buildSignature(fingerprints);
+  if (cachedSignature === signature && cachedResult) {
+    return cachedResult;
+  }
 
-  for (let i = 0; i < fingerprints.length; i++) {
-    for (let j = i + 1; j < fingerprints.length; j++) {
-      const a = fingerprints[i];
-      const b = fingerprints[j];
+  const N = fingerprints.length;
 
-      // 同路径跳过（理论上不会出现，防御性编程）
-      if (a.page.path === b.page.path) continue;
+  // 步骤 2：倒排索引做 blocking，把 O(n²) 全量两两比较降为「共享 token 的候选对」比较。
+  // 正确性：命中阈值要求 Jaccard ≥ 0.3，而 Jaccard > 0 ⇔ 两页至少共享一个 token；
+  //   因此任何会被判为重复的对必然共享 token，blocking 不会漏判（false negative = 0）。
+  // 过短页面（< MIN_TOKENS_FOR_DEDUP）不参与，与历史行为一致。
+  const inverted = new Map<string, number[]>();
+  for (let i = 0; i < N; i++) {
+    if (fingerprints[i].tokens.size < MIN_TOKENS_FOR_DEDUP) continue;
+    for (const t of fingerprints[i].tokens) {
+      const arr = inverted.get(t);
+      if (arr) arr.push(i);
+      else inverted.set(t, [i]);
+    }
+  }
 
-      // 内容过短跳过：避免空白页或占位文件被误判
-      if (a.tokens.size < MIN_TOKENS_FOR_DEDUP || b.tokens.size < MIN_TOKENS_FOR_DEDUP) continue;
-
-      let similarity = 0;
-      let matchType: DuplicatePair['matchType'] | null = null;
-      let reason = '';
-
-      if (a.contentHash === b.contentHash) {
-        // 完全相同：SHA-256 哈希一致（已排除空内容）
-        similarity = 1.0; // NOSONAR
-        matchType = 'exact';
-        reason = '内容完全相同（SHA-256 一致）';
-      } else {
-        const jaccard = computeJaccardSimilarity(a.tokens, b.tokens);
-        if (jaccard >= MATCH_THRESHOLD_NEAR) {
-          similarity = jaccard;
-          matchType = 'near-duplicate';
-          reason = `内容高度相似（Jaccard ${(jaccard * 100).toFixed(0)}%）`;
-        } else if (jaccard >= MATCH_MIN_JACCARD_FOR_SEMANTIC) {
-          const titleSim = computeTitleSimilarity(a.page.title, b.page.title);
-          if (titleSim >= MATCH_THRESHOLD_SEMANTIC_TITLE) {
-            similarity = Math.max(jaccard, titleSim);
-            matchType = 'semantic-similar';
-            reason = `标题相似 ${(titleSim * 100).toFixed(0)}% + 内容重叠 ${(jaccard * 100).toFixed(0)}%`;
-          }
-        }
-      }
-
-      if (matchType) {
-        // pageA 取质量分较高者，便于用户判断"保留谁"
-        const [pageA, pageB] =
-          a.page.qualityScore >= b.page.qualityScore ? [a.page, b.page] : [b.page, a.page];
-        matches.push({ pageA, pageB, similarity, matchType, reason });
-        uf.union(a.page.path, b.page.path);
+  // 超高频 token（如 the/and）几乎出现在所有页面：既无区分度，又会因 C(k,2) 退化回 O(n²)。
+  // 剔除频率超过上限的 token（这类 token 的 Jaccard 贡献本就趋近 0，命中不到 0.3 阈值）。
+  const FREQ_CAP = Math.max(30, Math.floor(N * 0.05));
+  // 长度比预剪枝（数学精确）：Jaccard ≥ t 要求较小集合 ≥ t × 较大集合。
+  // 候选对若 min(size) < 0.3 × max(size)，则 Jaccard 必 < 0.3，不可能命中任何阈值，直接跳过。
+  const MIN_JACCARD_FOR_ANY_MATCH = MATCH_MIN_JACCARD_FOR_SEMANTIC; // 0.3
+  const seen = new Set<number>();
+  const candidatePairs: Array<[number, number]> = [];
+  for (const postings of inverted.values()) {
+    if (postings.length > FREQ_CAP) continue;
+    for (let a = 0; a < postings.length; a++) {
+      const ia = postings[a];
+      const sa = fingerprints[ia].tokens.size;
+      for (let b = a + 1; b < postings.length; b++) {
+        const ib = postings[b];
+        const sb = fingerprints[ib].tokens.size;
+        // 长度比预剪枝：较小集合明显小于较大集合的 0.3 倍 → 不可能命中任何阈值
+        if (Math.min(sa, sb) < MIN_JACCARD_FOR_ANY_MATCH * Math.max(sa, sb)) continue;
+        const key = ia * N + ib; // postings 按 i 递增追加，保证 ia < ib
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidatePairs.push([ia, ib]);
       }
     }
   }
 
-  // 步骤 3：用 Union-Find 聚合分组，每组选 qualityScore 最高者为 representative
+  // 步骤 3：对候选对逐一判定，生成 matches + 同步 Union-Find 聚合
+  const matches: DuplicatePair[] = [];
+  const uf = new UnionFind();
+
+  for (const [i, j] of candidatePairs) {
+    const a = fingerprints[i];
+    const b = fingerprints[j];
+
+    // 同路径跳过（理论上不会出现，防御性编程）
+    if (a.page.path === b.page.path) continue;
+
+    let similarity = 0;
+    let matchType: DuplicatePair['matchType'] | null = null;
+    let reason = '';
+
+    if (a.contentHash === b.contentHash) {
+      // 完全相同：SHA-256 哈希一致（已排除空内容）
+      similarity = 1.0; // NOSONAR
+      matchType = 'exact';
+      reason = '内容完全相同（SHA-256 一致）';
+    } else {
+      const jaccard = computeJaccardSimilarity(a.tokens, b.tokens);
+      if (jaccard >= MATCH_THRESHOLD_NEAR) {
+        similarity = jaccard;
+        matchType = 'near-duplicate';
+        reason = `内容高度相似（Jaccard ${(jaccard * 100).toFixed(0)}%）`;
+      } else if (jaccard >= MATCH_MIN_JACCARD_FOR_SEMANTIC) {
+        const titleSim = computeTitleSimilarity(a.page.title, b.page.title);
+        if (titleSim >= MATCH_THRESHOLD_SEMANTIC_TITLE) {
+          similarity = Math.max(jaccard, titleSim);
+          matchType = 'semantic-similar';
+          reason = `标题相似 ${(titleSim * 100).toFixed(0)}% + 内容重叠 ${(jaccard * 100).toFixed(0)}%`;
+        }
+      }
+    }
+
+    if (matchType) {
+      // pageA 取质量分较高者，便于用户判断"保留谁"
+      const [pageA, pageB] =
+        a.page.qualityScore >= b.page.qualityScore ? [a.page, b.page] : [b.page, a.page];
+      matches.push({ pageA, pageB, similarity, matchType, reason });
+      uf.union(a.page.path, b.page.path);
+    }
+  }
+
+  // 步骤 4：用 Union-Find 聚合分组，每组选 qualityScore 最高者为 representative
   const groupMap = uf.groups();
   const duplicateGroups: DeduplicateResult['duplicateGroups'] = [];
+
+  // path → page 映射，避免原实现在分组时 O(n) 查找导致的二次 O(n²)
+  const pageByPath = new Map<string, PageQualityScore>();
+  for (const f of fingerprints) pageByPath.set(f.page.path, f.page);
 
   for (const [, paths] of groupMap) {
     if (paths.length < 2) continue;
 
     const pagesInGroup = paths
-      .map((p) => fingerprints.find((f) => f.page.path === p)!.page)
+      .map((p) => pageByPath.get(p)!)
       .sort((a, b) => b.qualityScore - a.qualityScore);
 
     const representative = pagesInGroup[0];
@@ -248,10 +302,13 @@ export async function deduplicatePages(vault: VaultService): Promise<Deduplicate
   );
   const uniquePages = pages.length - duplicatePageCount;
 
-  return {
+  const result: DeduplicateResult = {
     matches,
     scannedPages: pages.length,
     uniquePages,
     duplicateGroups,
   };
+  cachedSignature = signature;
+  cachedResult = result;
+  return result;
 }
