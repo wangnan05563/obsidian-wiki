@@ -266,13 +266,17 @@ onBeforeUnmount(() => {
 
       <div v-if="detailLoading" class="mb-hint">读取内容中…</div>
       <template v-else-if="current">
-        <h2 class="mb-detail-title">{{ currentTitle }}</h2>
-        <div v-if="typeOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) || createdOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) || currentTags.length" class="mb-detail-meta">
-          <span v-if="typeOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem)" class="mb-chip mb-chip-type">{{ typeOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) }}</span>
-          <span v-if="createdOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem)" class="mb-meta">{{ createdOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) }}</span>
-          <span v-for="t in currentTags" :key="t" class="mb-chip">#{{ t }}</span>
+        <div class="mb-detail-hero">
+          <h2 class="mb-detail-title">{{ currentTitle }}</h2>
+          <div v-if="typeOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) || createdOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) || currentTags.length" class="mb-detail-meta">
+            <span v-if="typeOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem)" class="mb-chip mb-chip-type">{{ typeOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) }}</span>
+            <span v-if="createdOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem)" class="mb-meta">{{ createdOf({ path: '', name: '', dir: '', frontmatter: current.frontmatter } as PageItem) }}</span>
+            <span v-for="t in currentTags" :key="t" class="mb-chip">#{{ t }}</span>
+          </div>
         </div>
-        <MarkdownRenderer :content="detailContent" />
+        <div class="mb-detail-body">
+          <MarkdownRenderer :content="detailContent" />
+        </div>
       </template>
       <div v-else class="mb-hint">{{ errorMsg || '内容为空' }}</div>
     </div>
@@ -430,7 +434,10 @@ onBeforeUnmount(() => {
 
 /* 详情 */
 .mb-detail {
-  padding: 0 14px 16px;
+  padding: 0 14px calc(16px + env(safe-area-inset-bottom, 0));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .mb-detail-head {
   position: sticky;
@@ -464,11 +471,17 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mb-detail-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0 4px;
+}
 .mb-detail-title {
-  font-size: 19px;
-  font-weight: 700;
-  line-height: 1.4;
-  margin: 6px 0 10px;
+  font-size: 21px;
+  font-weight: 800;
+  line-height: 1.35;
+  margin: 0;
   color: var(--m-text, #111111);
 }
 .mb-detail-meta {
@@ -476,7 +489,13 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-bottom: 12px;
+}
+.mb-detail-body {
+  background: #ffffff;
+  border: 1px solid var(--m-border, #ededed);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(17, 17, 17, 0.04);
 }
 
 .mb-error {

@@ -59,8 +59,8 @@ function onKeydown(e: KeyboardEvent) {
   <div class="mlogin-root">
     <div class="mlogin-card">
       <div class="mlogin-brand">
-        <RobotAvatar :size="64" floating />
-        <h1 class="mlogin-title grad-text">AI 知识库</h1>
+        <RobotAvatar :size="56" />
+        <h1 class="mlogin-title">AI 知识库</h1>
         <p class="mlogin-sub">{{ mode === 'login' ? '登录以继续使用' : '创建你的账户' }}</p>
       </div>
 
@@ -130,10 +130,7 @@ function onKeydown(e: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0));
-  background:
-    radial-gradient(circle at 20% 15%, rgba(255, 0, 110, 0.25), transparent 45%),
-    radial-gradient(circle at 85% 80%, rgba(0, 245, 255, 0.22), transparent 45%),
-    var(--bg-void);
+  background: #ffffff;
   font-family: var(--font-body);
 }
 
@@ -144,12 +141,9 @@ function onKeydown(e: KeyboardEvent) {
   flex-direction: column;
   gap: 28px;
   padding: 28px 22px;
-  background: rgba(18, 8, 36, 0.5);
-  backdrop-filter: var(--mg-blur-strong);
-  -webkit-backdrop-filter: var(--mg-blur-strong);
-  border: var(--mg-border);
-  border-radius: 24px;
-  box-shadow: var(--mg-highlight), var(--mg-shadow-strong);
+  background: #ffffff;
+  border: 1px solid var(--m-border, #ececee);
+  border-radius: 16px;
 }
 
 .mlogin-brand {
@@ -161,15 +155,15 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .mlogin-title {
-  font-family: var(--font-display);
-  font-size: 26px;
-  font-weight: 900;
+  font-size: 24px;
+  font-weight: 800;
   margin: 0 0 6px;
+  color: var(--m-text, #111111);
 }
 
 .mlogin-sub {
   font-size: 13px;
-  color: var(--text-soft);
+  color: var(--m-muted, #777777);
   margin: 0;
 }
 
@@ -185,26 +179,23 @@ function onKeydown(e: KeyboardEvent) {
   min-height: 48px;
   padding: 12px 16px;
   font-size: 16px;
-  color: var(--text-bright);
-  background: rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid var(--accent-purple-a30);
-  box-shadow: var(--mg-highlight-soft);
-  border-radius: 12px;
+  color: var(--m-text, #111111);
+  background: var(--m-surface, #f5f6f8);
+  border: 1px solid var(--m-border, #ececee);
+  border-radius: 10px;
   outline: none;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
   -webkit-appearance: none;
   appearance: none;
 }
 
 .mlogin-input::placeholder {
-  color: var(--text-dim);
+  color: #aaaaaa;
 }
 
 .mlogin-input:focus {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 0 2px var(--accent-cyan-a08);
+  border-color: var(--m-primary, #0f4c81);
+  background: #ffffff;
 }
 
 .mlogin-input:disabled {
@@ -214,34 +205,27 @@ function onKeydown(e: KeyboardEvent) {
 .mlogin-error {
   padding: 10px 12px;
   font-size: 13px;
-  color: var(--neon-magenta);
-  background: var(--accent-pink-a10, rgba(255, 0, 110, 0.1));
-  border: 1px solid var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
-  border-radius: 10px;
+  color: #d93025;
+  background: rgba(217, 48, 37, 0.06);
+  border: 1px solid rgba(217, 48, 37, 0.15);
+  border-radius: 8px;
 }
 
 .mlogin-btn {
   width: 100%;
-  min-height: 50px;
+  min-height: 48px;
   font-size: 16px;
   font-weight: 700;
-  letter-spacing: 2px;
-  color: #fff;
-  background: var(--grad-fire);
+  letter-spacing: 1px;
+  color: #ffffff;
+  background: var(--m-primary, #0f4c81);
   border: none;
-  border-radius: 12px;
+  border-radius: 10px;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-  box-shadow: 0 4px 18px var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
-}
-
-.mlogin-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 24px var(--accent-pink-a40, rgba(255, 0, 110, 0.4));
 }
 
 .mlogin-btn:active:not(:disabled) {
-  transform: scale(0.98);
+  opacity: 0.92;
 }
 
 .mlogin-btn:disabled {
@@ -252,17 +236,13 @@ function onKeydown(e: KeyboardEvent) {
 .mlogin-switch {
   text-align: center;
   font-size: 14px;
-  color: var(--text-soft);
+  color: var(--m-muted, #777777);
 }
 
 .mlogin-switch-link {
-  color: var(--neon-cyan);
+  color: var(--m-primary, #0f4c81);
   font-weight: 600;
   cursor: pointer;
-}
-
-.mlogin-switch-link:hover {
-  text-decoration: underline;
 }
 
 .mlogin-hint {
@@ -272,18 +252,18 @@ function onKeydown(e: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  color: var(--text-dim);
+  color: var(--m-muted, #777777);
   padding: 10px;
-  border: 1px dashed var(--accent-purple-a30);
-  border-radius: 10px;
+  border: 1px dashed var(--m-border, #ececee);
+  border-radius: 8px;
 }
 
 .mlogin-hint code {
   font-family: var(--font-mono);
   font-size: 10px;
   padding: 2px 6px;
-  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  background: var(--m-surface, #f5f6f8);
   border-radius: 4px;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #0f4c81);
 }
 </style>
