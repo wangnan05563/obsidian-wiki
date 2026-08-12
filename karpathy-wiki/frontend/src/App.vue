@@ -136,10 +136,20 @@ async function handleLogout() {
   authMode.value = 'login';
 }
 
+// 会话失效（后端重启 / token 过期等）：apiFetch 在受保护接口返回 401 且本次携带了
+// token 时广播此事件。此处统一跳转到登录页，避免停留在失效会话中持续 401 刷屏。
+function handleAuthExpired() {
+  if (authStore.isLoggedIn) {
+    authStore.logout();
+    authMode.value = 'login';
+  }
+}
+
 onMounted(() => {
   window.addEventListener('scroll', handleScroll, { passive: true });
   globalThis.addEventListener('karpathy:jump-vault', handleJumpVault);
   globalThis.addEventListener('karpathy:navigate', handleNavigateEvent as EventListener);
+  globalThis.addEventListener('karpathy:auth-expired', handleAuthExpired);
   // 启动时恢复会话：localStorage 读取 token，向后端验证
   // 为什fire-and-forget：恢复过程不阻断 UI 渲染，恢复完成后响应式更
   authStore.restoreSession().then((ok) => {
@@ -165,6 +175,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleScroll);
   globalThis.removeEventListener('karpathy:jump-vault', handleJumpVault);
   globalThis.removeEventListener('karpathy:navigate', handleNavigateEvent as EventListener);
+  globalThis.removeEventListener('karpathy:auth-expired', handleAuthExpired);
 });
 </script>
 

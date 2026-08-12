@@ -53,8 +53,10 @@ export const useModelStore = defineStore('model', () => {
       }
       loadError.value = presets.value.length ? '' : '暂无可用模型预设';
     } catch (err) {
+      // 仅记录错误状态，不向上抛出：调用方（MobileQuery/ModelSelector/Config 的
+      // onMounted）多为裸 await，抛出会产生未捕获 rejection 并在控制台刷屏。
+      // 失效 token 导致的 401 已由 apiBase 的 401 自愈逻辑处理（清理 token + 跳登录）。
       loadError.value = err instanceof Error ? err.message : String(err);
-      throw err;
     }
   }
 
