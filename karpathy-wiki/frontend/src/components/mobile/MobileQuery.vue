@@ -4,9 +4,7 @@
 // - 历史会话：置顶排序、长按弹出操作菜单（置顶/取消置顶 · 重命名 · 删除）、右下 FAB 新建会话
 // - 输入栏：语音输入（Web Speech API）+ 模型切换（useModelStore 预设）+ 发送/停止
 // - 会话切换安全：仅"浏览列表"不打断后台生成；主动打开并发送另一会话时优雅中止上一会话流，避免串台
-// 复用链路：useQueryStore / useConversationsStore（状态与会话持久化，ownerId 多账户隔离）
-//          consumeQuerySSE + apiFetch + API_BASE（流式消费与鉴权注入）
-//          useChatAutoScroll / ThinkingBlock / RefsList / FollowupsChips（与桌面端一致）
+// 视觉：浅白极简商务风（任务列表 + 深蓝高亮），见 styles/mobile-light.css。
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import {
@@ -18,23 +16,46 @@ import {
   Delete,
   ChatLineRound,
   Loading,
+  Search,
+  Close,
 } from '@element-plus/icons-vue';
 import { API_BASE, apiFetch } from '../../utils/apiBase';
 import { renderMarkdown } from '../../utils/markdown';
 import { consumeQuerySSE } from '../../utils/sse';
 import { useQueryStore, DEFAULT_ACTIVE } from '../../stores/query';
 import { useConversationsStore, getLastActiveConversationId } from '../../stores/conversations';
+import { useAuthStore } from '../../stores/auth';
 import { useModelStore } from '../../stores/model';
+import {
+  loadAiUserConfig,
+  loadSearchUserConfig,
+} from '../../services/userConfig';
+import type { AiUserConfig, SearchUserConfig } from '../../services/userConfig';
 import { useChatAutoScroll } from '../../composables/useChatAutoScroll';
 import { useSpeechRecognition } from '../../composables/useSpeechRecognition';
 import ThinkingBlock from '../ThinkingBlock.vue';
 import RefsList from '../RefsList.vue';
 import FollowupsChips from '../FollowupsChips.vue';
-import type { ChatMessage, Reference } from '../../types';
+import type { ChatMessage, Reference, ConversationRecord } from '../../types';
+
+const emit = defineEmits<{ (e: 'open-me'): void }>();
 
 const store = useQueryStore();
 const conversationsStore = useConversationsStore();
+const authStore = useAuthStore();
 const modelStore = useModelStore();
+
+// BYOK 配置（与桌面 Query.vue 一致）：读取用户 per-user AI/搜索配置，
+// 问答请求时下发 llmConfig / searchConfig 给后端覆盖服务端共享配置。
+const byokConfig = ref<AiUserConfig | null>(null);
+const byokSearch = ref<SearchUserConfig | null>(null);
+const byokReady = computed(() => !!byokConfig.value && !!byokConfig.value.apiKey);
+// 模型显示：优先展示用户已配置的 BYOK 模型，否则回退预制模型（与后端实际生效逻辑一致）
+const displayModel = computed(() =>
+  byokReady.value
+    ? (byokConfig.value!.model || '我的模型 (BYOK)')
+    : (modelStore.currentModel || '模型'),
+);
 const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 // 当前"激活"会话（其消息驻留 store 扁平缓冲，SSE 写入目标）；切到别的会话会优雅中止其后台流
@@ -43,6 +64,27 @@ const activeId = ref<string | null>(null);
 // 模式：list=历史会话列表（有历史首屏进入）；chat=问答聊天
 const mode = ref<'list' | 'chat'>('chat');
 const hasHistory = computed(() => conversationsStore.conversations.length > 0);
+
+// 列表筛选：【全部任务】下拉
+type FilterKey = 'all' | 'pinned' | 'streaming';
+const filter = ref<FilterKey>('all');
+const filterLabel = computed(() =>
+  filter.value === 'pinned' ? '置顶任务' : filter.value === 'streaming' ? '进行中' : '全部任务',
+);
+const filterOpen = ref(false);
+const filterOptions: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: '全部任务' },
+  { key: 'pinned', label: '置顶任务' },
+  { key: 'streaming', label: '进行中' },
+];
+
+// 列表内搜索（按标题）
+const searchOpen = ref(false);
+const searchText = ref('');
+function toggleSearch() {
+  searchOpen.value = !searchOpen.value;
+  if (!searchOpen.value) searchText.value = '';
+}
 
 // 长按操作菜单（置顶/取消置顶 · 重命名 · 删除）
 const actionSheet = reactive<{ open: boolean; id: string | null; pinned: boolean }>({
@@ -53,11 +95,22 @@ const actionSheet = reactive<{ open: boolean; id: string | null; pinned: boolean
 // 模型切换底部面板
 const modelSheet = ref(false);
 
+// 任务详情 / 根因弹窗
+const detailOpen = ref(false);
+const detailConv = ref<ConversationRecord | null>(null);
+const detailAsk = ref('');
+
 // ===== 计算属性 =====
 const hasMessages = computed(() => store.messages.length > 0);
 const canSend = computed(() => !!inputQuestion.value.trim() && !store.isLoading);
 // 是否有任意会话正在生成（驱动头部历史图标动画）
 const isStreaming = computed(() => store.anySessionStreaming);
+
+// 头像首字母（取当前登录用户名首字符）
+const avatarInitial = computed(() => {
+  const name = authStore.user?.username || '';
+  return name ? name.trim().charAt(0).toUpperCase() : 'U';
+});
 
 // 历史会话：置顶优先，其次按更新时间倒序
 const sortedConversations = computed(() =>
@@ -66,6 +119,17 @@ const sortedConversations = computed(() =>
     return (b.updatedAt || '').localeCompare(a.updatedAt || '');
   }),
 );
+
+// 列表筛选 + 搜索后的可见会话
+const visibleConversations = computed(() => {
+  const q = searchText.value.trim().toLowerCase();
+  return sortedConversations.value.filter((c) => {
+    if (filter.value === 'pinned' && !c.isPinned) return false;
+    if (filter.value === 'streaming' && !store.isSessionStreaming(c.id)) return false;
+    if (q && !(c.title || '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+});
 
 // 当前会话标题（用于聊天头部）
 const currentTitle = computed(() => {
@@ -106,6 +170,21 @@ function formatTime(iso?: string): string {
   return `${hh}:${mm}`;
 }
 
+// 列表项日期：今天显示时间，否则 MM-DD HH:mm
+function formatDateTime(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (sameDay) return `${hh}:${mm}`;
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return `${mo}-${da} ${hh}:${mm}`;
+}
+
 // 自动贴底滚动（流式输出场景）
 const { scrollToBottom } = useChatAutoScroll(chatBodyRef, () => store.isLoading);
 watch(() => store.messages.length, () => scrollToBottom(true));
@@ -130,9 +209,6 @@ function toggleVoice() {
 }
 
 // ===== 会话切换（并行流式）=====
-// 每个会话拥有独立缓冲（store.sessions）；切换仅改变 activeId，后台流继续写入各自缓冲。
-// 真正并行：A 在后台流式时打开 B，A 的 SSE writer 按 conversationId 路由到 sessions[A]，
-// 不被打断；回到 A 时 writer 动态地改写 active 缓冲，无缝衔接。
 let activeAbort: AbortController | null = null;
 
 // 确保当前有真实会话 id（新建首问前若尚未落到某会话，则开一个）
@@ -167,27 +243,22 @@ function openConversation(id: string) {
     mode.value = 'chat';
     return;
   }
-  // 先落盘即将离开的会话（其缓冲可能仍在流式）
   persistActiveIfAny();
   const rec = conversationsStore.conversations.find((c) => c.id === id) ?? null;
   const buf = store.getSessionBuffer(id);
   if (buf && buf.isLoading) {
-    // 该会话正在后台流式：保留实时进度，仅切换激活缓冲
     store.swapSession(id);
   } else {
-    // 非流式：载入持久化消息并恢复线程隔离键
     store.swapSession(id, { messages: rec ? rec.messages : [], threadId: rec?.threadId ?? null });
   }
   conversationsStore.currentConversationId = id;
   activeId.value = id;
   mode.value = 'chat';
-  // 切换后贴底（若有历史）
   requestAnimationFrame(() => scrollToBottom(true));
 }
 
 function newSession() {
   persistActiveIfAny();
-  // 中止当前激活会话的后台流（其进度已落盘，安全）
   if (activeAbort && store.isLoading) {
     activeAbort.abort();
     activeAbort = null;
@@ -201,8 +272,47 @@ function newSession() {
 }
 
 function goList() {
-  // 仅浏览列表，不打断任何后台生成（active 缓冲的后台流继续演进）
   mode.value = 'list';
+}
+
+// ===== 任务详情 / 根因弹窗 =====
+function openDetail(c: ConversationRecord) {
+  detailConv.value = c;
+  detailAsk.value = '';
+  detailOpen.value = true;
+}
+function closeDetail() {
+  detailOpen.value = false;
+  detailConv.value = null;
+}
+// 从最后一条助手消息中提取首个代码块（用于根因技术文本展示）
+const detailCode = computed(() => {
+  const c = detailConv.value;
+  if (!c) return '';
+  const last = [...(c.messages ?? [])].reverse().find((m) => m.role === 'assistant');
+  if (!last) return '';
+  const m = last.content.match(/```[^\n]*\n([\s\S]*?)```/);
+  if (!m) return '';
+  return m[1].trim().slice(0, 600);
+});
+const detailBullets = computed(() => {
+  const c = detailConv.value;
+  if (!c) return [];
+  const count = c.messages?.length ?? 0;
+  const list = [
+    `会话 ID：${c.id}`,
+    `消息：${count} 条`,
+    `最近更新：${formatDateTime(c.updatedAt)}`,
+    `状态：${c.isPinned ? '已置顶' : '普通'}`,
+  ];
+  return list;
+});
+function sendDetailAsk() {
+  const q = detailAsk.value.trim();
+  if (!q) return;
+  closeDetail();
+  inputQuestion.value = q;
+  handleSubmit();
 }
 
 // ===== 长按菜单 =====
@@ -225,7 +335,6 @@ function pressEnd() {
   }
 }
 function onConvClick(id: string) {
-  // 长按已触发菜单则不重复打开
   if (longPressed) {
     longPressed = false;
     return;
@@ -270,7 +379,6 @@ async function doDelete() {
       cancelButtonText: '取消',
     });
     await conversationsStore.deleteConversation(id);
-    // 删除对应会话缓冲（若删除的是当前激活会话，store 自动回落默认空缓冲）
     store.removeSession(id);
     if (activeId.value === id) {
       activeId.value = null;
@@ -290,7 +398,6 @@ function pickModel(key: string) {
 function handleSubmit() {
   const q = inputQuestion.value.trim();
   if (!q || store.isLoading) return;
-  // 确保当前展示的会话即激活会话，并取得其会话 id（用于并行流式路由）
   const convId = ensureSessionId();
   store.submitQuestion(q);
   conversationsStore.currentConversationId = convId;
@@ -310,7 +417,6 @@ function onFollowup(question: string) {
 
 async function sendQuestion(question: string, convId: string) {
   activeAbort = new AbortController();
-  // 读取该会话缓冲的线程隔离键 / 历史，而非全局状态
   const buf = store.getSessionBuffer(convId);
   const activeThreadId = buf?.currentThreadId ?? null;
   const history = activeThreadId
@@ -324,6 +430,23 @@ async function sendQuestion(question: string, convId: string) {
     body.history = history;
   }
 
+  // ── BYOK per-user 配置注入（对齐桌面 Query.vue）──
+  // 每个用户携带自己配置的 AI 服务 / 搜索配置（含 API Key），后端以这些覆盖项替换
+  // 服务端共享配置，实现「各用户独立额度、互不抢占限流」。密钥仅经请求体一次性下发，
+  // 后端不持久化（参见 services/userConfig.ts）。仅当用户已填 API Key 才下发，
+  // 空密钥视为未配置，交由后端 400 拦截。
+  const uid = authStore.user?.id || 'guest';
+  const [aiCfg, searchCfg] = await Promise.all([
+    loadAiUserConfig(uid),
+    loadSearchUserConfig(uid),
+  ]);
+  if (aiCfg && aiCfg.apiKey) {
+    body.llmConfig = aiCfg;
+  }
+  if (searchCfg && searchCfg.apiKey) {
+    body.searchConfig = searchCfg;
+  }
+
   try {
     const response = await apiFetch(`${API_BASE}/query`, {
       method: 'POST',
@@ -332,11 +455,9 @@ async function sendQuestion(question: string, convId: string) {
       signal: activeAbort.signal,
     });
     if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
-    // 按 conversationId 路由 SSE 写入：切走后写 sessions[convId]，切回后自动写 active 缓冲
     await consumeQuerySSE(response, store.getSessionWriter(convId), activeAbort.signal);
   } catch (err: unknown) {
     if ((err as Error).name === 'AbortError') return;
-    // 错误写入目标会话缓冲（可能非 active）
     store.getSessionWriter(convId).handleError((err as Error).message);
     ElMessage.warning((err as Error).message);
   } finally {
@@ -358,7 +479,6 @@ function handleStop() {
   }
 }
 
-// 新建会话：清空本地会话作用域
 function handleNewSession() {
   newSession();
 }
@@ -371,7 +491,6 @@ function resumeLastAnswer(convId: string) {
   if (!msgs.length) return;
   const last = msgs[msgs.length - 1];
   if (last.role === 'assistant' && last.status === 'streaming') {
-    // 移除流式占位（active 缓冲即该会话，故 removeMessage 作用正确）
     store.removeMessage(msgs.length - 1);
   }
   let question: string | undefined;
@@ -391,7 +510,6 @@ async function maybeResumeOnLoad() {
   if (!lastId) return;
   const rec = conversationsStore.conversations.find((c) => c.id === lastId);
   if (!rec) return;
-  // 载入到以 lastId 为键的会话缓冲（含线程隔离键），而非默认 active
   store.swapSession(lastId, { messages: rec.messages, threadId: rec.threadId });
   conversationsStore.currentConversationId = lastId;
   activeId.value = lastId;
@@ -414,7 +532,14 @@ onMounted(async () => {
   } catch {
     /* 模型列表不可用时静默降级 */
   }
-  // 有历史首屏进列表，无历史直接进聊天（含招呼语）
+  // 加载 BYOK 配置（用于模型显示 + 问答下发 llmConfig）
+  try {
+    const uid = authStore.user?.id || 'guest';
+    byokConfig.value = await loadAiUserConfig(uid);
+    byokSearch.value = await loadSearchUserConfig(uid);
+  } catch {
+    /* BYOK 不可用时静默降级 */
+  }
   mode.value = hasHistory.value ? 'list' : 'chat';
   try {
     await maybeResumeOnLoad();
@@ -432,65 +557,120 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="mq-root">
-    <!-- 顶部标题栏 -->
-    <header class="mq-header">
-      <button
-        v-if="mode === 'chat' && hasHistory"
-        class="mq-hist-btn"
-        :class="{ spinning: isStreaming }"
-        title="历史会话"
-        @click="goList"
-      >
-        <el-icon v-if="isStreaming"><Loading /></el-icon>
-        <el-icon v-else><ChatLineRound /></el-icon>
-      </button>
-      <span class="mq-title">{{ mode === 'list' ? '历史会话' : currentTitle }}</span>
-      <button v-if="mode === 'chat'" class="mq-new-btn" title="新会话" @click="handleNewSession">
-        <el-icon><Plus /></el-icon>
-      </button>
-    </header>
-
-    <!-- 列表模式：历史会话 -->
+    <!-- ============ 列表模式：任务列表 ============ -->
     <div v-if="mode === 'list'" class="mq-listview">
-      <div class="mq-list-empty" v-if="!hasHistory">
-        <el-icon class="mq-list-empty-icon"><ChatLineRound /></el-icon>
-        <p>还没有会话，点击右下角按钮开始提问</p>
-      </div>
-      <div
-        v-for="c in sortedConversations"
-        :key="c.id"
-        class="mq-conv-item"
-        :class="{ pinned: c.isPinned }"
-        @click="onConvClick(c.id)"
-        @pointerdown="pressStart(c.id, !!c.isPinned)"
-        @pointerup="pressEnd"
-        @pointerleave="pressEnd"
-        @pointercancel="pressEnd"
-      >
-        <div class="mq-conv-main">
-          <div class="mq-conv-title">
-            <el-icon v-if="c.isPinned" class="mq-pin"><Top /></el-icon>
-            <span class="mq-conv-name">{{ c.title || '未命名会话' }}</span>
+      <!-- 顶栏：左侧【全部任务】下拉 + 右侧搜索 / 头像 -->
+      <header class="mq-topbar m-safe-top">
+        <button class="mq-filter" :class="{ open: filterOpen }" @click="filterOpen = !filterOpen">
+          <span class="mq-filter-label">{{ filterLabel }}</span>
+          <svg class="mq-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+        </button>
+        <div class="mq-top-actions">
+          <button class="mq-icon-btn" title="搜索" @click="toggleSearch">
+            <el-icon><Search /></el-icon>
+          </button>
+          <button class="mq-avatar" title="我的" @click="emit('open-me')">{{ avatarInitial }}</button>
+        </div>
+
+        <!-- 筛选下拉菜单 -->
+        <transition name="mq-pop">
+          <div v-if="filterOpen" class="mq-filter-menu" @click.self="filterOpen = false">
+            <button
+              v-for="opt in filterOptions"
+              :key="opt.key"
+              class="mq-filter-item"
+              :class="{ active: filter === opt.key }"
+              @click="filter = opt.key; filterOpen = false"
+            >{{ opt.label }}</button>
           </div>
-          <div class="mq-conv-preview">{{ c.preview || '（暂无内容）' }}</div>
-        </div>
-        <div class="mq-conv-meta">
-          <span class="mq-conv-time">{{ formatTime(c.updatedAt) }}</span>
-          <el-icon v-if="store.isSessionStreaming(c.id)" class="mq-conv-spin"><Loading /></el-icon>
-        </div>
+        </transition>
+      </header>
+
+      <!-- 搜索条 -->
+      <div v-if="searchOpen" class="mq-searchbar">
+        <svg class="mq-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+        <input v-model="searchText" class="mq-search-input" type="search" enterkeyhint="search" placeholder="搜索会话…" />
+        <button class="mq-search-clear" @click="searchText = ''"><el-icon><Close /></el-icon></button>
       </div>
-      <!-- 右下 FAB 新建会话 -->
+
+      <!-- 任务列表（分割条目） -->
+      <div v-if="!visibleConversations.length" class="mq-empty-list">
+        <el-icon class="mq-empty-icon"><ChatLineRound /></el-icon>
+        <p>{{ searchText || filter !== 'all' ? '没有匹配的会话' : '还没有会话，点击右下角按钮开始提问' }}</p>
+      </div>
+
+      <ul v-else class="mq-tasks">
+        <li
+          v-for="c in visibleConversations"
+          :key="c.id"
+          class="mq-task"
+          :class="{ pinned: c.isPinned }"
+          @click="onConvClick(c.id)"
+          @pointerdown="pressStart(c.id, !!c.isPinned)"
+          @pointerup="pressEnd"
+          @pointerleave="pressEnd"
+          @pointercancel="pressEnd"
+        >
+          <!-- 左侧圆形浅灰图标容器 -->
+          <div class="mq-task-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 9 9 0 0 1-4-1L3 20l1.5-5.5a8.38 8.38 0 0 1-1-4A8.5 8.5 0 1 1 21 11.5z" />
+            </svg>
+          </div>
+          <!-- 中间：标题 + 灰色标签 -->
+          <div class="mq-task-main">
+            <div class="mq-task-title">
+              <span v-if="c.isPinned" class="mq-task-pin">置顶</span>
+              <span class="mq-task-name">{{ c.title || '未命名会话' }}</span>
+            </div>
+            <div class="mq-task-tag">□ 对话 · {{ c.preview || '暂无内容' }}</div>
+          </div>
+          <!-- 右侧：日期 + 根因详情入口 -->
+          <div class="mq-task-right">
+            <span class="mq-task-time">{{ formatDateTime(c.updatedAt) }}</span>
+            <button
+              class="mq-task-more"
+              title="根因 / 详情"
+              @click.stop="openDetail(c)"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
+          </div>
+        </li>
+      </ul>
+
+      <!-- 右下 FAB 新建会话（蓝色圆形加号） -->
       <button class="mq-fab" title="新建会话" @click="newSession">
         <el-icon><Plus /></el-icon>
       </button>
     </div>
 
-    <!-- 聊天模式 -->
+    <!-- ============ 聊天模式 ============ -->
     <div v-else class="mq-chat">
+      <!-- 顶栏：返回列表 + 标题 + 新建 -->
+      <header class="mq-chatbar m-safe-top">
+        <button
+          v-if="hasHistory"
+          class="mq-icon-btn"
+          :class="{ spinning: isStreaming }"
+          title="历史会话"
+          @click="goList"
+        >
+          <el-icon v-if="isStreaming"><Loading /></el-icon>
+          <el-icon v-else><ChatLineRound /></el-icon>
+        </button>
+        <span class="mq-chat-title">{{ currentTitle }}</span>
+        <button class="mq-icon-btn" title="新会话" @click="handleNewSession">
+          <el-icon><Plus /></el-icon>
+        </button>
+      </header>
+
       <div ref="chatBodyRef" class="mq-messages">
         <!-- 空态：招呼语 + 建议问题 -->
         <div v-if="!hasMessages" class="mq-empty">
-          <div class="mq-empty-robot">🤖</div>
+          <div class="mq-empty-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 9 9 0 0 1-4-1L3 20l1.5-5.5a8.38 8.38 0 0 1-1-4A8.5 8.5 0 1 1 21 11.5z" /></svg>
+          </div>
           <p class="mq-empty-greeting">{{ greeting }}</p>
           <div class="mq-suggestions">
             <button v-for="s in suggestions" :key="s" class="mq-suggestion" @click="onFollowup(s)">
@@ -559,7 +739,7 @@ onBeforeUnmount(() => {
           @keydown.enter.exact.prevent="handleSubmit"
         ></textarea>
         <button class="mq-model" title="切换模型" @click="modelSheet = true">
-          <span class="mq-model-label">{{ modelStore.currentModel || '模型' }}</span>
+          <span class="mq-model-label">{{ displayModel }}</span>
         </button>
         <button
           v-if="store.isLoading"
@@ -571,13 +751,12 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 长按操作菜单（底部动作面板）-->
+    <!-- 长按操作菜单（白底底部面板） -->
     <transition name="mq-sheet">
       <div v-if="actionSheet.open" class="mq-sheet-mask" @click.self="closeActionSheet">
         <div class="mq-sheet">
           <button class="mq-sheet-item" @click="doPin">
-            <el-icon><Top v-if="actionSheet.pinned" /><Top v-else /></el-icon>
-            {{ actionSheet.pinned ? '取消置顶' : '置顶' }}
+            <el-icon><Top /></el-icon>{{ actionSheet.pinned ? '取消置顶' : '置顶' }}
           </button>
           <button class="mq-sheet-item" @click="doRename">
             <el-icon><Edit /></el-icon>重命名
@@ -590,22 +769,73 @@ onBeforeUnmount(() => {
       </div>
     </transition>
 
-    <!-- 模型切换面板 -->
+    <!-- 模型切换面板（白底） -->
     <transition name="mq-sheet">
       <div v-if="modelSheet" class="mq-sheet-mask" @click.self="modelSheet = false">
         <div class="mq-sheet">
           <div class="mq-sheet-title">切换模型</div>
           <button
+            v-if="byokReady"
+            class="mq-sheet-item byok"
+            :class="{ active: true }"
+            disabled
+          >
+            {{ byokConfig?.model }}
+            <span class="mq-sheet-sub">{{ byokConfig?.provider }} · BYOK 已生效</span>
+          </button>
+          <button
             v-for="p in modelStore.presets"
             :key="p.key"
             class="mq-sheet-item"
-            :class="{ active: p.key === modelStore.selectedPresetKey }"
+            :class="{ active: !byokReady && p.key === modelStore.selectedPresetKey }"
             @click="pickModel(p.key)"
           >
             {{ p.label || p.model }}
             <span class="mq-sheet-sub">{{ p.model }}</span>
           </button>
           <button class="mq-sheet-item cancel" @click="modelSheet = false">取消</button>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 任务详情 / 根因弹窗（白底圆角浮窗） -->
+    <transition name="mq-sheet">
+      <div v-if="detailOpen" class="mq-sheet-mask" @click.self="closeDetail">
+        <div class="mq-detail-sheet">
+          <div class="mq-detail-head">
+            <span class="mq-detail-title">{{ detailConv?.title || '未命名会话' }}</span>
+            <button class="mq-icon-btn" @click="closeDetail"><el-icon><Close /></el-icon></button>
+          </div>
+          <div class="mq-detail-meta">
+            <span class="mq-detail-tag">□ 对话</span>
+            <span class="mq-detail-date">{{ formatDateTime(detailConv?.updatedAt) }}</span>
+          </div>
+
+          <div class="mq-detail-body">
+            <div class="mq-rc-title">根因</div>
+            <ul class="mq-rc-list">
+              <li v-for="(b, i) in detailBullets" :key="i">{{ b }}</li>
+            </ul>
+            <pre v-if="detailCode" class="mq-rc-code">{{ detailCode }}</pre>
+            <p v-else class="mq-rc-note">该会话暂无代码片段。</p>
+          </div>
+
+          <!-- 底部输入 + 功能图标栏（简约聊天文档预览） -->
+          <div class="mq-detail-foot">
+            <input
+              v-model="detailAsk"
+              class="mq-detail-input"
+              type="text"
+              placeholder="向该任务追问…"
+              enterkeyhint="send"
+              @keyup.enter="sendDetailAsk"
+            />
+            <div class="mq-detail-icons">
+              <button class="mq-foot-ic" title="引用"><el-icon><ChatLineRound /></el-icon></button>
+              <button class="mq-foot-ic" title="复制"><el-icon><MoreFilled /></el-icon></button>
+              <button class="mq-foot-send" title="发送" @click="sendDetailAsk">发送</button>
+            </div>
+          </div>
         </div>
       </div>
     </transition>
@@ -618,186 +848,306 @@ onBeforeUnmount(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  background: var(--m-bg, #ffffff);
 }
 
-/* 顶部标题栏 */
-.mq-header {
-  flex-shrink: 0;
+/* ===== 顶栏（列表） ===== */
+.mq-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   height: 52px;
+  padding: 0 14px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-border, #ededed);
+}
+.mq-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  padding: 6px 4px;
+  cursor: pointer;
+  color: var(--m-text, #111111);
+  font-family: var(--m-font);
+}
+.mq-filter-label {
+  font-size: 16px;
+  font-weight: 700;
+}
+.mq-caret {
+  width: 16px;
+  height: 16px;
+  color: var(--m-text-2, #777777);
+  transition: transform 0.18s ease;
+}
+.mq-filter.open .mq-caret { transform: rotate(180deg); }
+.mq-top-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
-  padding-top: env(safe-area-inset-top, 0);
-  background: rgba(5, 0, 16, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--accent-purple-a30);
-  position: relative;
-  z-index: 5;
 }
-.mq-title {
-  flex: 1;
-  font-family: var(--font-display);
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: 1px;
-  background: var(--grad-aurora);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mq-hist-btn,
-.mq-new-btn {
+.mq-icon-btn {
   width: 36px;
   height: 36px;
   border: none;
   background: transparent;
-  color: var(--text-bright);
+  color: var(--m-text-2, #777777);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
   border-radius: 10px;
+  font-size: 20px;
 }
-.mq-hist-btn:active,
-.mq-new-btn:active {
-  background: rgba(168, 85, 247, 0.18);
-}
-.mq-hist-btn.spinning :deep(svg) {
+.mq-icon-btn:active { background: var(--m-fill, #f4f5f7); }
+.mq-icon-btn.spinning :deep(svg) {
   animation: mq-spin 1s linear infinite;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #1554d1);
 }
-@keyframes mq-spin {
-  to { transform: rotate(360deg); }
+@keyframes mq-spin { to { transform: rotate(360deg); } }
+.mq-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: var(--m-fill, #f4f5f7);
+  color: var(--m-text, #111111);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--m-font);
+}
+.mq-avatar:active { background: var(--m-fill-2, #eceef1); }
+
+/* 筛选下拉菜单 */
+.mq-filter-menu {
+  position: absolute;
+  top: 52px;
+  left: 14px;
+  z-index: 7;
+  min-width: 140px;
+  background: #ffffff;
+  border: 1px solid var(--m-border, #ededed);
+  border-radius: 12px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 6px 20px rgba(17, 17, 17, 0.1);
+}
+.mq-filter-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--m-text, #111111);
+  cursor: pointer;
+  font-family: var(--m-font);
+}
+.mq-filter-item:active { background: var(--m-fill, #f4f5f7); }
+.mq-filter-item.active { color: var(--m-primary, #1554d1); font-weight: 600; }
+
+/* 搜索条 */
+.mq-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-border, #ededed);
+}
+.mq-search-icon { width: 18px; height: 18px; color: var(--m-text-3, #9aa0a6); flex-shrink: 0; }
+.mq-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: var(--m-bg-soft, #f7f8fa);
+  color: var(--m-text, #111111);
+  font-size: 14px;
+  font-family: var(--m-font);
+  outline: none;
+}
+.mq-search-input:focus { border-color: var(--m-primary, #1554d1); }
+.mq-search-clear {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--m-text-3, #9aa0a6);
+  cursor: pointer;
+  display: flex;
+  font-size: 18px;
 }
 
-/* 列表模式 */
+/* ===== 任务列表（分割条目） ===== */
 .mq-listview {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 12px 80px;
-  position: relative;
+  padding-bottom: 80px;
 }
-.mq-list-empty {
-  height: 100%;
+.mq-empty-list {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: var(--text-soft);
+  padding: 60px 24px;
+  color: var(--m-text-2, #777777);
   text-align: center;
-  padding: 24px;
 }
-.mq-list-empty-icon {
-  font-size: 40px;
-  opacity: 0.6;
-}
-.mq-conv-item {
+.mq-empty-icon { font-size: 36px; opacity: 0.5; }
+
+.mq-tasks { list-style: none; margin: 0; padding: 0; }
+.mq-task {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  margin-bottom: 10px;
-  background: rgba(20, 12, 40, 0.7);
-  border: 1px solid var(--accent-purple-a30);
-  border-radius: 14px;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--m-border, #ededed);
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
-.mq-conv-item:active {
-  background: rgba(168, 85, 247, 0.16);
+.mq-task:active { background: var(--m-bg-soft, #f7f8fa); }
+
+/* 左侧圆形浅灰图标容器 */
+.mq-task-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--m-fill, #f4f5f7);
+  color: var(--m-text-2, #777777);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.mq-conv-item.pinned {
-  border-color: rgba(0, 245, 255, 0.4);
-}
-.mq-conv-main {
-  flex: 1;
-  min-width: 0;
-}
-.mq-conv-title {
+.mq-task-icon svg { width: 20px; height: 20px; }
+
+.mq-task-main { flex: 1; min-width: 0; }
+.mq-task-title {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.mq-pin {
-  color: var(--neon-cyan);
-  font-size: 14px;
+.mq-task-pin {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--m-primary, #1554d1);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  border-radius: 5px;
+  padding: 1px 5px;
 }
-.mq-conv-name {
+.mq-task-name {
   font-size: 15px;
-  font-weight: 600;
-  color: var(--text-bright);
+  font-weight: 700;
+  color: var(--m-text, #111111);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mq-conv-preview {
+.mq-task-tag {
   margin-top: 4px;
-  font-size: 12.5px;
-  color: var(--text-soft);
+  font-size: 12px;
+  color: var(--m-text-2, #777777);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mq-conv-meta {
+
+.mq-task-right {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
+  gap: 6px;
 }
-.mq-conv-time {
+.mq-task-time {
   font-size: 11px;
-  color: var(--text-soft);
-  opacity: 0.8;
+  color: var(--m-text-2, #777777);
 }
-.mq-conv-spin {
-  color: var(--neon-cyan);
-  animation: mq-spin 1s linear infinite;
-}
-
-/* FAB 新建会话 */
-.mq-fab {
-  position: absolute;
-  right: 18px;
-  bottom: 22px;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
+.mq-task-more {
+  width: 26px;
+  height: 26px;
   border: none;
-  background: var(--grad-aurora, linear-gradient(135deg, #00f5ff, #a855f7));
-  color: #0a0214;
-  font-size: 28px;
+  background: transparent;
+  color: var(--m-text-3, #9aa0a6);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 6px 20px rgba(0, 245, 255, 0.35);
-  transition: transform 0.15s ease;
+  border-radius: 8px;
 }
-.mq-fab:active {
-  transform: scale(0.92);
-}
+.mq-task-more:active { background: var(--m-fill, #f4f5f7); }
+.mq-task-more svg { width: 18px; height: 18px; }
 
-/* 聊天模式 */
+/* FAB 新建会话（蓝色圆形加号） */
+.mq-fab {
+  position: absolute;
+  right: 18px;
+  bottom: 22px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--m-primary, #1554d1);
+  color: #ffffff;
+  font-size: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(21, 84, 209, 0.28);
+  z-index: 8;
+  transition: background 0.15s ease, transform 0.12s ease;
+}
+.mq-fab:active { background: var(--m-primary-press, #0f3f9e); transform: scale(0.92); }
+.mq-fab :deep(svg) { width: 26px; height: 26px; }
+
+/* ===== 聊天模式 ===== */
 .mq-chat {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
+.mq-chatbar {
+  flex-shrink: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-border, #ededed);
+}
+.mq-chat-title {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--m-text, #111111);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mq-messages {
   flex: 1;
   min-height: 0;
@@ -815,12 +1165,19 @@ onBeforeUnmount(() => {
   padding: 24px;
   text-align: center;
 }
-.mq-empty-robot {
-  font-size: 44px;
-  filter: drop-shadow(0 0 10px rgba(0, 245, 255, 0.4));
+.mq-empty-badge {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--m-fill, #f4f5f7);
+  color: var(--m-primary, #1554d1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
+.mq-empty-badge svg { width: 28px; height: 28px; }
 .mq-empty-greeting {
-  color: var(--text-soft, #9aa0b4);
+  color: var(--m-text-2, #777777);
   font-size: 14px;
   margin: 0;
   line-height: 1.6;
@@ -834,33 +1191,22 @@ onBeforeUnmount(() => {
   margin-top: 4px;
 }
 .mq-suggestion {
-  border: 1px solid var(--accent-purple-a30, rgba(168, 85, 247, 0.3));
-  background: rgba(168, 85, 247, 0.08);
-  color: var(--text-bright, #e8e9f3);
+  border: 1px solid var(--m-border, #ededed);
+  background: #ffffff;
+  color: var(--m-text, #111111);
   border-radius: 12px;
   padding: 10px 14px;
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
-  transition: all 0.2s ease;
+  font-family: var(--m-font);
+  transition: border-color 0.18s ease;
 }
-.mq-suggestion:active {
-  transform: scale(0.98);
-  border-color: var(--neon-cyan, #00f5ff);
-}
+.mq-suggestion:active { border-color: var(--m-primary, #1554d1); }
 
-.mq-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.mq-row {
-  display: flex;
-  justify-content: flex-start;
-}
-.mq-row.user {
-  justify-content: flex-end;
-}
+.mq-list { display: flex; flex-direction: column; gap: 14px; }
+.mq-row { display: flex; justify-content: flex-start; }
+.mq-row.user { justify-content: flex-end; }
 .mq-bubble {
   max-width: 86%;
   padding: 10px 13px;
@@ -868,49 +1214,25 @@ onBeforeUnmount(() => {
   font-size: 15px;
   line-height: 1.6;
   word-break: break-word;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 .mq-bubble.assistant {
-  background: rgba(20, 12, 40, 0.85);
-  border: 1px solid var(--accent-purple-a30, rgba(168, 85, 247, 0.25));
+  background: #ffffff;
+  border: 1px solid var(--m-border-2, #e2e4e8);
   border-bottom-left-radius: 5px;
 }
 .mq-bubble.user {
-  background: linear-gradient(135deg, rgba(0, 245, 255, 0.18), rgba(168, 85, 247, 0.28));
-  border: 1px solid rgba(0, 245, 255, 0.35);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  border: 1px solid rgba(21, 84, 209, 0.18);
   border-bottom-right-radius: 5px;
 }
-.mq-md {
-  font-size: 15px;
-}
-.mq-md :deep(pre) {
-  background: rgba(0, 0, 0, 0.4);
-  border-radius: 8px;
-  padding: 10px;
-  overflow-x: auto;
-  font-size: 13px;
-}
-.mq-md :deep(code) {
-  font-family: var(--font-mono, monospace);
-  font-size: 13px;
-}
-.mq-md :deep(p) {
-  margin: 0.4em 0;
-}
-.mq-md :deep(ul), .mq-md :deep(ol) {
-  padding-left: 1.2em;
-  margin: 0.4em 0;
-}
-.mq-md :deep(a) {
-  color: var(--neon-cyan, #00f5ff);
-}
+.mq-md { font-size: 15px; }
 .mq-time {
   margin-top: 6px;
   font-size: 11px;
-  color: var(--text-soft, #9aa0b4);
+  color: var(--m-text-3, #9aa0a6);
   text-align: right;
-  opacity: 0.7;
 }
+
 .mq-dots {
   display: inline-flex;
   align-items: center;
@@ -921,18 +1243,14 @@ onBeforeUnmount(() => {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--neon-cyan, #00f5ff);
+  background: var(--m-text-3, #9aa0a6);
   animation: mq-blink 1.2s infinite ease-in-out;
 }
 .mq-dots .dot:nth-child(2) { animation-delay: 0.2s; }
 .mq-dots .dot:nth-child(3) { animation-delay: 0.4s; }
-.mq-dots-text {
-  font-size: 13px;
-  color: var(--text-soft, #9aa0b4);
-  margin-left: 4px;
-}
+.mq-dots-text { font-size: 13px; color: var(--m-text-2, #777777); margin-left: 4px; }
 @keyframes mq-blink {
-  0%, 80%, 100% { opacity: 0.25; }
+  0%, 80%, 100% { opacity: 0.3; }
   40% { opacity: 1; }
 }
 
@@ -940,10 +1258,10 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   margin: 0 12px;
   padding: 8px 12px;
-  background: rgba(255, 80, 80, 0.12);
-  border: 1px solid rgba(255, 80, 80, 0.4);
+  background: rgba(217, 54, 54, 0.08);
+  border: 1px solid rgba(217, 54, 54, 0.3);
   border-radius: 10px;
-  color: #ff9a9a;
+  color: var(--m-danger, #d93636);
   font-size: 13px;
 }
 
@@ -954,72 +1272,48 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   gap: 8px;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0));
-  background: rgba(5, 0, 16, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-top: 1px solid var(--accent-purple-a30, rgba(168, 85, 247, 0.25));
+  background: #ffffff;
+  border-top: 1px solid var(--m-border, #ededed);
 }
 .mq-mic,
 .mq-model {
   flex-shrink: 0;
   height: 38px;
   border-radius: 10px;
-  border: 1px solid var(--accent-purple-a30, rgba(168, 85, 247, 0.3));
-  background: rgba(168, 85, 247, 0.12);
-  color: var(--text-bright, #e8e9f3);
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: #ffffff;
+  color: var(--m-text-2, #777777);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 18px;
 }
-.mq-mic {
-  width: 38px;
-}
+.mq-mic { width: 38px; }
 .mq-mic.listening {
-  border-color: var(--neon-cyan, #00f5ff);
-  color: var(--neon-cyan, #00f5ff);
-  animation: mq-pulse 1.2s ease-in-out infinite;
+  border-color: var(--m-primary, #1554d1);
+  color: var(--m-primary, #1554d1);
 }
-.mq-mic:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-@keyframes mq-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 245, 255, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(0, 245, 255, 0); }
-}
-.mq-model {
-  padding: 0 10px;
-  font-size: 12.5px;
-  max-width: 92px;
-  overflow: hidden;
-}
-.mq-model-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.mq-mic:disabled { opacity: 0.4; cursor: not-allowed; }
+.mq-model { padding: 0 10px; font-size: 12.5px; max-width: 92px; overflow: hidden; }
+.mq-model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mq-input {
   flex: 1;
   min-height: 38px;
   max-height: 110px;
   resize: none;
   border-radius: 12px;
-  border: 1px solid var(--accent-purple-a30, rgba(168, 85, 247, 0.3));
-  background: rgba(10, 4, 24, 0.9);
-  color: var(--text-bright, #e8e9f3);
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: var(--m-bg-soft, #f7f8fa);
+  color: var(--m-text, #111111);
   padding: 9px 12px;
   font-size: 15px;
-  font-family: var(--font-body);
+  font-family: var(--m-font);
   line-height: 1.45;
-}
-.mq-input:focus {
   outline: none;
-  border-color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 0 0 2px rgba(0, 245, 255, 0.18);
 }
-.mq-input::placeholder { color: var(--text-soft, #6b7088); }
+.mq-input:focus { border-color: var(--m-primary, #1554d1); }
+.mq-input::placeholder { color: var(--m-text-3, #9aa0a6); }
 
 .mq-send {
   flex-shrink: 0;
@@ -1027,47 +1321,41 @@ onBeforeUnmount(() => {
   padding: 0 16px;
   border-radius: 12px;
   border: none;
-  background: var(--grad-aurora, linear-gradient(135deg, #00f5ff, #a855f7));
-  color: #0a0214;
-  font-weight: 800;
+  background: var(--m-primary, #1554d1);
+  color: #ffffff;
+  font-weight: 600;
   font-size: 14px;
   cursor: pointer;
-  transition: opacity 0.2s ease, transform 0.15s ease;
+  font-family: var(--m-font);
+  transition: background 0.15s ease;
 }
-.mq-send:active { transform: scale(0.95); }
-.mq-send:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.mq-stop {
-  background: rgba(255, 80, 80, 0.85);
-  color: #fff;
-}
+.mq-send:active { background: var(--m-primary-press, #0f3f9e); }
+.mq-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.mq-stop { background: var(--m-danger, #d93636); color: #fff; }
 
-/* 底部动作面板 */
+/* ===== 底部弹窗（白底） ===== */
 .mq-sheet-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(17, 17, 17, 0.4);
   display: flex;
   align-items: flex-end;
   z-index: 50;
 }
 .mq-sheet {
   width: 100%;
-  background: rgba(16, 8, 32, 0.98);
+  background: #ffffff;
   border-top-left-radius: 18px;
   border-top-right-radius: 18px;
-  padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0));
+  padding: 8px 14px calc(14px + env(safe-area-inset-bottom, 0));
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-top: 1px solid var(--accent-purple-a30);
 }
 .mq-sheet-title {
   text-align: center;
   font-size: 13px;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
   padding: 6px 0 4px;
 }
 .mq-sheet-item {
@@ -1078,43 +1366,171 @@ onBeforeUnmount(() => {
   min-height: 50px;
   border: none;
   border-radius: 12px;
-  background: rgba(168, 85, 247, 0.1);
-  color: var(--text-bright);
+  background: var(--m-fill, #f4f5f7);
+  color: var(--m-text, #111111);
   font-size: 15px;
   cursor: pointer;
+  font-family: var(--m-font);
 }
-.mq-sheet-item.active {
-  background: rgba(0, 245, 255, 0.16);
-  border: 1px solid rgba(0, 245, 255, 0.4);
-  color: var(--neon-cyan);
-}
-.mq-sheet-item.danger {
-  color: #ff9a9a;
-  background: rgba(255, 80, 80, 0.12);
-}
-.mq-sheet-item.cancel {
-  color: var(--text-soft);
-  background: transparent;
-}
-.mq-sheet-sub {
-  font-size: 11px;
-  color: var(--text-soft);
-  opacity: 0.8;
-}
+.mq-sheet-item:active { background: var(--m-fill-2, #eceef1); }
+.mq-sheet-item.active { background: var(--m-primary-soft, rgba(21, 84, 209, 0.08)); color: var(--m-primary, #1554d1); font-weight: 600; }
+.mq-sheet-item.danger { color: var(--m-danger, #d93636); }
+.mq-sheet-item.cancel { color: var(--m-text-2, #777777); background: transparent; }
+.mq-sheet-item.byok { color: var(--m-primary, #1554d1); }
+.mq-sheet-item:disabled { opacity: 1; cursor: default; }
+.mq-sheet-sub { font-size: 11px; color: var(--m-text-3, #9aa0a6); }
+
 .mq-sheet-enter-active,
-.mq-sheet-leave-active {
-  transition: opacity 0.2s ease;
-}
+.mq-sheet-leave-active { transition: opacity 0.2s ease; }
 .mq-sheet-enter-from,
-.mq-sheet-leave-to {
-  opacity: 0;
-}
+.mq-sheet-leave-to { opacity: 0; }
 .mq-sheet-enter-active .mq-sheet,
-.mq-sheet-leave-active .mq-sheet {
-  transition: transform 0.25s ease;
-}
+.mq-sheet-leave-active .mq-sheet { transition: transform 0.25s ease; }
 .mq-sheet-enter-from .mq-sheet,
-.mq-sheet-leave-to .mq-sheet {
-  transform: translateY(100%);
+.mq-sheet-leave-to .mq-sheet { transform: translateY(100%); }
+
+/* 筛选菜单淡入 */
+.mq-pop-enter-active,
+.mq-pop-leave-active { transition: opacity 0.15s ease, transform 0.15s ease; }
+.mq-pop-enter-from,
+.mq-pop-leave-to { opacity: 0; transform: translateY(-6px); }
+
+/* ===== 任务详情 / 根因弹窗 ===== */
+.mq-detail-sheet {
+  width: 100%;
+  max-height: 82vh;
+  overflow-y: auto;
+  background: #ffffff;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
+.mq-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mq-detail-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--m-text, #111111);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mq-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mq-detail-tag {
+  font-size: 12px;
+  color: var(--m-text-2, #777777);
+}
+.mq-detail-date {
+  font-size: 12px;
+  color: var(--m-text-3, #9aa0a6);
+}
+.mq-detail-body {
+  border-top: 1px solid var(--m-border, #ededed);
+  padding-top: 12px;
+}
+.mq-rc-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--m-text, #111111);
+  margin-bottom: 8px;
+}
+.mq-rc-list {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mq-rc-list li {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--m-text-2, #777777);
+}
+.mq-rc-code {
+  margin: 0;
+  padding: 12px;
+  background: var(--m-fill, #f4f5f7);
+  border: 1px solid var(--m-border, #ededed);
+  border-radius: 10px;
+  font-family: var(--m-font-mono, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--m-text, #111111);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mq-rc-note {
+  font-size: 13px;
+  color: var(--m-text-3, #9aa0a6);
+  margin: 0;
+}
+.mq-detail-foot {
+  border-top: 1px solid var(--m-border, #ededed);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mq-detail-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: var(--m-bg-soft, #f7f8fa);
+  color: var(--m-text, #111111);
+  font-size: 14px;
+  font-family: var(--m-font);
+  outline: none;
+}
+.mq-detail-input:focus { border-color: var(--m-primary, #1554d1); }
+.mq-detail-input::placeholder { color: var(--m-text-3, #9aa0a6); }
+.mq-detail-icons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mq-foot-ic {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: #ffffff;
+  color: var(--m-text-2, #777777);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 18px;
+}
+.mq-foot-ic:active { background: var(--m-fill, #f4f5f7); }
+.mq-foot-send {
+  margin-left: auto;
+  height: 38px;
+  padding: 0 20px;
+  border-radius: 10px;
+  border: none;
+  background: var(--m-primary, #1554d1);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--m-font);
+}
+.mq-foot-send:active { background: var(--m-primary-press, #0f3f9e); }
 </style>
