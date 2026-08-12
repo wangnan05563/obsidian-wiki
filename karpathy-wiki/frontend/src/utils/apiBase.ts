@@ -18,8 +18,9 @@ import { STORAGE_KEYS } from '../constants/storageKeys';
 
 export async function apiFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
+  let token: string | null = null;
   try {
-    const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }
@@ -32,5 +33,17 @@ export async function apiFetch(input: string | URL | Request, init: RequestInit 
   if (!headers.has('Content-Type') && typeof init.body === 'string') {
     headers.set('Content-Type', 'application/json');
   }
-  return fetch(input, { ...init, headers });
+  const response = await fetch(input, { ...init, headers });
+  // 401 自动清理失效会话：本次携带了 token 却仍 401（典型场景：后端重启导致临时
+  // 会话密钥变化，旧 token 失效），清理本地失效 token 并广播事件，由 App.vue 跳登录，
+  // 避免持续 401 与未捕获 rejection 刷屏。未携带 token 的 401 不处理（本就未登录）。
+  if (response.status === 401 && token) {
+    try { localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN); } catch { /* ignore */ }
+    try {
+      if (typeof CustomEvent !== 'undefined' && globalThis.dispatchEvent) {
+        globalThis.dispatchEvent(new CustomEvent('karpathy:auth-expired'));
+      }
+    } catch { /* ignore */ }
+  }
+  return response;
 }
