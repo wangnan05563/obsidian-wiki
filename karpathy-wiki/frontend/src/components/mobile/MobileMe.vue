@@ -8,10 +8,13 @@ import {
   DEFAULT_AI_USER_CONFIG,
   type AiUserConfig,
 } from '../../services/userConfig';
+import { useMobileTheme } from '../../composables/useMobileTheme';
 
 // 移动端「我的」页（SRS FR-ME）：用户资料 + BYOK（AI 服务密钥）配置 + 登出。
 // BYOK 复用 services/userConfig 的 per-user IndexedDB 命名空间（密钥仅存本地，不落服务端）。
 const authStore = useAuthStore();
+// 主题切换（毛玻璃 / 浅白）：与 MobileShell 共享模块级单例，切换即时联动并持久化
+const { theme: mobileTheme, setTheme } = useMobileTheme();
 const userId = computed(() => authStore.user?.id ?? '');
 
 const cfg = ref<AiUserConfig>({ ...DEFAULT_AI_USER_CONFIG });
@@ -64,13 +67,41 @@ async function logout() {
 <template>
   <div class="mme-root">
     <!-- 用户资料卡 -->
-    <section class="mme-profile glass-card">
+    <section class="mme-profile">
       <RobotAvatar :size="56" />
       <div class="mme-profile-info">
         <div class="mme-username">{{ authStore.user?.username }}</div>
         <span class="mme-role" :class="`role-${authStore.user?.role}`">
           {{ roleLabel[authStore.user?.role ?? ''] ?? authStore.user?.role }}
         </span>
+      </div>
+    </section>
+
+    <!-- 外观主题切换：毛玻璃 / 浅白（实时切换，localStorage 持久化）-->
+    <section class="mme-theme">
+      <div class="mme-theme-head">
+        <h2 class="mme-card-title">外观主题</h2>
+        <span class="mme-theme-hint">实时切换 · 下次记住</span>
+      </div>
+      <div class="mme-seg" role="group" aria-label="外观主题切换">
+        <button
+          class="mme-seg-item"
+          :class="{ active: mobileTheme === 'glass' }"
+          type="button"
+          :aria-pressed="mobileTheme === 'glass'"
+          @click="setTheme('glass')"
+        >
+          <span class="mme-seg-ico" aria-hidden="true">◈</span>毛玻璃
+        </button>
+        <button
+          class="mme-seg-item"
+          :class="{ active: mobileTheme === 'light' }"
+          type="button"
+          :aria-pressed="mobileTheme === 'light'"
+          @click="setTheme('light')"
+        >
+          <span class="mme-seg-ico" aria-hidden="true">▢</span>浅白
+        </button>
       </div>
     </section>
 
@@ -126,16 +157,14 @@ async function logout() {
   flex-direction: column;
   gap: 16px;
   font-family: var(--font-body);
+  color: var(--m-text, #111111);
 }
 
-.glass-card,
+.mme-profile,
 .mme-card {
-  background: var(--mg-bg);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: var(--mg-border);
-  border-radius: 16px;
-  box-shadow: var(--mg-highlight), var(--mg-shadow);
+  background: var(--m-surface, #f5f6f8);
+  border: 1px solid var(--m-border, #ececee);
+  border-radius: 12px;
 }
 
 .mme-profile {
@@ -153,10 +182,9 @@ async function logout() {
 }
 
 .mme-username {
-  font-family: var(--font-mono);
   font-size: 17px;
   font-weight: 700;
-  color: var(--text-bright);
+  color: var(--m-text, #111111);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -167,26 +195,23 @@ async function logout() {
   font-size: 11px;
   font-weight: 700;
   padding: 2px 8px;
-  border-radius: 8px;
+  border-radius: 6px;
   letter-spacing: 0.5px;
 }
 
 .mme-role.role-admin {
-  background: var(--accent-magenta-a20, rgba(255, 0, 110, 0.2));
-  color: var(--neon-magenta);
-  border: 1px solid var(--accent-magenta-a30, rgba(255, 0, 110, 0.3));
+  background: rgba(15, 76, 129, 0.1);
+  color: var(--m-primary, #0f4c81);
 }
 
 .mme-role.role-user {
-  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
-  color: var(--neon-cyan);
-  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  background: rgba(15, 76, 129, 0.06);
+  color: var(--m-primary, #0f4c81);
 }
 
 .mme-role.role-guest {
-  background: var(--accent-purple-a10, rgba(176, 38, 255, 0.1));
-  color: var(--text-soft);
-  border: 1px solid var(--accent-purple-a30, rgba(176, 38, 255, 0.3));
+  background: var(--m-border, #ececee);
+  color: var(--m-muted, #777777);
 }
 
 .mme-card {
@@ -196,6 +221,68 @@ async function logout() {
   gap: 12px;
 }
 
+/* 外观主题切换分段控件（毛玻璃 / 浅白）*/
+.mme-theme {
+  padding: 16px;
+  background: var(--m-surface, #f5f6f8);
+  border: 1px solid var(--m-border, #ececee);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mme-theme-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mme-theme-hint {
+  font-size: 11px;
+  color: var(--m-muted, #777777);
+}
+
+.mme-seg {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--m-fill, #eceef1);
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+
+.mme-seg-item {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--m-text-2, #777777);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: var(--m-font);
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.mme-seg-item.active {
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  color: var(--m-primary, #0f4c81);
+  box-shadow: var(--m-highlight-soft, 0 1px 3px rgba(0, 0, 0, 0.12));
+}
+
+.mme-seg-ico {
+  font-size: 14px;
+  line-height: 1;
+}
+
 .mme-card-head {
   display: flex;
   align-items: center;
@@ -203,42 +290,39 @@ async function logout() {
 }
 
 .mme-card-title {
-  font-family: var(--font-display);
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 700;
   margin: 0;
-  color: var(--text-bright);
+  color: var(--m-text, #111111);
 }
 
 .mme-status {
   font-size: 11px;
   font-weight: 700;
   padding: 3px 9px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .mme-status.ok {
-  background: rgba(0, 245, 255, 0.12);
-  color: var(--neon-cyan);
-  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  background: rgba(15, 76, 129, 0.1);
+  color: var(--m-primary, #0f4c81);
 }
 
 .mme-status.warn {
-  background: rgba(255, 170, 0, 0.14);
-  color: #ffb020;
-  border: 1px solid rgba(255, 170, 0, 0.35);
+  background: rgba(249, 171, 0, 0.12);
+  color: #b76e00;
 }
 
 .mme-card-desc {
   font-size: 12px;
   line-height: 1.5;
-  color: var(--text-soft);
+  color: var(--m-muted, #777777);
   margin: 0;
 }
 
 .mme-warn-text {
   font-size: 12px;
-  color: #ffb020;
+  color: #b76e00;
 }
 
 .mme-field {
@@ -250,7 +334,7 @@ async function logout() {
 .mme-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-soft);
+  color: var(--m-muted, #777777);
 }
 
 .mme-input {
@@ -259,27 +343,28 @@ async function logout() {
   min-height: 44px;
   padding: 10px 14px;
   font-size: 15px;
-  color: var(--text-bright);
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid var(--accent-purple-a30);
-  box-shadow: var(--mg-highlight-soft);
+  color: var(--m-text, #111111);
+  background: #ffffff;
+  border: 1px solid var(--m-border, #ececee);
   border-radius: 10px;
   outline: none;
   -webkit-appearance: none;
   appearance: none;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  transition: border-color 0.15s ease;
 }
 
 .mme-input:focus {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 0 2px var(--accent-cyan-a08);
+  border-color: var(--m-primary, #0f4c81);
+}
+
+.mme-input::placeholder {
+  color: #aaaaaa;
 }
 
 select.mme-input {
-  background-image: linear-gradient(45deg, transparent 50%, var(--text-soft) 50%),
-    linear-gradient(135deg, var(--text-soft) 50%, transparent 50%);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--m-muted, #777777) 50%),
+    linear-gradient(135deg, var(--m-muted, #777777) 50%, transparent 50%);
   background-position: calc(100% - 18px) center, calc(100% - 13px) center;
   background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
@@ -287,25 +372,19 @@ select.mme-input {
 
 .mme-save {
   margin-top: 4px;
-  min-height: 48px;
+  min-height: 46px;
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 1px;
-  color: #fff;
-  background: var(--grad-fire);
+  letter-spacing: 0.5px;
+  color: #ffffff;
+  background: var(--m-primary, #0f4c81);
   border: none;
-  border-radius: 12px;
+  border-radius: 10px;
   cursor: pointer;
-  transition: transform 0.2s ease, opacity 0.2s ease;
-  box-shadow: 0 4px 16px var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
-}
-
-.mme-save:hover:not(:disabled) {
-  transform: translateY(-1px);
 }
 
 .mme-save:active:not(:disabled) {
-  transform: scale(0.98);
+  opacity: 0.92;
 }
 
 .mme-save:disabled {
@@ -314,18 +393,17 @@ select.mme-input {
 }
 
 .mme-logout {
-  min-height: 48px;
+  min-height: 46px;
   font-size: 15px;
   font-weight: 600;
-  color: var(--neon-magenta);
-  background: transparent;
-  border: 1px solid var(--accent-pink-a30, rgba(255, 0, 110, 0.3));
-  border-radius: 12px;
+  color: #d93025;
+  background: #ffffff;
+  border: 1px solid var(--m-border, #ececee);
+  border-radius: 10px;
   cursor: pointer;
-  transition: background 0.25s ease;
 }
 
-.mme-logout:hover {
-  background: var(--accent-pink-a10, rgba(255, 0, 110, 0.1));
+.mme-logout:active {
+  background: var(--m-surface, #f5f6f8);
 }
 </style>

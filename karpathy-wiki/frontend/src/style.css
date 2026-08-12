@@ -186,6 +186,37 @@
   --mg-shadow: 0 8px 30px rgba(0, 0, 0, 0.38);          /* 柔和投影 */
   --mg-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.28);     /* 轻投影（卡片）*/
   --mg-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.5);   /* 重投影（弹窗/卡）*/
+
+  /* ============================================================
+   * 移动端「统一主题变量」--m-*：默认 = 毛玻璃（frosted glass）
+   * 浅白商务风由 mobile-light.css 在 .mobile-root.theme-light 下整体覆盖。
+   * 组件只引用 --m-*，切换主题=切换 --m-* 取值，无需改组件逻辑。
+   * ============================================================ */
+  --m-blur: 18px;                 /* 结构面 blur（导航栏/弹窗/播放器）*/
+  --m-blur-strong: 26px;          /* 重磨砂面（登录卡/底部动作面板）*/
+  --m-bg: rgba(20, 8, 42, 0.42);  /* 页面底（透出 aurora 彩光）*/
+  --m-bg-soft: rgba(255, 255, 255, 0.05);
+  --m-surface: rgba(255, 255, 255, 0.07); /* 结构面填充（高光感）*/
+  --m-fill: rgba(255, 255, 255, 0.06);
+  --m-fill-2: rgba(255, 255, 255, 0.1);
+  --m-border: 1px solid rgba(255, 255, 255, 0.12);
+  --m-border-2: 1px solid rgba(255, 255, 255, 0.18);
+  --m-border-subtle: 1px solid rgba(255, 255, 255, 0.08);
+  --m-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --m-highlight-soft: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --m-shadow: 0 8px 30px rgba(0, 0, 0, 0.38);
+  --m-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.28);
+  --m-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --m-text: #f3eaff;
+  --m-text-2: #d9c8ff;
+  --m-text-3: #b9a9d6;
+  --m-muted: #a99cc8;
+  --m-primary: #b026ff;          /* 霓虹紫（毛玻璃主题主色）*/
+  --m-primary-press: #8a1fd1;
+  --m-primary-soft: rgba(176, 38, 255, 0.16);
+  --m-danger: #ff5c8a;
+  --m-font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --m-font-mono: 'SF Mono', 'JetBrains Mono', monospace;
 }
 
 * {

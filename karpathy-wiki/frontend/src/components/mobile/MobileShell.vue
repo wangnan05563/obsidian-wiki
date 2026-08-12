@@ -9,6 +9,7 @@ import MobileQuery from './MobileQuery.vue';
 import MobileBrowse from './MobileBrowse.vue';
 import MobileIngest from './MobileIngest.vue';
 import MobileListen from './MobileListen.vue';
+import { useMobileTheme } from '../../composables/useMobileTheme';
 
 // 移动端外壳：底部 5 Tab 导航 + 登录门 + 内容切换（SRS FR-MOB-NAV）。
 // 完全复用桌面端 stores/services，不引入 vue-router（与项目单 SPA 约定一致）。
@@ -16,6 +17,8 @@ import MobileListen from './MobileListen.vue';
 const authStore = useAuthStore();
 const queryStore = useQueryStore();
 const conversationsStore = useConversationsStore();
+// 主题切换（毛玻璃 / 浅白）：模块级单例，与 MobileMe 切换控件共享
+const { theme } = useMobileTheme();
 
 // 移动端多账户隔离（对齐桌面 Query.vue:136 的 watch）：登录态（账户 id）变化时，
 // 必须先作废上一账户的会话作用域并清空内存问答，否则会跨用户泄漏：
@@ -85,7 +88,9 @@ const icons: Record<TabKey, string> = {
   <!-- 登录门：未登录时全屏登录/注册，登录成功后自动进入 Tab 主界面 -->
   <MobileLogin v-if="!authStore.isLoggedIn" />
 
-  <div v-else class="mobile-root">
+  <div v-else class="mobile-root" :class="{ 'theme-light': theme === 'light' }">
+    <!-- 毛玻璃模糊源层（仅毛玻璃主题显示；浅白主题由 mobile-light.css 隐藏）-->
+    <div class="mg-aurora" aria-hidden="true"></div>
     <!-- 内容区：按激活 Tab 渲染对应移动视图（各页自带浅色顶栏） -->
     <!-- 聆听页用 v-show 常驻挂载：切走 Tab 时组件不卸载，<audio> 继续后台播放、
          队列/进度等本地状态不丢失（播放中切页保持播放状态）。其余 Tab 仍用 v-if。 -->
@@ -125,8 +130,9 @@ const icons: Record<TabKey, string> = {
   height: 100vh;
   height: 100dvh;
   min-height: 100vh;
-  background: var(--m-bg, #ffffff);
-  color: var(--m-text, #111111);
+  /* 毛玻璃主题：透明底，露出 .mg-aurora 光晕层；浅白主题由 --m-* 覆盖为白底 */
+  background: var(--m-bg, transparent);
+  color: var(--m-text, #f3eaff);
   font-family: var(--m-font);
   overflow: hidden;
 }
@@ -138,6 +144,9 @@ const icons: Record<TabKey, string> = {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* 毛玻璃主题：整片内容区磨砂，露出 aurora 彩光；浅白主题 --m-blur:none 自动失效 */
+  backdrop-filter: var(--m-blur);
+  -webkit-backdrop-filter: var(--m-blur);
   /* 预留底部 Tab 栏 + 系统导航安全区 */
   padding-bottom: calc(56px + env(safe-area-inset-bottom, 0));
 }
@@ -147,8 +156,12 @@ const icons: Record<TabKey, string> = {
   display: flex;
   height: 56px;
   padding-bottom: env(safe-area-inset-bottom, 0);
-  background: #ffffff;
-  border-top: 1px solid var(--m-border, #ededed);
+  /* 毛玻璃主题：半透磨砂 + 高光顶边；浅白主题由 --m-* 覆盖为白底 */
+  background: var(--m-surface, #ffffff);
+  border-top: var(--m-border-subtle, 1px solid #ededed);
+  backdrop-filter: var(--m-blur);
+  -webkit-backdrop-filter: var(--m-blur);
+  box-shadow: var(--m-highlight-soft);
   position: fixed;
   left: 0;
   right: 0;
