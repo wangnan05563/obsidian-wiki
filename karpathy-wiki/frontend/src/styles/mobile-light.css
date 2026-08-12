@@ -1,0 +1,418 @@
+/* ============================================================
+ * 移动端浅白极简商务主题（karpathy-wiki mobile）
+ * 设计约束：背景 #ffffff、主文本 #111111、次文本 #777777、
+ * 主色深蓝（仅按钮/高亮）、无渐变、无复杂阴影、无花哨动效、
+ * 无衬线系统字体、B 端研发工具（Trae IDE 移动端）视觉风格。
+ * 本文件仅作用于 .mobile-root.theme-light（移动外壳）子树，桌面端 aurora 主题不受影响。
+ * ============================================================ */
+
+/* ---- 设计令牌：在移动子树根部覆盖 aurora 变量为浅色 ---- */
+.mobile-root.theme-light,
+.mlogin-root.theme-light {
+  /* 调色板 */
+  --m-bg: #ffffff;
+  --m-bg-soft: #f7f8fa;
+  --m-surface: #ffffff;
+  --m-fill: #f4f5f7;          /* 浅灰图标容器 / 次级填充 */
+  --m-fill-2: #eceef1;        /* 按压态填充 */
+  --m-border: #ededed;        /* 分割线 / 浅边框 */
+  --m-border-2: #e2e4e8;      /* 输入框等较强边框 */
+  --m-text: #111111;          /* 主文本 */
+  --m-text-2: #777777;        /* 次要灰 */
+  --m-text-3: #9aa0a6;        /* 三级提示灰 */
+  --m-primary: #1554d1;       /* 深蓝主色 */
+  --m-primary-press: #0f3f9e;
+  --m-primary-soft: rgba(21, 84, 209, 0.08);
+  --m-danger: #d93636;
+  --m-radius: 10px;
+  --m-radius-lg: 14px;
+  --m-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --m-font-mono: 'SF Mono', 'JetBrains Mono', 'Courier New', monospace;
+
+  /* 把 aurora 变量就地覆盖为浅色，作为子组件残留引用的安全网 */
+  --text-base: var(--m-text);
+  --text-bright: var(--m-text);
+  --text-soft: var(--m-text-2);
+  --text-dim: var(--m-text-3);
+  --neon-cyan: var(--m-primary);
+  --neon-magenta: var(--m-primary);
+  --neon-purple: var(--m-primary);
+  --neon-pink: var(--m-primary);
+  --grad-aurora: none;
+  --grad-fire: none;
+  --mg-bg: var(--m-surface);
+  --mg-bg-solid: var(--m-surface);
+  --bg-glass: var(--m-surface);
+  --bg-card-solid: var(--m-surface);
+  --mg-border: 1px solid var(--m-border);
+  --mg-border-subtle: 1px solid var(--m-border);
+  --mg-border-strong: 1px solid var(--m-border-2);
+  --mg-blur: none;
+  --mg-blur-strong: none;
+  --m-blur: none;
+  --m-blur-strong: none;
+  --mg-highlight: none;
+  --mg-highlight-soft: none;
+  --m-highlight: none;
+  --m-highlight-soft: none;
+  --mg-shadow: none;
+  --mg-shadow-soft: none;
+  --mg-shadow-strong: none;
+  --m-shadow: none;
+  --m-shadow-soft: none;
+  --m-shadow-strong: none;
+  --accent-cyan-a08: var(--m-primary-soft);
+  --accent-cyan-a30: var(--m-border-2);
+  --accent-purple-a10: var(--m-primary-soft);
+  --accent-purple-a30: var(--m-border-2);
+  --accent-magenta-a20: var(--m-primary-soft);
+  --accent-pink-a10: var(--m-primary-soft);
+  --accent-pink-a30: var(--m-border-2);
+  --accent-pink-a40: var(--m-border-2);
+  --glow-cyan: none;
+  --font-body: var(--m-font);
+  --font-display: var(--m-font);
+  --font-mono: var(--m-font-mono);
+
+  background: var(--m-bg);
+  color: var(--m-text);
+  font-family: var(--m-font);
+}
+
+/* ---- 共享基础类（仅 .mobile-root.theme-light 内可用） ---- */
+
+/* 卡片 */
+.mobile-root.theme-light .m-card {
+  background: var(--m-surface);
+  border: 1px solid var(--m-border);
+  border-radius: var(--m-radius-lg);
+  padding: 14px;
+}
+
+/* 输入框 / 文本域 / 下拉 */
+.mobile-root.theme-light .m-input,
+.mobile-root.theme-light .m-textarea,
+.mobile-root.theme-light .m-select {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 11px 12px;
+  font-size: 15px;
+  color: var(--m-text);
+  background: #ffffff;
+  border: 1px solid var(--m-border-2);
+  border-radius: var(--m-radius);
+  outline: none;
+  font-family: var(--m-font);
+  -webkit-appearance: none;
+  appearance: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.mobile-root.theme-light .m-textarea { resize: vertical; line-height: 1.6; }
+.mobile-root.theme-light .m-input:focus,
+.mobile-root.theme-light .m-textarea:focus,
+.mobile-root.theme-light .m-select:focus {
+  border-color: var(--m-primary);
+  box-shadow: 0 0 0 2px var(--m-primary-soft);
+}
+.mobile-root.theme-light .m-input::placeholder,
+.mobile-root.theme-light .m-textarea::placeholder { color: var(--m-text-3); }
+.mobile-root.theme-light .m-input:disabled { opacity: 0.6; background: var(--m-bg-soft); }
+
+/* 主按钮（深蓝） */
+.mobile-root.theme-light .m-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--m-primary);
+  border: none;
+  border-radius: var(--m-radius);
+  cursor: pointer;
+  font-family: var(--m-font);
+  transition: background 0.15s ease, transform 0.12s ease;
+}
+.mobile-root.theme-light .m-btn:active:not(:disabled) { background: var(--m-primary-press); transform: scale(0.985); }
+.mobile-root.theme-light .m-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.mobile-root.theme-light .m-btn-block { width: 100%; }
+
+/* 次要按钮（白底描边） */
+.mobile-root.theme-light .m-btn-ghost {
+  background: #ffffff;
+  color: var(--m-text);
+  border: 1px solid var(--m-border-2);
+}
+.mobile-root.theme-light .m-btn-ghost:active:not(:disabled) { background: var(--m-bg-soft); }
+
+/* 危险按钮 */
+.mobile-root.theme-light .m-btn-danger {
+  color: var(--m-danger);
+  background: #ffffff;
+  border: 1px solid rgba(217, 54, 54, 0.35);
+}
+.mobile-root.theme-light .m-btn-danger:active:not(:disabled) { background: rgba(217, 54, 54, 0.08); }
+
+/* 标签 */
+.mobile-root.theme-light .m-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--m-text-2);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--m-fill);
+  white-space: nowrap;
+}
+.mobile-root.theme-light .m-chip-primary {
+  color: #ffffff;
+  background: var(--m-primary);
+}
+.mobile-root.theme-light .m-chip-blue {
+  color: var(--m-primary);
+  background: var(--m-primary-soft);
+}
+
+/* 细分割线 */
+.mobile-root.theme-light .m-divider {
+  height: 1px;
+  background: var(--m-border);
+  border: none;
+  margin: 0;
+}
+
+/* 右下悬浮蓝色加号按钮 */
+.mobile-root.theme-light .m-fab {
+  position: absolute;
+  right: 18px;
+  bottom: 22px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--m-primary);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(21, 84, 209, 0.28);
+  transition: background 0.15s ease, transform 0.12s ease;
+  z-index: 8;
+}
+.mobile-root.theme-light .m-fab:active { background: var(--m-primary-press); transform: scale(0.92); }
+.mobile-root.theme-light .m-fab svg { width: 26px; height: 26px; }
+
+/* 底部弹出面板（白底圆角） */
+.mobile-root.theme-light .m-sheet-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 17, 17, 0.4);
+  display: flex;
+  align-items: flex-end;
+  z-index: 50;
+}
+.mobile-root.theme-light .m-sheet {
+  width: 100%;
+  background: #ffffff;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  padding: 8px 14px calc(14px + env(safe-area-inset-bottom, 0));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mobile-root.theme-light .m-sheet-title {
+  text-align: center;
+  font-size: 13px;
+  color: var(--m-text-2);
+  padding: 6px 0 4px;
+}
+.mobile-root.theme-light .m-sheet-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 50px;
+  border: none;
+  border-radius: 12px;
+  background: var(--m-fill);
+  color: var(--m-text);
+  font-size: 15px;
+  cursor: pointer;
+  font-family: var(--m-font);
+}
+.mobile-root.theme-light .m-sheet-item:active { background: var(--m-fill-2); }
+.mobile-root.theme-light .m-sheet-item.active { background: var(--m-primary-soft); color: var(--m-primary); font-weight: 600; }
+.mobile-root.theme-light .m-sheet-item.danger { color: var(--m-danger); }
+.mobile-root.theme-light .m-sheet-item.cancel { color: var(--m-text-2); background: transparent; }
+.mobile-root.theme-light .m-sheet-sub { font-size: 11px; color: var(--m-text-3); }
+
+/* 顶部安全区 padding 工具 */
+.mobile-root.theme-light .m-safe-top { padding-top: env(safe-area-inset-top, 0); }
+
+/* ---- 浅色 Markdown（移动端聊天/详情内渲染） ---- */
+.mobile-root.theme-light .markdown-body {
+  color: var(--m-text);
+  font-family: var(--m-font);
+  font-size: 15px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+.mobile-root.theme-light .markdown-body h1,
+.mobile-root.theme-light .markdown-body h2,
+.mobile-root.theme-light .markdown-body h3,
+.mobile-root.theme-light .markdown-body h4,
+.mobile-root.theme-light .markdown-body h5,
+.mobile-root.theme-light .markdown-body h6 {
+  color: var(--m-text);
+  line-height: 1.4;
+  margin: 0.8em 0 0.4em;
+}
+.mobile-root.theme-light .markdown-body p { margin: 0.5em 0; }
+.mobile-root.theme-light .markdown-body a { color: var(--m-primary); text-decoration: none; }
+.mobile-root.theme-light .markdown-body ul,
+.mobile-root.theme-light .markdown-body ol { padding-left: 1.4em; margin: 0.5em 0; }
+.mobile-root.theme-light .markdown-body li { margin: 0.25em 0; }
+.mobile-root.theme-light .markdown-body code {
+  font-family: var(--m-font-mono);
+  font-size: 13px;
+  background: var(--m-fill);
+  color: #1a2b4a;
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.mobile-root.theme-light .markdown-body pre {
+  background: var(--m-fill);
+  border: 1px solid var(--m-border);
+  border-radius: 10px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+.mobile-root.theme-light .markdown-body pre code {
+  background: transparent;
+  color: var(--m-text);
+  padding: 0;
+  font-size: 13px;
+}
+.mobile-root.theme-light .markdown-body blockquote {
+  border-left: 3px solid var(--m-border-2);
+  color: var(--m-text-2);
+  margin: 0.6em 0;
+  padding: 2px 12px;
+}
+.mobile-root.theme-light .markdown-body table { border-collapse: collapse; margin: 0.6em 0; width: 100%; }
+.mobile-root.theme-light .markdown-body th,
+.mobile-root.theme-light .markdown-body td { border: 1px solid var(--m-border); padding: 6px 10px; }
+.mobile-root.theme-light .markdown-body hr { border: none; border-top: 1px solid var(--m-border); margin: 1em 0; }
+.mobile-root.theme-light .markdown-body img { max-width: 100%; border-radius: 8px; }
+
+/* ---- MarkdownRenderer 组件（.md-body）的移动端浅色覆盖 ----
+   MarkdownRenderer.vue 内部用 .md-body 而非 .markdown-body，需单独覆盖，
+   确保在 MobileBrowse 详情页、MobileQuery 聊天气泡等处正文颜色足够深。 */
+.mobile-root.theme-light .md-body {
+  color: var(--m-text);
+  font-family: var(--m-font);
+  font-size: 15px;
+  line-height: 1.75;
+  word-break: break-word;
+}
+.mobile-root.theme-light .md-body :deep(h1),
+.mobile-root.theme-light .md-body :deep(h2),
+.mobile-root.theme-light .md-body :deep(h3),
+.mobile-root.theme-light .md-body :deep(h4),
+.mobile-root.theme-light .md-body :deep(h5),
+.mobile-root.theme-light .md-body :deep(h6) {
+  color: var(--m-text);
+  font-weight: 700;
+  line-height: 1.4;
+  margin: 0.9em 0 0.5em;
+}
+.mobile-root.theme-light .md-body :deep(h1) { font-size: 1.35em; }
+.mobile-root.theme-light .md-body :deep(h2) { font-size: 1.22em; }
+.mobile-root.theme-light .md-body :deep(h3) { font-size: 1.12em; }
+.mobile-root.theme-light .md-body :deep(h4),
+.mobile-root.theme-light .md-body :deep(h5),
+.mobile-root.theme-light .md-body :deep(h6) { font-size: 1em; }
+.mobile-root.theme-light .md-body :deep(p) { margin: 0.55em 0; }
+.mobile-root.theme-light .md-body :deep(a) {
+  color: var(--m-primary);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(21, 84, 209, 0.35);
+}
+.mobile-root.theme-light .md-body :deep(a:hover) { color: var(--m-primary-press); border-bottom-color: var(--m-primary-press); }
+.mobile-root.theme-light .md-body :deep(ul),
+.mobile-root.theme-light .md-body :deep(ol) { padding-left: 1.5em; margin: 0.5em 0; }
+.mobile-root.theme-light .md-body :deep(li) { margin: 0.28em 0; }
+.mobile-root.theme-light .md-body :deep(strong) { color: var(--m-text); font-weight: 700; }
+.mobile-root.theme-light .md-body :deep(em) { color: var(--m-text-2); font-style: italic; }
+.mobile-root.theme-light .md-body :deep(del) { color: var(--m-text-3); }
+.mobile-root.theme-light .md-body :deep(code) {
+  font-family: var(--m-font-mono);
+  font-size: 0.9em;
+  background: var(--m-fill);
+  color: #1a2b4a;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px solid var(--m-border);
+  word-break: break-all;
+}
+.mobile-root.theme-light .md-body :deep(pre) {
+  background: var(--m-fill);
+  border: 1px solid var(--m-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.7em 0;
+}
+.mobile-root.theme-light .md-body :deep(pre code) {
+  background: transparent;
+  color: var(--m-text);
+  padding: 0;
+  border: 0;
+  font-size: 0.92em;
+  line-height: 1.6;
+  word-break: normal;
+}
+.mobile-root.theme-light .md-body :deep(blockquote) {
+  border-left: 3px solid var(--m-border-2);
+  background: var(--m-fill);
+  color: var(--m-text-2);
+  margin: 0.7em 0;
+  padding: 8px 14px;
+  border-radius: 0 10px 10px 0;
+}
+.mobile-root.theme-light .md-body :deep(blockquote p) { margin: 0.3em 0; }
+.mobile-root.theme-light .md-body :deep(table) {
+  border-collapse: collapse;
+  margin: 0.7em 0;
+  width: 100%;
+  font-size: 0.94em;
+  border: 1px solid var(--m-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mobile-root.theme-light .md-body :deep(th),
+.mobile-root.theme-light .md-body :deep(td) {
+  border: 1px solid var(--m-border);
+  padding: 8px 12px;
+  text-align: left;
+}
+.mobile-root.theme-light .md-body :deep(th) {
+  background: var(--m-fill);
+  font-weight: 700;
+  color: var(--m-text);
+}
+.mobile-root.theme-light .md-body :deep(tr:nth-child(2n) td) { background: rgba(244, 245, 247, 0.5); }
+.mobile-root.theme-light .md-body :deep(hr) { border: 0; border-top: 1px solid var(--m-border); margin: 1em 0; }
+.mobile-root.theme-light .md-body :deep(img) { max-width: 100%; border-radius: 8px; cursor: zoom-in; }
+
+/* 浅白主题：隐藏毛玻璃模糊源光晕层（.mg-aurora 仅毛玻璃主题显示）*/
+.mobile-root.theme-light .mg-aurora { display: none; }
