@@ -226,7 +226,6 @@ async function synthAndPlay(item: QueueItem) {
   errorMsg.value = '';
   position.value = 0; // S1：切换曲目时重置进度，避免沿用上一条的进度显示
   duration.value = 0;
-  // 阶段一：请求合成并准备好 <audio> 源（失败即「合成失败」）
   let synthOk = false;
   try {
     const useVoice = item.voice || voice; // 支持每曲目独立朗读者（演唱者）
@@ -252,7 +251,6 @@ async function synthAndPlay(item: QueueItem) {
     loading.value = false;
   }
   if (!synthOk) return;
-  // 阶段二：触发播放（失败多为自动播放策略拦截，文案需与合成失败区分）
   try {
     await a.play();
     isPlaying.value = true;
@@ -422,7 +420,6 @@ function locateCurrent() {
 }
 
 // 快速定位：滚动内容列表至最上/最下（与 locateCurrent 解耦，仅滚动外壳滚动容器）。
-// 向上查找首个 overflow-y:auto/scroll 的祖先（即 MobileShell 的 .mobile-content）。
 function findScrollContainer(): HTMLElement | null {
   let el = rootRef.value?.parentElement ?? null;
   while (el) {
@@ -461,7 +458,6 @@ function teardownScrollWatch() {
   window.removeEventListener('resize', updateScrollable);
 }
 
-
 // 切回聆听页（visible 由 false→true）时自动定位到当前播放条目
 watch(
   () => props.visible,
@@ -471,7 +467,6 @@ watch(
 );
 
 // 账户切换（含登录/登出）：重置聆听 transient 状态并加载当前账户默认音色，
-// 对齐 MobileShell「切换账户须重置会话作用域状态」约定，避免上一账户音色/队列残留。
 watch(
   () => authStore.user?.id,
   async (newId, oldId) => {
@@ -527,13 +522,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ml-root" ref="rootRef">
-    <!-- 正文预览 + 可朗读内容列表：仅聆听 Tab 激活（visible）时渲染重型 DOM，
-         降低 v-show 常驻导致的 1000+ 页面节点常驻内存/重排成本；
-         切走时仅保留 <audio> 与响应式状态以支持后台播放。 -->
+    <!-- 正文预览 + 可朗读内容列表：仅聆听 Tab 激活（visible）时渲染重型 DOM -->
     <template v-if="visible">
       <!-- 正文预览视图（点击标题进入，仅查看文字） -->
       <section v-if="previewPath" class="ml-preview">
-        <div class="ml-preview-head">
+        <div class="ml-preview-head m-safe-top">
           <button class="ml-back" @click="closePreview">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
             返回
@@ -553,8 +546,8 @@ onBeforeUnmount(() => {
 
       <!-- 可朗读内容列表（预览以外的浏览态） -->
       <template v-else>
-      <!-- 搜索栏：与播放状态完全解耦，仅检索知识库内容，不打断当前朗读 -->
-      <div class="ml-search">
+      <!-- 搜索栏：与播放状态完全解耦 -->
+      <div class="ml-search m-safe-top">
         <svg class="ml-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="11" cy="11" r="7" />
           <path d="M21 21l-4.3-4.3" />
@@ -570,7 +563,7 @@ onBeforeUnmount(() => {
         <button v-if="searchQuery" class="ml-search-clear" @click="clearSearch">取消</button>
       </div>
 
-      <!-- 搜索结果（有搜索词时显示；不影响 queue/currentIndex/audio） -->
+      <!-- 搜索结果 -->
       <section v-if="searchQuery.trim()" class="ml-section">
         <h3 class="ml-h3">搜索结果（{{ searchHits.length }}）</h3>
         <div v-if="searching" class="ml-hint">搜索中…</div>
@@ -617,7 +610,7 @@ onBeforeUnmount(() => {
       </template>
     </template>
 
-    <!-- 播放列表（完整增删改查模块，轻量，保持在 v-show 容器内随时可访问） -->
+    <!-- 播放列表 -->
     <section v-if="queue.length" class="ml-section">
       <h3 class="ml-h3">
         <span>播放列表（{{ queue.length }}）</span>
@@ -637,7 +630,6 @@ onBeforeUnmount(() => {
         :class="{ active: i === currentIndex, playing: i === currentIndex && isPlaying }"
         :data-q-active="i === currentIndex ? 'true' : 'false'"
       >
-        <!-- 主区：排序序号 + 播放指示 + 曲目名称/演唱者/时长；点击播放 -->
         <div class="ml-q-main" @click="startAt(i)">
           <span class="ml-q-order">{{ i + 1 }}</span>
           <span class="ml-q-icon">{{ i === currentIndex && isPlaying ? '🔊' : '🔈' }}</span>
@@ -650,7 +642,6 @@ onBeforeUnmount(() => {
             </span>
           </div>
         </div>
-        <!-- 工具区：朗读者(属性) / 上移 / 下移 / 移除 -->
         <div class="ml-q-tools">
           <select
             class="ml-voice"
@@ -659,7 +650,6 @@ onBeforeUnmount(() => {
             @change="onVoiceChange($event, i)"
           >
             <option v-for="v in voices" :key="v.shortName" :value="v.shortName">{{ v.name }}</option>
-            <!-- S3：音色列表为空（加载失败/网络异常）时仍展示当前朗读者，避免下拉无选项 -->
             <option v-if="voices.length === 0" :value="q.voice || voice">{{ voiceName(q.voice) }}</option>
           </select>
           <button class="ml-q-btn" type="button" :disabled="i === 0" title="上移" @click.stop="moveQueueItem(i, i - 1)"><Top /></button>
@@ -701,17 +691,17 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 快速定位当前播放文章：长列表浏览时一键回到正在播放的条目（Element Plus 开源图标 Aim） -->
+    <!-- 快速定位当前播放文章 -->
     <button
       v-if="!previewPath && currentItem"
-      class="ml-locate-fab pulse"
+      class="ml-locate-fab"
       :title="`定位当前播放：${currentItem.title}`"
       @click="locateCurrent"
     >
       <Aim />
     </button>
 
-    <!-- 快速定位：悬浮常驻，顶部→滚到内容最上方，底部→滚到内容最下方（播放器可见时隐藏底部，避免冲突） -->
+    <!-- 快速定位：悬浮常驻 -->
     <button v-if="listScrollable" class="ml-scroll-fab ml-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6" /></svg>
     </button>
@@ -742,11 +732,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .ml-root {
-  padding: 14px 14px 16px;
-  font-family: var(--font-body);
+  padding: 0 14px 16px;
+  font-family: var(--m-font);
   display: flex;
   flex-direction: column;
   gap: 16px;
+  background: var(--m-bg, #ffffff);
 }
 .ml-section {
   display: flex;
@@ -759,12 +750,12 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   font-size: 13px;
   font-weight: 700;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
   margin: 0;
   letter-spacing: 0.5px;
 }
 .ml-hint {
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
   font-size: 13px;
   padding: 12px 0;
 }
@@ -777,16 +768,14 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 0;
-  background: rgba(5, 0, 16, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--accent-purple-a30);
+  padding: 10px 0 calc(10px + env(safe-area-inset-top, 0));
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-border, #ededed);
 }
 .ml-search-icon {
   width: 18px;
   height: 18px;
-  color: var(--text-soft);
+  color: var(--m-text-3, #9aa0a6);
   flex-shrink: 0;
 }
 .ml-search-input {
@@ -795,30 +784,24 @@ onBeforeUnmount(() => {
   height: 38px;
   padding: 0 12px;
   border-radius: 10px;
-  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text-bright);
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: var(--m-bg-soft, #f7f8fa);
+  color: var(--m-text, #111111);
   font-size: 14px;
-  font-family: var(--font-body);
+  font-family: var(--m-font);
   outline: none;
 }
-.ml-search-input::placeholder {
-  color: var(--text-soft);
-}
-.ml-search-input:focus {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 0 2px rgba(0, 245, 255, 0.15);
-}
+.ml-search-input::placeholder { color: var(--m-text-3, #9aa0a6); }
+.ml-search-input:focus { border-color: var(--m-primary, #1554d1); }
 .ml-search-clear {
   flex-shrink: 0;
   border: none;
   background: transparent;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #1554d1);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
-/* 搜索结果条目：标题 + 摘要，保留「播放中」标记与加号/播放操作 */
 .ml-page-main {
   display: flex;
   flex-direction: column;
@@ -830,7 +813,7 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -841,18 +824,16 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border: 1px solid var(--accent-purple-a30);
-  background: var(--bg-glass, rgba(20, 8, 40, 0.55));
+  border: 1px solid var(--m-border, #ededed);
+  background: #ffffff;
   border-radius: 12px;
   padding: 11px 12px;
   cursor: pointer;
   text-align: left;
-  font-family: var(--font-body);
-  color: var(--text-bright);
+  font-family: var(--m-font);
+  color: var(--m-text, #111111);
 }
-.ml-page:active {
-  border-color: var(--neon-cyan);
-}
+.ml-page:active { border-color: var(--m-primary, #1554d1); }
 .ml-page-title {
   font-size: 14px;
   font-weight: 600;
@@ -868,36 +849,37 @@ onBeforeUnmount(() => {
 .ml-mini {
   font-size: 12px;
   font-weight: 700;
-  color: var(--neon-cyan);
-  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  color: var(--m-primary, #1554d1);
+  border: 1px solid rgba(21, 84, 209, 0.2);
   border-radius: 8px;
   padding: 3px 8px;
-  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  cursor: pointer;
 }
 .ml-mini.play {
-  color: #04121a;
-  background: var(--neon-cyan);
-  border-color: var(--neon-cyan);
+  color: #ffffff;
+  background: var(--m-primary, #1554d1);
+  border-color: var(--m-primary, #1554d1);
 }
 .ml-mini.in-queue {
-  color: var(--neon-magenta, #ff3ea5);
-  border-color: rgba(255, 62, 165, 0.3);
-  background: rgba(255, 62, 165, 0.08);
+  color: var(--m-text-2, #777777);
+  border-color: var(--m-border-2, #e2e4e8);
+  background: var(--m-fill, #f4f5f7);
 }
 .ml-qitem {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid transparent;
-  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--m-border, #ededed);
+  background: #ffffff;
   border-radius: 10px;
   padding: 9px 11px;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
 }
 .ml-qitem.active {
-  border-color: var(--neon-cyan);
-  background: rgba(0, 245, 255, 0.08);
-  color: var(--text-bright);
+  border-color: var(--m-primary, #1554d1);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.06));
+  color: var(--m-text, #111111);
 }
 .ml-q-main {
   display: flex;
@@ -916,17 +898,14 @@ onBeforeUnmount(() => {
   justify-content: center;
   font-size: 11px;
   font-weight: 700;
-  color: var(--text-soft);
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--m-text-2, #777777);
+  background: var(--m-fill, #f4f5f7);
 }
 .ml-qitem.active .ml-q-order {
-  color: #04121a;
-  background: var(--neon-cyan);
+  color: #ffffff;
+  background: var(--m-primary, #1554d1);
 }
-.ml-q-icon {
-  font-size: 15px;
-  flex-shrink: 0;
-}
+.ml-q-icon { font-size: 15px; flex-shrink: 0; }
 .ml-q-text {
   flex: 1;
   min-width: 0;
@@ -946,22 +925,20 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ml-q-artist {
   font-weight: 600;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #1554d1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 60%;
 }
-.ml-q-dot {
-  opacity: 0.6;
-}
+.ml-q-dot { opacity: 0.6; }
 .ml-q-tools {
   display: flex;
   align-items: center;
@@ -972,46 +949,32 @@ onBeforeUnmount(() => {
   min-width: 0;
   height: 30px;
   border-radius: 8px;
-  border: 1px solid var(--accent-purple-a30);
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text-bright);
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: #ffffff;
+  color: var(--m-text, #111111);
   font-size: 12px;
-  font-family: var(--font-body);
+  font-family: var(--m-font);
   padding: 0 6px;
   outline: none;
 }
-.ml-voice:focus {
-  border-color: var(--neon-cyan);
-}
+.ml-voice:focus { border-color: var(--m-primary, #1554d1); }
 .ml-q-btn {
   flex-shrink: 0;
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  border: 1px solid var(--accent-purple-a30);
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text-bright);
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: #ffffff;
+  color: var(--m-text-2, #777777);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
 }
-.ml-q-btn:active {
-  transform: scale(0.92);
-}
-.ml-q-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-.ml-q-btn.del:hover {
-  color: #ff6b8a;
-  border-color: rgba(255, 107, 138, 0.4);
-}
-.ml-q-btn svg {
-  width: 16px;
-  height: 16px;
-}
-/* 播放列表头：标题 + 添加/刷新操作 */
+.ml-q-btn:active { background: var(--m-fill, #f4f5f7); }
+.ml-q-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.ml-q-btn.del:hover { color: var(--m-danger, #d93636); border-color: rgba(217, 54, 54, 0.4); }
+.ml-q-btn svg { width: 16px; height: 16px; }
 .ml-pl-actions {
   display: flex;
   align-items: center;
@@ -1022,23 +985,17 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
-  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
-  color: var(--neon-cyan);
+  border: 1px solid rgba(21, 84, 209, 0.2);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  color: var(--m-primary, #1554d1);
   border-radius: 8px;
   padding: 3px 8px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
 }
-.ml-pl-btn svg {
-  width: 15px;
-  height: 15px;
-}
-.ml-pl-btn:active {
-  transform: scale(0.95);
-}
-/* 操作状态反馈 toast */
+.ml-pl-btn svg { width: 15px; height: 15px; }
+.ml-pl-btn:active { background: rgba(21, 84, 209, 0.14); }
 .ml-toast {
   position: fixed;
   left: 50%;
@@ -1048,33 +1005,19 @@ onBeforeUnmount(() => {
   max-width: 80vw;
   padding: 9px 16px;
   border-radius: 999px;
-  background: rgba(5, 0, 16, 0.92);
-  border: 1px solid var(--neon-cyan);
-  color: var(--text-bright);
+  background: #ffffff;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  color: var(--m-text, #111111);
   font-size: 13px;
   font-weight: 600;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
   white-space: nowrap;
 }
 .ml-toast-enter-active,
-.ml-toast-leave-active {
-  transition: opacity 0.25s ease, transform 0.25s ease;
-}
+.ml-toast-leave-active { transition: opacity 0.25s ease, transform 0.25s ease; }
 .ml-toast-enter-from,
-.ml-toast-leave-to {
-  opacity: 0;
-  transform: translate(-50%, 8px);
-}
-.ml-error {
-  color: #ffb4c4;
-  font-size: 12px;
-  margin: 0;
-}
-.ml-warn {
-  color: #ffd27a;
-  font-size: 12px;
-  margin: 0;
-}
+.ml-toast-leave-to { opacity: 0; transform: translate(-50%, 8px); }
+.ml-error { color: var(--m-danger, #d93636); font-size: 12px; margin: 0; }
+.ml-warn { color: #b8791f; font-size: 12px; margin: 0; }
 
 /* 预览视图（阅读型） */
 .ml-preview {
@@ -1090,7 +1033,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 0 8px;
-  background: var(--bg-void);
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-border, #ededed);
 }
 .ml-back {
   display: inline-flex;
@@ -1098,31 +1042,27 @@ onBeforeUnmount(() => {
   gap: 2px;
   border: none;
   background: transparent;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #1554d1);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   flex-shrink: 0;
 }
-.ml-back svg {
-  width: 18px;
-  height: 18px;
-}
+.ml-back svg { width: 18px; height: 18px; }
 .ml-preview-path {
   font-size: 11px;
-  color: var(--text-soft);
-  font-family: var(--font-mono, monospace);
+  color: var(--m-text-2, #777777);
+  font-family: var(--m-font-mono, monospace);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ml-preview-title {
-  font-family: var(--font-display);
   font-size: 19px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.4;
   margin: 4px 0 10px;
-  color: var(--text-bright);
+  color: var(--m-text, #111111);
 }
 .ml-preview-actions {
   display: flex;
@@ -1137,21 +1077,19 @@ onBeforeUnmount(() => {
   z-index: 4;
   margin: 4px -14px -16px;
   padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0));
-  background: rgba(5, 0, 16, 0.95);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-top: 1px solid var(--accent-purple-a30);
+  background: #ffffff;
+  border-top: 1px solid var(--m-border, #ededed);
 }
 .ml-progress {
   height: 6px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--m-fill, #f4f5f7);
   overflow: hidden;
   margin-bottom: 10px;
 }
 .ml-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--neon-cyan), #8338ec);
+  background: var(--m-primary, #1554d1);
 }
 .ml-player-row {
   display: flex;
@@ -1159,22 +1097,19 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 10px;
 }
-.ml-now {
-  min-width: 0;
-  flex: 1;
-}
+.ml-now { min-width: 0; flex: 1; }
 .ml-now-title {
   font-size: 14px;
   font-weight: 700;
-  color: var(--text-bright);
+  color: var(--m-text, #111111);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ml-now-time {
   font-size: 11px;
-  color: var(--text-soft);
-  font-family: var(--font-mono, monospace);
+  color: var(--m-text-2, #777777);
+  font-family: var(--m-font-mono, monospace);
 }
 .ml-ctrls {
   display: flex;
@@ -1186,26 +1121,22 @@ onBeforeUnmount(() => {
   width: 38px;
   height: 38px;
   border-radius: 50%;
-  border: 1px solid var(--accent-purple-a30);
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text-bright);
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: #ffffff;
+  color: var(--m-text, #111111);
   font-size: 15px;
   cursor: pointer;
 }
-.ml-btn:active {
-  transform: scale(0.92);
-}
+.ml-btn:active { background: var(--m-fill, #f4f5f7); }
 .ml-btn.ml-play {
   width: 46px;
   height: 46px;
   font-size: 18px;
-  background: var(--grad-aurora, linear-gradient(135deg, #00f5ff, #8338ec));
-  color: #04121a;
+  background: var(--m-primary, #1554d1);
+  color: #ffffff;
   border: none;
 }
-.ml-btn:disabled {
-  opacity: 0.5;
-}
+.ml-btn:disabled { opacity: 0.5; }
 .ml-speeds {
   display: flex;
   gap: 6px;
@@ -1215,36 +1146,36 @@ onBeforeUnmount(() => {
 .ml-speed {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-soft);
-  border: 1px solid var(--accent-purple-a30);
+  color: var(--m-text-2, #777777);
+  border: 1px solid var(--m-border-2, #e2e4e8);
   background: transparent;
   border-radius: 8px;
   padding: 3px 10px;
   cursor: pointer;
 }
 .ml-speed.on {
-  color: var(--neon-cyan);
-  border-color: var(--neon-cyan);
-  background: rgba(0, 245, 255, 0.1);
+  color: var(--m-primary, #1554d1);
+  border-color: var(--m-primary, #1554d1);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
 }
 
-/* 当前播放条目高亮（长列表快速识别） */
+/* 当前播放条目高亮 */
 .ml-page.playing {
-  border-color: var(--neon-cyan);
-  background: rgba(0, 245, 255, 0.08);
+  border-color: var(--m-primary, #1554d1);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.06));
 }
 .ml-page-tag {
   align-self: center;
   flex-shrink: 0;
   font-size: 10px;
   font-weight: 700;
-  color: #04121a;
-  background: var(--neon-cyan);
+  color: #ffffff;
+  background: var(--m-primary, #1554d1);
   border-radius: 6px;
   padding: 1px 6px;
 }
 
-/* 快速定位当前播放 FAB：右上悬浮，使用 Element Plus 开源图标库 Aim（currentColor 主题感知） */
+/* 快速定位 FAB */
 .ml-locate-fab {
   position: fixed;
   top: calc(52px + env(safe-area-inset-top, 0) + 12px);
@@ -1257,27 +1188,14 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--grad-aurora, linear-gradient(135deg, #00f5ff, #8338ec));
-  color: #04121a;
-  box-shadow: 0 6px 18px rgba(0, 245, 255, 0.35);
+  background: var(--m-primary, #1554d1);
+  color: #ffffff;
   cursor: pointer;
 }
-.ml-locate-fab:active {
-  transform: scale(0.92);
-}
-.ml-locate-fab svg {
-  width: 24px;
-  height: 24px;
-}
-.ml-locate-fab.pulse {
-  animation: ml-locate-pulse 2s ease-in-out infinite;
-}
-@keyframes ml-locate-pulse {
-  0%, 100% { box-shadow: 0 6px 18px rgba(0, 245, 255, 0.35); }
-  50% { box-shadow: 0 6px 26px rgba(0, 245, 255, 0.7); }
-}
+.ml-locate-fab:active { transform: scale(0.92); }
+.ml-locate-fab svg { width: 24px; height: 24px; }
 
-/* 快速定位 FAB：常驻悬浮，半透明不挡阅读；左缘上下分布，避开顶部搜索栏与底部 Tab/播放器 */
+/* 快速定位 FAB */
 .ml-scroll-fab {
   position: fixed;
   left: 12px;
@@ -1288,25 +1206,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(5, 0, 16, 0.82);
-  border: 1px solid var(--neon-cyan, #00f5ff);
-  color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: #ffffff;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  color: var(--m-text-2, #777777);
   cursor: pointer;
 }
-.ml-scroll-fab:active {
-  transform: scale(0.92);
-}
-.ml-scroll-top {
-  top: calc(52px + env(safe-area-inset-top, 0) + 10px);
-}
-.ml-scroll-bottom {
-  bottom: calc(56px + env(safe-area-inset-bottom, 0) + 14px);
-}
-.ml-scroll-fab svg {
-  width: 20px;
-  height: 20px;
-}
+.ml-scroll-fab:active { background: var(--m-fill, #f4f5f7); }
+.ml-scroll-top { top: calc(52px + env(safe-area-inset-top, 0) + 10px); }
+.ml-scroll-bottom { bottom: calc(56px + env(safe-area-inset-bottom, 0) + 14px); }
+.ml-scroll-fab svg { width: 20px; height: 20px; }
 </style>

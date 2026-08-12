@@ -169,6 +169,23 @@
   --accent-cyan-a70: rgba(0, 245, 255, 0.7);
   --accent-pink-a70: rgba(255, 0, 110, 0.7);
   --accent-magenta-a70: rgba(255, 62, 201, 0.7);
+
+  /* ============================================================
+   * 移动端毛玻璃（glassmorphism）设计 token
+   * 统一半透明磨砂面、边框高光与柔和阴影，供各移动组件复用，确保风格一致。
+   * ============================================================ */
+  --mg-blur: 18px;            /* 导航栏 / 弹窗 / 播放器 等结构面 blur */
+  --mg-blur-strong: 26px;     /* 登录卡 / 底部动作面板 等重磨砂面 */
+  --mg-bg: rgba(20, 8, 42, 0.42);     /* 卡片磨砂底（透出 aurora 彩光）*/
+  --mg-bg-soft: rgba(255, 255, 255, 0.05); /* 极淡表面（叠加在深色上）*/
+  --mg-surface: rgba(255, 255, 255, 0.07); /* 结构面填充（更亮的高光感）*/
+  --mg-border: 1px solid rgba(255, 255, 255, 0.12);   /* 主描边 */
+  --mg-border-subtle: 1px solid rgba(255, 255, 255, 0.08); /* 次级描边 */
+  --mg-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16); /* 顶部高光（玻璃质感关键）*/
+  --mg-highlight-soft: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --mg-shadow: 0 8px 30px rgba(0, 0, 0, 0.38);          /* 柔和投影 */
+  --mg-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.28);     /* 轻投影（卡片）*/
+  --mg-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.5);   /* 重投影（弹窗/卡）*/
 }
 
 * {
@@ -768,5 +785,44 @@ body {
 
 .markdown-body em {
   color: var(--neon-cyan);
+}
+
+/* ============================================================
+ * 移动端毛玻璃（glassmorphism）通用层与工具类
+ * 仅作用于移动端：模糊源背景层 + 磨砂面 / 弹窗面。各组件 scoped 样式复用同一 token 体系。
+ * ============================================================ */
+
+/* 模糊源：固定满屏的彩色光晕层，作为所有 backdrop-filter 的模糊对象（关键缺失件）。
+   置于内容之下，内容滚动时它保持静止，形成通透的磨砂视差。 */
+.mg-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 45% at 16% 12%, rgba(176, 38, 255, 0.50), transparent 60%),
+    radial-gradient(55% 45% at 84% 20%, rgba(0, 245, 255, 0.42), transparent 62%),
+    radial-gradient(60% 50% at 72% 82%, rgba(255, 0, 110, 0.38), transparent 64%),
+    radial-gradient(55% 45% at 24% 86%, rgba(131, 56, 236, 0.46), transparent 62%),
+    var(--bg-deep, #0a0118);
+  background-attachment: fixed;
+}
+
+/* 磨砂结构面：导航栏 / 搜索栏 / 播放器 / 卡片容器 —— 半透明 + 背景模糊 + 顶部高光 + 柔和阴影 */
+.mg-surface {
+  background: var(--mg-surface);
+  backdrop-filter: var(--mg-blur);
+  -webkit-backdrop-filter: var(--mg-blur);
+  border: var(--mg-border);
+  box-shadow: var(--mg-highlight), var(--mg-shadow-soft);
+}
+
+/* 重磨砂面：登录卡 / 底部动作面板 / 弹窗 —— 更强模糊与投影 */
+.mg-modal {
+  background: rgba(18, 8, 36, 0.62);
+  backdrop-filter: var(--mg-blur-strong);
+  -webkit-backdrop-filter: var(--mg-blur-strong);
+  border: var(--mg-border);
+  box-shadow: var(--mg-highlight), var(--mg-shadow-strong);
 }
 
