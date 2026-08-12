@@ -437,10 +437,21 @@ function scrollListTo(where: 'top' | 'bottom') {
 
 // 是否可滚动：仅当内容超出视口高度时才显示悬浮定位图标，避免无滚动时多余控件
 const listScrollable = ref(false);
+// 定位图标显隐：仅在下拉滚动时显示，停止滚动 ~1.5s 后自动淡出
+const isScrolling = ref(false);
 let scrollObserver: ResizeObserver | null = null;
+let scrollEl: HTMLElement | null = null;
+let scrollHideTimer: number | null = null;
 function updateScrollable() {
   const sc = findScrollContainer();
   listScrollable.value = !!sc && sc.scrollHeight - sc.clientHeight > 4;
+}
+function onListScroll() {
+  isScrolling.value = true;
+  if (scrollHideTimer) window.clearTimeout(scrollHideTimer);
+  scrollHideTimer = window.setTimeout(() => {
+    isScrolling.value = false;
+  }, 1500);
 }
 function setupScrollWatch() {
   updateScrollable();
@@ -451,11 +462,26 @@ function setupScrollWatch() {
     scrollObserver.observe(root);
   }
   window.addEventListener('resize', updateScrollable);
+  // 在滚动容器上挂 scroll 监听，驱动定位图标显隐
+  const sc = findScrollContainer();
+  if (sc) {
+    scrollEl = sc;
+    sc.addEventListener('scroll', onListScroll, { passive: true });
+  }
 }
 function teardownScrollWatch() {
   if (scrollObserver) scrollObserver.disconnect();
   scrollObserver = null;
   window.removeEventListener('resize', updateScrollable);
+  if (scrollEl) {
+    scrollEl.removeEventListener('scroll', onListScroll);
+    scrollEl = null;
+  }
+  if (scrollHideTimer) {
+    window.clearTimeout(scrollHideTimer);
+    scrollHideTimer = null;
+  }
+  isScrolling.value = false;
 }
 
 // 切回聆听页（visible 由 false→true）时自动定位到当前播放条目
@@ -702,12 +728,13 @@ onBeforeUnmount(() => {
     </button>
 
     <!-- 快速定位：悬浮常驻 -->
-    <button v-if="listScrollable" class="ml-scroll-fab ml-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
+    <button v-if="listScrollable" class="ml-scroll-fab ml-scroll-top" :class="{ 'is-scrolling': isScrolling }" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6" /></svg>
     </button>
     <button
       v-if="listScrollable && !(currentItem || queue.length)"
       class="ml-scroll-fab ml-scroll-bottom"
+      :class="{ 'is-scrolling': isScrolling }"
       title="滚动到底部"
       aria-label="滚动到底部"
       @click="scrollListTo('bottom')"
@@ -1210,6 +1237,16 @@ onBeforeUnmount(() => {
   border: 1px solid var(--m-border-2, #e2e4e8);
   color: var(--m-text-2, #777777);
   cursor: pointer;
+  /* 默认隐藏：仅下拉滚动时（.is-scrolling）淡入，停止滚动后自动淡出 */
+  opacity: 0;
+  transform: translateX(-8px);
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.ml-scroll-fab.is-scrolling {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
 }
 .ml-scroll-fab:active { background: var(--m-fill, #f4f5f7); }
 .ml-scroll-top { top: calc(52px + env(safe-area-inset-top, 0) + 10px); }
