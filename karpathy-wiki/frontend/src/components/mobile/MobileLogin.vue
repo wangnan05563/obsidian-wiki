@@ -143,6 +143,13 @@ function onKeydown(e: KeyboardEvent) {
   display: flex;
   flex-direction: column;
   gap: 28px;
+  padding: 28px 22px;
+  background: rgba(18, 8, 36, 0.5);
+  backdrop-filter: var(--mg-blur-strong);
+  -webkit-backdrop-filter: var(--mg-blur-strong);
+  border: var(--mg-border);
+  border-radius: 24px;
+  box-shadow: var(--mg-highlight), var(--mg-shadow-strong);
 }
 
 .mlogin-brand {
@@ -179,8 +186,11 @@ function onKeydown(e: KeyboardEvent) {
   padding: 12px 16px;
   font-size: 16px;
   color: var(--text-bright);
-  background: var(--bg-glass);
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--accent-purple-a30);
+  box-shadow: var(--mg-highlight-soft);
   border-radius: 12px;
   outline: none;
   transition: border-color 0.25s ease, box-shadow 0.25s ease;

@@ -111,7 +111,6 @@ function clearSearch() {
 }
 
 // ---------- 快速定位：滚动内容列表至最上/最下 ----------
-// 滚动容器是外壳的 .mobile-content（overflow-y:auto），向上查找首个可滚动祖先即可。
 const rootRef = ref<HTMLElement | null>(null);
 function findScrollContainer(): HTMLElement | null {
   let el = rootRef.value?.parentElement ?? null;
@@ -151,7 +150,6 @@ function teardownScrollWatch() {
   window.removeEventListener('resize', updateScrollable);
 }
 
-
 // ---------- 打开条目详情 ----------
 async function openPath(path: string) {
   view.value = 'detail';
@@ -186,7 +184,6 @@ function backToList() {
 
 onMounted(async () => {
   await loadPages();
-  // 支持从问答页 vault 引用跳转
   if (props.jumpPath) {
     if (props.jumpPath.startsWith('__search__:')) {
       const q = props.jumpPath.slice('__search__:'.length);
@@ -207,7 +204,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="mb-root" ref="rootRef">
     <!-- 搜索栏（吸顶） -->
-    <div class="mb-search">
+    <div class="mb-search m-safe-top">
       <svg class="mb-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="11" cy="11" r="7" />
         <path d="M21 21l-4.3-4.3" />
@@ -257,7 +254,7 @@ onBeforeUnmount(() => {
 
     <!-- 详情视图 -->
     <div v-else class="mb-detail">
-      <div class="mb-detail-head">
+      <div class="mb-detail-head m-safe-top">
         <button class="mb-back" @click="backToList">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6" />
@@ -282,7 +279,7 @@ onBeforeUnmount(() => {
 
     <div v-if="errorMsg && view !== 'detail'" class="mb-error">{{ errorMsg }}</div>
 
-    <!-- 快速定位：悬浮常驻，顶部→滚到内容最上方，底部→滚到内容最下方（不影响阅读） -->
+    <!-- 快速定位：悬浮常驻 -->
     <button v-if="listScrollable" class="mb-scroll-fab mb-scroll-top" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6" /></svg>
     </button>
@@ -297,10 +294,11 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-height: 100%;
-  font-family: var(--font-body);
+  font-family: var(--m-font);
+  background: var(--m-bg, #ffffff);
 }
 
-/* 搜索栏：吸顶 */
+/* 搜索栏：吸顶 + 浅色 */
 .mb-search {
   position: sticky;
   top: 0;
@@ -308,16 +306,14 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
-  background: rgba(5, 0, 16, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--accent-purple-a30);
+  padding: 10px 14px calc(10px + env(safe-area-inset-top, 0));
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-border, #ededed);
 }
 .mb-search-icon {
   width: 18px;
   height: 18px;
-  color: var(--text-soft);
+  color: var(--m-text-3, #9aa0a6);
   flex-shrink: 0;
 }
 .mb-search-input {
@@ -326,25 +322,20 @@ onBeforeUnmount(() => {
   height: 38px;
   padding: 0 12px;
   border-radius: 10px;
-  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text-bright);
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: var(--m-bg-soft, #f7f8fa);
+  color: var(--m-text, #111111);
   font-size: 14px;
-  font-family: var(--font-body);
+  font-family: var(--m-font);
   outline: none;
 }
-.mb-search-input::placeholder {
-  color: var(--text-soft);
-}
-.mb-search-input:focus {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 0 2px rgba(0, 245, 255, 0.15);
-}
+.mb-search-input::placeholder { color: var(--m-text-3, #9aa0a6); }
+.mb-search-input:focus { border-color: var(--m-primary, #1554d1); }
 .mb-search-clear {
   flex-shrink: 0;
   border: none;
   background: transparent;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #1554d1);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -359,7 +350,7 @@ onBeforeUnmount(() => {
 }
 .mb-hint {
   text-align: center;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
   font-size: 13px;
   padding: 28px 16px;
 }
@@ -367,19 +358,16 @@ onBeforeUnmount(() => {
   display: block;
   width: 100%;
   text-align: left;
-  border: 1px solid var(--accent-purple-a30);
-  background: var(--bg-glass, rgba(20, 8, 40, 0.55));
-  border-radius: 14px;
+  border: 1px solid var(--m-border, #ededed);
+  background: #ffffff;
+  border-radius: 12px;
   padding: 12px 14px;
   cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.2s ease;
-  font-family: var(--font-body);
-  color: var(--text-bright);
+  font-family: var(--m-font);
+  color: var(--m-text, #111111);
+  transition: border-color 0.18s ease;
 }
-.mb-card:active {
-  transform: scale(0.985);
-  border-color: var(--neon-cyan);
-}
+.mb-card:active { border-color: var(--m-primary, #1554d1); }
 .mb-card-top {
   display: flex;
   align-items: center;
@@ -390,7 +378,7 @@ onBeforeUnmount(() => {
   font-size: 15px;
   font-weight: 700;
   line-height: 1.4;
-  color: var(--text-bright);
+  color: var(--m-text, #111111);
 }
 .mb-card-meta {
   display: flex;
@@ -400,10 +388,10 @@ onBeforeUnmount(() => {
 }
 .mb-meta {
   font-size: 12px;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
 }
 .mb-meta-dir {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--m-font-mono, monospace);
   opacity: 0.8;
 }
 .mb-tags {
@@ -415,27 +403,25 @@ onBeforeUnmount(() => {
 .mb-chip {
   font-size: 11px;
   font-weight: 600;
-  color: var(--neon-cyan);
+  color: var(--m-text-2, #777777);
   padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
-  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  border-radius: 6px;
+  background: var(--m-fill, #f4f5f7);
+  border: 1px solid var(--m-border, #ededed);
 }
 .mb-chip-type {
-  color: var(--neon-magenta, #ff3ea5);
-  border-color: rgba(255, 62, 165, 0.3);
-  background: rgba(255, 62, 165, 0.08);
+  color: var(--m-primary, #1554d1);
+  border-color: rgba(21, 84, 209, 0.2);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
 }
 .mb-chip-hit {
-  color: var(--text-soft);
-  border-color: var(--accent-purple-a30);
-  background: rgba(160, 90, 255, 0.1);
+  color: var(--m-text-2, #777777);
 }
 .mb-snippet {
   margin: 8px 0 0;
   font-size: 13px;
   line-height: 1.55;
-  color: var(--text-soft);
+  color: var(--m-text-2, #777777);
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -448,13 +434,14 @@ onBeforeUnmount(() => {
 }
 .mb-detail-head {
   position: sticky;
-  top: 59px;
+  top: 0;
   z-index: 3;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 0;
-  background: var(--bg-void);
+  padding: 10px 0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-border, #ededed);
 }
 .mb-back {
   display: inline-flex;
@@ -462,31 +449,27 @@ onBeforeUnmount(() => {
   gap: 2px;
   border: none;
   background: transparent;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #1554d1);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   flex-shrink: 0;
 }
-.mb-back svg {
-  width: 18px;
-  height: 18px;
-}
+.mb-back svg { width: 18px; height: 18px; }
 .mb-detail-path {
   font-size: 11px;
-  color: var(--text-soft);
-  font-family: var(--font-mono, monospace);
+  color: var(--m-text-2, #777777);
+  font-family: var(--m-font-mono, monospace);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .mb-detail-title {
-  font-family: var(--font-display);
   font-size: 19px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.4;
   margin: 6px 0 10px;
-  color: var(--text-bright);
+  color: var(--m-text, #111111);
 }
 .mb-detail-meta {
   display: flex;
@@ -501,12 +484,12 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 12px;
-  color: #ffb4c4;
-  background: rgba(255, 0, 80, 0.1);
-  border: 1px solid rgba(255, 0, 80, 0.3);
+  color: var(--m-danger, #d93636);
+  background: rgba(217, 54, 54, 0.08);
+  border: 1px solid rgba(217, 54, 54, 0.3);
 }
 
-/* 快速定位 FAB：常驻悬浮，半透明不挡阅读；左缘上下分布，避开顶部搜索栏与底部 Tab */
+/* 快速定位 FAB */
 .mb-scroll-fab {
   position: fixed;
   left: 12px;
@@ -517,25 +500,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(5, 0, 16, 0.82);
-  border: 1px solid var(--neon-cyan, #00f5ff);
-  color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: #ffffff;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  color: var(--m-text-2, #777777);
   cursor: pointer;
 }
-.mb-scroll-fab:active {
-  transform: scale(0.92);
-}
-.mb-scroll-top {
-  top: calc(52px + env(safe-area-inset-top, 0) + 10px);
-}
-.mb-scroll-bottom {
-  bottom: calc(56px + env(safe-area-inset-bottom, 0) + 14px);
-}
-.mb-scroll-fab svg {
-  width: 20px;
-  height: 20px;
-}
+.mb-scroll-fab:active { background: var(--m-fill, #f4f5f7); }
+.mb-scroll-top { top: calc(58px + env(safe-area-inset-top, 0) + 10px); }
+.mb-scroll-bottom { bottom: calc(56px + env(safe-area-inset-bottom, 0) + 14px); }
+.mb-scroll-fab svg { width: 20px; height: 20px; }
 </style>

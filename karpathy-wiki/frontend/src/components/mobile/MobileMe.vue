@@ -130,10 +130,12 @@ async function logout() {
 
 .glass-card,
 .mme-card {
-  background: var(--bg-glass);
-  border: 1px solid var(--accent-purple-a30);
+  background: var(--mg-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: var(--mg-border);
   border-radius: 16px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--mg-highlight), var(--mg-shadow);
 }
 
 .mme-profile {
@@ -258,8 +260,11 @@ async function logout() {
   padding: 10px 14px;
   font-size: 15px;
   color: var(--text-bright);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--accent-purple-a30);
+  box-shadow: var(--mg-highlight-soft);
   border-radius: 10px;
   outline: none;
   -webkit-appearance: none;

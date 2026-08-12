@@ -9,10 +9,10 @@ import MobileQuery from './MobileQuery.vue';
 import MobileBrowse from './MobileBrowse.vue';
 import MobileIngest from './MobileIngest.vue';
 import MobileListen from './MobileListen.vue';
-import MobilePlaceholder from './MobilePlaceholder.vue';
 
 // 移动端外壳：底部 5 Tab 导航 + 登录门 + 内容切换（SRS FR-MOB-NAV）。
 // 完全复用桌面端 stores/services，不引入 vue-router（与项目单 SPA 约定一致）。
+// 视觉：苹果风毛玻璃（aurora 模糊源 + 统一 --mg-* token），见 style.css 的 .mg-* 工具类。
 const authStore = useAuthStore();
 const queryStore = useQueryStore();
 const conversationsStore = useConversationsStore();
@@ -71,21 +71,6 @@ function onVaultJump(e: Event) {
 onMounted(() => window.addEventListener('karpathy:jump-vault', onVaultJump));
 onBeforeUnmount(() => window.removeEventListener('karpathy:jump-vault', onVaultJump));
 
-const titleMap: Record<TabKey, string> = {
-  query: '知识问答',
-  browse: '知识浏览',
-  listen: '聆听',
-  ingest: '投递采集',
-  me: '我的',
-};
-
-const placeholderDesc: Record<Exclude<TabKey, 'me'>, string> = {
-  query: '随时向知识库提问，查看流式回答与引用来源',
-  browse: '浏览与搜索已入库的笔记、文章与引用片段',
-  listen: '通勤、散步时聆听知识库内容（TTS 播客模式）',
-  ingest: '随手拍纸质笔记或粘贴网页链接，快速入库',
-};
-
 // 各 Tab 内联 SVG 图标（独立于桌面 NavIcons，避免缺失图标名）
 const icons: Record<TabKey, string> = {
   query: 'M4 5h16v11H8l-4 4V5z',
@@ -101,29 +86,18 @@ const icons: Record<TabKey, string> = {
   <MobileLogin v-if="!authStore.isLoggedIn" />
 
   <div v-else class="mobile-root">
-    <!-- 顶部标题栏 -->
-    <header class="mobile-header">
-      <span class="mobile-title">{{ titleMap[activeTab] }}</span>
-    </header>
-
-    <!-- 内容区：按激活 Tab 渲染对应移动视图 -->
+    <!-- 内容区：按激活 Tab 渲染对应移动视图（各页自带浅色顶栏） -->
     <!-- 聆听页用 v-show 常驻挂载：切走 Tab 时组件不卸载，<audio> 继续后台播放、
          队列/进度等本地状态不丢失（播放中切页保持播放状态）。其余 Tab 仍用 v-if。 -->
     <main class="mobile-content">
-      <MobileQuery v-if="activeTab === 'query'" />
+      <MobileQuery v-if="activeTab === 'query'" @open-me="activeTab = 'me'" />
       <MobileBrowse v-else-if="activeTab === 'browse'" :jump-path="vaultJump" />
       <MobileIngest v-else-if="activeTab === 'ingest'" />
       <MobileMe v-else-if="activeTab === 'me'" />
       <MobileListen v-show="activeTab === 'listen'" :visible="activeTab === 'listen'" />
-      <MobilePlaceholder
-        v-if="activeTab !== 'query' && activeTab !== 'browse' && activeTab !== 'ingest' && activeTab !== 'me' && activeTab !== 'listen'"
-        :tab="activeTab"
-        :label="titleMap[activeTab]"
-        :desc="placeholderDesc[activeTab]"
-      />
     </main>
 
-    <!-- 底部 Tab 导航栏（固定，含安全区适配） -->
+    <!-- 底部 Tab 导航栏（固定，含安全区适配，浅色描边） -->
     <nav class="mobile-tabbar" aria-label="移动端主导航">
       <button
         v-for="tab in tabs"
@@ -145,49 +119,27 @@ const icons: Record<TabKey, string> = {
 
 <style scoped>
 .mobile-root {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
   min-height: 100vh;
-  background: var(--bg-void);
-  color: var(--text-bright);
-  font-family: var(--font-body);
+  background: var(--m-bg, #ffffff);
+  color: var(--m-text, #111111);
+  font-family: var(--m-font);
   overflow: hidden;
 }
 
-.mobile-header {
-  flex-shrink: 0;
-  height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding-top: env(safe-area-inset-top, 0);
-  background: rgba(5, 0, 16, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--accent-purple-a30);
-  position: relative;
-  z-index: 5;
-}
-
-.mobile-title {
-  font-family: var(--font-display);
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: 1px;
-  background: var(--grad-aurora);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
 .mobile-content {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0));
+  /* 预留底部 Tab 栏 + 系统导航安全区 */
+  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0));
 }
 
 .mobile-tabbar {
@@ -195,10 +147,8 @@ const icons: Record<TabKey, string> = {
   display: flex;
   height: 56px;
   padding-bottom: env(safe-area-inset-bottom, 0);
-  background: rgba(5, 0, 16, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-top: 1px solid var(--accent-purple-a30);
+  background: #ffffff;
+  border-top: 1px solid var(--m-border, #ededed);
   position: fixed;
   left: 0;
   right: 0;
@@ -215,22 +165,18 @@ const icons: Record<TabKey, string> = {
   gap: 3px;
   border: none;
   background: transparent;
-  color: var(--text-soft);
+  color: var(--m-text-3, #9aa0a6);
   cursor: pointer;
-  transition: color 0.25s ease, transform 0.2s ease;
-  font-family: var(--font-body);
+  font-family: var(--m-font);
+  -webkit-tap-highlight-color: transparent;
 }
 
 .tab-item:active {
-  transform: scale(0.92);
+  color: var(--m-text-2, #777777);
 }
 
 .tab-item.active {
-  color: var(--neon-cyan);
-}
-
-.tab-item.active .tab-icon {
-  filter: drop-shadow(0 0 6px rgba(0, 245, 255, 0.6));
+  color: var(--m-primary, #1554d1);
 }
 
 .tab-icon {
@@ -241,6 +187,6 @@ const icons: Record<TabKey, string> = {
 .tab-label {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 </style>
