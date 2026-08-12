@@ -11,8 +11,10 @@ defineProps<{
 <template>
   <div class="mph-root">
     <div class="mph-icon-wrap">
-      <span class="mph-dot" />
-      <span class="mph-ring" />
+      <svg class="mph-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6">
+        <rect x="3" y="3" width="18" height="18" rx="3" />
+        <path d="M9 12h6M12 9v6" />
+      </svg>
     </div>
     <h3 class="mph-label">{{ label }}</h3>
     <p class="mph-desc">{{ desc }}</p>
@@ -31,50 +33,35 @@ defineProps<{
   padding: 32px 28px;
   gap: 14px;
   font-family: var(--font-body);
+  color: var(--m-text, #111111);
 }
 
 .mph-icon-wrap {
-  position: relative;
-  width: 72px;
-  height: 72px;
+  width: 64px;
+  height: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.mph-dot {
-  width: 16px;
-  height: 16px;
   border-radius: 50%;
-  background: var(--grad-fire);
-  box-shadow: 0 0 14px rgba(255, 0, 110, 0.6);
+  background: var(--m-surface, #f5f6f8);
+  color: var(--m-muted, #777777);
 }
 
-.mph-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1.5px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
-  animation: mph-pulse 2.4s ease-out infinite;
-}
-
-@keyframes mph-pulse {
-  0% { transform: scale(0.6); opacity: 0.9; }
-  100% { transform: scale(1.25); opacity: 0; }
+.mph-icon {
+  opacity: 0.8;
 }
 
 .mph-label {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 800;
+  font-size: 17px;
+  font-weight: 700;
   margin: 0;
-  color: var(--text-bright);
+  color: var(--m-text, #111111);
 }
 
 .mph-desc {
   font-size: 13px;
   line-height: 1.6;
-  color: var(--text-soft);
+  color: var(--m-muted, #777777);
   margin: 0;
   max-width: 260px;
 }
@@ -83,10 +70,10 @@ defineProps<{
   margin-top: 6px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--neon-cyan);
+  color: var(--m-primary, #0f4c81);
   padding: 5px 12px;
-  border: 1px dashed var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  border: 1px dashed rgba(15, 76, 129, 0.25);
   border-radius: 999px;
-  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  background: rgba(15, 76, 129, 0.06);
 }
 </style>
