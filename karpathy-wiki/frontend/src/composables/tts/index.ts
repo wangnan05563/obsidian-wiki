@@ -1,4 +1,4 @@
-import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
+import { computed, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue';
 import type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 import { createBrowserTTSProvider } from './browserTtsProvider';
 import { createDoubaoTTSProvider } from './doubaoTtsProvider';
@@ -68,9 +68,14 @@ export function useTTS(): UseTTSReturn {
   // 每次 useTTS() 调用都创建独立 provider 实例
   // 为什么不用单例：useTTS 是 composable，应遵循"每次调用独立状态"惯例
   const initialType = resolveProviderType();
-  let currentProvider: StateAwareProvider = createProvider(initialType);
-  // 暴露 provider name 给 UI：用于"当前使用：浏览器/豆包"展示
-  const providerName = computed(() => currentProvider.name);
+  // 用 shallowRef 持有 provider 实例：setProvider 整体替换实例（.value = ...）时会触发响应式，
+  // 让下方的 providerName computed 能感知引擎切换。
+  // 旧实现用普通 local let，computed 闭包捕获的是非响应式变量且其 .name 为静态字符串，
+  // 导致 computed 仅求值一次后被缓存、切换引擎后 providerName 永远停在初始 'edge'，
+  // 表现即"语音引擎切换后厂商标签不跟随高亮"。
+  const currentProvider = shallowRef<StateAwareProvider>(createProvider(initialType));
+  // 暴露 provider name 给 UI：用于"当前使用：浏览器/豆包"展示（依赖 currentProvider.value，可响应切换）
+  const providerName = computed(() => currentProvider.value.name);
 
   // 桥接 provider.state → useTTS state
   // 用 watch 监听 provider 内部 state，同步到 useTTS 的 state，
@@ -86,14 +91,14 @@ export function useTTS(): UseTTSReturn {
       { flush: 'sync' },
     );
   }
-  let stopWatch = bridgeProviderState(currentProvider);
+  let stopWatch = bridgeProviderState(currentProvider.value);
 
   function setProvider(type: TTSProviderType): void {
     // 切换前 dispose 旧 provider，避免音频/audioContext 泄漏
-    currentProvider.dispose();
+    currentProvider.value.dispose();
     stopWatch();
-    currentProvider = createProvider(type);
-    stopWatch = bridgeProviderState(currentProvider);
+    currentProvider.value = createProvider(type);
+    stopWatch = bridgeProviderState(currentProvider.value);
     // 持久化偏好
     try {
       localStorage.setItem('tts.provider', type);
@@ -109,22 +114,22 @@ export function useTTS(): UseTTSReturn {
       text: string,
       options?: { lang?: string; rate?: number; voice?: string; style?: string; volume?: number; pitch?: number },
     ) {
-      currentProvider.speak(text, options ?? { lang: 'zh-CN', rate: rate.value });
+      currentProvider.value.speak(text, options ?? { lang: 'zh-CN', rate: rate.value });
     },
     pause() {
-      currentProvider.pause();
+      currentProvider.value.pause();
     },
     resume() {
-      currentProvider.resume();
+      currentProvider.value.resume();
     },
     stop() {
-      currentProvider.stop();
+      currentProvider.value.stop();
     },
     setRate(newRate: number, restartText?: string, lang = 'zh-CN') {
       rate.value = Math.min(2, Math.max(0.5, newRate));
       // 仅在朗读中且有原文时重启
       if (state.value === 'playing' && restartText) {
-        currentProvider.speak(restartText, { lang, rate: rate.value });
+        currentProvider.value.speak(restartText, { lang, rate: rate.value });
       }
     },
     providerName,

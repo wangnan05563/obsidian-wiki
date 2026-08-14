@@ -176,16 +176,16 @@
    * ============================================================ */
   --mg-blur: 18px;            /* 导航栏 / 弹窗 / 播放器 等结构面 blur */
   --mg-blur-strong: 26px;     /* 登录卡 / 底部动作面板 等重磨砂面 */
-  --mg-bg: rgba(20, 8, 42, 0.42);     /* 卡片磨砂底（透出 aurora 彩光）*/
-  --mg-bg-soft: rgba(255, 255, 255, 0.05); /* 极淡表面（叠加在深色上）*/
-  --mg-surface: rgba(255, 255, 255, 0.07); /* 结构面填充（更亮的高光感）*/
-  --mg-border: 1px solid rgba(255, 255, 255, 0.12);   /* 主描边 */
-  --mg-border-subtle: 1px solid rgba(255, 255, 255, 0.08); /* 次级描边 */
-  --mg-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16); /* 顶部高光（玻璃质感关键）*/
-  --mg-highlight-soft: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  --mg-shadow: 0 8px 30px rgba(0, 0, 0, 0.38);          /* 柔和投影 */
-  --mg-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.28);     /* 轻投影（卡片）*/
-  --mg-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.5);   /* 重投影（弹窗/卡）*/
+  --mg-bg: rgba(13, 9, 26, 0.74);      /* 卡片磨砂底（压暗 aurora，提升对比）*/
+  --mg-bg-soft: rgba(255, 255, 255, 0.06); /* 极淡表面（叠加在深色上）*/
+  --mg-surface: rgba(40, 30, 64, 0.58); /* 结构面：深色磨砂玻璃 */
+  --mg-border: 1px solid rgba(255, 255, 255, 0.16);   /* 主描边 */
+  --mg-border-subtle: 1px solid rgba(255, 255, 255, 0.10); /* 次级描边 */
+  --mg-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.18); /* 顶部高光（玻璃质感关键）*/
+  --mg-highlight-soft: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --mg-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);          /* 柔和投影 */
+  --mg-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.35);     /* 轻投影（卡片）*/
+  --mg-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.55);   /* 重投影（弹窗/卡）*/
 
   /* ============================================================
    * 移动端「统一主题变量」--m-*：默认 = 毛玻璃（frosted glass）
@@ -194,29 +194,50 @@
    * ============================================================ */
   --m-blur: 18px;                 /* 结构面 blur（导航栏/弹窗/播放器）*/
   --m-blur-strong: 26px;          /* 重磨砂面（登录卡/底部动作面板）*/
-  --m-bg: rgba(20, 8, 42, 0.42);  /* 页面底（透出 aurora 彩光）*/
-  --m-bg-soft: rgba(255, 255, 255, 0.05);
-  --m-surface: rgba(255, 255, 255, 0.07); /* 结构面填充（高光感）*/
-  --m-fill: rgba(255, 255, 255, 0.06);
-  --m-fill-2: rgba(255, 255, 255, 0.1);
-  --m-border: 1px solid rgba(255, 255, 255, 0.12);
-  --m-border-2: 1px solid rgba(255, 255, 255, 0.18);
-  --m-border-subtle: 1px solid rgba(255, 255, 255, 0.08);
-  --m-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16);
-  --m-highlight-soft: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  --m-shadow: 0 8px 30px rgba(0, 0, 0, 0.38);
-  --m-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.28);
-  --m-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.5);
-  --m-text: #f3eaff;
-  --m-text-2: #d9c8ff;
-  --m-text-3: #b9a9d6;
-  --m-muted: #a99cc8;
-  --m-primary: #b026ff;          /* 霓虹紫（毛玻璃主题主色）*/
-  --m-primary-press: #8a1fd1;
-  --m-primary-soft: rgba(176, 38, 255, 0.16);
-  --m-danger: #ff5c8a;
+  /* 页面底：加深加不透明，压暗 aurora 彩光，直接提升浅色文字对比（修复「文字太浅看不清」）*/
+  --m-bg: rgba(13, 9, 26, 0.74);
+  --m-bg-soft: rgba(255, 255, 255, 0.06);
+  /* 结构面：深色磨砂玻璃（替代原白底，配合浅色文字形成可读对比）*/
+  --m-surface: rgba(40, 30, 64, 0.58);
+  --m-fill: rgba(255, 255, 255, 0.08);    /* 次级填充（图标容器/chip）*/
+  --m-fill-2: rgba(255, 255, 255, 0.14);  /* 按压态填充 */
+  --m-border: 1px solid rgba(255, 255, 255, 0.16);   /* 主描边（暗底上提亮）*/
+  --m-border-2: 1px solid rgba(255, 255, 255, 0.24); /* 较强描边 */
+  --m-border-subtle: 1px solid rgba(255, 255, 255, 0.10);
+  --m-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --m-highlight-soft: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --m-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --m-shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --m-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.55);
+  /* 文字：近白高对比主文本 + 逐级加深的次级文本，保证层级可读 */
+  --m-text: #f7f4ff;
+  --m-text-2: #d6c9ee;
+  --m-text-3: #b6a7d2;
+  --m-muted: #9f92bd;
+  /* 主色：收敛霓虹紫为沉稳靛紫，去除过度艳丽（修复「颜色过于艳丽」）*/
+  --m-primary: #8b6cff;
+  --m-primary-press: #6f4fe0;
+  --m-primary-soft: rgba(139, 108, 255, 0.22);
+  --m-danger: #ff779e;           /* 危险色：软化玫红 */
   --m-font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --m-font-mono: 'SF Mono', 'JetBrains Mono', monospace;
+
+  /* ============================================================
+   * 跨主题统一的语义别名（原仅 light-business 显式定义，其余主题靠组件内联
+   * fallback 兜底）。在此 :root（aurora 暗色基）统一定义暗色值，使 creative /
+   * macaron / enterprise / product / ecommerce / portfolio 等所有暗色主题均持有
+   * 这些 token；浅色主题 light-business 在自身作用域内覆盖为浅色值。
+   * 组件不再依赖内联 fallback，切换主题即切换取值，无需改组件逻辑。
+   * 注：--bg-input 此前无定义，导致 .msg-edit 文本框在暗色主题下落到 #fff 白底 +
+   * 浅色文字（不可读）；此处定义暗色值一并修复该隐患。
+   * ============================================================ */
+  --text-primary: #f3e9ff;                    /* 主文本（标题/重点），对齐 --text-bright */
+  --text-main: #d4c5f0;                       /* 主要正文，对齐 --text-base */
+  --text-muted: #9d8ec4;                      /* 次要/弱化文本，对齐 --text-soft */
+  --border-color: rgba(128, 128, 128, 0.2);   /* 通用边框（暗色下中性灰半透明）*/
+  --border-soft: rgba(255, 255, 255, 0.12);   /* 次级边框：修复暗色下原 fallback rgba(0,0,0,0.08) 不可见 */
+  --bg-elevated: rgba(28, 14, 50, 0.95);      /* 浮层/下拉背景（暗色 elevated surface）*/
+  --bg-input: rgba(22, 10, 45, 0.3);          /* 输入框/编辑态背景（暗色半透明，对齐 el-input）*/
 }
 
 * {
@@ -831,10 +852,10 @@ body {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(60% 45% at 16% 12%, rgba(176, 38, 255, 0.50), transparent 60%),
-    radial-gradient(55% 45% at 84% 20%, rgba(0, 245, 255, 0.42), transparent 62%),
-    radial-gradient(60% 50% at 72% 82%, rgba(255, 0, 110, 0.38), transparent 64%),
-    radial-gradient(55% 45% at 24% 86%, rgba(131, 56, 236, 0.46), transparent 62%),
+    radial-gradient(60% 45% at 16% 12%, rgba(124, 92, 255, 0.32), transparent 60%),
+    radial-gradient(55% 45% at 84% 20%, rgba(64, 142, 220, 0.28), transparent 62%),
+    radial-gradient(60% 50% at 72% 82%, rgba(150, 92, 170, 0.24), transparent 64%),
+    radial-gradient(55% 45% at 24% 86%, rgba(96, 76, 190, 0.30), transparent 62%),
     var(--bg-deep, #0a0118);
   background-attachment: fixed;
 }
@@ -850,7 +871,7 @@ body {
 
 /* 重磨砂面：登录卡 / 底部动作面板 / 弹窗 —— 更强模糊与投影 */
 .mg-modal {
-  background: rgba(18, 8, 36, 0.62);
+  background: rgba(20, 13, 38, 0.82);
   backdrop-filter: var(--mg-blur-strong);
   -webkit-backdrop-filter: var(--mg-blur-strong);
   border: var(--mg-border);

@@ -31,6 +31,21 @@ const isOpen = ref(localStorage.getItem(STORAGE_KEYS.FLOATING_CHAT_OPEN) === 'tr
 const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 let abortController: AbortController | null = null;
+// 超时机制（与主问答页 Query.vue 一致）：LLM 长时间无响应自动中断，避免用户卡在"正在思考"。
+// 滑动窗口：请求发起时启动，每次收到 SSE 数据（onActivity）重置；连续 QUESTION_TIMEOUT_MS
+// 无任何数据才触发超时中断。超时后由 finally 按 abortReason 提交部分答案并打 timedOut 标记。
+const QUESTION_TIMEOUT_MS = 120_000;
+let questionTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let abortReason: 'user' | 'timeout' | null = null;
+function resetQuestionTimeout() {
+  if (questionTimeoutId) clearTimeout(questionTimeoutId);
+  questionTimeoutId = setTimeout(() => {
+    if (abortController && !abortController.signal.aborted) {
+      abortReason = 'timeout';
+      abortController.abort();
+    }
+  }, QUESTION_TIMEOUT_MS);
+}
 
 const hasMessages = computed(() => store.messages.length > 0);
 
@@ -81,6 +96,7 @@ watch(
 
 async function sendQuestion(question: string) {
   abortController = new AbortController();
+  abortReason = null;
   // 线程隔离：已有线程时把 threadId 交给后端，由后端从本地记忆注入上下文；
   // 不再重复发送前端 history。无线程时回退旧行为发送 history。
   const activeThreadId = store.currentThreadId;
@@ -108,14 +124,38 @@ async function sendQuestion(question: string) {
       throw new Error(`HTTP ${response.status}`);
     }
 
+    // 启动超时滑动窗口（首字节前即开始计时；之后每个数据块经 onActivity 重置）
+    resetQuestionTimeout();
     // SSE 流消费统一委托给 utils/sse.ts，降低本函数认知复杂度（S3776）
-    await consumeQuerySSE(response, store.getSessionWriter(), abortController.signal);
+    // 传入 resetQuestionTimeout 作为 onActivity：每收到一个数据块即重置超时窗口，
+    // 保证"慢但正常流式输出"不会被固定墙钟误杀（仍保留对真·挂死的保护）。
+    await consumeQuerySSE(response, store.getSessionWriter(), abortController.signal, resetQuestionTimeout);
+    // 持久化完整对话到 IndexedDB（支持断点续答）
+    await conversationsStore.persistConversation(store.messages);
   } catch (err: unknown) {
-    if ((err as Error).name === 'AbortError') return;
-    const msg = (err as Error).message;
-    store.handleError(msg);
-    ElMessage.warning(apiErrorMessage('问答失败', err));
+    // AbortError 由超时/用户停止触发，不视为错误；具体清理交由 finally 按 abortReason 处理
+    if ((err as Error).name === 'AbortError') {
+      // 超时/用户停止：finally 会按 abortReason 提交部分答案（超时打 timedOut 标记）
+    } else {
+      const msg = (err as Error).message;
+      store.handleError(msg);
+      ElMessage.warning(apiErrorMessage('问答失败', err));
+    }
   } finally {
+    // 清理超时定时器（无论正常完成、用户停止、超时、错误都要清）
+    if (questionTimeoutId) {
+      clearTimeout(questionTimeoutId);
+      questionTimeoutId = null;
+    }
+    // 超时/用户停止：提交中断时的部分答案，超时额外打 timedOut 标记（供模板渲染"确认重发"）
+    if (abortReason && store.isLoading) {
+      store.stopLoading(abortReason);
+      if (abortReason === 'timeout') {
+        ElMessage.warning(`问答超时（${QUESTION_TIMEOUT_MS / 1000}秒无响应），请检查网络或模型配置`);
+      }
+      await conversationsStore.persistConversation(store.messages);
+    }
+    abortReason = null;
     abortController = null;
   }
 }
@@ -136,12 +176,56 @@ function handleRemoveMessage(idx: number) {
   store.removeMessage(idx);
 }
 
-// 停止生成：调用 abortController 中断 SSE 流，store 会在 catch 中自然 finalize
-// 为什么不调 store.stop：store 无 stop 方法，abort 触发后 SSE reader 自动抛 AbortError
+// 停止生成：标记 user 中断并调用 abortController 中断 SSE 流，
+// finally 会按 abortReason==='user' 提交部分答案（与主问答页一致，保留 [已停止] 中断点）
 function handleStop() {
   if (abortController) {
+    abortReason = 'user';
     abortController.abort();
-    abortController = null;
+  }
+}
+
+// 重新生成 / 超时重发共用核心：复用该消息对应的 user 问题，丢弃原 assistant 回答，触发新问答。
+// 与 Query.vue 语义一致——保留原问题、丢弃失败/超时答案、重新走完整 SSE。
+// 返回 true 表示已定位原始问题并触发重发；false 表示找不到 user 问题（调用方负责提示）。
+function resendFromUserQuestion(idx: number): boolean {
+  if (store.isLoading) return false;
+  let userIdx = -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      userIdx = i;
+      break;
+    }
+  }
+  if (userIdx < 0) return false;
+  const question = store.messages[userIdx].content;
+  store.removeMessagesFrom(idx);
+  void sendQuestion(question);
+  return true;
+}
+
+// 重新生成：复用该消息对应的 user 问题，丢弃原 assistant 回答，触发新问答。
+function handleRegenerate(idx: number) {
+  if (store.isLoading) {
+    ElMessage.warning('回答生成中，请稍后');
+    return;
+  }
+  if (!resendFromUserQuestion(idx)) {
+    ElMessage.warning('未找到原始问题，无法重新生成');
+  }
+}
+
+// 超时重发：针对超时中断（msg.timedOut）的 assistant 消息，复用原始 user 问题重新发起问答。
+// 语义即"在原消息基础上重新思考"——保留原问题、丢弃超时产生的部分/失败答案、重新 SSE。
+function handleResend(idx: number) {
+  if (store.isLoading) {
+    ElMessage.warning('回答生成中，请稍后');
+    return;
+  }
+  if (resendFromUserQuestion(idx)) {
+    ElMessage.info('正在原问题基础上重新思考…');
+  } else {
+    ElMessage.warning('未找到原始问题，无法重发');
   }
 }
 
@@ -378,8 +462,24 @@ onBeforeUnmount(() => {
                 :created-at="msg.createdAt"
                 :can-regenerate="!store.isLoading"
                 :can-edit="false"
+                @regenerate="handleRegenerate(idx)"
                 @remove="handleRemoveMessage(idx)"
               />
+              <!-- 超时重发入口：超时中断的 assistant 消息常驻显示"确认重发"按钮，
+                   区别于 hover 工具栏的"重新生成"，让超时失败态有明确的恢复动作。
+                   点击后在原 user 问题基础上重新思考（复用问题 + 丢弃超时答案 + 重新 SSE）。 -->
+              <div
+                v-if="msg.role === 'assistant' && msg.timedOut"
+                class="timeout-resend"
+                @click.stop
+              >
+                <span class="timeout-resend-tip">回答因超时中断，结果可能不完整</span>
+                <button
+                  class="resend-btn"
+                  data-testid="confirm-resend"
+                  @click="handleResend(idx)"
+                >确认重发</button>
+              </div>
             </div>
           </div>
           <!-- 流式输出中的 assistant 消息 -->
@@ -652,6 +752,42 @@ onBeforeUnmount(() => {
 }
 .msg-content-wrapper.assistant {
   align-items: flex-start;
+}
+
+/* 超时重发入口：常驻显示（不经 hover 工具栏），明确给出超时失败态的恢复动作。
+   采用暖色警示色（amber）与主题区分，提示"此条回答因超时中断"。 */
+.timeout-resend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(255, 159, 28, 0.10);
+  border: 1px solid rgba(255, 159, 28, 0.35);
+}
+.timeout-resend-tip {
+  font-size: 11px;
+  color: #ffb84d;
+  font-family: var(--font-mono, monospace);
+}
+.resend-btn {
+  padding: 3px 12px;
+  border-radius: 6px;
+  border: none;
+  background: #ff9f1c;
+  color: #1a1205;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.resend-btn:hover {
+  background: #ffb347;
+  box-shadow: 0 0 8px rgba(255, 159, 28, 0.5);
+}
+.resend-btn:active {
+  transform: translateY(1px);
 }
 
 .user-avatar {

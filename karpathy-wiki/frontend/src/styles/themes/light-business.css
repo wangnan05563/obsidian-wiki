@@ -1,0 +1,398 @@
+/* ============================================================
+ * 浅白商务主题 · Light Business Theme
+ * 与移动端 mobile-light.css 风格统一：浅白底 + 深蓝主色 + 极简留白
+ * 无渐变发光、无重投影，专业商务观感；适配大屏信息密度。
+ * ============================================================ */
+
+[data-theme="light-business"] {
+  /* 品牌主色：商务深蓝（与移动端 --m-primary:#1554d1 对齐） */
+  --neon-purple: #1554d1;   /* 主品牌蓝 */
+  --neon-magenta: #d93636;  /* 危险/退出红 */
+  --neon-cyan: #1554d1;     /* 强调蓝（副标题/图标/hover） */
+  --neon-violet: #3b6fd4;
+  --neon-pink: #e0792b;     /* 警告琥珀 */
+  --neon-lime: #2faa6a;     /* 成功绿 */
+
+  /* 背景层次：白底 + 极浅灰填充（与移动端 --m-bg / --m-bg-soft 对齐） */
+  --bg-void: #f5f6f8;
+  --bg-deep: #eef0f3;
+  --bg-mid: #e6e8ec;
+  --bg-card: #ffffff;
+  --bg-card-solid: #ffffff;
+  --bg-glass: rgba(255, 255, 255, 0.72);
+
+  /* 文字：近黑 + 灰阶（与移动端 --m-text / --m-text-2 对齐） */
+  --text-bright: #111111;
+  --text-base: #2b2b2b;
+  --text-soft: #5a5f66;
+  --text-dim: #9aa0a6;
+
+  /* 核心语义别名：aurora 默认未定义这些变量（被 Browse/Config 等视图直接引用，
+     此前靠 CSS 继承/initial 兜底）。浅色主题显式补齐，避免继承到深色祖先色值导致不可读。 */
+  --text-primary: #111111;
+  --text-main: #2b2b2b;
+  --text-muted: #5a5f66;
+
+  /* 渐变：弱对比商务蓝（仅用于激活态/主按钮，整体仍偏实色） */
+  --grad-neon: linear-gradient(135deg, #1554d1 0%, #2f7de0 100%);
+  --grad-fire: linear-gradient(135deg, #1554d1 0%, #0f3f9e 100%);
+  --grad-cool: linear-gradient(135deg, #2f7de0 0%, #1554d1 100%);
+  --grad-aurora: linear-gradient(120deg, #2f7de0 0%, #1554d1 40%, #3b6fd4 80%, #0f3f9e 100%);
+
+  /* 柔和阴影（浅色主题下克制，避免脏感） */
+  --glow-purple: 0 0 20px rgba(21, 84, 209, 0.16);
+  --glow-magenta: 0 0 20px rgba(47, 125, 224, 0.16);
+  --glow-cyan: 0 0 20px rgba(21, 84, 209, 0.18);
+  --glow-soft: 0 8px 40px rgba(17, 17, 17, 0.06);
+
+  /* 边框：浅灰（与移动端 --m-border 对齐） */
+  --border-neon: 1px solid rgba(21, 84, 209, 0.22);
+  --border-glass: 1px solid #e6e8ec;
+
+  /* 边框/输入/抬升面：补齐 aurora 默认未定义的语义变量（浅色值，与 --m-border/--m-bg-soft 对齐） */
+  --border-color: #e6e8ec;
+  --border-soft: #ededed;
+  --bg-input: #ffffff;
+  --bg-elevated: #f7f8fa;
+
+  /* 圆角：商务克制（与移动端 --m-radius:10px / --m-radius-lg:14px 对齐） */
+  --radius-card: 14px;
+  --radius-btn: 10px;
+  --radius-input: 8px;
+  --radius-pill: 999px;
+
+  --blur: blur(10px);
+
+  /* 字体：系统无衬线栈（与移动端 --m-font 对齐） */
+  --font-display: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-body: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Robot IP 配色：浅色机身 + 蓝色点缀 */
+  --robot-head-1: #e8eef9;
+  --robot-head-2: #d6e2f5;
+  --robot-head-3: #eaf0f8;
+  --robot-body-1: #1554d1;
+  --robot-body-2: #e8eef9;
+  --robot-accent: #1554d1;
+  --robot-eye: #2f7de0;
+  --robot-eye-deep: #0f3f9e;
+  --robot-antenna: #2f7de0;
+  --robot-glow: rgba(21, 84, 209, 0.25);
+
+  /* 图谱目录色：蓝色系节点 + 琥珀/绿状态 */
+  --graph-entities: #1554d1;
+  --graph-concepts: #2f7de0;
+  --graph-comparisons: #3b6fd4;
+  --graph-queries: #1a5fd0;
+  --graph-entities-border: #3b6fd4;
+  --graph-concepts-border: #5a9be8;
+  --graph-comparisons-border: #6f8fe0;
+  --graph-queries-border: #4a86e8;
+  --graph-qa: #e0792b;
+  --graph-solutions: #2faa6a;
+  --graph-qa-border: #eaa15a;
+  --graph-solutions-border: #5fc78f;
+  --graph-edge: rgba(21, 84, 209, 0.22);
+  --graph-edge-highlight: #1554d1;
+  --graph-label: #111111;
+
+  --bg-scene: #f5f6f8;
+  --border-accent: rgba(21, 84, 209, 0.22);
+
+  /* ============================================================
+   * Accent 半透明色（由品牌蓝 #1554d1 派生，供 UI 组件分级使用）
+   * 危险红 #d93636 / 警告琥珀 #e0792b 各自独立派生。
+   * ============================================================ */
+  --accent-purple-base: #1554d1;
+  --accent-cyan-base: #2f7de0;
+  --accent-pink-base: #d93636;   /* 危险红 */
+  --accent-magenta-base: #e0792b;/* 警告琥珀 */
+
+  --accent-purple-a03: rgba(21, 84, 209, 0.03);
+  --accent-cyan-a03: rgba(47, 125, 224, 0.03);
+  --accent-pink-a03: rgba(217, 54, 54, 0.03);
+  --accent-magenta-a03: rgba(224, 121, 43, 0.03);
+
+  --accent-purple-a04: rgba(21, 84, 209, 0.04);
+  --accent-cyan-a04: rgba(47, 125, 224, 0.04);
+  --accent-pink-a04: rgba(217, 54, 54, 0.04);
+  --accent-magenta-a04: rgba(224, 121, 43, 0.04);
+
+  --accent-purple-a05: rgba(21, 84, 209, 0.05);
+  --accent-cyan-a05: rgba(47, 125, 224, 0.05);
+  --accent-pink-a05: rgba(217, 54, 54, 0.05);
+  --accent-magenta-a05: rgba(224, 121, 43, 0.05);
+
+  --accent-purple-a06: rgba(21, 84, 209, 0.06);
+  --accent-cyan-a06: rgba(47, 125, 224, 0.06);
+  --accent-pink-a06: rgba(217, 54, 54, 0.06);
+  --accent-magenta-a06: rgba(224, 121, 43, 0.06);
+
+  --accent-purple-a08: rgba(21, 84, 209, 0.08);
+  --accent-cyan-a08: rgba(47, 125, 224, 0.08);
+  --accent-pink-a08: rgba(217, 54, 54, 0.08);
+  --accent-magenta-a08: rgba(224, 121, 43, 0.08);
+
+  --accent-purple-a10: rgba(21, 84, 209, 0.1);
+  --accent-cyan-a10: rgba(47, 125, 224, 0.1);
+  --accent-pink-a10: rgba(217, 54, 54, 0.1);
+  --accent-magenta-a10: rgba(224, 121, 43, 0.1);
+
+  --accent-purple-a12: rgba(21, 84, 209, 0.12);
+  --accent-cyan-a12: rgba(47, 125, 224, 0.12);
+  --accent-pink-a12: rgba(217, 54, 54, 0.12);
+  --accent-magenta-a12: rgba(224, 121, 43, 0.12);
+
+  --accent-purple-a15: rgba(21, 84, 209, 0.15);
+  --accent-cyan-a15: rgba(47, 125, 224, 0.15);
+  --accent-pink-a15: rgba(217, 54, 54, 0.15);
+  --accent-magenta-a15: rgba(224, 121, 43, 0.15);
+
+  --accent-purple-a18: rgba(21, 84, 209, 0.18);
+  --accent-cyan-a18: rgba(47, 125, 224, 0.18);
+  --accent-pink-a18: rgba(217, 54, 54, 0.18);
+  --accent-magenta-a18: rgba(224, 121, 43, 0.18);
+
+  --accent-purple-a20: rgba(21, 84, 209, 0.2);
+  --accent-cyan-a20: rgba(47, 125, 224, 0.2);
+  --accent-pink-a20: rgba(217, 54, 54, 0.2);
+  --accent-magenta-a20: rgba(224, 121, 43, 0.2);
+
+  --accent-purple-a25: rgba(21, 84, 209, 0.25);
+  --accent-cyan-a25: rgba(47, 125, 224, 0.25);
+  --accent-pink-a25: rgba(217, 54, 54, 0.25);
+  --accent-magenta-a25: rgba(224, 121, 43, 0.25);
+
+  --accent-purple-a30: rgba(21, 84, 209, 0.3);
+  --accent-cyan-a30: rgba(47, 125, 224, 0.3);
+  --accent-pink-a30: rgba(217, 54, 54, 0.3);
+  --accent-magenta-a30: rgba(224, 121, 43, 0.3);
+
+  --accent-purple-a35: rgba(21, 84, 209, 0.35);
+  --accent-cyan-a35: rgba(47, 125, 224, 0.35);
+  --accent-pink-a35: rgba(217, 54, 54, 0.35);
+  --accent-magenta-a35: rgba(224, 121, 43, 0.35);
+
+  --accent-purple-a40: rgba(21, 84, 209, 0.4);
+  --accent-cyan-a40: rgba(47, 125, 224, 0.4);
+  --accent-pink-a40: rgba(217, 54, 54, 0.4);
+  --accent-magenta-a40: rgba(224, 121, 43, 0.4);
+
+  --accent-purple-a45: rgba(21, 84, 209, 0.45);
+  --accent-cyan-a45: rgba(47, 125, 224, 0.45);
+  --accent-pink-a45: rgba(217, 54, 54, 0.45);
+  --accent-magenta-a45: rgba(224, 121, 43, 0.45);
+
+  --accent-purple-a50: rgba(21, 84, 209, 0.5);
+  --accent-cyan-a50: rgba(47, 125, 224, 0.5);
+  --accent-pink-a50: rgba(217, 54, 54, 0.5);
+  --accent-magenta-a50: rgba(224, 121, 43, 0.5);
+
+  --accent-purple-a60: rgba(21, 84, 209, 0.6);
+  --accent-cyan-a60: rgba(47, 125, 224, 0.6);
+  --accent-pink-a60: rgba(217, 54, 54, 0.6);
+  --accent-magenta-a60: rgba(224, 121, 43, 0.6);
+
+  --accent-purple-a70: rgba(21, 84, 209, 0.7);
+  --accent-cyan-a70: rgba(47, 125, 224, 0.7);
+  --accent-pink-a70: rgba(217, 54, 54, 0.7);
+  --accent-magenta-a70: rgba(224, 121, 43, 0.7);
+}
+
+/* ============================================================
+ * 背景视差层：浅色主题下极淡蓝晕，保持通透商务感
+ * ============================================================ */
+[data-theme="light-business"] .bg-layer.base {
+  background:
+    radial-gradient(ellipse 70% 50% at 12% 8%, rgba(21, 84, 209, 0.06) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 45% at 88% 14%, rgba(47, 125, 224, 0.05) 0%, transparent 55%),
+    var(--bg-deep);
+}
+
+[data-theme="light-business"] .bg-layer.grid {
+  background-image:
+    linear-gradient(rgba(21, 84, 209, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(21, 84, 209, 0.035) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 100% 80% at 50% 30%, #000 30%, transparent 80%);
+  animation: grid-drift 40s linear infinite;
+}
+
+[data-theme="light-business"] .bg-layer.noise {
+  opacity: 0;
+  mix-blend-mode: normal;
+}
+
+[data-theme="light-business"] .bg-layer.orbs::before {
+  background: radial-gradient(circle, #1554d1, transparent 70%);
+  opacity: 0.1;
+}
+
+[data-theme="light-business"] .bg-layer.orbs::after {
+  background: radial-gradient(circle, #2f7de0, transparent 70%);
+  opacity: 0.1;
+}
+
+/* 卡片顶部高光线：浅蓝，弱存在感 */
+[data-theme="light-business"] .glass-card::before {
+  background: linear-gradient(90deg, transparent, #1554d1, #2f7de0, transparent);
+  opacity: 0.35;
+}
+
+/* 3D 悬停改为克制微抬升 + 柔和投影 */
+[data-theme="light-business"] .hover-3d:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(17, 17, 17, 0.1);
+}
+
+/* 标题渐变文字：商务主题下改为实色深黑，去掉流光动画 */
+[data-theme="light-business"] .grad-text {
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: #111111;
+  color: #111111;
+  animation: none;
+}
+
+/* ============================================================
+ * Element Plus 适配：浅白商务风
+ * 主按钮实色深蓝；次按钮白底描边；输入白底浅边框。
+ * ============================================================ */
+[data-theme="light-business"] .el-button--primary {
+  background: #1554d1 !important;
+  border: none !important;
+  box-shadow: 0 4px 16px rgba(21, 84, 209, 0.22) !important;
+}
+
+[data-theme="light-business"] .el-button--primary:hover {
+  background: #0f3f9e !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 22px rgba(21, 84, 209, 0.32) !important;
+}
+
+[data-theme="light-business"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success) {
+  background: #ffffff !important;
+  border: 1px solid #d9dde3 !important;
+  color: #2b2b2b !important;
+}
+
+[data-theme="light-business"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
+  background: #f2f6fd !important;
+  border-color: #1554d1 !important;
+  color: #1554d1 !important;
+  box-shadow: 0 2px 10px rgba(21, 84, 209, 0.12) !important;
+}
+
+[data-theme="light-business"] .el-input__wrapper,
+[data-theme="light-business"] .el-textarea__inner {
+  background: #ffffff !important;
+  box-shadow: 0 0 0 1px #d9dde3 inset !important;
+  color: #111111 !important;
+}
+
+[data-theme="light-business"] .el-input__wrapper:hover,
+[data-theme="light-business"] .el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px rgba(21, 84, 209, 0.4) inset !important;
+}
+
+[data-theme="light-business"] .el-input__wrapper.is-focus,
+[data-theme="light-business"] .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px #1554d1 inset, 0 0 0 3px rgba(21, 84, 209, 0.1) !important;
+}
+
+[data-theme="light-business"] .el-input__inner {
+  color: #111111 !important;
+}
+
+[data-theme="light-business"] .el-input__inner::placeholder {
+  color: #9aa0a6 !important;
+}
+
+[data-theme="light-business"] .el-tabs__item {
+  color: #5a5f66 !important;
+}
+
+[data-theme="light-business"] .el-tabs__item:hover {
+  color: #1554d1 !important;
+}
+
+[data-theme="light-business"] .el-tabs__item.is-active {
+  color: #1554d1 !important;
+  text-shadow: none;
+  font-weight: 700;
+}
+
+[data-theme="light-business"] .el-tabs__active-bar {
+  background: #1554d1 !important;
+}
+
+[data-theme="light-business"] .el-tabs__nav-wrap::after {
+  background-color: #e6e8ec !important;
+}
+
+[data-theme="light-business"] .el-tree {
+  color: #2b2b2b !important;
+}
+
+[data-theme="light-business"] .el-tree-node__content:hover {
+  background: #f2f6fd !important;
+}
+
+[data-theme="light-business"] .el-tree-node.is-current > .el-tree-node__content {
+  background: #e8f0fc !important;
+}
+
+[data-theme="light-business"] .el-dialog {
+  background: #ffffff !important;
+  border: 1px solid #e6e8ec;
+  box-shadow: 0 24px 64px rgba(17, 17, 17, 0.16) !important;
+}
+
+[data-theme="light-business"] .el-dialog__title {
+  color: #111111 !important;
+}
+
+[data-theme="light-business"] .el-dialog__body {
+  color: #2b2b2b !important;
+}
+
+[data-theme="light-business"] .el-upload-dragger {
+  background: #ffffff !important;
+  border: 2px dashed #cdd5df !important;
+}
+
+[data-theme="light-business"] .el-upload-dragger:hover {
+  border-color: #1554d1 !important;
+  box-shadow: 0 2px 12px rgba(21, 84, 209, 0.12) !important;
+}
+
+[data-theme="light-business"] .el-message {
+  background: #ffffff !important;
+  color: #111111 !important;
+  border: 1px solid #e6e8ec;
+  box-shadow: 0 8px 32px rgba(17, 17, 17, 0.12) !important;
+}
+
+[data-theme="light-business"] ::-webkit-scrollbar-track {
+  background: #eef0f3;
+}
+
+[data-theme="light-business"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #1554d1, #2f7de0);
+  border: 2px solid #eef0f3;
+}
+
+[data-theme="light-business"] ::selection {
+  background: rgba(21, 84, 209, 0.22);
+  color: #111111;
+}
+
+/* 浮动提示气泡：浅色主题下 --bg-card-solid 为白色，需强制深色底保证白字可读
+   （Query.vue 的 .chip-tooltip 用 background: var(--bg-card-solid) + color:#fff） */
+[data-theme="light-business"] .chip-tooltip {
+  background: rgba(17, 17, 17, 0.85);
+  color: #fff;
+}

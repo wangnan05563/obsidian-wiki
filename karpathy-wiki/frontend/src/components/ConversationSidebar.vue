@@ -3,6 +3,7 @@ import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { Edit, Delete, ArrowLeft, Plus, DocumentCopy, Download, MoreFilled } from '@element-plus/icons-vue';
 import NavIcons from './NavIcons.vue';
+import SessionStatusIcon from './SessionStatusIcon.vue';
 import { useConversationsStore } from '../stores/conversations';
 import type { ConversationRecord } from '../types';
 import { buildConversationMarkdown, buildConversationFilename, downloadTextFile } from '../utils/exportConversation';
@@ -209,7 +210,10 @@ onBeforeUnmount(() => {
           <span class="pin-rot is-pinned"><NavIcons name="pin" :size="14" /></span>
         </span>
         <div class="conv-info">
-          <div class="conv-title">{{ conv.title }}</div>
+          <div class="conv-title-row">
+            <div class="conv-title">{{ conv.title }}</div>
+            <SessionStatusIcon :conv="conv" />
+          </div>
           <div class="conv-time">{{ formatTime(conv.updatedAt) }}</div>
         </div>
         <!-- F-3.3 hover 操作按钮：高频操作直显（置顶 / 删除），低频操作收进「更多操作」菜单
@@ -457,7 +461,15 @@ onBeforeUnmount(() => {
   flex: 1;
   min-width: 0;
 }
+.conv-title-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
 .conv-title {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: var(--text-bright, #f3e9ff);
   overflow: hidden;

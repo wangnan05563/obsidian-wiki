@@ -91,6 +91,8 @@ function defaultConfig(): AppConfig {
     // sessionSecretRef 默认 WIKI_SESSION_SECRET：与 llm.apiKeyRef 一致的引用模式
     auth: {
       enabled: true,
+      // #5 默认 false：保持既有的读端点公开可读；置 true 即要求登录后才可浏览/下载知识库
+      filesReadAuthRequired: false,
       sessionTtlHours: 24,
       permissionCacheTtlSec: 300,
       auditLogPath: '../data/audit.log',

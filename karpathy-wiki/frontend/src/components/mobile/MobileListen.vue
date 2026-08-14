@@ -796,7 +796,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 0 calc(10px + env(safe-area-inset-top, 0));
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-bottom: 1px solid var(--m-border, #ededed);
 }
 .ml-search-icon {
@@ -852,7 +852,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 8px;
   border: 1px solid var(--m-border, #ededed);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-radius: 12px;
   padding: 11px 12px;
   cursor: pointer;
@@ -898,7 +898,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   border: 1px solid var(--m-border, #ededed);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-radius: 10px;
   padding: 9px 11px;
   color: var(--m-text-2, #777777);
@@ -977,7 +977,7 @@ onBeforeUnmount(() => {
   height: 30px;
   border-radius: 8px;
   border: 1px solid var(--m-border-2, #e2e4e8);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-text, #111111);
   font-size: 12px;
   font-family: var(--m-font);
@@ -991,7 +991,7 @@ onBeforeUnmount(() => {
   height: 30px;
   border-radius: 8px;
   border: 1px solid var(--m-border-2, #e2e4e8);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-text-2, #777777);
   display: inline-flex;
   align-items: center;
@@ -1032,7 +1032,7 @@ onBeforeUnmount(() => {
   max-width: 80vw;
   padding: 9px 16px;
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border-2, #e2e4e8);
   color: var(--m-text, #111111);
   font-size: 13px;
@@ -1060,7 +1060,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 0 8px;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-bottom: 1px solid var(--m-border, #ededed);
 }
 .ml-back {
@@ -1104,7 +1104,7 @@ onBeforeUnmount(() => {
   z-index: 4;
   margin: 4px -14px -16px;
   padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0));
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-top: 1px solid var(--m-border, #ededed);
 }
 .ml-progress {
@@ -1149,7 +1149,7 @@ onBeforeUnmount(() => {
   height: 38px;
   border-radius: 50%;
   border: 1px solid var(--m-border-2, #e2e4e8);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-text, #111111);
   font-size: 15px;
   cursor: pointer;
@@ -1233,7 +1233,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border-2, #e2e4e8);
   color: var(--m-text-2, #777777);
   cursor: pointer;

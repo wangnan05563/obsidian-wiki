@@ -85,6 +85,10 @@ export interface AuthConfig {
   // 是否启用权限控制（关闭时所有请求视为 admin）
   // 为什么保留开关：本地开发场景可关闭简化测试
   enabled: boolean;
+  // 知识库读端点是否要求登录（#5）：true 时 /api/files 的 tree/pages/files/download
+  // 四个读端点统一要求已登录，实现「知识库仅登录可见」。默认 false 保持既有公开可读。
+  // 为什么可配且不硬编码：运营可按部署形态（公开站 / 内部私有库）切换，无需改代码。
+  filesReadAuthRequired?: boolean;
   // 会话有效期（小时）
   sessionTtlHours: number;
   // 权限缓存 TTL（秒）

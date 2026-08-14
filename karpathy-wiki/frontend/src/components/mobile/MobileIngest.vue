@@ -339,7 +339,7 @@ function openPage(path: string) {
 .mi-input:focus,
 .mi-textarea:focus {
   border-color: var(--m-primary, #0f4c81);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
 }
 .mi-file {
   width: 100%;
@@ -456,7 +456,7 @@ function openPage(path: string) {
   margin-top: 4px;
   height: 40px;
   border: 1px solid var(--m-border, #ececee);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-muted, #777777);
   border-radius: 10px;
   font-size: 14px;
@@ -540,7 +540,7 @@ function openPage(path: string) {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-primary, #0f4c81);
   flex-shrink: 0;
 }

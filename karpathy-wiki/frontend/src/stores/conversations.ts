@@ -123,6 +123,10 @@ export const useConversationsStore = defineStore('conversations', () => {
   const conversations = ref<ConversationRecord[]>([]);
   const currentConversationId = ref<string | null>(null);
   const searchKeyword = ref('');
+  // 用户「正在查看」的会话 id（会话状态图标用）：进入某会话聊天视图时置为该 id，
+  // 回到列表视图时置 null。persistConversation 据此判定「完成更新时用户是否正在看」——
+  // 没在看的会话标记 unread，触发历史列表的「已完成未读」状态动画。
+  const viewingConversationId = ref<string | null>(null);
   // 当前用户（authStore.user.id）上一次 loadConversations 时的归属，用于在 auth 变化时
   // 判定是否需要重置会话作用域（FR-RM-06 防御）：切换账户后 currentConversationId 必须作废，
   // 否则下一用户复用同一 id 调 persistConversation 会把上一用户的会话覆盖并改属自己，
@@ -210,6 +214,9 @@ export const useConversationsStore = defineStore('conversations', () => {
       threadId: threadId ?? useQueryStore().currentThreadId ?? existing?.threadId,
       // 本地多账户隔离键（FR-RM-06）：归属当前用户；未登录时留空（升级前老数据兼容）
       ownerId: currentOwnerId(),
+      // 未读标记：已存在的会话，若本次完成更新时用户「未正在查看」该会话，则标记未读；
+      // 新建会话（用户刚创建并正在查看）一律不标记未读。见 viewingConversationId 注释。
+      unread: existing ? viewingConversationId.value !== id : false,
     };
 
     // 仅写入 IndexedDB（客户端本地权威源），不再双写后端
@@ -307,6 +314,9 @@ export const useConversationsStore = defineStore('conversations', () => {
   // 本地优先（FR-RM-05）：会话内容仅存客户端，不再从后端读取
   async function selectConversation(id: string) {
     currentConversationId.value = id;
+    // 进入该会话聊天视图：标记正在查看并复位未读（历史列表状态图标实时更新）
+    viewingConversationId.value = id;
+    void markRead(id);
     // FR-RM-09 续答：切换会话同步记住活跃会话
     setLastActiveConversationId(id);
     const record = (await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id)) ?? null;
@@ -319,6 +329,23 @@ export const useConversationsStore = defineStore('conversations', () => {
     // 恢复线程隔离键：重开历史会话时一并恢复其本地记忆归属，使后续问答续接上下文
     useQueryStore().setThreadId(record?.threadId ?? null);
     useQueryStore().loadMessages(record?.messages ?? []);
+  }
+
+  // 标记会话为已读：复位 unread 并同步落盘 IndexedDB（跨刷新保持已读状态）
+  async function markRead(id: string) {
+    const idx = conversations.value.findIndex((c) => c.id === id);
+    if (idx < 0 || !conversations.value[idx].unread) return;
+    conversations.value[idx] = { ...conversations.value[idx], unread: false };
+    try {
+      await dbPut(STORE_CONVERSATIONS, conversations.value[idx]);
+    } catch {
+      // IndexedDB 失败不阻断
+    }
+  }
+
+  // 设置「正在查看」的会话：进入聊天视图置 id，回列表置 null（供未读判定与状态图标）
+  function setViewing(id: string | null) {
+    viewingConversationId.value = id;
   }
 
   function startNewConversation() {
@@ -343,5 +370,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     duplicateConversation,
     selectConversation,
     startNewConversation,
+    markRead,
+    setViewing,
   };
 });

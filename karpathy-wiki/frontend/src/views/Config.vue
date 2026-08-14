@@ -7,20 +7,23 @@ import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import MarkdownRenderer from '../components/MarkdownRenderer.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData, PromptFile, PromptTestRunEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
-import { STORAGE_KEYS, presetStorageKey } from '../constants/storageKeys';
 import { consumeSSE } from '../utils/sse';
 import { useAuthStore } from '../stores/auth';
 import { useTtsStore } from '../stores/tts';
 import { DEFAULT_TTS_CONFIG } from '../services/ttsConfig';
 // 按用户维度隔离的 AI/搜索/工具配置读写层（BYOK：密钥仅存客户端本地，按 userId 命名空间隔离）
+// 多模型（按 LLM 预设）独立配置：每个预设各自保存 provider/baseUrl/model/apiKey。
 import {
-  loadAiUserConfig,
-  saveAiUserConfig,
+  loadAiUserConfigMap,
+  loadAiUserConfigForPreset,
+  saveAiUserConfigForPreset,
+  saveAiUserConfigMap,
   loadSearchUserConfig,
   saveSearchUserConfig,
   loadToolsUserConfig,
   saveToolsUserConfig,
   DEFAULT_AI_USER_CONFIG,
+  type AiUserConfig,
 } from '../services/userConfig';
 
 const activeTab = ref<'schema' | 'config' | 'ai' | 'tts' | 'theme' | 'tools' | 'qq' | 'prompts'>('schema');
@@ -255,49 +258,10 @@ const matchedPreset = computed(() =>
 const aiBaseUrlPlaceholder = computed(() => matchedPreset.value?.baseUrl ?? '请输入 API Base URL');
 const aiModelPlaceholder = computed(() => matchedPreset.value?.model ?? '请输入模型名称');
 
-// 按预设持久化非敏感 UI 状态（baseUrl/model）到 localStorage。
-// 为什么不存 apiKey：apiKey 明文存 localStorage 与后端 config.json 形成双轨，
-// 两者独立变化会导致状态不一致。apiKey 唯一权威源为后端 config.json。
-// 切换预设时 apiKey 从后端读取脱敏值返显，明文 key 仅用户输入时短暂存在内存。
-// presetStorageKey 函数已从 constants/storageKeys.ts 导入，此处不再重复定义。
-
-interface PresetConfigCache {
-  baseUrl: string;
-  model: string;
-}
-
-function loadPresetCache(presetKey: string): PresetConfigCache | null {
-  const raw = localStorage.getItem(presetStorageKey(presetKey));
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as Partial<PresetConfigCache> & { apiKey?: string };
-      // 兼容旧格式（含 apiKey 字段）：忽略 apiKey，仅取 baseUrl/model
-      return {
-        baseUrl: parsed.baseUrl ?? '',
-        model: parsed.model ?? '',
-      };
-    } catch {
-      // 损坏数据忽略
-    }
-  }
-  return null;
-}
-
-function savePresetCache(presetKey: string, cache: PresetConfigCache): void {
-  localStorage.setItem(presetStorageKey(presetKey), JSON.stringify(cache));
-}
-
-function clearAllPresetCache(): void {
-  // 清除所有 llmPresetConfig:* 和遗留的 apiKey:* 条目（旧格式迁移清理）
-  const keysToRemove: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && (k.startsWith(STORAGE_KEYS.LLM_PRESET_CONFIG_PREFIX) || k.startsWith('apiKey:'))) {
-      keysToRemove.push(k);
-    }
-  }
-  keysToRemove.forEach(k => localStorage.removeItem(k));
-}
+// 按预设持久化：每个 LLM 预设独立保存完整配置（含 apiKey）到按用户命名空间的映射表
+// （services/userConfig 的 AiUserConfigMap），切换预设时加载对应预设的已保存配置，
+// 实现「各模型 API Key 互不干扰、随模型切换正确返显」。映射表为单一权威源，
+// 不再另用 localStorage 缓存（避免双轨不一致）。
 
 // 当前用户 id（未登录视为 guest 命名空间）；用于按用户隔离读写本地配置。
 const currentUserId = computed(() => authStore.user?.id || 'guest');
@@ -313,8 +277,15 @@ function maskLocal(key: string): string {
 async function loadAiConfig() {
   loadingAi.value = true;
   try {
-    const cfg = await loadAiUserConfig(currentUserId.value);
-    // 表单初始化为当前用户的本地配置（apiKey 为本人浏览器明文，password 控件默认以点显示）
+    // 初始编辑目标：优先第一个「已保存」的预设，否则第一个预设，否则空（自定义）。
+    const map = await loadAiUserConfigMap(currentUserId.value);
+    const savedKeys = aiPresets.value.map(p => p.key).filter(k => map[k]);
+    const initialKey = savedKeys[0] ?? aiPresets.value[0]?.key ?? '';
+    selectedPresetKey.value = initialKey;
+    // 传入initialKey对应的预设模板：无保存槽且无 legacy 时将以该预设模板为默认值，
+    // 与上方高亮的 selectedPresetKey 标签保持一致（避免首次打开表单停在全局 GLM 默认）。
+    const initialPreset = aiPresets.value.find(p => p.key === initialKey);
+    const cfg = await loadAiUserConfigForPreset(currentUserId.value, initialKey, initialPreset);
     aiForm.value = {
       provider: cfg.provider,
       baseUrl: cfg.baseUrl,
@@ -322,22 +293,24 @@ async function loadAiConfig() {
       apiKey: cfg.apiKey,
     };
     // 本地派生状态摘要（原 aiConfig 来自服务端，现在由本地配置派生）
-    aiConfig.value = {
-      provider: cfg.provider,
-      baseUrl: cfg.baseUrl,
-      model: cfg.model,
-      apiKeyRef: '',
-      apiKeyMasked: cfg.apiKey ? maskLocal(cfg.apiKey) : '',
-      apiKeySet: Boolean(cfg.apiKey),
-    };
-    // 根据当前 provider 匹配预设 key，用于预设标签高亮
-    const matched = aiPresets.value.find(p => p.provider === cfg.provider);
-    selectedPresetKey.value = matched?.key ?? '';
+    aiConfig.value = deriveAiSummary(cfg);
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载 AI 配置失败', err));
   } finally {
     loadingAi.value = false;
   }
+}
+
+// 由 AiUserConfig 派生本地状态摘要（含本地脱敏 apiKeyMasked）
+function deriveAiSummary(cfg: AiUserConfig): AiConfig {
+  return {
+    provider: cfg.provider,
+    baseUrl: cfg.baseUrl,
+    model: cfg.model,
+    apiKeyRef: '',
+    apiKeyMasked: cfg.apiKey ? maskLocal(cfg.apiKey) : '',
+    apiKeySet: Boolean(cfg.apiKey),
+  };
 }
 
 // 加载 LLM 预设列表
@@ -352,26 +325,24 @@ async function loadPresets() {
   }
 }
 
-// 应用预设：切换标签时返显该预设"上次保存"的 baseUrl/model。
-// 设计边界（single-source-rule）：
-//   - 权威持久化源为按用户隔离的本地 IndexedDB（saveAiConfig 写入的 aiUserConfig），保存即落盘；
-//   - 本地另维护一份"按预设"的非敏感 UI 缓存（localStorage 下 llmPresetConfig:<presetKey>），
-//     仅缓存 baseUrl/model，作为切换预设时快速回显"该预设上次填过的值"，避免切换即被模板默认值覆盖。
-// 优先级：持久化缓存（该预设已保存过）→ 预设模板默认值（首次使用）。
-// apiKey 不从缓存读取、也不覆盖：用户已填的明文 key 保留在表单，用户仍需自行保存自己的密钥。
-function applyPreset(preset: LlmPreset) {
+// 应用预设：切换标签时加载「该预设已保存」的完整配置（含 API Key），实现按模型独立返显。
+// 优先用持久化的按预设槽位；无保存记录则回退预设模板默认值（首次使用，API Key 留空由用户填写）。
+// 这是修复「切换模型 API Key 不跟随返显」的关键：apiKey 随预设一并加载，而非保留上一个表单内容。
+async function applyPreset(preset: LlmPreset) {
   selectedPresetKey.value = preset.key;
-  // 优先恢复该预设持久化的 baseUrl/model；无缓存（首次）则回退预设模板默认值。
-  const cached = loadPresetCache(preset.key);
-  // 按用户隔离：预设仅作为"模板"填充 provider；baseUrl/model 优先用持久化值。
-  // apiKey 保留用户已填内容（不覆盖），用户仍需填写并保存自己的密钥。
-  aiForm.value.provider = preset.provider;
-  aiForm.value.baseUrl = cached?.baseUrl ?? preset.baseUrl;
-  aiForm.value.model = cached?.model ?? preset.model;
-  ElMessage.success(`已套用 ${preset.label} 预设（请填写并保存你的 API Key）`);
+  const cfg = await loadAiUserConfigForPreset(currentUserId.value, preset.key, preset);
+  aiForm.value = {
+    // 已保存过则取保存值；未保存则回退预设模板默认值
+    provider: cfg.provider || preset.provider,
+    baseUrl: cfg.baseUrl || preset.baseUrl,
+    model: cfg.model || preset.model,
+    apiKey: cfg.apiKey, // 该预设已保存的密钥（未保存则为空，由用户填写）
+  };
+  aiConfig.value = deriveAiSummary(aiForm.value);
+  ElMessage.success(`已切到 ${preset.label}（请确认或填写你的 API Key）`);
 }
 
-// 保存 AI 配置（按用户隔离写入本地 IndexedDB，不回传服务端）
+// 保存 AI 配置（按用户隔离写入本地 IndexedDB 映射表的「当前预设」槽位，不回传服务端）
 async function saveAiConfig() {
   if (!aiForm.value.baseUrl.trim()) {
     ElMessage.warning('请填写 API Base URL');
@@ -384,32 +355,18 @@ async function saveAiConfig() {
 
   savingAi.value = true;
   try {
-    await saveAiUserConfig(currentUserId.value, {
+    await saveAiUserConfigForPreset(currentUserId.value, selectedPresetKey.value, {
       provider: aiForm.value.provider,
       baseUrl: aiForm.value.baseUrl,
       model: aiForm.value.model,
       apiKey: aiForm.value.apiKey,
     });
-    // 同步持久化"按预设"的 UI 缓存（baseUrl/model），确保下次切换回该预设时
-    // 返显的是上次保存的配置，而非被模板默认值覆盖（见 applyPreset 的 loadPresetCache）。
-    // 仅当当前表单确实对应某个预设时才写缓存，避免写入空 key 的脏记录。
-    if (selectedPresetKey.value) {
-      savePresetCache(selectedPresetKey.value, {
-        baseUrl: aiForm.value.baseUrl,
-        model: aiForm.value.model,
-      });
-    }
     // 更新本地派生状态摘要
-    aiConfig.value = {
-      ...aiConfig.value,
-      provider: aiForm.value.provider,
-      baseUrl: aiForm.value.baseUrl,
-      model: aiForm.value.model,
-      apiKeyRef: '',
-      apiKeyMasked: aiForm.value.apiKey ? maskLocal(aiForm.value.apiKey) : '',
-      apiKeySet: Boolean(aiForm.value.apiKey),
-    };
-    ElMessage.success('AI 配置已保存到本地（仅当前账户可见）');
+    aiConfig.value = deriveAiSummary(aiForm.value);
+    const label = selectedPresetKey.value
+      ? `模型 ${selectedPresetKey.value}`
+      : '当前模型';
+    ElMessage.success(`AI 配置已保存到本地（${label}，仅当前账户可见）`);
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
@@ -417,12 +374,12 @@ async function saveAiConfig() {
   }
 }
 
-// 恢复初始配置：将当前账户的本地 AI 配置重置为默认值（仅影响当前用户，不影响他人）。
+// 恢复初始配置：将当前账户所有模型的本地 AI 配置重置为默认值（仅影响当前用户，不影响他人）。
 const resettingAi = ref(false);
 async function resetAiConfig() {
   try {
     await ElMessageBox.confirm(
-      '确定将当前账户的 AI 配置恢复为默认值吗？此操作仅清空你本地的 provider/baseUrl/model/apiKey，不影响其他账户。',
+      '确定将当前账户的 AI 配置恢复为默认值吗？此操作清空你本地所有模型的 provider/baseUrl/model/apiKey，不影响其他账户。',
       '恢复初始配置',
       { confirmButtonText: '确定恢复', cancelButtonText: '取消', type: 'warning' },
     );
@@ -433,26 +390,12 @@ async function resetAiConfig() {
 
   resettingAi.value = true;
   try {
-    await saveAiUserConfig(currentUserId.value, { ...DEFAULT_AI_USER_CONFIG });
-    // 同时清空按预设的 UI 缓存，避免重置后切换预设仍回显旧的 baseUrl/model。
-    clearAllPresetCache();
-    aiForm.value = {
-      provider: DEFAULT_AI_USER_CONFIG.provider,
-      baseUrl: DEFAULT_AI_USER_CONFIG.baseUrl,
-      model: DEFAULT_AI_USER_CONFIG.model,
-      apiKey: '',
-    };
-    aiConfig.value = {
-      ...aiConfig.value,
-      provider: DEFAULT_AI_USER_CONFIG.provider,
-      baseUrl: DEFAULT_AI_USER_CONFIG.baseUrl,
-      model: DEFAULT_AI_USER_CONFIG.model,
-      apiKeyRef: '',
-      apiKeyMasked: '',
-      apiKeySet: false,
-    };
-    const matched = aiPresets.value.find(p => p.provider === DEFAULT_AI_USER_CONFIG.provider);
-    selectedPresetKey.value = matched?.key ?? '';
+    // 清空整张按预设映射表（含兼容槽），等同于恢复初始配置
+    await saveAiUserConfigMap(currentUserId.value, {});
+    const def = { ...DEFAULT_AI_USER_CONFIG };
+    selectedPresetKey.value = aiPresets.value[0]?.key ?? '';
+    aiForm.value = { ...def };
+    aiConfig.value = deriveAiSummary(def);
     aiTestResult.value = null;
     ElMessage.success('已恢复当前账户默认配置');
   } catch (err) {
@@ -1774,7 +1717,7 @@ onMounted(async () => {
                   v-for="preset in aiPresets"
                   :key="preset.key"
                   class="preset-tag"
-                  :class="{ active: aiForm.provider === preset.provider }"
+                  :class="{ active: selectedPresetKey === preset.key }"
                   @click="applyPreset(preset)"
                 >
                   {{ preset.label }}

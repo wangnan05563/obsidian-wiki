@@ -133,6 +133,10 @@ export interface ChatMessage {
   // - 'error'：生成出错，重载后不自动续答（保留 [出错] 部分答案）
   // 仅用于本地 IndexedDB 暂存与续答判定，不回传后端。
   status?: 'complete' | 'streaming' | 'interrupted' | 'error';
+  // 超时中断标记：reason==='timeout' 时由 bufStopLoading 置位，用于前端在超时 assistant
+  // 消息下方常驻渲染"确认重发"按钮（区别于 hover 工具栏的"重新生成"）。
+  // 随 IndexedDB 持久化，刷新重载后该标记仍保留，超时消息可持续提供重发入口。
+  timedOut?: boolean;
   // FR-09-2 多模态输出（mindmap/faq/timeline），作为独立卡片渲染在主答案之后
   multimodal?: MultimodalOutput;
   // v3 图像生成结果：独立于 multimodal，通过 SSE image 事件推送
@@ -183,6 +187,9 @@ export interface ConversationRecord {
   // 本地多账户隔离键（FR-RM-06）：会话归属的用户 id（= authStore.user.id）。
   // 老数据/升级前无此字段，读取时按「ownerId 缺失即归属当前用户」兼容，避免历史会话丢失。
   ownerId?: string;
+  // 未读标记（会话状态图标用）：会话在用户「未正在查看」时完成更新（如后台生成结束），
+  // 标记为未读，直到用户打开该会话（markRead 复位）。用于历史列表「已完成未读」状态动画。
+  unread?: boolean;
 }
 
 // SSE answer 事件数据

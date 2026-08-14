@@ -130,7 +130,7 @@ function onKeydown(e: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0));
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   font-family: var(--font-body);
 }
 
@@ -141,7 +141,7 @@ function onKeydown(e: KeyboardEvent) {
   flex-direction: column;
   gap: 28px;
   padding: 28px 22px;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border, #ececee);
   border-radius: 16px;
 }
@@ -195,7 +195,7 @@ function onKeydown(e: KeyboardEvent) {
 
 .mlogin-input:focus {
   border-color: var(--m-primary, #0f4c81);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
 }
 
 .mlogin-input:disabled {

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { useAuthStore } from '../../stores/auth';
+import { useModelStore } from '../../stores/model';
 import RobotAvatar from '../RobotAvatar.vue';
 import {
-  loadAiUserConfig,
-  saveAiUserConfig,
+  loadAiUserConfigForPreset,
+  saveAiUserConfigForPreset,
   DEFAULT_AI_USER_CONFIG,
   type AiUserConfig,
 } from '../../services/userConfig';
+import type { LlmPreset } from '../../types';
 import { useMobileTheme } from '../../composables/useMobileTheme';
 
 // 移动端「我的」页（SRS FR-ME）：用户资料 + BYOK（AI 服务密钥）配置 + 登出。
@@ -16,9 +18,15 @@ const authStore = useAuthStore();
 // 主题切换（毛玻璃 / 浅白）：与 MobileShell 共享模块级单例，切换即时联动并持久化
 const { theme: mobileTheme, setTheme } = useMobileTheme();
 const userId = computed(() => authStore.user?.id ?? '');
+// 模型预设列表（与聊天页 ModelSelector 同源）：用于按模型独立配置 API Key
+const modelStore = useModelStore();
 
 const cfg = ref<AiUserConfig>({ ...DEFAULT_AI_USER_CONFIG });
+// 服务商可选项（自由输入，不限于预设）
 const providerOptions = ['glm', 'openai', 'deepseek', 'qwen', 'anthropic', 'custom'];
+// 预设列表与当前选中的预设 key：每个预设独立保存各自的配置
+const presets = ref<LlmPreset[]>([]);
+const selectedPresetKey = ref('');
 
 const saving = ref(false);
 const saved = ref(false);
@@ -35,10 +43,38 @@ const roleLabel: Record<string, string> = {
   guest: '游客',
 };
 
+// 加载 LLM 预设列表（与聊天页一致）
+async function loadPresets(): Promise<void> {
+  try {
+    await modelStore.loadPresets();
+  } catch {
+    // 预设加载失败不阻断
+  }
+  presets.value = modelStore.presets;
+}
+
+// 切换预设：加载该预设已保存的完整配置（含 API Key），实现各模型独立返显
+async function applyPreset(key: string): Promise<void> {
+  if (!key || !userId.value) return;
+  selectedPresetKey.value = key;
+  try {
+    // 传入预设模板：预设槽位为空时 provider/baseUrl/model 跟随该预设（而非 legacy 扁平配置）
+    const preset = presets.value.find(p => p.key === key);
+    const cfgData = await loadAiUserConfigForPreset(userId.value, key, preset);
+    cfg.value = { ...cfgData };
+  } catch {
+    // 读取失败保留当前表单
+  }
+}
+
 onMounted(async () => {
   if (!userId.value) return;
+  await loadPresets();
+  selectedPresetKey.value = modelStore.selectedPresetKey || presets.value[0]?.key || '';
   try {
-    cfg.value = await loadAiUserConfig(userId.value);
+    const preset = presets.value.find(p => p.key === selectedPresetKey.value);
+    const cfgData = await loadAiUserConfigForPreset(userId.value, selectedPresetKey.value, preset);
+    cfg.value = { ...cfgData };
   } catch {
     loadError.value = '读取本地配置失败，将使用默认值';
   }
@@ -49,8 +85,9 @@ async function save() {
   saving.value = true;
   saved.value = false;
   try {
-    // 传入纯对象副本：userConfig.saveUserConfig 内部会深拷贝剥离响应式代理
-    await saveAiUserConfig(userId.value, { ...cfg.value });
+    // 传入纯对象副本：userConfig.saveUserConfig 内部会深拷贝剥离响应式代理；
+    // 写入当前所选预设的槽位，实现各模型配置互不干扰。
+    await saveAiUserConfigForPreset(userId.value, selectedPresetKey.value, { ...cfg.value });
     saved.value = true;
     setTimeout(() => (saved.value = false), 2000);
   } finally {
@@ -118,6 +155,13 @@ async function logout() {
       </p>
 
       <div v-if="loadError" class="mme-warn-text">{{ loadError }}</div>
+
+      <div class="mme-field">
+        <label class="mme-label">模型预设</label>
+        <select v-model="selectedPresetKey" class="mme-input" @change="applyPreset(selectedPresetKey)">
+          <option v-for="p in presets" :key="p.key" :value="p.key">{{ p.label }}</option>
+        </select>
+      </div>
 
       <div class="mme-field">
         <label class="mme-label">服务商</label>
@@ -344,7 +388,7 @@ async function logout() {
   padding: 10px 14px;
   font-size: 15px;
   color: var(--m-text, #111111);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border, #ececee);
   border-radius: 10px;
   outline: none;
@@ -397,7 +441,7 @@ select.mme-input {
   font-size: 15px;
   font-weight: 600;
   color: #d93025;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border, #ececee);
   border-radius: 10px;
   cursor: pointer;
