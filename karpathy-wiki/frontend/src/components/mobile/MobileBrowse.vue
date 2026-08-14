@@ -4,7 +4,7 @@
 // 三种视图：list（全部页面）/ search（搜索命中）/ detail（条目正文）。
 // 同时支持从「知识问答」页点击 vault 引用跳转（MobileShell 监听 karpathy:jump-vault 后注入 jumpPath）。
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { apiFetch, API_BASE } from '../../utils/apiBase';
+import { apiFetch, API_BASE, downloadVaultFile } from '../../utils/apiBase';
 import MarkdownRenderer from '../MarkdownRenderer.vue';
 import type { PageItem, FileContent, SearchHit, SearchResponse } from '../../types';
 
@@ -20,6 +20,11 @@ const listLoading = ref(false);
 const searching = ref(false);
 const detailLoading = ref(false);
 const errorMsg = ref('');
+
+// 下载态：dlLoading 防重复点击；dlError 在详情视图内展示下载失败反馈
+// （不再复用 errorMsg —— 其展示条件为 view !== 'detail'，会导致详情页下载失败被隐藏，评审发现 #2）
+const dlLoading = ref(false);
+const dlError = ref('');
 
 const current = ref<FileContent | null>(null);
 const currentPath = ref('');
@@ -208,6 +213,23 @@ function backToList() {
   current.value = null;
 }
 
+// 下载当前文档到本地设备（移动端详情页「下载」按钮）。
+// 失败信息回显到 dlError（详情视图内可见），复用桌面端同一套 downloadVaultFile（含 iOS 兜底）。
+async function downloadCurrent() {
+  if (!currentPath.value || dlLoading.value) return;
+  dlLoading.value = true;
+  dlError.value = '';
+  try {
+    await downloadVaultFile(currentPath.value, currentTitle.value || currentPath.value.split('/').pop() || 'document');
+  } catch (err) {
+    dlError.value = '下载失败：' + (err as Error).message;
+    // 4s 后自动清除，避免常驻
+    setTimeout(() => { if (dlError.value) dlError.value = ''; }, 4000);
+  } finally {
+    dlLoading.value = false;
+  }
+}
+
 onMounted(async () => {
   await loadPages();
   if (props.jumpPath) {
@@ -288,9 +310,22 @@ onBeforeUnmount(() => {
           返回
         </button>
         <span class="mb-detail-path">{{ currentPath }}</span>
+        <button
+          class="mb-dl"
+          :disabled="detailLoading || dlLoading"
+          aria-label="下载文档"
+          title="下载到本地"
+          @click="downloadCurrent"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12 M7 10l5 5 5-5 M5 21h14" />
+          </svg>
+          下载
+        </button>
       </div>
 
       <div v-if="detailLoading" class="mb-hint">读取内容中…</div>
+      <div v-if="dlError" class="mb-error">{{ dlError }}</div>
       <template v-else-if="current">
         <div class="mb-detail-hero">
           <h2 class="mb-detail-title">{{ currentTitle }}</h2>
@@ -337,7 +372,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 14px calc(10px + env(safe-area-inset-top, 0));
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-bottom: 1px solid var(--m-border, #ededed);
 }
 .mb-search-icon {
@@ -389,7 +424,7 @@ onBeforeUnmount(() => {
   width: 100%;
   text-align: left;
   border: 1px solid var(--m-border, #ededed);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-radius: 12px;
   padding: 12px 14px;
   cursor: pointer;
@@ -473,7 +508,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 0;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-bottom: 1px solid var(--m-border, #ededed);
 }
 .mb-back {
@@ -497,6 +532,28 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 移动端详情页「下载」按钮：触控友好（≥40px 高）、主色描边、贴右 */
+.mb-dl {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 36px;
+  padding: 0 12px;
+  margin-left: auto;
+  border: 1px solid var(--m-primary, #1554d1);
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  color: var(--m-primary, #1554d1);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--m-font);
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mb-dl:active { background: rgba(21, 84, 209, 0.18); }
+.mb-dl:disabled { opacity: 0.5; cursor: not-allowed; }
+.mb-dl svg { width: 16px; height: 16px; }
 .mb-detail-hero {
   display: flex;
   flex-direction: column;
@@ -517,7 +574,7 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 .mb-detail-body {
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border, #ededed);
   border-radius: 14px;
   padding: 16px;
@@ -545,7 +602,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border-2, #e2e4e8);
   color: var(--m-text-2, #777777);
   cursor: pointer;

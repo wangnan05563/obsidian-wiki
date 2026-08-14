@@ -222,6 +222,21 @@ function bufStopLoading(b: SessionBuffer, reason: 'user' | 'timeout' | 'edit') {
       createdAt: new Date().toISOString(),
       // FR-RM-09：用户/超时主动停止 → interrupted，重载后不自动续答
       status: 'interrupted',
+      // 超时中断：打 timedOut 标记，供前端在消息下方渲染常驻"确认重发"按钮
+      timedOut: reason === 'timeout',
+    });
+  } else if (reason === 'timeout') {
+    // S2 修复：首字节前即超时（弱网/模型挂死，连续 120s 零数据）时没有任何部分答案可保留，
+    // 但仍生成一条 timedOut 占位消息承载"确认重发"按钮，兑现"超时后点击确认重发"的诉求——
+    // 否则纯挂死场景下用户只看到超时 toast、原问题无答案且无重发入口。
+    // 注意：仅 timeout 落占位；user 主动停止且零字节时不生成（避免凭空出现重发入口）。
+    b.messages.push({
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: `${suffix} 请求超时，未收到任何响应，请检查网络或模型配置后点击下方按钮重发。`,
+      createdAt: new Date().toISOString(),
+      status: 'interrupted',
+      timedOut: true,
     });
   }
   bufClearCurrentRound(b);
@@ -315,7 +330,10 @@ function bufLoadMessages(b: SessionBuffer, loadedMessages: ChatMessage[]) {
 }
 
 function bufRemoveMessagesFrom(b: SessionBuffer, index: number) {
-  b.messages = b.messages.slice(0, index);
+  // 防御：夹紧到合法范围，避免传入过期/越界 idx 时 slice 产生非预期结果（负值回退到 0 即保留全部，
+  // 超长回退到末尾即不删）。模板始终传有效 idx 且 isLoading 守卫阻断并发变更，此兜底仅防未然。
+  const safe = Math.min(Math.max(index, 0), b.messages.length);
+  b.messages = b.messages.slice(0, safe);
 }
 
 function bufRemoveMessage(b: SessionBuffer, index: number) {

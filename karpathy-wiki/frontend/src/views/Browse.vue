@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE, apiFetch } from '../utils/apiBase';
+import { API_BASE, apiFetch, downloadVaultFile } from '../utils/apiBase';
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Check, Close, CircleClose } from '@element-plus/icons-vue';
@@ -752,6 +752,37 @@ function hasUnsavedChanges(): boolean {
   return editing.value && editBuffer.value !== (fileContent.value?.content ?? '');
 }
 
+// 下载当前打开的文档（知识浏览→内容操作栏「下载」按钮）
+const downloading = ref(false);
+async function downloadCurrent() {
+  if (!currentNode.value) return;
+  downloading.value = true;
+  try {
+    await downloadVaultFile(currentNode.value, currentNode.value.split('/').pop() || 'document');
+    ElMessage.success('已开始下载');
+  } catch (err) {
+    ElMessage.error('下载失败：' + (err as Error).message);
+  } finally {
+    downloading.value = false;
+  }
+}
+
+// 从列表（看板/日历卡片）直接下载文档，带 @click.stop 避免触发卡片打开详情
+// downloadingPage：防快速连点重复下载（评审发现 #4）
+const downloadingPage = ref(false);
+async function downloadPage(p: PageItem) {
+  if (downloadingPage.value) return;
+  downloadingPage.value = true;
+  try {
+    await downloadVaultFile(p.path, String(p.frontmatter.title || p.name));
+    ElMessage.success('已开始下载');
+  } catch (err) {
+    ElMessage.error('下载失败：' + (err as Error).message);
+  } finally {
+    downloadingPage.value = false;
+  }
+}
+
 function renderMarkdown(md: string): string {
   if (!md) return '';
   let html = md
@@ -1309,6 +1340,15 @@ onMounted(async () => {
                       class="kanban-tag"
                     >{{ t }}</span>
                   </div>
+                  <div class="kanban-card-actions">
+                    <el-button
+                      size="small"
+                      text
+                      type="primary"
+                      :disabled="downloadingPage"
+                      @click.stop="downloadPage(p)"
+                    >下载</el-button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1341,6 +1381,15 @@ onMounted(async () => {
                 >
                   <div class="calendar-card-title">{{ p.frontmatter.title || p.name }}</div>
                   <div class="calendar-card-path">{{ p.path }}</div>
+                  <div class="calendar-card-actions">
+                    <el-button
+                      size="small"
+                      text
+                      type="primary"
+                      :disabled="downloadingPage"
+                      @click.stop="downloadPage(p)"
+                    >下载</el-button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1370,6 +1419,12 @@ onMounted(async () => {
             <div class="action-bar">
               <span class="current-path">{{ currentNode }}</span>
               <div class="actions">
+                <el-button
+                  v-if="!editing"
+                  size="small"
+                  :loading="downloading"
+                  @click="downloadCurrent"
+                >下载</el-button>
                 <el-button v-if="!editing" size="small" @click="startEdit">编辑</el-button>
                 <template v-else>
                   <el-button size="small" type="primary" @click="saveEdit">保存</el-button>
@@ -1613,6 +1668,14 @@ onMounted(async () => {
   border-radius: 6px;
   background: var(--accent-cyan-a15);
   color: var(--text-primary);
+}
+
+/* 看板/日历卡片底部下载操作行 */
+.kanban-card-actions,
+.calendar-card-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* FR-11 日历视图 */

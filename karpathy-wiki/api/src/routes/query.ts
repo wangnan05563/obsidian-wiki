@@ -174,6 +174,17 @@ export function registerQueryRoute(
       return void reply.code(errAny.statusCode ?? 500).send({ error: errAny.message ?? String(err) });
     }
 
+    // ── Q&A 管线 stage 日志（logs-review 诊断项）──
+    // 纯增量：不改变任何业务行为，仅用于定位长耗时（历史出现 143s/282s）卡在哪一环。
+    // 关键信号：first-token（首 token 延迟）= 鉴权+线程解析+prompt 编排+LLM 首响的总耗时；
+    // done 的 totalMs = 整轮总耗时。两者差值即"首 token 后流式输出 + 持久化"耗时。
+    const t0 = Date.now();
+    const mark = (phase: string, extra?: Record<string, unknown>): void => {
+      request.log.info({ reqId: request.id, threadId, phase, elapsedMs: Date.now() - t0, ...extra }, 'query-pipeline');
+    };
+    mark('accepted', { qLen: input.question.length, mode: input.mode ?? null, web: !!input.webSearch, stream: input.stream ?? null });
+    let firstTokenAt: number | null = null;
+
     // 本轮问答使用的会话/记忆标识（sessionId === threadId，1 线程 1 会话）
     const sessionId = threadId;
     const answerBuffer: string[] = [];
@@ -268,10 +279,15 @@ export function registerQueryRoute(
 
           if (chunk.done) {
             await handleDoneChunk(chunk);
+            mark('done', { totalMs: Date.now() - t0, answerLen: answerBuffer.join('').length, refs: refs.length, webRefs: webRefs.length });
           } else if ((chunk.refs?.length ?? 0) > 0) {
             // 兜底：非 done 时收到 refs 也下发（兼容 v1 行为）
             send('refs', { refs: chunk.refs, webRefs });
           } else if (chunk.text) {
+            if (firstTokenAt === null) {
+              firstTokenAt = Date.now();
+              mark('first-token', { firstTokenMs: firstTokenAt - t0 });
+            }
             answerBuffer.push(chunk.text);
             send('answer', { text: chunk.text });
           }
@@ -280,8 +296,8 @@ export function registerQueryRoute(
     } catch (err: unknown) {
       // 为什么同时调用 request.log.error：SSE 错误只推前端，后端日志流需独立记录以便排障
       request.log.error(
-        { err, question: input.question, sessionId },
-        'query SSE stream error',
+        { err, reqId: request.id, threadId, phase: 'error', elapsedMs: Date.now() - t0, question: input.question, sessionId },
+        'query-pipeline error',
       );
       send('error', {
         message: err instanceof Error ? err.message : String(err),

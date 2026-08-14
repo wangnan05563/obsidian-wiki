@@ -27,7 +27,7 @@ import { useConversationsStore, getLastActiveConversationId } from '../../stores
 import { useAuthStore } from '../../stores/auth';
 import { useModelStore } from '../../stores/model';
 import {
-  loadAiUserConfig,
+  loadAiUserConfigForPreset,
   loadSearchUserConfig,
 } from '../../services/userConfig';
 import type { AiUserConfig, SearchUserConfig } from '../../services/userConfig';
@@ -36,6 +36,7 @@ import { useSpeechRecognition } from '../../composables/useSpeechRecognition';
 import ThinkingBlock from '../ThinkingBlock.vue';
 import RefsList from '../RefsList.vue';
 import FollowupsChips from '../FollowupsChips.vue';
+import SessionStatusIcon from '../SessionStatusIcon.vue';
 import type { ChatMessage, Reference, ConversationRecord } from '../../types';
 
 const emit = defineEmits<{ (e: 'open-me'): void }>();
@@ -252,6 +253,8 @@ function openConversation(id: string) {
     store.swapSession(id, { messages: rec ? rec.messages : [], threadId: rec?.threadId ?? null });
   }
   conversationsStore.currentConversationId = id;
+  conversationsStore.markRead(id);
+  conversationsStore.setViewing(id);
   activeId.value = id;
   mode.value = 'chat';
   requestAnimationFrame(() => scrollToBottom(true));
@@ -265,6 +268,7 @@ function newSession() {
   }
   const newId = crypto.randomUUID();
   conversationsStore.currentConversationId = newId;
+  conversationsStore.setViewing(newId);
   store.swapSession(newId);
   activeId.value = newId;
   mode.value = 'chat';
@@ -272,6 +276,8 @@ function newSession() {
 }
 
 function goList() {
+  // 回到历史列表：清空「正在查看」会话，使后台完成的会话可被标记为未读
+  conversationsStore.setViewing(null);
   mode.value = 'list';
 }
 
@@ -417,6 +423,13 @@ function onFollowup(question: string) {
 
 async function sendQuestion(question: string, convId: string) {
   activeAbort = new AbortController();
+  // 会话已失效（auth/me 返回 401 触发自动登出）时，直接提示重新登录/配置，
+  // 避免继续打 /api/query 拿到 401/404 等晦涩错误（移动端「会话失效 → 点击发送」的典型崩溃路径）。
+  if (!authStore.isLoggedIn) {
+    ElMessage.warning('会话已失效，请先登录并在「配置 → AI 服务」填写 API 配置后再提问');
+    activeAbort = null;
+    return;
+  }
   const buf = store.getSessionBuffer(convId);
   const activeThreadId = buf?.currentThreadId ?? null;
   const history = activeThreadId
@@ -436,8 +449,10 @@ async function sendQuestion(question: string, convId: string) {
   // 后端不持久化（参见 services/userConfig.ts）。仅当用户已填 API Key 才下发，
   // 空密钥视为未配置，交由后端 400 拦截。
   const uid = authStore.user?.id || 'guest';
+  // 传入当前预设模板：预设槽位为空时让 provider/baseUrl/model 跟随该预设（而非 legacy 扁平配置）
+  const activePreset = modelStore.presets.find(p => p.key === modelStore.selectedPresetKey);
   const [aiCfg, searchCfg] = await Promise.all([
-    loadAiUserConfig(uid),
+    loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset),
     loadSearchUserConfig(uid),
   ]);
   if (aiCfg && aiCfg.apiKey) {
@@ -535,7 +550,8 @@ onMounted(async () => {
   // 加载 BYOK 配置（用于模型显示 + 问答下发 llmConfig）
   try {
     const uid = authStore.user?.id || 'guest';
-    byokConfig.value = await loadAiUserConfig(uid);
+    const activePreset = modelStore.presets.find(p => p.key === modelStore.selectedPresetKey);
+    byokConfig.value = await loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset);
     byokSearch.value = await loadSearchUserConfig(uid);
   } catch {
     /* BYOK 不可用时静默降级 */
@@ -622,6 +638,7 @@ onBeforeUnmount(() => {
             <div class="mq-task-title">
               <span v-if="c.isPinned" class="mq-task-pin">置顶</span>
               <span class="mq-task-name">{{ c.title || '未命名会话' }}</span>
+              <SessionStatusIcon :conv="c" />
             </div>
             <div class="mq-task-tag">□ 对话 · {{ c.preview || '暂无内容' }}</div>
           </div>
@@ -862,7 +879,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   height: 52px;
   padding: 0 14px;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-bottom: 1px solid var(--m-border, #ededed);
 }
 .mq-filter {
@@ -935,7 +952,7 @@ onBeforeUnmount(() => {
   left: 14px;
   z-index: 7;
   min-width: 140px;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border, #ededed);
   border-radius: 12px;
   padding: 6px;
@@ -964,7 +981,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-bottom: 1px solid var(--m-border, #ededed);
 }
 .mq-search-icon { width: 18px; height: 18px; color: var(--m-text-3, #9aa0a6); flex-shrink: 0; }
@@ -1055,6 +1072,8 @@ onBeforeUnmount(() => {
   padding: 1px 5px;
 }
 .mq-task-name {
+  flex: 1;
+  min-width: 0;
   font-size: 15px;
   font-weight: 700;
   color: var(--m-text, #111111);
@@ -1134,7 +1153,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 0 12px;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-bottom: 1px solid var(--m-border, #ededed);
 }
 .mq-chat-title {
@@ -1192,7 +1211,7 @@ onBeforeUnmount(() => {
 }
 .mq-suggestion {
   border: 1px solid var(--m-border, #ededed);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-text, #111111);
   border-radius: 12px;
   padding: 10px 14px;
@@ -1216,7 +1235,7 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 .mq-bubble.assistant {
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border: 1px solid var(--m-border-2, #e2e4e8);
   border-bottom-left-radius: 5px;
 }
@@ -1272,7 +1291,7 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   gap: 8px;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0));
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-top: 1px solid var(--m-border, #ededed);
 }
 .mq-mic,
@@ -1281,7 +1300,7 @@ onBeforeUnmount(() => {
   height: 38px;
   border-radius: 10px;
   border: 1px solid var(--m-border-2, #e2e4e8);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-text-2, #777777);
   cursor: pointer;
   display: flex;
@@ -1344,7 +1363,7 @@ onBeforeUnmount(() => {
 }
 .mq-sheet {
   width: 100%;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-top-left-radius: 18px;
   border-top-right-radius: 18px;
   padding: 8px 14px calc(14px + env(safe-area-inset-bottom, 0));
@@ -1400,7 +1419,7 @@ onBeforeUnmount(() => {
   width: 100%;
   max-height: 82vh;
   overflow-y: auto;
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   border-top-left-radius: 18px;
   border-top-right-radius: 18px;
   padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0));
@@ -1510,7 +1529,7 @@ onBeforeUnmount(() => {
   height: 38px;
   border-radius: 10px;
   border: 1px solid var(--m-border-2, #e2e4e8);
-  background: #ffffff;
+  background: var(--m-surface, #ffffff);
   color: var(--m-text-2, #777777);
   display: flex;
   align-items: center;

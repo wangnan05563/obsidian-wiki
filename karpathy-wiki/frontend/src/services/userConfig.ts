@@ -17,7 +17,7 @@
 // 注意：本层是纯客户端存储，不回传服务端（与项目"个人配置仅存本地"约定一致）。
 
 import { dbGet, dbPut, CHAT_STORES } from './chatDb';
-import type { ToolsConfig } from '../types';
+import type { ToolsConfig, LlmPreset } from '../types';
 
 export type UserConfigKind = 'ai' | 'search' | 'tools' | 'inputbox';
 
@@ -48,6 +48,113 @@ export const DEFAULT_AI_USER_CONFIG: AiUserConfig = {
   model: '',
   apiKey: '',
 };
+
+// ── 多模型（按 LLM 预设）配置：每个预设独立保存各自的 provider/baseUrl/model/apiKey ──
+// 存储形状：Record<presetKey, AiUserConfig>，仍存于同一 per-user 命名空间 'usercfg::ai::<userId>'。
+// 这样切换模型时各模型的 API Key 互不干扰、各自持久化与返显（修复「切换模型 API Key 不跟随返显」）。
+export type AiUserConfigMap = Record<string, AiUserConfig>;
+
+export const DEFAULT_AI_USER_CONFIG_MAP: AiUserConfigMap = {};
+
+// 兼容槽：旧版单份扁平配置 / 移动端未分预设的 BYOK 配置落于此键，
+// 当未配置具体预设（或尚未迁移）时作为回退，保证历史数据不丢。
+export const LEGACY_AI_CONFIG_KEY = '__legacy__';
+
+// 判断一条 'ai' 记录是「旧版扁平配置」还是「按预设的映射表」：
+// 映射表的值均为 AiUserConfig 对象，绝不会在顶层出现字符串 apiKey。
+function isLegacyFlatAiConfig(rec: unknown): boolean {
+  return !!rec && typeof (rec as Record<string, unknown>).apiKey === 'string';
+}
+
+// 读取完整按预设映射表；遇旧版扁平配置自动迁移为映射表并写回磁盘，后续统一走映射表。
+export async function loadAiUserConfigMap(userId: string): Promise<AiUserConfigMap> {
+  if (!userId) return {};
+  try {
+    const rec = await dbGet<Record<string, unknown>>(
+      CHAT_STORES.preferences,
+      userConfigKey('ai', userId),
+    );
+    if (!rec) return {};
+    const { key: _key, ...rest } = rec;
+    void _key;
+    // 旧版扁平配置：迁移为映射表，落到兼容槽，并写回磁盘（saveUserConfig 内部已深拷贝 + 静默降级）
+    if (isLegacyFlatAiConfig(rest)) {
+      const legacy = rest as unknown as AiUserConfig;
+      const migrated: AiUserConfigMap = { [LEGACY_AI_CONFIG_KEY]: legacy };
+      await saveUserConfig(userId, 'ai', migrated);
+      return migrated;
+    }
+    return (rest as AiUserConfigMap) ?? {};
+  } catch {
+    // IndexedDB 不可用时静默降级为默认映射，不阻断功能
+    return {};
+  }
+}
+
+// 写入完整按预设映射表（覆盖式）。
+export async function saveAiUserConfigMap(userId: string, map: AiUserConfigMap): Promise<void> {
+  await saveUserConfig(userId, 'ai', map);
+}
+
+// 读取指定预设的 AI 配置；该预设无独立保存时回退兼容槽，再回退默认值。
+// presetKey 为空（自定义 / 未选中预设）时直接读兼容槽。
+//
+// 关键修正（修复「切换模型后实际模型不跟随变化」）：
+//   当预设槽位为空时，provider/baseUrl/model 必须以「该预设模板」为准，
+//   而非回退到 __legacy__ 扁平配置（旧版单份配置只有一个 model，会让所有预设
+//   都解析到同一模型，导致切换预设后 selectedPresetKey 变了、但下发给后端的
+//   llmConfig.model 始终不变）。apiKey 仅在 legacy.provider 与当前预设一致时沿用，
+//   避免把 A 厂商的 key 错发给 B 厂商。
+// 返回值已与默认值合并，调用方可直接使用。
+export async function loadAiUserConfigForPreset(
+  userId: string,
+  presetKey?: string,
+  preset?: LlmPreset,
+): Promise<AiUserConfig> {
+  const map = await loadAiUserConfigMap(userId);
+  const slot = presetKey ? map[presetKey] : undefined;
+  if (slot) return { ...DEFAULT_AI_USER_CONFIG, ...slot };
+  // 预设槽位为空：以预设模板的 provider/baseUrl/model 为准，让模型随预设切换
+  const legacy = map[LEGACY_AI_CONFIG_KEY];
+  if (legacy) {
+    if (!preset) {
+      // 未传模板（如纯 legacy 读取路径）：完整沿用旧配置，保持向后兼容
+      return { ...DEFAULT_AI_USER_CONFIG, ...legacy };
+    }
+    // 传了模板：provider/baseUrl/model 一律跟随模板，保证各预设解析到各自的模型；
+    // apiKey 仅在 legacy 厂商与模板一致时沿用（兼容老用户单厂商配置），
+    // 厂商不一致则留空，避免把 A 厂商的 key 错发给 B 厂商。
+    return {
+      provider: preset.provider,
+      baseUrl: preset.baseUrl,
+      model: preset.model,
+      apiKey: legacy.provider === preset.provider ? legacy.apiKey : '',
+    };
+  }
+  // 预设槽位为空且无 legacy 兼容槽：以「该预设模板」为默认值，
+  // 保证首次点击某预设时厂商标签与 URL 跟随高亮/切换（而非回退到全局 GLM 默认）。
+  // 仅当未传模板（纯 legacy 读取路径，如 loadAiConfig 初始加载）时才回退到全局 DEFAULT_AI_USER_CONFIG。
+  return {
+    provider: preset?.provider ?? DEFAULT_AI_USER_CONFIG.provider,
+    baseUrl: preset?.baseUrl ?? DEFAULT_AI_USER_CONFIG.baseUrl,
+    model: preset?.model ?? DEFAULT_AI_USER_CONFIG.model,
+    apiKey: '',
+  };
+}
+
+// 保存指定预设的 AI 配置到映射表对应槽位（覆盖式）。
+// presetKey 为空时写入兼容槽，等价于旧版单份行为，保证未分预设的 BYOK 配置仍可落盘。
+export async function saveAiUserConfigForPreset(
+  userId: string,
+  presetKey: string | undefined,
+  cfg: AiUserConfig,
+): Promise<void> {
+  if (!userId) return;
+  const map = await loadAiUserConfigMap(userId);
+  const key = presetKey && presetKey.trim() ? presetKey : LEGACY_AI_CONFIG_KEY;
+  map[key] = { ...cfg };
+  await saveUserConfig(userId, 'ai', map);
+}
 
 export const DEFAULT_SEARCH_USER_CONFIG: SearchUserConfig = {
   provider: 'tavily',
@@ -142,10 +249,12 @@ export async function saveUserConfig<T>(
 }
 
 // ── 类型化门面（业务层按需引用，避免散落字符串 kind）──
+// 兼容旧调用：等价于读写兼容槽（旧版单份配置 / 移动端未分预设 BYOK）。
+// 新业务请直接使用 loadAiUserConfigForPreset / saveAiUserConfigForPreset 实现按模型独立配置。
 export const loadAiUserConfig = (userId: string) =>
-  loadUserConfig<AiUserConfig>(userId, 'ai', DEFAULT_AI_USER_CONFIG);
+  loadAiUserConfigForPreset(userId, LEGACY_AI_CONFIG_KEY);
 export const saveAiUserConfig = (userId: string, cfg: AiUserConfig) =>
-  saveUserConfig(userId, 'ai', cfg);
+  saveAiUserConfigForPreset(userId, LEGACY_AI_CONFIG_KEY, cfg);
 
 export const loadSearchUserConfig = (userId: string) =>
   loadUserConfig<SearchUserConfig>(userId, 'search', DEFAULT_SEARCH_USER_CONFIG);

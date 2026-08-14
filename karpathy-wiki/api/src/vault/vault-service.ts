@@ -3,6 +3,22 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import { watch, type FSWatcher } from 'chokidar';
 
+// 将底层 fs 读取错误包装为带 code 的 Error，保留准确文案（区分不存在/目录/权限/其它）。
+// 为什么需要：路由层需按 HTTP 状态码分流（目录→400、权限→403、不存在→404、其它→500），
+//   但 Node 原生错误码分散在各 catch 中；统一在此透传，避免路由层再猜测或一律 404（#7）。
+function enrichReadError(e: unknown, relativePath: string): Error {
+  const fsErr = e as { code?: string };
+  const code = fsErr?.code;
+  let message: string;
+  if (code === 'ENOENT') message = `文件不存在: ${relativePath}`;
+  else if (code === 'EISDIR') message = `路径为目录而非文件: ${relativePath}`;
+  else if (code === 'EACCES' || code === 'EPERM') message = `无读取权限: ${relativePath}`;
+  else message = `读取失败: ${relativePath} (${code || 'UNKNOWN'})`;
+  const err = new Error(message) as Error & { code?: string };
+  err.code = code || 'UNKNOWN';
+  return err;
+}
+
 export interface TreeNode {
   name: string;
   path: string;
@@ -268,7 +284,9 @@ export class VaultService {
     const full = path.resolve(this.vaultPath, rel);
     const relFromVault = path.relative(this.vaultPath, full);
     if (relFromVault.startsWith('..') || path.isAbsolute(relFromVault)) {
-      throw new Error(`路径越界: ${rel}`);
+      const err = new Error(`路径越界: ${rel}`) as Error & { code?: string };
+      err.code = 'EOUTSIDE';
+      throw err;
     }
     return full;
   }
@@ -285,9 +303,9 @@ export class VaultService {
     let stat;
     try {
       stat = await fs.stat(full);
-    } catch {
-      // stat 失败说明文件不存在，直接抛错让调用方处理
-      throw new Error(`文件不存在: ${relativePath}`);
+    } catch (e) {
+      // stat 失败：透传底层 fs 错误码（ENOENT/EACCES 等），由调用方按码分流状态码
+      throw enrichReadError(e, relativePath);
     }
 
     const cached = this._fileContentCache.get(rel);
@@ -309,8 +327,9 @@ export class VaultService {
     try {
       // 不传编码参数，fs.readFile 返回 Buffer 而非 string
       return await fs.readFile(full);
-    } catch {
-      throw new Error(`文件不存在: ${relativePath}`);
+    } catch (e) {
+      // 透传底层 fs 错误码（ENOENT/EISDIR/EACCES 等），由调用方按码分流状态码
+      throw enrichReadError(e, relativePath);
     }
   }
 

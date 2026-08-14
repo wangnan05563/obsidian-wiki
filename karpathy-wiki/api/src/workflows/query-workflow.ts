@@ -316,6 +316,8 @@ function collectWebSearchResults(result: StepResult, state: AfterStepState): voi
     // 为什么放这里：web-search.ts 的 handler 签名只返回数组，无法直接推送 thinking
     // 用 webSearchDowngradeNotified 布尔避免多次 web_search 调用重复提示
     if (toolResult.length === 0 && !state.webSearchDowngradeNotified) {
+      // §5.2 结构化日志：web_search 被调用但未返回任何结果（超时/被限流/无命中）
+      console.log('[query-websearch] web_search returned 0 results (timeout/empty), downgrade to local-only');
       state.thinking.push({
         phase: 'thinking',
         message: '联网搜索超时或未返回结果，已降级为仅本地知识库。',
@@ -930,6 +932,12 @@ function buildMiddlewareContext(input: QueryInput): {
   const useWebSearch = middlewareSet != null ? middlewareSet.has('web_search') : !!input.webSearch; // NOSONAR
   const useDeepThinking = middlewareSet != null ? middlewareSet.has('deep_thinking') : input.mode === 'deep'; // NOSONAR
   const useStream = middlewareSet != null ? middlewareSet.has('stream') : !!input.stream; // NOSONAR
+  // §5.2 结构化日志：输出中间件解析决策，便于排查"联网搜索默认勾选却未生效"类问题。
+  // middlewareSet 为 null 即历史 bug 触发点（前端省略 middlewares → 各开关回退到废弃字段）。
+  console.log(
+    `[query-mw] resolve middlewareSet=${middlewareSet ? '[' + [...middlewareSet].join(',') + ']' : 'null'} ` +
+      `=> webSearch=${useWebSearch} deepThinking=${useDeepThinking} stream=${useStream}`,
+  );
   let effectiveMode: string;
   if (useDeepThinking) {
     effectiveMode = 'deep';

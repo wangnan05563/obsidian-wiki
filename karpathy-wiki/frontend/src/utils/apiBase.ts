@@ -47,3 +47,77 @@ export async function apiFetch(input: string | URL | Request, init: RequestInit 
   }
   return response;
 }
+
+// 从 Content-Disposition 解析权威文件名：RFC 5987 的 filename*（UTF-8''<pct-encoded>）优先，
+//   兼容旧浏览器的 ASCII filename="..."。下载落盘文件名以此为准，避免列表/卡片/移动端
+//   因传入展示标题（无扩展名）而保存出无后缀文件（评审发现 #1）。
+function parseDispositionName(disposition: string): string | null {
+  if (!disposition) return null;
+  const star = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try { return decodeURIComponent(star[1]); } catch { /* 解码失败回退 */ }
+  }
+  const plain = disposition.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1].trim() : null;
+}
+
+// 下载默认超时（避免慢网/大文件下 await res.blob() 长时间挂起，评审发现 #3）。
+// 知识库文档多为 KB~MB 级，120s 足够；超时会抛 AbortError 由调用方提示。
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
+
+// 下载知识库文件到本地设备（PC / 移动端复用）。
+// 为什么必须用 apiFetch：鉴权为 localStorage 的 Bearer Token（非 Cookie），
+//   普通 <a href> 直链不带 Token → 401；此函数经 apiFetch 注入 Token 后取 Blob 触发下载。
+// 流程：GET /api/files/download（后端返回原始字节 + Content-Disposition: attachment）
+//   → 读 Blob → 解析服务端权威文件名 → 生成 object URL → 创建隐藏 <a download> 触发保存。
+// 兼容性策略：
+//   - 桌面 Chrome/Edge/Firefox/Safari 与 Android Chrome：anchor download 可靠生效；
+//   - iOS Safari 对 anchor download 支持有限（常改为预览而非保存），改用 window.open
+//     在新标签打开 Blob，由用户借助系统「分享 / 存储到文件」完成保存（平台限制，非代码缺陷）。
+export async function downloadVaultFile(
+  relPath: string,
+  fallbackName?: string,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<void> {
+  const url = `${API_BASE}/files/download?path=${encodeURIComponent(relPath)}`;
+  // 超时保护：未显式传入 signal 时，按默认/调用方超时构造 AbortSignal（特性检测，旧环境降级为无超时）
+  let signal = opts.signal;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+  if (!signal && timeoutMs > 0 && typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
+    try { signal = AbortSignal.timeout(timeoutMs); } catch { /* 不支持则忽略 */ }
+  }
+  const res = await apiFetch(url, signal ? { signal } : undefined);
+  if (!res.ok) {
+    throw new Error(`下载失败：HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  // 落盘文件名优先级：服务端 Content-Disposition（含正确扩展名/中文）> 清洗后的展示名 > 路径 basename
+  const name =
+    parseDispositionName(res.headers.get('content-disposition') || '') ||
+    (fallbackName ? fallbackName.replace(/[\\/]/g, '_') : null) ||
+    relPath.split('/').pop() ||
+    'download';
+  const objectUrl = URL.createObjectURL(blob);
+  const isIOS =
+    /iP(hone|ad|od)/.test(navigator.platform || '') ||
+    (/Macintosh/.test(navigator.userAgent || '') && 'ontouchend' in document);
+  if (isIOS) {
+    // iOS：新标签打开 Blob，由用户「分享 / 存储到文件」。延迟回收 object URL。
+    window.open(objectUrl, '_blank');
+    setTimeout(() => {
+      try { URL.revokeObjectURL(objectUrl); } catch { /* ignore */ }
+    }, 30000);
+  } else {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // 延迟回收 object URL，确保下载已开始
+    setTimeout(() => {
+      try { URL.revokeObjectURL(objectUrl); } catch { /* ignore */ }
+    }, 1500);
+  }
+}

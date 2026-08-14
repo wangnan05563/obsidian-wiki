@@ -11,7 +11,8 @@ export type ThemeName =
   | 'creative'
   | 'product'
   | 'ecommerce'
-  | 'portfolio';
+  | 'portfolio'
+  | 'light-business';
 
 export interface ThemeMeta {
   key: ThemeName;
@@ -58,15 +59,24 @@ export const THEMES: ThemeMeta[] = [
     label: '艺术作品集',
     description: '米色金黑 · 优雅极简',
     swatch: ['#c9a961', '#1a1a1a'],
+  },
+  {
+    key: 'light-business',
+    label: '商务浅白',
+    description: '浅白专业 · 蓝灰商务（与移动端一致）',
+    swatch: ['#1554d1', '#f5f6f8'],
   }
 ];
 
+// 默认主题：商务浅白（与移动端 mobile-light.css 风格统一，PC/移动一致开箱即用）
+const DEFAULT_THEME: ThemeName = 'light-business';
+
 function readStoredTheme(): ThemeName {
-  // 从 localStorage 读取用户上次选择，非法值回退到 creative
+  // 从 localStorage 读取用户上次选择，非法值回退到 DEFAULT_THEME（商务浅白）
   // 通过 valid.key 返回而非 stored 类型断言，避免不安全的类型转换
   const stored = localStorage.getItem(STORAGE_KEYS.THEME);
   const valid = THEMES.find((t) => t.key === stored);
-  return valid ? valid.key : 'creative';
+  return valid ? valid.key : DEFAULT_THEME;
 }
 
 const currentTheme = ref<ThemeName>(readStoredTheme());

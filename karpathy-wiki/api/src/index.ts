@@ -401,7 +401,7 @@ export async function buildApp(): Promise<BuiltApp> {
   // PERF-TEST-FIX: registerThreadsRoute disabled (see import above)
   registerHealthCheckRoute(app, adapter, isolationGuards);
   // files/graph/stats 路由直接操作 Vault，不经过 adapter（纯确定性操作）
-  registerFilesRoutes(app, vault, isolationGuards);
+  registerFilesRoutes(app, vault, isolationGuards, { filesReadAuthRequired: config.auth?.filesReadAuthRequired ?? false });
   registerGraphRoute(app, vault);
   registerStatsRoute(app, vault);
   registerSchemaRoutes(app, vault, isolationGuards);

@@ -23,7 +23,7 @@ import { dbGet, CHAT_STORES } from '../services/chatDb';
 // 按用户隔离配置（BYOK 代理）：每次请求携带当前用户的 AI/搜索/工具配置，
 // 后端用其覆盖服务端共享配置，密钥仅存客户端、不落服务端磁盘。
 import {
-  loadAiUserConfig,
+  loadAiUserConfigForPreset,
   loadSearchUserConfig,
   loadToolsUserConfig,
 } from '../services/userConfig';
@@ -574,19 +574,23 @@ async function sendQuestion(question: string) {
   // §真流式开关透传：前端偏好覆盖后端 config.llm.stream 默认值
   // 为什么显式发送而非依赖后端默认：用户可在 Query 页面即时切换，无需改后端配置
   body.stream = store.streamMode;
-  // 中间件多选透传：仅在非全开时发送，全开时省略以减少请求体大小
-  // 与 outputModes 一致的策略：后端收到 undefined 时按各功能默认行为执行
-  if (store.middlewares.length > 0 && store.middlewares.length < ALL_MIDDLEWARES.length) {
-    body.middlewares = [...store.middlewares];
-  }
+  // 中间件多选透传：始终携带当前选择，使后端以 UI 选择为权威（覆盖各功能默认行为）。
+  // 修复：此前"全开"时省略 middlewares，后端 resolveMiddleware 将其视为 null，
+  // 使 web_search/deep_thinking/stream 回退到已废弃的 input.webSearch/input.mode/input.stream
+  // （默认 OFF），而 extended_tools/followups 仍默认 ON —— 逻辑不一致，导致默认勾选的
+  // "联网搜索"实际从未生效。始终发送后，UI 多选与后端开关完全一致。
+  body.middlewares = [...store.middlewares];
 
   // ── BYOK per-user 配置注入 ──
   // 每个用户携带自己配置的 AI 服务 / 搜索引擎 / 工具配置（含 API Key），
   // 后端以这些覆盖项替换服务端共享配置，实现"各用户独立额度、互不抢占限流"。
   // 密钥仅经此请求体一次性发给后端代理，后端不持久化到磁盘（参见 services/userConfig.ts）。
   const uid = authStore.user?.id || 'guest';
+  // 传入当前预设模板：预设槽位为空时让 provider/baseUrl/model 跟随该预设（而非 legacy 扁平配置），
+  // 修复「切换模型后实际模型不跟随变化」。
+  const activePreset = modelStore.presets.find(p => p.key === modelStore.selectedPresetKey);
   const [aiCfg, searchCfg, toolsCfg] = await Promise.all([
-    loadAiUserConfig(uid),
+    loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset),
     loadSearchUserConfig(uid),
     loadToolsUserConfig(uid),
   ]);
@@ -629,10 +633,18 @@ async function sendQuestion(question: string) {
     // 持久化对话到 IndexedDB（支持侧栏历史列表）
     await conversationsStore.persistConversation(store.messages);
   } catch (err: unknown) {
-    // AbortError 已在 consumeQuerySSE 内吞掉，此处只会是真实网络/API 错误
-    const msg = (err as Error).message;
-    store.handleError(msg);
-    ElMessage.warning(apiErrorMessage('问答失败', err));
+    // 对称守护（与 FloatingChat 一致）：AbortError 由超时/用户停止触发，交由 finally 按
+    // abortReason 提交部分答案并打 timedOut 标记，此处不再推送 error 消息，也不污染
+    // errorMessage。显式判断 name==='AbortError' 可消除对 consumeQuerySSE 内部"吞掉
+    // AbortError"契约的隐式依赖——authFetch 在信号中止时同样会抛 AbortError，若无此守护
+    // 会被误判为真实错误并额外推送一条 error 消息，与 finally 的 interrupted 消息叠加。
+    if ((err as Error).name === 'AbortError') {
+      // 中断路径：finally 会按 abortReason 处理（user→[已停止] / timeout→[已超时]+timedOut）
+    } else {
+      const msg = (err as Error).message;
+      store.handleError(msg);
+      ElMessage.warning(apiErrorMessage('问答失败', err));
+    }
   } finally {
     // 清理超时定时器（无论正常完成、用户停止、超时、错误都要清）
     if (questionTimeoutId) {
@@ -906,14 +918,12 @@ async function archiveMessage(idx: number) {
   }
 }
 
-// F-3.13 重新生成：复用该消息对应的 user 问题，丢弃原 assistant 回答，触发新问答
+// F-3.13 重新生成 / 超时重发共用核心：复用该消息对应的 user 问题，丢弃原 assistant 回答，触发新问答
 // 为什么不直接重发：SRS 要求"重新生成产生新 sessionId"，所以必须重新走完整 SSE 流程
-// 策略：找到 idx-1 的 user 消息内容 → removeMessagesFrom(idx) 丢弃 assistant 回答 → sendQuestion
-function handleRegenerate(idx: number) {
-  if (store.isLoading) {
-    ElMessage.warning('回答生成中，请稍后');
-    return;
-  }
+// 策略：找到 idx 之前最近一条 user 消息内容 → removeMessagesFrom(idx) 丢弃 assistant 回答 → sendQuestion
+// 返回 true 表示已成功定位原始问题并触发重发；false 表示找不到 user 问题（调用方负责提示）
+function resendFromUserQuestion(idx: number): boolean {
+  if (store.isLoading) return false;
   // 找到当前 assistant 消息对应的 user 问题（按 idx-1 回溯）
   // 兼容 user 消息可能不在 idx-1 的场景（如归档消息），向下回溯到第一个 user 消息
   let userIdx = -1;
@@ -923,15 +933,39 @@ function handleRegenerate(idx: number) {
       break;
     }
   }
-  if (userIdx < 0) {
-    ElMessage.warning('未找到原始问题，无法重新生成');
-    return;
-  }
+  if (userIdx < 0) return false;
   const question = store.messages[userIdx].content;
   // 丢弃从 idx 开始的所有消息（assistant 回答 + 可能的后续追问）
-  // 保留 user 问题，让用户看到"重新生成"的上下文
+  // 保留 user 问题，让用户看到"重新生成/重发"的上下文
   store.removeMessagesFrom(idx);
   void sendQuestion(question);
+  return true;
+}
+
+// F-3.13 重新生成：复用该消息对应的 user 问题，丢弃原 assistant 回答，触发新问答
+function handleRegenerate(idx: number) {
+  if (store.isLoading) {
+    ElMessage.warning('回答生成中，请稍后');
+    return;
+  }
+  if (!resendFromUserQuestion(idx)) {
+    ElMessage.warning('未找到原始问题，无法重新生成');
+  }
+}
+
+// 超时重发：针对超时中断（msg.timedOut）的 assistant 消息，复用原始 user 问题重新发起问答。
+// 语义即用户要求的"在原消息基础上重新思考"——保留原问题、丢弃超时产生的部分/失败答案、重新走完整 SSE。
+// 与 handleRegenerate 共用 resendFromUserQuestion，仅在入口与提示文案上区分（明确这是超时后的确认重发）。
+function handleResend(idx: number) {
+  if (store.isLoading) {
+    ElMessage.warning('回答生成中，请稍后');
+    return;
+  }
+  if (resendFromUserQuestion(idx)) {
+    ElMessage.info('正在原问题基础上重新思考…');
+  } else {
+    ElMessage.warning('未找到原始问题，无法重发');
+  }
 }
 
 // 删除单条消息：用户点击工具栏删除按钮时调用
@@ -1227,6 +1261,21 @@ onBeforeUnmount(() => {
                 @edit="handleEditMessage(idx)"
                 @archive="archiveMessage(idx)"
               />
+              <!-- 超时重发入口：超时中断的 assistant 消息常驻显示"确认重发"按钮，
+                   区别于 hover 工具栏的"重新生成"，让超时失败态有明确的恢复动作。
+                   点击后在原 user 问题基础上重新思考（复用问题 + 丢弃超时答案 + 重新 SSE）。 -->
+              <div
+                v-if="msg.role === 'assistant' && msg.timedOut"
+                class="timeout-resend"
+                @click.stop
+              >
+                <span class="timeout-resend-tip">回答因超时中断，结果可能不完整</span>
+                <button
+                  class="resend-btn"
+                  data-testid="confirm-resend"
+                  @click="handleResend(idx)"
+                >确认重发</button>
+              </div>
             </div>
           </div>
         </template>
@@ -1813,6 +1862,42 @@ onBeforeUnmount(() => {
 /* 编辑态气泡放宽上下内边距（原 user 气泡 padding 仅 2px 过窄），让 textarea 不贴边、输入更舒适 */
 .msg-content-wrapper.editing .msg-bubble.user {
   padding: 10px 12px;
+}
+
+/* 超时重发入口：常驻显示（不经 hover 工具栏），明确给出超时失败态的恢复动作。
+   采用暖色警示色（amber）与主题霓虹色区分，提示"此条回答因超时中断"。 */
+.timeout-resend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 159, 28, 0.10);
+  border: 1px solid rgba(255, 159, 28, 0.35);
+}
+.timeout-resend-tip {
+  font-size: 12px;
+  color: #ffb84d;
+  font-family: var(--font-mono, monospace);
+}
+.resend-btn {
+  padding: 4px 14px;
+  border-radius: 6px;
+  border: none;
+  background: #ff9f1c;
+  color: #1a1205;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.resend-btn:hover {
+  background: #ffb347;
+  box-shadow: 0 0 8px rgba(255, 159, 28, 0.5);
+}
+.resend-btn:active {
+  transform: translateY(1px);
 }
 
 /* §用户头像收窄：从 36px 收到 30px，每条用户消息行减少约 6px 垂直占用，
