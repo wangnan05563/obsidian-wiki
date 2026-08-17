@@ -1,4 +1,4 @@
-﻿$distDir = "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\dist\karpathy-wiki"
+﻿$distDir = "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\release\app\karpathy-wiki"
 $NodeExe = "D:\code\nodejs24\node.exe"
 $bundleFile = "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\.build\bundle.cjs"
 $exePath = "$distDir\karpathy-wiki.exe"
@@ -12,8 +12,8 @@ if (Test-Path $distDir) { Remove-Item $distDir -Recurse -Force }
 # Copy resources
 Copy-Item -Path "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\api\src\prompts" -Destination $distDir -Recurse -Force
 Copy-Item -Path "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\api\llm-presets.json" -Destination $distDir -Force -ErrorAction SilentlyContinue
-if (Test-Path "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\api\public") {
-    Copy-Item -Path "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\api\public" -Destination $distDir -Recurse -Force
+if (Test-Path "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\release\spa\public") {
+    Copy-Item -Path "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\release\spa\public" -Destination $distDir -Recurse -Force
 }
 $apiNodeModules = "D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\api\node_modules"
 $distNodeModules = "$distDir\node_modules"

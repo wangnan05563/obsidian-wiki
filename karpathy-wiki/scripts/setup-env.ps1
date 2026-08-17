@@ -371,7 +371,7 @@ if (-not $SkipWizard) {
 
 Write-Step "[6/7] 检查 .gitignore..."
 $Gitignore = Join-Path $ProjectRoot ".gitignore"
-$ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/', 'api/public/')
+$ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/', 'release/')
 $existing = if (Test-Path $Gitignore) { Get-Content $Gitignore } else { @() }
 $updated = $existing
 foreach ($rule in $ignoreRules) {

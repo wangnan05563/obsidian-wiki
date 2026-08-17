@@ -59,18 +59,6 @@
   --font-body: 'Rajdhani', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 
-  /* 机器人 IP 配色：机身渐变 + 发光点缀，随主题变化 */
-  --robot-head-1: #1a0533;
-  --robot-head-2: #2d0a4a;
-  --robot-head-3: #0d1a3d;
-  --robot-body-1: #3d0a5c;
-  --robot-body-2: #0a1f4d;
-  --robot-accent: #b026ff;
-  --robot-eye: #00f5ff;
-  --robot-eye-deep: #0088aa;
-  --robot-antenna: #ff006e;
-  --robot-glow: rgba(176, 38, 255, 0.4);
-
   /* 图谱目录色：4 类节点的填充 + 描边，随主题变化 */
   --graph-entities: #ff006e;
   --graph-concepts: #00f5ff;
@@ -467,21 +455,6 @@ body {
 }
 .spin-icon {
   animation: spin 1s linear infinite;
-}
-
-/* 机器人眨眼 */
-@keyframes robot-blink {
-  0%, 92%, 100% { transform: scaleY(1); }
-  96% { transform: scaleY(0.1); }
-}
-
-/* 机器人浮动 */
-@keyframes robot-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-10px); }
-}
-.robot-floating {
-  animation: robot-float 2.8s ease-in-out infinite;
 }
 
 /* 霓虹脉动 */

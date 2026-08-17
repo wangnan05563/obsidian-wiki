@@ -56,17 +56,7 @@
   --font-body: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 
-  /* Robot IP & Graph colors: theme-aware */
-  --robot-head-1: #1a1a1a;
-  --robot-head-2: #2d2d2d;
-  --robot-head-3: #3d3d3d;
-  --robot-body-1: #c9a961;
-  --robot-body-2: #8b7355;
-  --robot-accent: #c9a961;
-  --robot-eye: #c9a961;
-  --robot-eye-deep: #a08c5a;
-  --robot-antenna: #d4b572;
-  --robot-glow: rgba(201, 169, 97, 0.3);
+  /* Graph colors: theme-aware */
   --graph-entities: #c9a961;
   --graph-concepts: #8b7355;
   --graph-comparisons: #1a1a1a;

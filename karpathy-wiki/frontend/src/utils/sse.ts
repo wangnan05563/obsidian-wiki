@@ -18,11 +18,22 @@ export interface SSEWriter {
   setImage(payload: NonNullable<ChatMessage['image']>): void;
   setPpt(payload: NonNullable<ChatMessage['ppt']>): void;
   setThreadId(id: string | null): void;
+  // §X-1 步骤级追踪：done 事件携带的 harness runId 透传到缓冲
+  setRunId(id?: string): void;
+  // X-2 可恢复流式：open 事件携带的 manager runId 透传到缓冲
+  setManagerRunId(id?: string): void;
   finalizeAnswer(sessionId?: string, messageIndex?: number, threadId?: string, followups?: string[]): void;
   handleError(message: string): void;
   // 供 consumeQuerySSE 做「流结束但未收到 done」的兜底判定
   readonly isLoading: boolean;
   readonly streamingAnswer: string;
+  // X-2 断线重连所需元数据（由 store writer 暴露）
+  readonly managerRunId: string | null;
+  readonly threadId: string | null;
+  // 本轮 SSE 是否已收到 done 事件（区分"正常完成"与"异常断开"）
+  readonly didDone: boolean;
+  // 断线重连前清空已收部分内容，等待后端回放完整响应（避免重复追加）
+  resetForResume(): void;
 }
 
 // Query SSE 事件处理器签名：接收已 JSON.parse 的数据，调用 writer 对应方法
@@ -77,7 +88,13 @@ const QUERY_EVENT_HANDLERS: Record<string, QueryEventHandler> = {
   done: (parsed, writer) => {
     // 记录线程隔离键（与 sessionId 同源），供后续问答续接本地记忆
     if (parsed.threadId) writer.setThreadId(parsed.threadId);
+    // §X-1 步骤级追踪：携带 harness runId，供前端拉取每步耗时分解
+    if (parsed.runId) writer.setRunId(parsed.runId);
     writer.finalizeAnswer(parsed.sessionId, parsed.messageIndex, parsed.threadId);
+  },
+  // X-2 可恢复流式：首帧 open 事件携带 manager runId，前端凭此在断线时重连继续接收同一响应
+  open: (parsed, writer) => {
+    if (parsed.runId) writer.setManagerRunId(parsed.runId);
   },
   error: (parsed, writer) => {
     writer.handleError(parsed.message || '问答出错');
@@ -150,7 +167,9 @@ export async function consumeQuerySSE(
       processQuerySSEEvents(events, writer);
     }
     // 流正常结束但未收到 done 事件时兜底
-    if (writer.isLoading && writer.streamingAnswer) {
+    // X-2：若 writer 持有 managerRunId（后端已开启可恢复流式），则不在此兜底 finalize，
+    // 交由 consumeQuerySSEResumable 决定是否重连续接；无 managerRunId 时维持原兜底行为。
+    if (writer.isLoading && writer.streamingAnswer && !writer.managerRunId) {
       writer.finalizeAnswer();
     }
   } catch (err: unknown) {
@@ -162,6 +181,73 @@ export async function consumeQuerySSE(
     if (signal?.aborted) {
       try { await reader.cancel(); } catch { /* 忽略已释放 */ }
     }
+  }
+}
+
+// X-2 可恢复流式：带断线重连的 SSE 消费包装。
+// 在 consumeQuerySSE 之上增加一层：当流异常结束（未收到 done）且 writer 持有 managerRunId 时，
+// 凭 managerRunId 调 resumeFetch 重新订阅同一 run，先 resetForResume 清空已收部分内容，再回放完整响应。
+// 安全性：任何重连失败或超次都降级为"兜底 finalize 已收部分答案"（与关闭可恢复流式时行为一致），
+// 绝不会让 isLoading 卡死或抛未捕获异常打断调用方逻辑。
+//   initialFetch：首连请求工厂（返回 Response）；resumeFetch(runId, threadId)：重连请求工厂。
+export async function consumeQuerySSEResumable(
+  initialFetch: () => Promise<Response>,
+  resumeFetch: (runId: string, threadId: string | null) => Promise<Response>,
+  writer: SSEWriter,
+  signal?: AbortSignal,
+  onActivity?: () => void,
+  maxResume = 1,
+): Promise<void> {
+  let fetchNext = initialFetch;
+  let resumeCount = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let response: Response;
+    try {
+      response = await fetchNext();
+    } catch (err) {
+      // 首连或重连请求本身失败：兜底 finalize 部分答案后退出
+      if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
+      throw err;
+    }
+    if (!response.ok || !response.body) {
+      if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    // F6: 读取阶段异常（网络骤断 / RST / 超时）也应触发重连，而非直接当错误抛出。
+    // consumeQuerySSE 仅在用户主动停止（AbortError）时静默返回，其余读取错误会透传至此。
+    let streamError: unknown = null;
+    try {
+      await consumeQuerySSE(response, writer, signal, onActivity);
+    } catch (err) {
+      // 主动停止（AbortError）不重连；仅在仍持有 managerRunId 且未达重连上限时尝试重连续接
+      if ((err as Error)?.name !== 'AbortError' && writer.managerRunId && resumeCount < maxResume) {
+        streamError = err;
+      } else {
+        if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
+        throw err;
+      }
+    }
+
+    // 正常完成（收到 done）→ 退出
+    if (writer.didDone) return;
+
+    // 可重连续接条件：未收 done 且仍持有 managerRunId 且未达上限。
+    // 流读取异常（streamError 非空）只要满足上述条件也走此分支，实现「网络中断可恢复」。
+    if (writer.managerRunId && resumeCount < maxResume) {
+      resumeCount++;
+      const runId = writer.managerRunId;
+      const threadId = writer.threadId;
+      writer.resetForResume();
+      fetchNext = () => resumeFetch(runId, threadId);
+      continue;
+    }
+
+    // 不可恢复：兜底 finalize 部分答案后退出；若因读取异常退出则原样抛出
+    if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
+    if (streamError) throw streamError;
+    return;
   }
 }
 

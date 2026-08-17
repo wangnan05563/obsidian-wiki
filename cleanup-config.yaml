@@ -6,7 +6,7 @@
 
 workspace:
   root: "."
-  script_dir: "scripts"
+  script_dir: "tooling/scripts"
   docs_dir: "docs"
   logs_dir: "logs"
   frontend_dir: "karpathy-wiki/frontend"
@@ -48,7 +48,7 @@ script_extensions:
 script_exclude_dirs:
   - "karpathy-wiki/"
   - "wiki-harness/"
-  - "scripts/"
+  - "tooling/scripts/"
   - "node_modules/"
   - ".venv/"
   - "venv/"
@@ -169,7 +169,7 @@ service_recovery:
     path: "/"
     expect_status: 200
   # 覆盖危机核验：定位当前伺服的 SPA 根（glob），grep 打包产物是否含关键特性标记
-  served_root_glob: "karpathy-wiki/api/public_live_*"
+  served_root_glob: "release/spa/public_live_*"
   served_bundle_markers:
     - "聆听"
     - "MobileListen"

@@ -7,6 +7,10 @@ import RobotAvatar from '../RobotAvatar.vue';
 // 登录/注册成功后 authStore.isLoggedIn 变 true，由 MobileShell 登录门自动切到主界面。
 const authStore = useAuthStore();
 
+// vite.config.ts 配置了 base: '/wiki/'，CSS 中不能直接用 import.meta，
+// 故在脚本层计算 BASE_URL 再注入模板样式变量
+const baseUrl = import.meta.env.BASE_URL;
+
 const mode = ref<'login' | 'register'>('login');
 const username = ref('');
 const password = ref('');
@@ -56,7 +60,10 @@ function onKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="mlogin-root">
+  <div
+    class="mlogin-root"
+    :style="{ '--login-bg': `url(${baseUrl}images/login/mobile-login-bg.jpg)` }"
+  >
     <div class="mlogin-card">
       <div class="mlogin-brand">
         <RobotAvatar :size="56" />
@@ -130,40 +137,48 @@ function onKeydown(e: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0));
-  background: var(--m-surface, #ffffff);
+  background:
+    linear-gradient(180deg, rgba(8, 12, 22, 0.42) 0%, rgba(6, 10, 18, 0.78) 100%),
+    var(--login-bg, #070a12);
+  background-size: cover;
+  background-position: center;
   font-family: var(--font-body);
 }
 
 .mlogin-card {
   width: 100%;
-  max-width: 360px;
+  max-width: 380px;
   display: flex;
   flex-direction: column;
   gap: 28px;
-  padding: 28px 22px;
-  background: var(--m-surface, #ffffff);
-  border: 1px solid var(--m-border, #ececee);
-  border-radius: 16px;
+  padding: 34px 26px;
+  background: rgba(18, 24, 38, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
 .mlogin-brand {
   text-align: center;
 }
 
-.mlogin-brand :deep(.robot-avatar) {
+.mlogin-brand :deep(.cognition-icon) {
   margin: 0 auto 14px;
 }
 
 .mlogin-title {
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 800;
   margin: 0 0 6px;
-  color: var(--m-text, #111111);
+  color: #ffffff;
+  letter-spacing: 0.5px;
 }
 
 .mlogin-sub {
   font-size: 13px;
-  color: var(--m-muted, #777777);
+  color: rgba(255, 255, 255, 0.62);
   margin: 0;
 }
 
@@ -179,10 +194,10 @@ function onKeydown(e: KeyboardEvent) {
   min-height: 48px;
   padding: 12px 16px;
   font-size: 16px;
-  color: var(--m-text, #111111);
-  background: var(--m-surface, #f5f6f8);
-  border: 1px solid var(--m-border, #ececee);
-  border-radius: 10px;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
   outline: none;
   transition: border-color 0.15s ease, background 0.15s ease;
   -webkit-appearance: none;
@@ -190,24 +205,32 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .mlogin-input::placeholder {
-  color: #aaaaaa;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .mlogin-input:focus {
-  border-color: var(--m-primary, #0f4c81);
-  background: var(--m-surface, #ffffff);
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .mlogin-input:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
+}
+
+.mlogin-input:-webkit-autofill,
+.mlogin-input:-webkit-autofill:hover,
+.mlogin-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #ffffff;
+  -webkit-box-shadow: 0 0 0px 1000px rgba(255, 255, 255, 0.10) inset;
+  transition: background-color 5000s ease-in-out 0s;
 }
 
 .mlogin-error {
   padding: 10px 12px;
   font-size: 13px;
-  color: #d93025;
-  background: rgba(217, 48, 37, 0.06);
-  border: 1px solid rgba(217, 48, 37, 0.15);
+  color: #ff7d72;
+  background: rgba(217, 48, 37, 0.12);
+  border: 1px solid rgba(217, 48, 37, 0.25);
   border-radius: 8px;
 }
 
@@ -218,14 +241,17 @@ function onKeydown(e: KeyboardEvent) {
   font-weight: 700;
   letter-spacing: 1px;
   color: #ffffff;
-  background: var(--m-primary, #0f4c81);
+  background: #2b7de1;
   border: none;
-  border-radius: 10px;
+  border-radius: 12px;
   cursor: pointer;
+  box-shadow: 0 8px 24px rgba(43, 125, 225, 0.28);
+  transition: transform 0.1s ease, box-shadow 0.15s ease;
 }
 
 .mlogin-btn:active:not(:disabled) {
-  opacity: 0.92;
+  transform: translateY(1px);
+  box-shadow: 0 4px 14px rgba(43, 125, 225, 0.28);
 }
 
 .mlogin-btn:disabled {
@@ -236,11 +262,11 @@ function onKeydown(e: KeyboardEvent) {
 .mlogin-switch {
   text-align: center;
   font-size: 14px;
-  color: var(--m-muted, #777777);
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .mlogin-switch-link {
-  color: var(--m-primary, #0f4c81);
+  color: #8ec5ff;
   font-weight: 600;
   cursor: pointer;
 }
@@ -252,9 +278,9 @@ function onKeydown(e: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  color: var(--m-muted, #777777);
+  color: rgba(255, 255, 255, 0.58);
   padding: 10px;
-  border: 1px dashed var(--m-border, #ececee);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
   border-radius: 8px;
 }
 
@@ -262,8 +288,8 @@ function onKeydown(e: KeyboardEvent) {
   font-family: var(--font-mono);
   font-size: 10px;
   padding: 2px 6px;
-  background: var(--m-surface, #f5f6f8);
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 4px;
-  color: var(--m-primary, #0f4c81);
+  color: #8ec5ff;
 }
 </style>

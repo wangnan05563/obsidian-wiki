@@ -56,17 +56,7 @@
   --font-body: 'Rajdhani', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 
-  /* Robot IP & Graph colors: theme-aware */
-  --robot-head-1: #0a0a14;
-  --robot-head-2: #12121f;
-  --robot-head-3: #050508;
-  --robot-body-1: #1a1a2e;
-  --robot-body-2: #0a0a14;
-  --robot-accent: #00ff88;
-  --robot-eye: #00ff88;
-  --robot-eye-deep: #00cc6a;
-  --robot-antenna: #ff0080;
-  --robot-glow: rgba(0, 255, 136, 0.5);
+  /* Graph colors: theme-aware */
   --graph-entities: #ff0080;
   --graph-concepts: #00ff88;
   --graph-comparisons: #6366f1;

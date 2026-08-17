@@ -4,6 +4,11 @@ import { ref, computed } from 'vue';
 import type { UserInfo, LoginRequest, LoginResponse, RegisterRequest, CreateUserRequest, UpdateUserRequest, AuthPermission, AuthRole } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
 import { unlock as unlockVault, lock as lockVault, restoreKeyFromSession } from '../services/localVault';
+// 账户切换 / 登出时主动作废上一用户的会话作用域与聊天窗口（FR-RM-06 主动防御层）：
+// 此前 resetSession 虽已实现，却未被 auth 流程调用，导致切换用户后仍残留上一用户问答。
+// 此处形成 auth↔conversations 的循环 import，但双方都仅在函数体内调用 useXxxStore()，
+// 模块加载期只是注册 store 定义、不实例化，Pinia 下安全（defined store 惰性实例化）。
+import { useConversationsStore } from './conversations';
 
 // 登录/注册请求超时（ms）：裸 fetch 不设超时会在后端首登慢（如创建默认用户）/网络异常时
 // 永久挂起，导致前端卡在「登录中…」且 loading 永不复位（async-reliability-rule）。
@@ -121,6 +126,10 @@ export const useAuthStore = defineStore('auth', () => {
         token.value = data.token;
         user.value = data.user;
         saveToken(data.token);
+        // FR-RM-06 主动防御：新账户登录即作废上一用户的会话作用域与聊天窗口，
+        // 避免切换用户后看到上一用户的问答内容（跨账户泄漏）。resetSession 一并
+        // 清空 LAST_ACTIVE_CONVERSATION 续答引用，使下一用户 onMounted 不会恢复旧会话。
+        useConversationsStore().resetSession();
         // FR-RM-07：用登录密码派生本地加密密钥（失败不影响登录，仅本地加密不可用）
         try {
           await unlockVault(params.password);
@@ -165,6 +174,8 @@ export const useAuthStore = defineStore('auth', () => {
         token.value = data.token;
         user.value = data.user;
         saveToken(data.token);
+        // FR-RM-06 主动防御：注册后自动登录，同登录流程作废上一用户会话作用域
+        useConversationsStore().resetSession();
         // FR-RM-07：用注册密码派生本地加密密钥
         try {
           await unlockVault(params.password);
@@ -207,6 +218,9 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null;
     user.value = null;
     saveToken(null);
+    // FR-RM-06 主动防御：登出 / 401 失效时同步作废会话作用域与聊天窗口，
+    // 避免残留上一用户问答（覆盖 logout 与 authFetch 的 401 自动登出两条路径）。
+    useConversationsStore().resetSession();
   }
 
   // 恢复会话：从 localStorage 读取 token，向后端验证并恢复用户信息

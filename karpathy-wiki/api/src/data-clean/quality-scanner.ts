@@ -135,6 +135,18 @@ function hasValidFrontmatter(parsed: matter.GrayMatterFile<string>): boolean {
   return !!(parsed.data?.type && parsed.data?.title);
 }
 
+// 把传入路径解析为 vault 内的绝对路径，并阻止越权访问 vault 之外的文件。
+// 前端 data-clean 页传的是 vault 相对路径（如 concepts/foo.md），后端需拼回绝对路径才能
+// fs.unlink / fs.rename；若传入已是绝对路径则原样使用（path.join 会忽略前面的 base）。
+function resolveVaultPath(vault: VaultService, p: string): string {
+  const base = path.resolve(vault.getVaultPath());
+  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(base, p);
+  if (abs !== base && !abs.startsWith(base + path.sep)) {
+    throw new Error(`path escapes vault root: ${p}`);
+  }
+  return abs;
+}
+
 //  Archive 
 export async function archiveFiles(
   vault: VaultService,
@@ -160,8 +172,9 @@ export async function archiveFiles(
     try {
       const fileName = path.basename(filePath);
       const dest = path.join(archiveBase, fileName);
+      const abs = resolveVaultPath(vault, filePath);
       if (!dryRun) { // NOSONAR
-        await vaultRetry(() => fs.rename(filePath, dest), "archive-move");
+        await vaultRetry(() => fs.rename(abs, dest), "archive-move");
         archived.push(filePath);
       } else {
         archived.push(fileName);
@@ -184,8 +197,9 @@ export async function deleteFiles(
 
   for (const filePath of paths) {
     try {
+      const abs = resolveVaultPath(vault, filePath);
       if (!dryRun) { // NOSONAR
-        await vaultRetry(() => fs.unlink(filePath), "delete-file");
+        await vaultRetry(() => fs.unlink(abs), "delete-file");
         deleted.push(filePath);
       } else {
         deleted.push(path.basename(filePath));

@@ -5,9 +5,12 @@ import { resolveSpaRoot, resolveSpaAsset } from './spa-resolver.js';
 
 /**
  * SPA 静态资源托管设置（从 index.ts 抽出为独立模块，便于进程内 app.inject 冒烟测试复用）
- * 探测顺序（动态）：getApiDir()/public_live_<ts>（每次部署全新时间戳目录，钩子放行新建写入）【按时间戳取最新，首位】
+ * 探测顺序（动态，实际以 spa-resolver.ts 的 resolveSpaRoot 为准）：
+ *   release/spa/public_live_<ts>（统一生成内容后的主要来源，每次部署全新时间戳目录，按数值倒序取最新）【首位】
+ *            → getApiDir()/public_live_<ts>（兼容尚未迁移的旧部署）
  *            → getApiDir()/public_live（兼容旧部署，已被钩子锁定 index.html，仅作兜底）
- *            → getApiDir()/../frontend/dist（vite 默认构建产物，其他环境可写、恒为最新）
+ *            → release/spa/public（vite 新输出位置，_deploy_build.mjs 同步目标）
+ *            → getApiDir()/../frontend/dist（vite 默认构建产物）
  *            → CWD/public（exe 运行模式）→ getApiDir()/public（开发/api/public 或 SEA/exe/public）
  *            → static/spa（兼容旧路径）
  */
@@ -15,6 +18,25 @@ export async function setupSpaStatic(app: FastifyInstance): Promise<void> {
   const _apiDir = getApiDir();
   const spaRoot = resolveSpaRoot(_apiDir);
   if (spaRoot) {
+    // 防 stale 缓存：index.html（SPA 壳）每次都重新校验，避免浏览器长期缓存「修复前」的旧包，
+    // 导致「代码已修、线上已部署，但用户浏览器仍跑旧逻辑」的复发（编辑重发类问题尤甚）。
+    // 仅对 text/html 文档生效；带哈希的 JS/CSS 资源保持长缓存（文件名即版本，安全）。
+    app.addHook('onSend', async (_request, reply, payload) => {
+      // BR-090-1：响应/序列化钩子必须 fail-open——任何意外异常都原样放行，
+      // 否则单条异常会冒泡为全量 500 或阻塞整条连接。本钩子仅做 getHeader/header
+      // 这类不抛异常的同步操作，风险极低，但作为常驻热路径仍做防御性包裹。
+      try {
+        const ct = reply.getHeader('content-type');
+        if (typeof ct === 'string' && ct.includes('text/html')) {
+          // SPA 壳（index.html）每次重新校验，避免浏览器长期缓存「修复前」旧包导致复发；
+          // 仅对 text/html 生效，带哈希的 JS/CSS 资源保持长缓存（文件名即版本，安全）。
+          reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+      } catch {
+        // fail-open：异常时不修改任何头，原样返回 payload
+      }
+      return payload;
+    });
     // fastifyStatic 注册两次以同时服务 / 和 /wiki/ 前缀：
     // 1. prefix='/'：服务 /assets/... /favicon.svg 等（Funnel 剥除 /wiki/ 后的请求）
     // 2. prefix='/wiki/'：服务 /wiki/assets/... 等（浏览器直接请求 /wiki/ 路径时）

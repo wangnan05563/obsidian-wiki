@@ -73,6 +73,62 @@ export async function fetchWithDiagnostics(url: string, init: RequestInit): Prom
   }
 }
 
+// 走全局 fetch（undici，已通过 setGlobalDispatcher 配置代理，出网稳定）POST JSON，
+// 并手动跟随 301/302/307/308 重定向（最多 5 跳）。
+// 为什么不用默认 redirect:'follow'：undici 对 POST 的 301/302 重定向默认会丢弃 body 或挂起直到超时，
+// 实测 Agnes Image API 经 Cloudflare 触发重定向，导致 fetch 60s 超时、生图永远失败；手动跟随可精确控制。
+// 为什么用全局 fetch 而非原生 http/https：原生模块不走代理，直连 apihub.agnes-ai.com 不稳定（偶发超时），
+// 全局 fetch 复用后端代理配置，出网可靠（与 chat/video 接口一致）。
+export async function postJsonFollowRedirect(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  timeoutMs: number,
+  redirectsLeft = 5,
+): Promise<{ status: number; body: string }> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body,
+    redirect: 'manual',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  // 手动跟随重定向（保留 POST 方法与 body 用于 307/308；301/302 降级为 GET，符合浏览器语义）
+  if ([301, 302, 307, 308].includes(res.status) && redirectsLeft > 0) {
+    const loc = res.headers.get('location');
+    if (!loc) throw new Error(`redirect with no location (${res.status})`);
+    const next = new URL(loc, url).toString();
+    const nextMethod = res.status === 307 || res.status === 308 ? 'POST' : 'GET';
+    const nextBody = nextMethod === 'POST' ? body : undefined;
+    return postJsonFollowRedirect(next, headers, nextBody ?? '', timeoutMs, redirectsLeft - 1);
+  }
+  const text = await res.text();
+  return { status: res.status, body: text };
+}
+
+// 走全局 fetch（代理出网）GET 字节流并手动跟随重定向（最多 5 跳），用于下载生图/视频等二进制资源。
+// 为什么单独写二进制版本：图片下载需要 Buffer；对 GET 类重定向（CDN 常用 302）也手动跟随，避免漏下载。
+export async function fetchBufferFollowRedirect(
+  url: string,
+  timeoutMs: number,
+  redirectsLeft = 5,
+): Promise<Buffer> {
+  const res = await fetch(url, {
+    method: 'GET',
+    redirect: 'manual',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if ([301, 302, 307, 308].includes(res.status) && redirectsLeft > 0) {
+    const loc = res.headers.get('location');
+    if (!loc) throw new Error(`redirect with no location (${res.status})`);
+    const next = new URL(loc, url).toString();
+    return fetchBufferFollowRedirect(next, timeoutMs, redirectsLeft - 1);
+  }
+  if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`);
+  const ab = await res.arrayBuffer();
+  return Buffer.from(ab);
+}
+
 // 构造图像归档 Markdown（frontmatter type: query, output_mode: image）
 function buildImageArchiveMarkdown(
   imagePrompt: string,
@@ -202,27 +258,28 @@ ${pageContext}
 
   // 3. 调用 Agnes Image API（OpenAI 兼容接口 POST /v1/images/generations）
   // 为什么 60 秒超时：图像生成通常 10-30 秒，60 秒兜底
-  const response = await fetchWithDiagnostics(`${mediaConfig.agnes.baseUrl}/images/generations`, {
-    method: 'POST',
-    headers: {
+  // 为什么用原生 https（postJsonFollowRedirect）而非 fetch：Agnes Image API 经 Cloudflare
+  // 触发 301 重定向，fetch 对 POST 重定向会挂起至超时；原生 http/https 手动跟随重定向稳定返回 200。
+  const imgResp = await postJsonFollowRedirect(
+    `${mediaConfig.agnes.baseUrl}/images/generations`,
+    {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
+    JSON.stringify({
       model: mediaConfig.agnes.imageModel,
       prompt: imagePrompt,
       size: mediaConfig.agnes.defaultImageSize,
       ratio: mediaConfig.agnes.defaultImageRatio,
     }),
-    signal: AbortSignal.timeout(60000),
-  });
+    60000,
+  );
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Agnes Image API failed (${response.status}): ${errText}`);
+  if (imgResp.status < 200 || imgResp.status >= 300) {
+    throw new Error(`Agnes Image API failed (${imgResp.status}): ${imgResp.body}`);
   }
 
-  const data = (await response.json()) as {
+  const data = JSON.parse(imgResp.body) as {
     data?: Array<{ url?: string; b64_json?: string }>;
   };
   const item = data.data?.[0];
@@ -235,11 +292,9 @@ ${pageContext}
   const imagePath = `queries/image-${timestamp}.png`;
   let imageBuffer: Buffer;
   if (item.url) {
-    const imgResp = await fetchWithDiagnostics(item.url, { signal: AbortSignal.timeout(60000) });
-    if (!imgResp.ok) {
-      throw new Error(`download image failed (${imgResp.status})`);
-    }
-    imageBuffer = Buffer.from(await imgResp.arrayBuffer());
+    // 为什么用原生 https 下载：返回的图片 URL 可能在 CDN 上再次 302，
+    // fetch 的 POST/GET 重定向语义不稳；fetchBufferFollowRedirect 手动跟随且返回 Buffer。
+    imageBuffer = await fetchBufferFollowRedirect(item.url, 60000);
   } else if (item.b64_json) {
     imageBuffer = Buffer.from(item.b64_json, 'base64');
   } else {
@@ -252,12 +307,59 @@ ${pageContext}
   const archiveContent = buildImageArchiveMarkdown(imagePrompt, question, imagePath, timestamp);
   await vault.writeFile(archivePath, archiveContent);
 
-  // url 返回 /api/files 路径，前端通过此路径访问归档图片
+  // url 返回 /api/media/file 路径（公开路由，无需认证），前端 <img>/<video> 标签可直接加载
   return {
-    url: `/api/files?path=${encodeURIComponent(imagePath)}`,
+    url: `/api/media/file/${imagePath.replace(/^queries\//, '')}`,
     alt: question,
     archivePath,
   };
+}
+
+// 生图连接测试：直接调用 Agnes Image API 做一次最小 prompt 请求，验证 Key + 网络可用。
+// 与 generateImage 共享原生 https 调用（绕过 fetch 在 POST 301 重定向上挂起的问题）。
+// 为什么独立导出：配置中心「图像生成」连接测试按钮需要，且不触发 LLM prompt 生成与归档，避免无谓耗时与副作用。
+export async function testImageGeneration(
+  mediaConfig: MediaConfig | undefined,
+  appConfig?: AppConfig,
+): Promise<{ ok: boolean; detail: string; model?: string }> {
+  if (!mediaConfig) {
+    return { ok: false, detail: '未配置媒体（生图）服务：media.agnes 缺失' };
+  }
+  const apiKey = resolveAgnesApiKey(mediaConfig, appConfig);
+  if (!apiKey) {
+    return {
+      ok: false,
+      detail: `未配置生图 API Key（media.agnes.apiKey / llm.apiKeys.agnes / 环境变量 ${mediaConfig.agnes.apiKeyRef} 均无）`,
+    };
+  }
+  const model = mediaConfig.agnes.imageModel;
+  try {
+    const resp = await postJsonFollowRedirect(
+      `${mediaConfig.agnes.baseUrl}/images/generations`,
+      {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      JSON.stringify({
+        model,
+        prompt: 'a simple test image: a red dot on white background',
+        size: mediaConfig.agnes.defaultImageSize,
+        ratio: mediaConfig.agnes.defaultImageRatio,
+      }),
+      30000,
+    );
+    if (resp.status < 200 || resp.status >= 300) {
+      return { ok: false, detail: `Agnes Image API 返回 ${resp.status}：${resp.body.slice(0, 200)}`, model };
+    }
+    const parsed = JSON.parse(resp.body) as { data?: Array<{ url?: string; b64_json?: string }> };
+    if (!parsed.data?.[0]?.url && !parsed.data?.[0]?.b64_json) {
+      return { ok: false, detail: 'Agnes Image API 返回结构异常（缺少 url / b64_json）', model };
+    }
+    return { ok: true, detail: '连接成功，生图 API 可用', model };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, detail: `连接失败：${msg}`, model };
+  }
 }
 
 // v3 PPT 生成：LLM 生成 Marp Markdown → 归档
@@ -450,7 +552,7 @@ export async function pollVideoTask(
       videoId: data.video_id ?? taskId,
       status: 'completed',
       progress: 100,
-      url: `/api/files?path=${encodeURIComponent(videoPath)}`,
+      url: `/api/media/file/${videoPath.replace(/^queries\//, '')}`,
       archivePath,
     };
   }

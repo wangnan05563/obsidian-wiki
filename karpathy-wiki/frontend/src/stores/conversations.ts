@@ -9,7 +9,7 @@ import { STORAGE_KEYS } from '../constants/storageKeys';
 
 // FR-RM-09 断点续答：跨刷新记住「上次活跃会话」，重载后据此自动恢复并续答。
 // 读写集中在此处（与写入 currentConversationId 同生命周期），避免键名散落。
-function setLastActiveConversationId(id: string | null) {
+export function setLastActiveConversationId(id: string | null) {
   try {
     if (id) localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE_CONVERSATION, id);
     else localStorage.removeItem(STORAGE_KEYS.LAST_ACTIVE_CONVERSATION);
@@ -159,10 +159,21 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   // 账户切换 / 登出时由外层调用：作废当前会话 id 与会话作用域，强制按新账户隔离
   // （FR-RM-06 加固：阻止跨账户会话 id 复用导致的覆盖/改属泄漏）。
+  // 同时清空问答窗口缓冲（query store 的 messages 即聊天窗口内容）：query store 是模块级单例，
+  // 若只清会话列表而不清窗口，下一用户切换后仍会看到上一用户的问答（跨账户可见，与移动端 MobileShell.vue 对齐）。
+  // 不清会直接表现为"历史记录已隔离、但问答窗口默认能看到其他用户的问答"。
   function resetSession() {
     currentConversationId.value = null;
     scopedOwnerId.value = null;
     conversations.value = [];
+    // 清空聊天窗口内存问答（含 currentThreadId），阻断上一用户问答残留与 threadId 串台
+    useQueryStore().reset();
+    // 一并作废"正在查看"的会话 id：账户切换/登出时该 ref 仍可能持有上一账户的会话 id，
+    // 虽 conversations 已清空使其暂不命中，但属隔离钩子里遗漏的跨账户状态，与窗口残留同源（FR-RM-06）。
+    viewingConversationId.value = null;
+    // 纵深防御：作废跨刷新续答引用（FR-RM-09）。否则切换用户后下一用户 onMounted 的
+    // maybeResumeOnLoad 仍可能据此 id 恢复上一用户的会话（若该 id 被 migrateOwnerless 归属新用户）。
+    setLastActiveConversationId(null);
   }
 
   // 用登录密码解锁本地加密数据（FR-RM-07）：Help 页「解锁」按钮调用
@@ -320,8 +331,17 @@ export const useConversationsStore = defineStore('conversations', () => {
     // FR-RM-09 续答：切换会话同步记住活跃会话
     setLastActiveConversationId(id);
     const record = (await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id)) ?? null;
-    // 越权保护：非当前用户（ownerId 不匹配）的会话不加载（FR-RM-06）
-    if (record && record.ownerId !== undefined && record.ownerId !== currentOwnerId()) {
+    // 越权保护（FR-RM-06 加固）：非当前用户的会话不加载。
+    // 三种越权场景全部拦截：
+    //   ① ownerId 存在但不匹配当前用户 → 明确归属他人
+    //   ② ownerId 缺失（undefined）且当前用户已登录 → 无主老数据/迁移失败记录，
+    //      不能默认归当前用户所有（否则切换账户后可见上一用户遗留的无主会话）
+    //   ③ 当前用户未登录（owner 为 undefined）→ 不应加载任何有主记录
+    const owner = currentOwnerId();
+    const isOwnedByOther = record && record.ownerId !== undefined && record.ownerId !== owner;
+    const isOwnerlessWhileLoggedIn = record && record.ownerId === undefined && owner !== undefined;
+    const isOwnedWhileLoggedOut = record && record.ownerId !== undefined && owner === undefined;
+    if (isOwnedByOther || isOwnerlessWhileLoggedIn || isOwnedWhileLoggedOut) {
       useQueryStore().setThreadId(null);
       useQueryStore().loadMessages([]);
       return;
@@ -360,6 +380,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     searchKeyword,
     localLocked,
     scopedOwnerId,
+    viewingConversationId,
     loadConversations,
     resetSession,
     unlockLocalData,

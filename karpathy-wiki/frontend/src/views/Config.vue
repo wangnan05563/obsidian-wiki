@@ -10,6 +10,8 @@ import { apiErrorMessage } from '../utils/apiError';
 import { consumeSSE } from '../utils/sse';
 import { useAuthStore } from '../stores/auth';
 import { useTtsStore } from '../stores/tts';
+import { useModelStore } from '../stores/model';
+import { AUTO_MODEL } from '../utils/autoModel';
 import { DEFAULT_TTS_CONFIG } from '../services/ttsConfig';
 // 按用户维度隔离的 AI/搜索/工具配置读写层（BYOK：密钥仅存客户端本地，按 userId 命名空间隔离）
 // 多模型（按 LLM 预设）独立配置：每个预设各自保存 provider/baseUrl/model/apiKey。
@@ -34,6 +36,8 @@ const config = ref<ConfigData | null>(null);
 // 不同用户命名空间隔离（见 stores/tts.ts + services/ttsConfig.ts）。
 const ttsStore = useTtsStore();
 const authStore = useAuthStore();
+// 模型 store：提供 fetchModels（按 baseUrl+apiKey 拉取服务商真实模型清单）+ 状态
+const modelStore = useModelStore();
 // 是否为管理员：用于 Config 内敏感 tab（SCHEMA/系统配置/AI 服务/工具/QQ/Prompt）的二次拦截，
 // 仅管理员可见可改；「朗读设置」「界面主题」为个人偏好，对所有登录用户开放。
 // 注意：authStore.isAdmin 经 Pinia 已解包为 boolean，这里用 computed 重新包一层以便模板 v-if 与脚本 .value 统一。
@@ -191,7 +195,10 @@ async function loadConfig() {
   try {
     const res = await authStore.authFetch(`${API_BASE}/config`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    config.value = await res.json();
+    const data = await res.json();
+    config.value = data;
+    // 子智能体开关初始状态与服务端保持一致
+    subAgentsEnabled.value = Boolean(data.enableSubAgents);
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载配置失败', err));
   } finally {
@@ -277,22 +284,53 @@ function maskLocal(key: string): string {
 async function loadAiConfig() {
   loadingAi.value = true;
   try {
-    // 初始编辑目标：优先第一个「已保存」的预设，否则第一个预设，否则空（自定义）。
+    // 初始编辑目标：优先「当前问答选中的预设」（若该预设存在），否则第一个「已保存」的预设，
+    // 否则第一个预设，否则空（自定义）。这样用户在问答页切到某预设后打开本页，直接看到该预设的
+    // 已保存配置，避免默认打开到别的（常为空的）预设而误以为"配置丢失/未返显"。
     const map = await loadAiUserConfigMap(currentUserId.value);
     const savedKeys = aiPresets.value.map(p => p.key).filter(k => map[k]);
-    const initialKey = savedKeys[0] ?? aiPresets.value[0]?.key ?? '';
+    const activeKey = modelStore.selectedPresetKey;
+    const initialKey =
+      (activeKey && activeKey !== AUTO_MODEL && aiPresets.value.some(p => p.key === activeKey)
+        ? activeKey
+        : savedKeys[0]) ?? aiPresets.value[0]?.key ?? '';
     selectedPresetKey.value = initialKey;
     // 传入initialKey对应的预设模板：无保存槽且无 legacy 时将以该预设模板为默认值，
     // 与上方高亮的 selectedPresetKey 标签保持一致（避免首次打开表单停在全局 GLM 默认）。
     const initialPreset = aiPresets.value.find(p => p.key === initialKey);
-    const cfg = await loadAiUserConfigForPreset(currentUserId.value, initialKey, initialPreset);
+    const byok = await loadAiUserConfigForPreset(currentUserId.value, initialKey, initialPreset);
+    // 回退到服务端配置：浏览器本地 BYOK 未保存（如重新编译/更换访问源后本地槽位丢失），
+    // 或已保存但 apiKey 为空（槽位存在但密钥丢失）时，用 /api/ai/config 的服务端配置兜底，
+    // 避免「API Key 未返显 / 配置丢失」的错觉。
+    // 用户真正保存过完整 BYOK（initialKey 在 savedKeys 中 且 apiKey 非空）时仍以 BYOK 为准。
+    let cfg = byok;
+    const hasSavedByok = savedKeys.includes(initialKey);
+    const hasApiKey = Boolean(byok?.apiKey?.trim());
+    if (!hasSavedByok || !hasApiKey) {
+      try {
+        const res = await authStore.authFetch(`${API_BASE}/ai/config`);
+        if (res.ok) {
+          const srv = await res.json();
+          // 仅补缺：BYOK 已有的字段不覆盖（用户本地值优先）；空字段用服务端基线填充
+          cfg = {
+            provider: cfg.provider || srv.provider,
+            baseUrl: cfg.baseUrl || srv.baseUrl,
+            model: cfg.model || srv.model,
+            // 服务端密钥仅回显脱敏值（**** 开头），保存时按「未修改」处理，不暴露明文
+            apiKey: cfg.apiKey?.trim() ? cfg.apiKey : (srv.apiKeyMasked || ''),
+          };
+        }
+      } catch {
+        // 服务端不可达时沿用本地 BYOK / 预设默认值，不阻断页面渲染
+      }
+    }
     aiForm.value = {
       provider: cfg.provider,
       baseUrl: cfg.baseUrl,
       model: cfg.model,
       apiKey: cfg.apiKey,
     };
-    // 本地派生状态摘要（原 aiConfig 来自服务端，现在由本地配置派生）
+    // 本地派生状态摘要（原 aiConfig 来自服务端，现在由本地配置派生，空时回退服务端）
     aiConfig.value = deriveAiSummary(cfg);
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载 AI 配置失败', err));
@@ -339,6 +377,9 @@ async function applyPreset(preset: LlmPreset) {
     apiKey: cfg.apiKey, // 该预设已保存的密钥（未保存则为空，由用户填写）
   };
   aiConfig.value = deriveAiSummary(aiForm.value);
+  // 清空上一预设残留的「服务商可用模型」清单：否则下拉会因模型名不匹配当前预设而显示空白，
+  // 造成"模型没返显/配置丢失"的错觉（aiForm.model 文本输入框始终是真实来源）。
+  modelStore.availableModels = [];
   ElMessage.success(`已切到 ${preset.label}（请确认或填写你的 API Key）`);
 }
 
@@ -355,17 +396,24 @@ async function saveAiConfig() {
 
   savingAi.value = true;
   try {
-    await saveAiUserConfigForPreset(currentUserId.value, selectedPresetKey.value, {
+    // 安全校验：selectedPresetKey 必须是一个真实存在的预设 key，否则 saveAiUserConfigForPreset
+    // 会把配置写入 LEGACY 兼容槽（而非预设槽），导致之后切换预设读不到、表现为"配置丢失"。
+    // 空/非法时回退到第一个预设，确保始终落到正确的预设槽位。
+    const targetKey =
+      selectedPresetKey.value && aiPresets.value.some(p => p.key === selectedPresetKey.value)
+        ? selectedPresetKey.value
+        : (aiPresets.value[0]?.key ?? '');
+    await saveAiUserConfigForPreset(currentUserId.value, targetKey, {
       provider: aiForm.value.provider,
       baseUrl: aiForm.value.baseUrl,
       model: aiForm.value.model,
-      apiKey: aiForm.value.apiKey,
+      // 服务端兜底回显的是脱敏值（**** 开头）；用户未改直接保存时不能把脱敏串当真实密钥写入本地，
+      // 否则污染本地 BYOK 槽、后续问答下发无效密钥。脱敏值按"未修改/沿用服务端"处理 → 存空（继承服务端基线）。
+      apiKey: aiForm.value.apiKey.startsWith('****') ? '' : aiForm.value.apiKey,
     });
     // 更新本地派生状态摘要
     aiConfig.value = deriveAiSummary(aiForm.value);
-    const label = selectedPresetKey.value
-      ? `模型 ${selectedPresetKey.value}`
-      : '当前模型';
+    const label = targetKey ? `模型 ${targetKey}` : '当前模型';
     ElMessage.success(`AI 配置已保存到本地（${label}，仅当前账户可见）`);
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
@@ -416,7 +464,8 @@ async function testConnection() {
       body: JSON.stringify({
         baseUrl: aiForm.value.baseUrl,
         model: aiForm.value.model,
-        apiKey: aiForm.value.apiKey,
+        // 脱敏值（**** 开头）非真实密钥，发送前清空，避免用掩码串探测连接（后端 BYOK 需真实 key）；与 fetchModelList 口径一致。
+        apiKey: aiForm.value.apiKey.startsWith('****') ? '' : aiForm.value.apiKey,
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -445,6 +494,26 @@ const testResultText = computed(() => {
 
 // 测试结果图标已迁移至模板内 el-icon（Check/Close），原 testResultIcon computed 已废弃删除
 
+// 按 API Base URL + API Key 自动获取服务商可用模型列表（FR：AI 服务自动获取模型）。
+// 优先用表单当前的 baseUrl（必填）；apiKey 若为脱敏值 **** 则清空（后端回退服务端 key），
+// 否则用用户本地真实 key。拉取成功后 models 落入 modelStore.availableModels 供下拉选择。
+async function fetchModelList() {
+  if (!aiForm.value.baseUrl.trim()) {
+    ElMessage.warning('请先填写 API Base URL');
+    return;
+  }
+  const ok = await modelStore.fetchModels({
+    baseUrl: aiForm.value.baseUrl,
+    apiKey: aiForm.value.apiKey.startsWith('****') ? '' : aiForm.value.apiKey,
+    provider: aiForm.value.provider,
+  });
+  if (ok) {
+    ElMessage.success(`已获取 ${modelStore.availableModels.length} 个可用模型，可从下方列表选取`);
+  } else {
+    ElMessage.warning(modelStore.modelsError || '获取模型列表失败');
+  }
+}
+
 // ===== 联网搜索配置 =====
 // §5.2 webSearch 配置状态：与 LLM 配置独立，用户可单独启用/禁用联网搜索
 const webSearchForm = ref({
@@ -460,6 +529,9 @@ const webSearchStatus = ref<{
 } | null>(null);
 const loadingWebSearch = ref(false);
 const savingWebSearch = ref(false);
+const testingWebSearch = ref(false);
+// 联网搜索（搜索引擎）连接测试结果：复用 { ok, detail } 形态，与 AI 测试一致
+const webSearchTestResult = ref<{ ok: boolean; detail: string; count?: number } | null>(null);
 
 // 联网搜索 provider 中文标签
 const WEB_SEARCH_PROVIDERS: Array<{ value: 'tavily' | 'bing'; label: string; apiKeyUrl: string }> = [
@@ -511,6 +583,85 @@ async function saveWebSearchConfig() {
   }
 }
 
+// 测试联网搜索（搜索引擎）连接：向后端 /api/ai/web-search/test 发送当前表单的 provider/apiKey/maxResults，
+// 由后端真实打一次对应服务商验证 Key + 网络可用性。前端不持久化即可先验连接。
+async function testWebSearchConnection() {
+  if (!webSearchForm.value.apiKey.trim()) {
+    ElMessage.warning('请先填写搜索引擎 API Key');
+    return;
+  }
+  testingWebSearch.value = true;
+  webSearchTestResult.value = null;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/web-search/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: webSearchForm.value.provider,
+        apiKey: webSearchForm.value.apiKey,
+        maxResults: webSearchForm.value.maxResults,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = (await res.json()) as { ok: boolean; detail: string; count?: number };
+    webSearchTestResult.value = result;
+    if (result.ok) {
+      ElMessage.success('搜索引擎连接测试成功');
+    } else {
+      ElMessage.warning('搜索引擎连接测试失败');
+    }
+  } catch (err) {
+    webSearchTestResult.value = { ok: false, detail: (err as Error).message };
+    ElMessage.error(apiErrorMessage('测试失败', err));
+  } finally {
+    testingWebSearch.value = false;
+  }
+}
+
+// 搜索引擎测试结果文本（计算属性，避免模板类型收窄问题）
+const webSearchTestText = computed(() => {
+  const r = webSearchTestResult.value;
+  if (!r) return '';
+  return r.ok ? `连接成功（返回 ${r.count ?? 0} 条结果）` : r.detail;
+});
+
+// ===== 图像生成（生图）连接测试 =====
+// 媒体配置为服务端统一配置（非 BYOK），不区分账户；仅做连通性自检，不持久化。
+const testingImageGen = ref(false);
+const imageGenTestResult = ref<{ ok: boolean; detail: string; model?: string } | null>(null);
+
+async function testImageGenConnection() {
+  testingImageGen.value = true;
+  imageGenTestResult.value = null;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/image/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = (await res.json()) as { ok: boolean; detail: string; model?: string };
+    imageGenTestResult.value = result;
+    if (result.ok) {
+      ElMessage.success('图像生成连接测试成功');
+    } else {
+      ElMessage.warning('图像生成连接测试失败');
+    }
+  } catch (err) {
+    imageGenTestResult.value = { ok: false, detail: (err as Error).message };
+    ElMessage.error(apiErrorMessage('测试失败', err));
+  } finally {
+    testingImageGen.value = false;
+  }
+}
+
+// 生图测试结果文本
+const imageGenTestText = computed(() => {
+  const r = imageGenTestResult.value;
+  if (!r) return '';
+  return r.ok ? `连接成功${r.model ? `（模型 ${r.model}）` : ''}` : r.detail;
+});
+
 // ===== 高级配置：运行参数 / 健康检查 / 批量编译 / 日志 =====
 // 这些表单补全 config.json 已有但前端缺失的编辑入口，降低用户配置门槛。
 // 表单初始值从 GET /api/config 派生，保存时调用 PUT /api/config/{子资源} 落盘。
@@ -535,6 +686,11 @@ const savingBatch = ref(false);
 // 日志表单（level / enableRequestLog）
 const loggingForm = ref({ level: 'info', enableRequestLog: true });
 const savingLogging = ref(false);
+
+// 子智能体（多步 Agent）开关：与后端 config.enableSubAgents 对齐。
+// 实时切换：开关变化即 PUT /api/config/sub-agents，下次问答即可委派 researcher 子智能体。
+const subAgentsEnabled = ref(false);
+const savingSubAgents = ref(false);
 
 // 日志级别可选项（与后端 pino logger 级别对齐）
 const LOG_LEVEL_OPTIONS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
@@ -704,6 +860,36 @@ async function saveLogging() {
     ElMessage.error(apiErrorMessage('保存日志配置失败', err));
   } finally {
     savingLogging.value = false;
+  }
+}
+
+// 保存子智能体（多步 Agent）开关：实时切换，无需单独保存按钮。
+// PUT /api/config/sub-agents 落盘 + 后端 adapter.updateConfig 热切换（下次问答即生效）。
+async function saveSubAgents(enabled: boolean) {
+  savingSubAgents.value = true;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/config/sub-agents`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.ok) {
+      if (config.value) {
+        config.value.enableSubAgents = data.enabled;
+      }
+      subAgentsEnabled.value = data.enabled;
+      ElMessage.success(data.enabled ? '已开启子智能体（多步 Agent）' : '已关闭子智能体');
+    } else {
+      throw new Error(data.error || '保存失败');
+    }
+  } catch (err) {
+    // 失败回滚开关状态，避免 UI 与后端不一致
+    subAgentsEnabled.value = !enabled;
+    ElMessage.error(apiErrorMessage('子智能体开关保存失败', err));
+  } finally {
+    savingSubAgents.value = false;
   }
 }
 
@@ -1350,6 +1536,23 @@ onMounted(async () => {
   // 为什么放在 onMounted 而非 watch activeTab：避免切换 tab 时首次加载延迟，影响用户体验
   loadPromptList();
 });
+
+// 进入 AI 服务 tab 时，若当前 selectedPresetKey 为空/非法（如 aiPresets 晚于 loadAiConfig 加载、
+// 或用户在问答页切换预设后才打开本页），自动重新选中有效预设，避免以空 key 保存而误入 LEGACY 槽。
+// 仅在 selectedPresetKey 无效时重选，不覆盖用户已手动选中的预设，也不丢弃已填写的表单。
+watch(activeTab, (tab) => {
+  if (tab !== 'ai') return;
+  const valid = selectedPresetKey.value && aiPresets.value.some(p => p.key === selectedPresetKey.value);
+  if (valid) return;
+  const activeKey = modelStore.selectedPresetKey;
+  const fallback =
+    (activeKey && activeKey !== AUTO_MODEL && aiPresets.value.some(p => p.key === activeKey)
+      ? activeKey
+      : aiPresets.value[0]?.key) ?? '';
+  if (fallback && fallback !== selectedPresetKey.value) {
+    void applyPreset(aiPresets.value.find(p => p.key === fallback)!);
+  }
+});
 </script>
 
 <template>
@@ -1622,6 +1825,26 @@ onMounted(async () => {
                 </div>
               </div>
 
+              <!-- 子智能体（多步 Agent）开关 -->
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 子智能体（多步 Agent）<span class="block-bracket">]</span></h3>
+                <div class="form-row form-row-inline">
+                  <label class="form-label" for="cfg-sub-agents">启用 researcher 子智能体</label>
+                  <el-switch
+                    id="cfg-sub-agents"
+                    v-model="subAgentsEnabled"
+                    :loading="savingSubAgents"
+                    active-text="开启"
+                    inactive-text="关闭"
+                    @change="saveSubAgents"
+                  />
+                </div>
+                <p class="block-hint">
+                  开启后，主问答可委派 <code>spawn_researcher</code> 子智能体在隔离上下文独立检索/研读知识库，返回聚焦结论后由父智能体综合作答。
+                  实时生效，无需重启；配置持久化至 config.json。
+                </p>
+              </div>
+
               <!-- 批量编译编辑 -->
               <div class="config-block hover-glow">
                 <h3 class="block-title"><span class="block-bracket">[</span> 批量编译 <span class="block-bracket">]</span></h3>
@@ -1751,12 +1974,37 @@ onMounted(async () => {
                 </div>
       <div class="form-row">
                   <label class="form-label" for="ai-model">模型</label>
-                  <el-input
-                    id="ai-model"
-                    v-model="aiForm.model"
-                    :placeholder="aiModelPlaceholder"
-                    class="form-input"
-                  />
+                  <div class="model-input-row">
+                    <el-input
+                      id="ai-model"
+                      v-model="aiForm.model"
+                      :placeholder="aiModelPlaceholder"
+                      class="form-input"
+                    />
+                    <el-button
+                      class="neon-btn model-fetch-btn"
+                      :loading="modelStore.modelsLoading"
+                      @click="fetchModelList"
+                    >
+                      获取模型列表
+                    </el-button>
+                  </div>
+                  <el-select
+                    v-if="modelStore.availableModels.length"
+                    :model-value="aiForm.model"
+                    class="model-select"
+                    placeholder="从服务商可用模型中选取"
+                    filterable
+                    @update:model-value="(v: string) => (aiForm.model = v)"
+                  >
+                    <el-option
+                      v-for="m in modelStore.availableModels"
+                      :key="m.id"
+                      :label="m.id"
+                      :value="m.id"
+                    />
+                  </el-select>
+                  <p v-if="modelStore.modelsError" class="model-error">{{ modelStore.modelsError }}</p>
                 </div>
               </div>
 
@@ -1850,14 +2098,46 @@ onMounted(async () => {
                   </div>
                 </div>
       <div class="ai-actions">
+                  <el-button class="neon-btn" :loading="testingWebSearch" @click="testWebSearchConnection">
+                    测试连接
+                  </el-button>
                   <el-button class="neon-btn-primary" :loading="savingWebSearch" @click="saveWebSearchConfig">
                     保存配置
                   </el-button>
+                </div>
+                <!-- 搜索引擎连接测试结果 -->
+                <div v-if="webSearchTestResult" class="test-result" :class="{ ok: webSearchTestResult.ok, fail: !webSearchTestResult.ok }">
+                  <el-icon class="result-icon"><component :is="webSearchTestResult.ok ? Check : Close" /></el-icon>
+                  <span class="result-text">{{ webSearchTestText }}</span>
                 </div>
       <div v-if="webSearchStatus && !webSearchStatus.apiKeySet" class="key-hint">
                   <span class="hint-icon">?</span>
                   <span>未配置 API Key 时，知识库问答点击"联网搜索"将仅使用本地知识库。请在上方填写你的搜索引擎 Key（仅存本浏览器）</span>
                 </div>
+              </div>
+            </div>
+
+            <!-- 图像生成（生图）连接测试：媒体配置为服务端统一配置，非 BYOK，仅做连通性自检 -->
+            <div class="web-search-section">
+              <div class="section-header">
+                <span class="section-desc">// 图像生成（生图）</span>
+                <span class="key-status set">服务端统一配置</span>
+              </div>
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 生图服务 <span class="block-bracket">]</span></h3>
+                <p class="key-hint">
+                  <span class="hint-icon">i</span>
+                  <span>生图模型与密钥由服务端统一配置（agnes-image-2.1-flash），不区分账户。点击下方「测试连接」可验证服务端生图 API 是否可用、网络是否通畅。</span>
+                </p>
+              </div>
+              <div class="ai-actions">
+                <el-button class="neon-btn" :loading="testingImageGen" @click="testImageGenConnection">
+                  测试连接
+                </el-button>
+              </div>
+              <div v-if="imageGenTestResult" class="test-result" :class="{ ok: imageGenTestResult.ok, fail: !imageGenTestResult.ok }">
+                <el-icon class="result-icon"><component :is="imageGenTestResult.ok ? Check : Close" /></el-icon>
+                <span class="result-text">{{ imageGenTestText }}</span>
               </div>
             </div>
           </div>
@@ -3129,6 +3409,30 @@ onMounted(async () => {
   min-height: 400px;
 }
 
+/* 模型输入框 + 获取列表按钮 一行排列 */
+.model-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.model-input-row .form-input {
+  flex: 1;
+}
+.model-fetch-btn {
+  flex: none;
+  white-space: nowrap;
+}
+/* 服务商真实模型下拉：占满整行，可搜索 */
+.model-select {
+  width: 100%;
+  margin-top: 8px;
+}
+.model-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--danger, #f56c6c);
+}
+
 .preset-bar {
   display: flex;
   align-items: flex-start;
@@ -3666,6 +3970,11 @@ onMounted(async () => {
 .form-row .el-input-number {
   width: 240px;
   flex-shrink: 0;
+}
+
+.form-row-inline label {
+  width: auto;
+  flex-shrink: 1;
 }
 
 .form-hint {

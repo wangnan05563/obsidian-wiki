@@ -29,9 +29,9 @@ export default defineConfig({
     },
   },
   build: {
-    // 输出到后端 public 目录，生产模式由 Fastify @fastify/static 托管
+    // 统一生成内容：输出到项目根/release/spa/public，由后端 @fastify/static 托管
     // 为什么不输出到默认 dist：单端口部署需要后端直接服务前端静态资源
-    outDir: '../api/public',
+    outDir: '../../release/spa/public',
     emptyOutDir: true,
     // 为什么调高到 1800：项目依赖 Element Plus + vis-network + markdown-it，
     // 单 chunk 压缩后约 580kB（gzip），在单端口部署场景下可接受

@@ -1,15 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useTheme } from '../composables/useTheme';
-
-// Luminous Cognition 主题自适应图标
-// 设计哲学：单一几何 + 双相光（dark/light 同构，仅光相位变化）
-// 替代 RobotAvatar 预制图标，与系统整体"光之认知"语言统一
-//
-// 为什么需要两份图标：浅色主题（macaron/ecommerce）背景接近白，
-// 深色版图标的青色卫星 (#00f5ff) 与半透明光晕在白底上几乎不可见；
-// light 版使用更深更饱和的同色系（深紫 #7a4ab8 / 深青 #2d9d8d / 深粉 #d4699b），
-// 保证 WCAG 对比度，同时维持同一构图 DNA
+// 系统统一图标：书本 + 灯泡 3D 粘土风格
+// 替代 RobotAvatar 预制机器人图标，去除所有机器人/赛博风元素
+// 深色/浅色主题共用同一份图标资源
 withDefaults(
   defineProps<{
     size?: number;
@@ -21,18 +13,9 @@ withDefaults(
   }
 );
 
-const { currentTheme } = useTheme();
-
-// 浅色主题清单：与 Login.vue 中的视觉分类保持一致
-const lightThemes = ['macaron', 'ecommerce'];
 // 为什么用 import.meta.env.BASE_URL：vite.config.ts 配置了 base: '/wiki/'，
 // 硬编码 '/images/...' 会被浏览器解析为 host 根路径导致 404，必须拼接 base 前缀
-const iconSrc = computed(() => {
-  const isLight = lightThemes.includes(currentTheme.value);
-  return isLight
-    ? `${import.meta.env.BASE_URL}images/login/cognition-icon-light.png`
-    : `${import.meta.env.BASE_URL}images/login/cognition-icon.png`;
-});
+const iconSrc = `${import.meta.env.BASE_URL}images/login/cognition-icon-new.png`;
 </script>
 
 <template>
@@ -43,7 +26,7 @@ const iconSrc = computed(() => {
   >
     <img
       :src="iconSrc"
-      alt="Luminous Cognition"
+      alt="AI 知识库"
       class="cognition-img"
       draggable="false"
     />
@@ -55,8 +38,8 @@ const iconSrc = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* 微妙发光：与 RobotAvatar 一致的 drop-shadow 量级，保持视觉一致性 */
-  filter: drop-shadow(0 0 14px var(--robot-glow, rgba(176, 38, 255, 0.4)));
+  /* 温和投影：与 3D 粘土风格图标匹配，避免赛博霓虹光晕 */
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
 }
 
 .cognition-img {

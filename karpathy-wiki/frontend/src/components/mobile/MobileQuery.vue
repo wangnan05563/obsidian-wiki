@@ -21,9 +21,9 @@ import {
 } from '@element-plus/icons-vue';
 import { API_BASE, apiFetch } from '../../utils/apiBase';
 import { renderMarkdown } from '../../utils/markdown';
-import { consumeQuerySSE } from '../../utils/sse';
+import { consumeQuerySSEResumable } from '../../utils/sse';
 import { useQueryStore, DEFAULT_ACTIVE } from '../../stores/query';
-import { useConversationsStore, getLastActiveConversationId } from '../../stores/conversations';
+import { useConversationsStore, getLastActiveConversationId, setLastActiveConversationId } from '../../stores/conversations';
 import { useAuthStore } from '../../stores/auth';
 import { useModelStore } from '../../stores/model';
 import {
@@ -31,6 +31,7 @@ import {
   loadSearchUserConfig,
 } from '../../services/userConfig';
 import type { AiUserConfig, SearchUserConfig } from '../../services/userConfig';
+import { AUTO_MODEL, resolveAutoPresetForUser } from '../../utils/autoModel';
 import { useChatAutoScroll } from '../../composables/useChatAutoScroll';
 import { useSpeechRecognition } from '../../composables/useSpeechRecognition';
 import ThinkingBlock from '../ThinkingBlock.vue';
@@ -52,11 +53,12 @@ const byokConfig = ref<AiUserConfig | null>(null);
 const byokSearch = ref<SearchUserConfig | null>(null);
 const byokReady = computed(() => !!byokConfig.value && !!byokConfig.value.apiKey);
 // 模型显示：优先展示用户已配置的 BYOK 模型，否则回退预制模型（与后端实际生效逻辑一致）
-const displayModel = computed(() =>
-  byokReady.value
-    ? (byokConfig.value!.model || '我的模型 (BYOK)')
-    : (modelStore.currentModel || '模型'),
-);
+// auto 模式下展示「自动」，提示系统将自动择优（与 ModelSelector 收起态口径一致）
+const displayModel = computed(() => {
+  if (modelStore.selectedPresetKey === AUTO_MODEL) return '自动';
+  if (byokReady.value) return byokConfig.value!.model || '我的模型 (BYOK)';
+  return modelStore.currentModel || '模型';
+});
 const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 // 当前"激活"会话（其消息驻留 store 扁平缓冲，SSE 写入目标）；切到别的会话会优雅中止其后台流
@@ -432,15 +434,16 @@ async function sendQuestion(question: string, convId: string) {
   }
   const buf = store.getSessionBuffer(convId);
   const activeThreadId = buf?.currentThreadId ?? null;
-  const history = activeThreadId
-    ? undefined
-    : (buf?.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
+  // persist=false（默认部署）下服务端不维护线程记忆，必须由前端每轮透传完整 history
+  // 才能保证多轮上下文连贯；故只要有历史消息即发送（不再因 activeThreadId 抑制）。
+  const history = (buf?.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
 
   const body: Record<string, unknown> = { question, stream: store.streamMode };
+  if (history && history.length > 0) {
+    body.history = history;
+  }
   if (activeThreadId) {
     body.threadId = activeThreadId;
-  } else if (history && history.length > 0) {
-    body.history = history;
   }
 
   // ── BYOK per-user 配置注入（对齐桌面 Query.vue）──
@@ -449,12 +452,18 @@ async function sendQuestion(question: string, convId: string) {
   // 后端不持久化（参见 services/userConfig.ts）。仅当用户已填 API Key 才下发，
   // 空密钥视为未配置，交由后端 400 拦截。
   const uid = authStore.user?.id || 'guest';
-  // 传入当前预设模板：预设槽位为空时让 provider/baseUrl/model 跟随该预设（而非 legacy 扁平配置）
-  const activePreset = modelStore.presets.find(p => p.key === modelStore.selectedPresetKey);
-  const [aiCfg, searchCfg] = await Promise.all([
-    loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset),
-    loadSearchUserConfig(uid),
-  ]);
+  // auto（自动）模式：从「用户已配置 apiKey」的预设中按能力优先级择优（见 autoModel.resolveAutoPresetForUser），
+  // 保证 auto 选中的模型必然已配置，避免解析到未配置预设导致不发 llmConfig、后端 400（请求参数有误）。
+  // 选中具体预设时沿用其 key，走既有 BYOK 加载逻辑。
+  let aiCfg: AiUserConfig | null = null;
+  if (modelStore.selectedPresetKey === AUTO_MODEL) {
+    const resolved = await resolveAutoPresetForUser(uid, modelStore.presets);
+    aiCfg = resolved.config;
+  } else {
+    const activePreset = modelStore.presets.find((p) => p.key === modelStore.selectedPresetKey);
+    aiCfg = await loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset);
+  }
+  const searchCfg = await loadSearchUserConfig(uid);
   if (aiCfg && aiCfg.apiKey) {
     body.llmConfig = aiCfg;
   }
@@ -463,14 +472,26 @@ async function sendQuestion(question: string, convId: string) {
   }
 
   try {
-    const response = await apiFetch(`${API_BASE}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: activeAbort.signal,
-    });
-    if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
-    await consumeQuerySSE(response, store.getSessionWriter(convId), activeAbort.signal);
+    // X-2 可恢复流式：用带重连的 SSE 消费包装。
+    // 首连请求工厂 initialFetch 发送完整 body；若流异常断开且后端已下发 managerRunId，
+    // 包装层自动以 resumeFetch 凭 runId 重连回放完整响应（resetForResume 避免重复追加）。
+    const writer = store.getSessionWriter(convId);
+    const initialFetch = () =>
+      apiFetch(`${API_BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: activeAbort!.signal,
+      });
+    const resumeFetch = (runId: string, threadId: string | null) =>
+      apiFetch(`${API_BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // 重连仅需 runId（订阅进行中的 run）；threadId 一并带上是为兼容后端未来做归属校验
+        body: JSON.stringify({ resume: runId, threadId: threadId ?? undefined }),
+        signal: activeAbort!.signal,
+      });
+    await consumeQuerySSEResumable(initialFetch, resumeFetch, writer, activeAbort.signal);
   } catch (err: unknown) {
     if ((err as Error).name === 'AbortError') return;
     store.getSessionWriter(convId).handleError((err as Error).message);
@@ -525,6 +546,11 @@ async function maybeResumeOnLoad() {
   if (!lastId) return;
   const rec = conversationsStore.conversations.find((c) => c.id === lastId);
   if (!rec) return;
+  // 所有权校验：仅恢复归属当前用户的会话，防止上一用户残留 ID 导致跨账户加载
+  if (rec.ownerId !== undefined && rec.ownerId !== authStore.user?.id) {
+    setLastActiveConversationId(null);
+    return;
+  }
   store.swapSession(lastId, { messages: rec.messages, threadId: rec.threadId });
   conversationsStore.currentConversationId = lastId;
   activeId.value = lastId;

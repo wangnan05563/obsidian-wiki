@@ -83,6 +83,50 @@ function mapVaultReadError(err: unknown): { status: number; message: string } {
   return { status: 500, message };
 }
 
+// 公开媒体文件服务路由：服务 queries/ 下服务端生成的图像/视频等二进制文件，无需认证。
+// 为什么需要：浏览器 <img>/<video> 标签无法携带 Authorization header，
+//   若走 /api/files（受 filesReadAuthRequired 保护）会 401。
+// 安全边界：① 仅限 queries/ 目录（服务端生成归档，非用户上传）；
+// ② 文件名含时间戳（不可枚举）；③ URL 仅通过 SSE 分发给已认证用户。
+// 路径格式：GET /api/media/file/image-20260814-221213.png → vault readFileBuffer('queries/image-20260814-221213.png')
+const MEDIA_PREFIX = 'queries/';
+const MEDIA_PATH_RE = /^([a-zA-Z0-9_\-./]+)$/; // 防路径穿越：仅允许字母数字._-/.
+
+export function registerPublicMediaServeRoute(app: FastifyInstance, vault: VaultService): void {
+  // 用无约束的 '*' 通配（find-my-way 原生 catch-all），不要用 ':path*' 命名通配符——
+  // 后者在匹配带扩展名的文件名时会抛 'invalid parameter value' (400)，且无约束 '*' 不影响
+  // 本 handler（路径完全从 request.url 解析，不依赖任何 param 命名）。
+  app.get('/api/media/file/*', {
+    config: { rateLimit: READ_RATE_LIMIT },
+  },   async (request: FastifyRequest, reply: FastifyReply) => {
+    // 从 request.url 直接提取文件名，避免依赖 fastify 通配符的 param 命名差异。
+    const urlPath = (request.url || '').split('?')[0];
+    const MEDIA_SERVE_PREFIX = '/api/media/file/';
+    const rawPath = urlPath.startsWith(MEDIA_SERVE_PREFIX)
+      ? decodeURIComponent(urlPath.slice(MEDIA_SERVE_PREFIX.length))
+      : '';
+    // 纵深防御：拒绝路径穿越序列（vault.resolve 另有 EOUTSIDE 兜底，这里再挡一层）。
+    if (!MEDIA_PATH_RE.test(rawPath) || rawPath.includes('..')) {
+      return void reply.code(400).send({ error: '非法文件名', rawPath });
+    }
+    const relPath = MEDIA_PREFIX + rawPath;
+    const ext = path.extname(rawPath).toLowerCase();
+    try {
+      if (!BINARY_EXTENSIONS.has(ext)) {
+        return void reply.code(400).send({ error: '仅支持二进制媒体文件' });
+      }
+      const buffer = await vault.readFileBuffer(relPath);
+      reply.header('Content-Type', BINARY_CONTENT_TYPES[ext] || 'application/octet-stream');
+      // 缓存策略：生成媒体不变更，允许浏览器/CDN 缓存 1 小时
+      reply.header('Cache-Control', 'public, max-age=3600, immutable');
+      return void reply.send(buffer);
+    } catch (err: unknown) {
+      const { status, message } = mapVaultReadError(err);
+      return void reply.code(status).send({ error: message });
+    }
+  });
+}
+
 export function registerFilesRoutes(
   app: FastifyInstance,
   vault: VaultService,

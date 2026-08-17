@@ -1,18 +1,21 @@
 <script setup lang="ts">
-import { API_BASE, apiFetch } from '../utils/apiBase';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useModelStore } from '../stores/model';
 import { useQueryStore } from '../stores/query';
 import { useAuthStore } from '../stores/auth';
-import { loadAiUserConfigForPreset } from '../services/userConfig';
+import { loadAiUserConfigForPreset, saveAiUserConfigForPreset } from '../services/userConfig';
+import { AUTO_MODEL } from '../utils/autoModel';
 import type { LlmPreset } from '../types';
 
 // F-3.9 模型切换 UI
 // 关键约束（SRS F-3.9 §9.1 R8）：
 //   1. 切换前检查 isLoading，in-flight 问答未结束时禁止切换，避免 SSE 中途换模型导致响应错乱
 //   2. 切换成功后 Toast 200ms 内出现「已切换到 xxx」
-//   3. 切换失败回滚到上一个预设 key，避免 UI 显示与后端实际配置不一致
+//   3. 预设切换为纯本地偏好（BYOK 架构下实际模型于发起问答时本地解析下发），
+//      不再回滚——原"比对后端全局 model 不一致则回滚"的逻辑对普通用户必然误报
+//      （PUT /api/ai/config 为管理员权限，普通用户不可写）。切换是否真正生效由
+//      showSwitchSuccess 据本地 BYOK 配置状态给出提示。
 //
 // 显示规范（本次迭代）：
 //   - 收起态（触发器）：仅显示「模型名称」(preset.model)，不含厂商，节省空间且聚焦当前模型
@@ -21,11 +24,13 @@ import type { LlmPreset } from '../types';
 const store = useModelStore();
 const queryStore = useQueryStore();
 const authStore = useAuthStore();
-const previousPresetKey = ref<string>('');
 
 const open = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
+const panelRef = ref<HTMLElement | null>(null);
 const activeIndex = ref(0);
+// 展开方向：false=向下（默认），true=向上。当下方空间不足时自动改为向上，避免被容器/视口截断
+const dropUp = ref(false);
 
 const isBusy = computed(() => queryStore.isLoading);
 
@@ -33,10 +38,30 @@ const selectedPreset = computed<LlmPreset | undefined>(() =>
   store.presets.find(p => p.key === store.selectedPresetKey),
 );
 
-// 收起态显示文本：仅模型名称（加载/错误态给出占位）
+// 渲染列表：自动（auto）虚拟项置顶 + 已配置预设列表。
+// auto 项不对应真实预设，仅作为「系统自动选择」入口；选中后由 resolveAutoPreset 动态择优。
+const items = computed<LlmPreset[]>(() => {
+  const autoItem: LlmPreset = {
+    key: AUTO_MODEL,
+    label: '系统自动选择',
+    provider: 'auto',
+    baseUrl: '',
+    model: '自动',
+    apiKeyRef: '',
+    apiKeyUrl: '',
+    vision: false,
+  };
+  return [autoItem, ...store.presets];
+});
+
+// 收起态显示文本：优先显示当前真实模型（含用户从服务商清单选取的具体模型），
+// 否则回退预设模板模型或预设 key（加载/错误态给出占位）
+// auto 模式下固定显示「自动」，提示系统将自动择优，而非展示某个具体模型。
 const collapsedLabel = computed(() => {
+  if (store.selectedPresetKey === AUTO_MODEL) return '自动';
   if (store.loadError) return '模型服务不可用';
   if (store.presets.length === 0) return '正在加载模型…';
+  if (store.currentModel) return store.currentModel;
   return selectedPreset.value?.model || store.selectedPresetKey || '';
 });
 
@@ -51,11 +76,17 @@ function itemProvider(preset: LlmPreset): string {
 onMounted(async () => {
   try {
     await store.loadPresets();
-    previousPresetKey.value = store.selectedPresetKey;
   } catch {}
   document.addEventListener('click', onDocClick, true);
+  // 视口/布局变化（缩放、滚动、侧栏伸缩等）时重新计算展开方向，保证不被边界截断
+  window.addEventListener('resize', onReflow);
+  window.addEventListener('scroll', onReflow, true);
 });
-onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true));
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocClick, true);
+  window.removeEventListener('resize', onReflow);
+  window.removeEventListener('scroll', onReflow, true);
+});
 
 // 点击组件外部时收起面板
 function onDocClick(e: MouseEvent) {
@@ -68,9 +99,104 @@ function toggle() {
   if (isBusy.value) return;
   open.value = !open.value;
   if (open.value) {
-    const idx = store.presets.findIndex(p => p.key === store.selectedPresetKey);
+    const idx = store.selectedPresetKey === AUTO_MODEL
+      ? 0
+      : items.value.findIndex(p => p.key === store.selectedPresetKey);
     activeIndex.value = idx >= 0 ? idx : 0;
+    // 面板已渲染后（nextTick 在浏览器绘制前完成），测量真实高度并据此选择展开方向，避免首帧抖动
+    nextTick(updateDirection);
+    // 展开时拉取「当前服务商真实模型」清单，供用户在问答内直接切换具体模型（FR）
+    void loadRealModels();
   }
+}
+
+// 当前预设下用户 BYOK 真实模型（用于高亮"服务商真实模型"分组中的已选项）
+const currentRealModel = ref('');
+
+// 拉取当前预设对应的服务商真实模型清单。
+// 读取当前用户该预设的 BYOK 配置（provider/baseUrl/apiKey/model），仅当用户已配置 key 才拉取；
+// 拉取结果落入 modelStore.availableModels，panel 内"服务商真实模型"分组据此渲染。
+async function loadRealModels() {
+  const uid = authStore.user?.id || 'guest';
+  const preset = store.presets.find(p => p.key === store.selectedPresetKey);
+  const cfg = await loadAiUserConfigForPreset(uid, store.selectedPresetKey, preset);
+  currentRealModel.value = cfg.model || '';
+  if (!cfg.apiKey) {
+    // 未配置该预设的 API Key：无法以用户身份拉取服务商模型，清空清单（panel 给出提示）
+    store.availableModels = [];
+    return;
+  }
+  await store.fetchModels({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, provider: cfg.provider });
+  // 拉取后若清单中恰好包含当前模型，保持高亮一致
+  if (store.availableModels.length && currentRealModel.value && !store.availableModels.some(m => m.id === currentRealModel.value)) {
+    // 当前模型不在清单内（如自定义模型名），不强制处理，仅不亮选
+  }
+}
+
+// 从"服务商真实模型"分组选取具体模型：写入当前预设的用户 BYOK 槽位并即时生效。
+// 与预设切换不同——provider/baseUrl 不变，仅覆盖 model 字段，使问答实际使用该模型。
+async function selectRealModel(id: string) {
+  closePanel();
+  if (isBusy.value) {
+    ElMessage.warning('回答生成中，请稍后再切换模型');
+    return;
+  }
+  if (!id) return;
+  const uid = authStore.user?.id || 'guest';
+  const preset = store.presets.find(p => p.key === store.selectedPresetKey);
+  const cfg = await loadAiUserConfigForPreset(uid, store.selectedPresetKey, preset);
+  await saveAiUserConfigForPreset(uid, store.selectedPresetKey, { ...cfg, model: id });
+  currentRealModel.value = id;
+  store.currentModel = id;
+  ElMessage.success(`已切换到 ${id}（已写入你的本地配置，问答将使用此模型）`);
+}
+
+function isRealSelected(id: string): boolean {
+  return id === currentRealModel.value;
+}
+
+// 找到真正会裁剪面板的祖先容器（任何 overflow 为 hidden/auto/scroll/clip 的祖先），
+// 找不到则返回视口（documentElement），用于把"下方可用空间"算在正确的边界内。
+function getClippingContainer(): HTMLElement {
+  let el = rootRef.value?.parentElement ?? null;
+  while (el && el !== document.documentElement) {
+    const cs = getComputedStyle(el);
+    const clips =
+      cs.overflowY === 'hidden' || cs.overflowY === 'auto' || cs.overflowY === 'scroll' || cs.overflowY === 'clip' ||
+      cs.overflowX === 'hidden' || cs.overflowX === 'auto' || cs.overflowX === 'scroll' || cs.overflowX === 'clip';
+    if (clips) return el;
+    el = el.parentElement;
+  }
+  return document.documentElement;
+}
+
+// 根据触发器上下方可用空间自动选择展开方向：下方够放则向下，否则向上，都不够则朝空间更大一侧（剩余靠滚动）
+function updateDirection() {
+  const root = rootRef.value;
+  const panel = panelRef.value;
+  if (!root || !panel) return;
+  const rect = root.getBoundingClientRect();
+  const cont = getClippingContainer();
+  const cRect =
+    cont === document.documentElement
+      ? { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth }
+      : cont.getBoundingClientRect();
+  const gap = 4; // 与面板 top/bottom: calc(100% + 4px) 的间距一致
+  const spaceBelow = cRect.bottom - rect.bottom - gap;
+  const spaceAbove = rect.top - cRect.top - gap;
+  const panelH = panel.getBoundingClientRect().height;
+  if (spaceBelow >= panelH) {
+    dropUp.value = false;
+  } else if (spaceAbove >= panelH) {
+    dropUp.value = true;
+  } else {
+    dropUp.value = spaceAbove >= spaceBelow;
+  }
+}
+
+// 视口/滚动变化时若处于展开态则重算方向
+function onReflow() {
+  if (open.value) updateDirection();
 }
 
 function closePanel() {
@@ -84,32 +210,19 @@ async function handleSelect(key: string) {
     ElMessage.warning('回答生成中，请稍后再切换模型');
     return;
   }
+  // 自动（auto）模式：仅切换本地选中态，不调后端、无需回滚校验（无具体预设可同步）。
+  if (key === AUTO_MODEL) {
+    store.selectAuto();
+    ElMessage.success('已切换到自动模式，系统将自动选择最合适的模型');
+    return;
+  }
   if (!key || key === store.selectedPresetKey) return;
 
-  previousPresetKey.value = store.selectedPresetKey;
   await store.switchModel(key);
-
-  // 切换失败回滚：switchModel 内部 catch 但不抛出，这里通过比对 selectedPresetKey 判断
-  // 为什么不依赖 catch：switchModel 在 fetch 失败时已 selectedPresetKey.value = preset.key
-  //（先更新 UI 再发请求），失败后 UI 仍是新值但后端未生效，需手动回滚
-  // 通过读取后端 /api/ai/config 验证是否真的生效
-  try {
-    const res = await apiFetch(`${API_BASE}/ai/config`);
-    if (res.ok) {
-      const cfg = await res.json() as { model?: string };
-      const preset = store.presets.find(p => p.key === key);
-      if (preset && cfg.model !== preset.model) {
-        // 后端 model 未更新，回滚
-        store.selectedPresetKey = previousPresetKey.value;
-        ElMessage.error('模型切换失败，已回滚');
-        return;
-      }
-    }
-    await showSwitchSuccess(key);
-  } catch {
-    // 验证失败不阻断（切换请求已发出），直接基于 BYOK 状态给出结果提示
-    await showSwitchSuccess(key);
-  }
+  // BYOK 架构下，实际问答模型在发起问答时按所选预设本地解析并随请求体下发，
+  // 预设切换是纯本地偏好操作，无需也不应 PUT 后端全局配置。是否真正生效
+  //（用户是否已为对应预设配置 BYOK）由 showSwitchSuccess 据本地状态给出提示。
+  await showSwitchSuccess(key);
 }
 
 // 切换成功提示：直接校验当前用户 BYOK llmConfig（本地命名空间），判断该切换对该用户
@@ -144,7 +257,7 @@ async function onKeydown(e: KeyboardEvent) {
     }
     return;
   }
-  const len = store.presets.length || 1;
+  const len = items.value.length || 1;
   if (e.key === 'Escape') {
     e.preventDefault();
     closePanel();
@@ -156,7 +269,7 @@ async function onKeydown(e: KeyboardEvent) {
     activeIndex.value = (activeIndex.value - 1 + len) % len;
   } else if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
-    const preset = store.presets[activeIndex.value];
+    const preset = items.value[activeIndex.value];
     if (preset) await handleSelect(preset.key);
   }
 }
@@ -185,12 +298,14 @@ async function onKeydown(e: KeyboardEvent) {
     <!-- 展开态面板：每项显示「模型名称 · 厂商名称」 -->
     <ul
       v-if="open && store.presets.length > 0"
+      ref="panelRef"
       class="model-selector-panel"
+      :class="{ 'drop-up': dropUp }"
       role="listbox"
       :aria-activedescendant="`ms-item-${activeIndex}`"
     >
       <li
-        v-for="(preset, idx) in store.presets"
+        v-for="(preset, idx) in items"
         :id="`ms-item-${idx}`"
         :key="preset.key"
         class="model-selector-item"
@@ -203,6 +318,27 @@ async function onKeydown(e: KeyboardEvent) {
         <span class="ms-item-model">{{ itemModel(preset) }}</span>
         <span class="ms-item-sep" aria-hidden="true">·</span>
         <span class="ms-item-provider">{{ itemProvider(preset) }}</span>
+      </li>
+
+      <!-- 服务商真实模型分组：按当前预设的 baseUrl+key 拉取，用户可直接选具体模型（FR） -->
+      <li class="ms-divider" role="separator"></li>
+      <li class="ms-group-header">
+        服务商真实模型
+        <span v-if="store.modelsLoading" class="ms-loading">加载中…</span>
+      </li>
+      <li
+        v-for="m in store.availableModels"
+        :key="`real-${m.id}`"
+        class="model-selector-item"
+        :class="{ selected: isRealSelected(m.id) }"
+        role="option"
+        :aria-selected="isRealSelected(m.id)"
+        @click="selectRealModel(m.id)"
+      >
+        <span class="ms-item-model">{{ m.id }}</span>
+      </li>
+      <li v-if="!store.modelsLoading && store.availableModels.length === 0" class="ms-empty">
+        未获取到真实模型（请先在「配置 → AI 服务」填写 API Key 并获取列表）
       </li>
     </ul>
   </div>
@@ -268,6 +404,12 @@ async function onKeydown(e: KeyboardEvent) {
   max-height: 280px;
   overflow-y: auto;
 }
+/* 下方空间不足时改为向上展开：从触发器的上边缘向上生长，避免超出容器/视口被截断 */
+.model-selector-panel.drop-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+}
 .model-selector-item {
   display: flex;
   align-items: baseline;
@@ -298,5 +440,37 @@ async function onKeydown(e: KeyboardEvent) {
 }
 .model-selector-item.selected .ms-item-model {
   color: var(--neon-cyan, #00f5ff);
+}
+
+/* 分组分隔线 + 分组标题（预设模型 / 服务商真实模型） */
+.ms-divider {
+  height: 1px;
+  margin: 4px 2px;
+  padding: 0;
+  background: var(--border-color, rgba(128, 128, 128, 0.2));
+  cursor: default;
+}
+.ms-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  cursor: default;
+  text-transform: none;
+}
+.ms-loading {
+  font-size: 10px;
+  color: var(--neon-cyan, #00f5ff);
+}
+.ms-empty {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  cursor: default;
+  white-space: normal;
+  line-height: 1.5;
 }
 </style>

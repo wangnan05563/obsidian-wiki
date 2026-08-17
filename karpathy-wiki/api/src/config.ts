@@ -224,6 +224,10 @@ function defaultConfig(): AppConfig {
     // 阈值可调：maxTokens 控制注入历史 token 硬上限；warnRatio 控制主动触发时机；
     //   recencyWindow 保证最近 N 条原文不被压缩（连贯性底线）。
     contextGovernor: { ...DEFAULT_GOVERNOR_CONFIG },
+    // 子智能体（多步 Agent）开关：默认关闭，零破坏；Config 页面可实时开启。
+    enableSubAgents: false,
+    // X-2 可恢复流式开关：默认关闭，零破坏；开启后问答运行与请求解耦支持断线重连。
+    enableResumableStream: false,
   };
 }
 
@@ -714,7 +718,39 @@ export async function saveHealthCheckConfig(updates: {
   return merged;
 }
 
-// 保存批量编译配置（allowedExtensions/maxBatchSize/maxFileSizeMb）到 config.json。
+// 保存子智能体（多步 Agent）开关到 config.json。
+// 为什么需要：用户在前端 Config 页面实时开启/关闭 researcher 子智能体后需持久化，重启后仍生效。
+export async function saveSubAgentConfig(enabled?: boolean): Promise<AppConfig> {
+  const current = await loadConfig();
+  const merged: AppConfig = { ...current };
+  if (enabled !== undefined) {
+    merged.enableSubAgents = enabled;
+  }
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存 X-2 可恢复流式开关到 config.json。
+// 为什么需要：用户在前端 Config 页面实时开启/关闭可恢复流式后需持久化，重启后仍生效。
+export async function saveResumableStreamConfig(enabled?: boolean): Promise<AppConfig> {
+  const current = await loadConfig();
+  const merged: AppConfig = { ...current };
+  if (enabled !== undefined) {
+    merged.enableResumableStream = enabled;
+  }
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+  refreshConfigCache(merged);
+  return merged;
+}
 // 为什么需要：不同业务场景下文件类型与大小限制不同，用户需在前端调整。
 export async function saveBatchConfig(updates: {
   allowedExtensions?: string[];
@@ -888,6 +924,8 @@ export async function saveUrlCrawlConfig(updates: Partial<UrlCrawlConfig>): Prom
   const baseUrlCrawl: Required<UrlCrawlConfig> = {
     ...DEFAULT_CRAWL_CONFIG,
     ...currentUrlCrawl,
+    // B 方案：egress 代理默认值（空字符串表示不启用），显式给 string 以满足 Required 约束
+    egressProxyUrl: currentUrlCrawl.egressProxyUrl ?? DEFAULT_CRAWL_CONFIG.egressProxyUrl,
     logging: {
       enabled: currentUrlCrawl.logging?.enabled ?? DEFAULT_CRAWL_CONFIG.logging.enabled,
       logFilePath: currentUrlCrawl.logging?.logFilePath ?? DEFAULT_CRAWL_CONFIG.logging.logFilePath,

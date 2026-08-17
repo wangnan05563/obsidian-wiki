@@ -6,6 +6,8 @@ import { getResourcePath } from '../utils/runtime.js';
 import type { EngineAdapter, LlmPreset } from '../types.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
+import { testWebSearchConnection } from '../tools/web-search.js';
+import { testImageGeneration } from '../workflows/media-generation-workflow.js';
 
 // 模块加载时一次性读取 LLM 预设列表，避免每次请求都读盘。
 // 为什么外置到 llm-presets.json：厂商预设（baseUrl/model/apiKeyRef）会随厂商更新迭代，
@@ -44,6 +46,41 @@ function formatHttpError(status: number, errText: string): string {
   return detail;
 }
 
+// 归一化服务商返回的模型列表为统一的 [{ id }] 结构。
+// 兼容两种主流形态：
+//   - OpenAI 兼容：{ data: [{ id: 'gpt-4o' }] }
+//   - Ollama 原生：`{ models: [{ name: 'qwen2.5:7b' }] }`
+// 未知形态或空列表返回 []，调用方据此提示"不支持 /models"。
+function normalizeModels(json: unknown): { id: string }[] {
+  if (!json || typeof json !== 'object') return [];
+  const obj = json as Record<string, unknown>;
+  const data = obj.data;
+  if (Array.isArray(data)) {
+    return data
+      .map((m) => (typeof m === 'string' ? m : (m as Record<string, unknown> | null)?.[ 'id']))
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      .map((id) => ({ id }));
+  }
+  const models = obj.models;
+  if (Array.isArray(models)) {
+    return models
+      .map((m) => {
+        if (typeof m === 'string') return m;
+        const rec = m as Record<string, unknown> | null;
+        return rec?.[ 'id'] ?? rec?.[ 'name'];
+      })
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      .map((id) => ({ id }));
+  }
+  return [];
+}
+
+// 模型列表内存缓存：按 baseUrl|provider 维度缓存 5 分钟。
+// 为什么与 apiKey 无关：可用模型清单不依赖具体密钥（只要任一有效 key 即可列出），
+// 按 baseUrl|provider 缓存可避免「同一服务商反复展开下拉」重复打外部 API。
+const modelsCache = new Map<string, { at: number; models: { id: string }[] }>();
+const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+
 // AI 服务路由：提供 LLM 配置的读取、保存与连接测试。
 // 参考 17_xianyu 项目 AI 服务模块设计，适配本项目的 Fastify + config.json 架构。
 //   GET  /api/ai/config           读取 AI 配置（API Key 脱敏）
@@ -53,6 +90,7 @@ function formatHttpError(status: number, errText: string): string {
 //   POST /api/ai/test-connection  测试 LLM 连接（OpenAI 兼容协议）
 //   GET  /api/ai/web-search       读取联网搜索配置
 //   PUT  /api/ai/web-search       保存联网搜索配置 + 同步 adapter 运行时
+//   POST /api/ai/web-search/test  测试联网搜索（搜索引擎）连接是否可用
 export function registerAiRoute(
   app: FastifyInstance,
   adapter?: EngineAdapter,
@@ -296,6 +334,70 @@ export function registerAiRoute(
     }
   });
 
+  // POST /api/ai/models：根据 API Base URL + API Key 自动获取服务商可用模型列表。
+  // 入参（均可选）：{ baseUrl?, apiKey?, provider? }
+  //   - 缺省回退服务端 config.llm（baseUrl/provider）；apiKey 回退 getEffectiveApiKey。
+  //   - apiKey 以 **** 开头视为脱敏回传，不覆盖（沿用服务端/环境变量 key）。
+  // 为什么需要：让用户不必手填 model 字符串，直接从服务商 /models 拉取真实清单选择（FR：AI 服务自动获取模型列表）。
+  // 兼容性：OpenAI 兼容返回 { data:[{id}] }；Ollama 原生返回 { models:[{name}] }；归一化为 [{id}]。
+  // 失败（网络/鉴权/不支持）返回 { ok:false, detail } 而非 500，前端可友好提示并回退手工输入。
+  // 缓存：按 baseUrl|provider 内存缓存 5 分钟，避免每次展开下拉都打外部 API。
+  app.post('/api/ai/models', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as { baseUrl?: string; apiKey?: string; provider?: string };
+
+    const config = await loadConfig();
+    const baseUrl = (body.baseUrl || config.llm.baseUrl || '').trim().replace(/\/+$/, '');
+    const provider = (body.provider || config.llm.provider || '').trim();
+    const rawKey = body.apiKey && !body.apiKey.startsWith('****') ? body.apiKey : undefined;
+    const apiKey = rawKey || getEffectiveApiKey(config);
+
+    if (!baseUrl) {
+      return void reply.send({ ok: false, detail: '缺少 baseUrl，请先在 AI 服务中配置 API Base URL' });
+    }
+
+    // 命中缓存（与 key 无关：可用模型清单不依赖具体 key）
+    const cacheKey = `${baseUrl}|${provider}`;
+    const cached = modelsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < MODELS_CACHE_TTL_MS) {
+      return void reply.send({ ok: true, models: cached.models, cached: true, provider });
+    }
+
+    const url = baseUrl + '/models';
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: 'Bearer ' + apiKey } : {}),
+        },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        clearTimeout(timeout);
+        return void reply.send({ ok: false, detail: formatHttpError(res.status, errText) });
+      }
+      const json = await res.json().catch(() => null);
+      clearTimeout(timeout);
+      const models = normalizeModels(json);
+      if (models.length === 0) {
+        return void reply.send({ ok: false, detail: '服务商未返回模型列表（可能不支持 /models 接口）' });
+      }
+      modelsCache.set(cacheKey, { at: Date.now(), models });
+      return void reply.send({ ok: true, models, cached: false, provider });
+    } catch (err) {
+      clearTimeout(timeout);
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      // AbortError 转换为更友好的超时提示
+      const detail = err instanceof Error && err.name === 'AbortError'
+        ? '获取模型列表超时（>15s），请检查 baseUrl 或网络'
+        : msg;
+      return void reply.send({ ok: false, detail });
+    }
+  });
+
   // §5.2 GET /api/ai/web-search：读取联网搜索配置，API Key 脱敏。
   // 为什么需要：前端 Config 页面需要展示当前配置状态，决定是否启用 web_search 工具。
   app.get('/api/ai/web-search', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
@@ -356,5 +458,57 @@ export function registerAiRoute(
       const msg = err instanceof Error ? err.message : 'Unknown error';
       return void reply.code(500).send({ error: msg });
     }
+  });
+
+  // §5.2 POST /api/ai/web-search/test：测试联网搜索（搜索引擎）连接是否可用。
+  // 入参（均可选）：{ provider?, apiKey?, maxResults? }
+  //   - 缺省回退服务端 config.webSearch（provider/maxResults）；apiKey 回退服务端/环境变量 key。
+  //   - apiKey 以 **** 开头视为脱敏回传，不覆盖（沿用服务端/环境变量 key）。
+  // 为什么需要：让用户不必先保存就能校验 Key + 网络，提前暴露「Key 无效 / 超时 / 区域不可用」等问题（FR：搜索引擎连接测试）。
+  // 鉴权：requireAuth（与 /api/ai/models 一致）——搜索引擎为 BYOK 本地配置，登录用户即可测试自己的 Key。
+  // 不抛 500：缺 Key / 鉴权失败 / 超时统一返回 { ok:false, detail }，前端友好提示。
+  app.post('/api/ai/web-search/test', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as { provider?: 'tavily' | 'bing'; apiKey?: string; maxResults?: number };
+
+    const config = await loadConfig();
+    const ws = config.webSearch;
+
+    const provider = body.provider || ws?.provider || 'tavily';
+    const maxResults = body.maxResults || ws?.maxResults || 5;
+
+    // API Key 解析：请求体新值（非脱敏）> 服务端 config.webSearch.apiKey > 环境变量[apiKeyRef]
+    let apiKey: string;
+    if (body.apiKey && !body.apiKey.startsWith('****')) {
+      apiKey = body.apiKey;
+    } else {
+      apiKey = (ws?.apiKey || (ws?.apiKeyRef ? process.env[ws.apiKeyRef] : '')) || '';
+    }
+
+    const result = await testWebSearchConnection({ provider, apiKey, maxResults });
+    return void reply.send(result);
+  });
+
+  // 图像生成（生图）连接测试：媒体配置为服务端统一配置（非 BYOK），测试服务端 media.agnes 的连通性。
+  // 入参（可选）：{ baseUrl?, imageModel? } 用于覆盖服务端配置做临时验证；缺省回退 config.media.agnes。
+  // 为什么需要：生图链路此前因 fetch 未跟随 POST 301 重定向而 60s 超时失败，提供连通性自检便于提前发现。
+  // 鉴权：requireAuth——登录用户即可查看服务端生图配置是否可用（不暴露密钥）。
+  app.post('/api/ai/image/test', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    const body = (_request.body ?? {}) as { baseUrl?: string; imageModel?: string };
+    const config = await loadConfig();
+    const media = config.media;
+    if (!media) {
+      return void reply.send({ ok: false, detail: '服务端未配置 media.agnes（生图服务）' });
+    }
+    // 允许临时覆盖 baseUrl / imageModel 做验证；其余字段沿用服务端配置
+    const overridden = {
+      ...media,
+      agnes: {
+        ...media.agnes,
+        ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
+        ...(body.imageModel ? { imageModel: body.imageModel } : {}),
+      },
+    };
+    const result = await testImageGeneration(overridden, config);
+    return void reply.send(result);
   });
 }

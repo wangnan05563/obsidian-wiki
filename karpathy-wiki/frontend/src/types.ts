@@ -143,6 +143,14 @@ export interface ChatMessage {
   image?: { url: string; alt: string; archivePath?: string };
   // v3 PPT 生成结果：Marp Markdown 源码，通过 SSE ppt 事件推送
   ppt?: { markdown: string; title: string; archivePath: string };
+  // §X-1 步骤级追踪：本条 assistant 消息对应的 harness runId。前端凭此调
+  //   GET /api/query/runs/:runId 拉取每步耗时分解（llmMs/toolMs/tokens/toolNames），
+  //   定位 143s/282s 级长耗时瓶颈。降级链兜底路径（search fallback）无此字段。
+  runId?: string;
+  // X-2 可恢复流式：本条 assistant 消息对应的 manager runId（后端 StreamRunManager 分配）。
+  // 首连 open 事件携带，前端在 SSE 异常断开（刷新/断网）时凭此调 POST /api/query?resume=<id>
+  // 重连继续接收同一响应。仅当后端 enableResumableStream=true 时服务端下发，否则不存在。
+  managerRunId?: string;
 }
 
 export interface Reference {
@@ -202,6 +210,33 @@ export interface AnswerChunkData {
 export interface RefsData {
   refs: string[];
   webRefs?: Array<{ title: string; url: string; snippet: string }>;
+}
+
+// ===== §X-1 步骤级追踪类型 =====
+// 与后端 GET /api/query/runs/:runId 响应对齐（api/src/routes/runs.ts）。
+
+// 单步耗时分解：定位长耗时瓶颈（LLM 调用 ms vs 工具执行 ms vs token 消耗 vs 调用工具名）
+export interface QueryRunTiming {
+  step: number;
+  llmMs: number;
+  toolMs: number;
+  tokens: number;
+  toolNames: string[];
+}
+
+// 单次问答运行的完整 trace：每步分解 + 聚合总耗时 + 事件溯源序列
+export interface QueryRunTrace {
+  runId: string;
+  task: string;
+  status: string;
+  step: number;
+  tokenUsed: number;
+  startedAt: string;
+  timings: QueryRunTiming[];
+  totalLlmMs: number;
+  totalToolMs: number;
+  totalMs: number;
+  events: unknown[];
 }
 
 // ===== 知识浏览相关类型 =====
@@ -312,6 +347,8 @@ export interface ConfigData {
     level: string;
     enableRequestLog: boolean;
   };
+  // 子智能体（多步 Agent）开关：与后端 AppConfig.enableSubAgents 对齐，默认关闭。
+  enableSubAgents?: boolean;
 }
 
 // ===== 工具配置类型（与后端 types.ts 对齐，type-sync-rule）=====
@@ -913,6 +950,8 @@ export interface UrlCrawlEventData {
   contentLength?: number;
   attachmentCount?: number;
   error?: string;
+  // page_error 事件：错误分类（timeout/http/network/ssrf/unknown），前端按类型展示明确原因
+  errorType?: 'timeout' | 'http' | 'network' | 'ssrf' | 'unknown';
   // attachment 事件：附件元信息
   attachment?: UrlCrawlAttachment;
   // done 阶段：汇总统计与合并 Markdown
@@ -923,6 +962,10 @@ export interface UrlCrawlEventData {
   elapsedMs?: number;
   // 增量爬取跳过的页面数
   pagesSkipped?: number;
+  // done 阶段：0 页面时的错误诊断（由后端聚合最可能是根因的提示）
+  errorCount?: number;
+  errors?: Array<{ url: string; errorType: string; message: string }>;
+  diagnosis?: string;
   pages?: Array<{ url: string; title: string; depth: number; contentLength: number; attachmentCount: number; markdown?: string }>;
   attachments?: UrlCrawlAttachment[];
 }
@@ -1039,7 +1082,7 @@ export interface PrecheckResult {
 // type: 'mindmap' Mermaid 思维导图 | 'faq' Q&A 问答对 | 'timeline' 按 created 排序的事件
 //       'image' 图像生成 | 'ppt' Marp 幻灯片
 // content: 对应格式的原始文本（mindmap=Mermaid 语法，faq/timeline=Markdown）
-// imageUrl: image 模式下图片访问 URL（/api/files?path=...）
+// imageUrl: image 模式下图片访问 URL（公开路由 /api/media/file/...，无需认证）
 // pptMarkdown: ppt 模式下 Marp Markdown 源码（与 content 互补，content 为渲染预览文本）
 export interface MultimodalOutput {
   type: 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt';

@@ -1,4 +1,5 @@
-import type { HarnessConfig } from '@wiki/harness';
+import { OpenAICompatibleAdapter, LlmPlanner } from '@wiki/harness';
+import type { HarnessConfig, SubAgentConfig } from '@wiki/harness';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent, WebSearchConfig, ToolsConfig, AppConfig, PodcastResult, SkillPreset, VideoTaskResult } from '../types.js';
@@ -12,6 +13,21 @@ import { generateVideo, pollVideoTask } from '../workflows/media-generation-work
 
 // BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
 import { applyPerRequestOverride } from './byok-override.js';
+
+// 子智能体（多步 Agent）默认配置：researcher 在隔离上下文独立检索/研读知识库，返回聚焦结论。
+// 声明式 + 框架自动注册 spawn_researcher 工具（见 wiki-harness subagent.ts / harness.ts）。
+export const RESEARCHER_SUBAGENT: SubAgentConfig = {
+  name: 'researcher',
+  description: '委派子智能体在隔离上下文中独立检索与研读知识库页面，返回聚焦结论后由父智能体综合作答。',
+  tools: ['search_pages', 'read_page'],
+  maxSteps: 8,
+  tokenBudget: 8000,
+};
+
+// 由「开关」解析出注入 Harness 的 subAgents 配置；关闭时返回 undefined（不注册任何 spawn 工具）。
+export function resolveSubAgents(enabled: boolean | undefined): SubAgentConfig[] | undefined {
+  return enabled ? [RESEARCHER_SUBAGENT] : undefined;
+}
 
 // HarnessAdapter：阶段 3 默认实现。
 // healthCheck 绕过 harness 直接走确定性逻辑（M-2），compile/query 通过工作流调用 harness。
@@ -31,19 +47,24 @@ export class HarnessAdapter implements EngineAdapter {
   // v3 媒体生成：持有 appConfig 引用，query/generateVideo/pollVideoTask 从中提取 mediaConfig
   // 为什么持有引用而非每次传参：query 方法签名由 EngineAdapter 接口固定，不能加 appConfig 参数
   private appConfig?: AppConfig;
+  // §P3-SubAgent 子智能体：显式配置，默认不传（关闭）。仅当调用方显式提供 subAgents 时，
+  // 由 query 路径注入 merged.harnessConfig，使 Harness 自动注册 spawn_<name> 工具。
+  // 默认关闭、零破坏：生产聚焦问答不受影响，需显式开启（如 ENABLE_SUBAGENTS 环境变量或运行时 updateConfig）。
+  private subAgents?: SubAgentConfig[];
 
   // 健康检查缓存
   private healthReportCache: HealthReport | null = null;
   private healthReportCachedAt = 0;
   private readonly HEALTH_CHECK_CACHE_TTL_MS = 60 * 1000; // 60秒缓存
 
-  constructor(config: HarnessConfig, vault: VaultService, staleDays = 30, webSearchConfig?: WebSearchConfig, toolsConfig?: ToolsConfig, appConfig?: AppConfig) {
+  constructor(config: HarnessConfig, vault: VaultService, staleDays = 30, webSearchConfig?: WebSearchConfig, toolsConfig?: ToolsConfig, appConfig?: AppConfig, subAgents?: SubAgentConfig[]) {
     this.harnessConfig = config;
     this.vault = vault;
     this.staleDays = staleDays;
     this.webSearchConfig = webSearchConfig;
     this.toolsConfig = toolsConfig;
     this.appConfig = appConfig;
+    this.subAgents = subAgents;
   }
 
   // v3 配置热加载：config.json 更新后同步 adapter 持有的 appConfig 引用
@@ -57,7 +78,7 @@ export class HarnessAdapter implements EngineAdapter {
   // 下次 harness.run 时 OpenAICompatibleAdapter 会读新值构造请求。
   // 为什么不需要重建 LLM 实例：OpenAICompatibleAdapter 持有 config 引用，构造请求时即时读取。
   // §5.2 webSearchConfig 变更同步内存实例，支持 Config 页面保存后即时生效
-  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig; activeSkill?: string; systemPrompt?: string; scope?: SkillPreset['scope']; outputFormat?: string }): void {
+  updateConfig(updates: { provider?: string; baseUrl?: string; model?: string; apiKey?: string; maxSteps?: number; tokenBudget?: number; staleDays?: number; webSearchConfig?: WebSearchConfig; toolsConfig?: ToolsConfig; activeSkill?: string; systemPrompt?: string; scope?: SkillPreset['scope']; outputFormat?: string; subAgents?: SubAgentConfig[] }): void {
     if (updates.provider) {
       this.harnessConfig.llm.provider = updates.provider;
     }
@@ -99,6 +120,11 @@ export class HarnessAdapter implements EngineAdapter {
     if (updates.outputFormat !== undefined) {
       this.activeOutputFormat = updates.outputFormat;
     }
+    // §P3-SubAgent 运行时开关：显式传 subAgents（含空数组 [] 表示清空）可覆盖 adapter 级配置，
+    // 支持 Config 页面保存后即时启用/停用子智能体。
+    if (updates.subAgents !== undefined) {
+      this.subAgents = updates.subAgents;
+    }
   }
 
   async *compile(input: CompileInput, appConfig?: AppConfig): AsyncIterable<ProgressEvent> {
@@ -128,6 +154,27 @@ export class HarnessAdapter implements EngineAdapter {
       searchConfig: input.searchConfig,
       toolsConfig: input.toolsConfig,
     });
+
+    // §P3 计划模式：主问答路径默认注入 LlmPlanner —— 循环前让 LLM 先产出全局意图锚点，
+    // 作为 system 上下文注入后续每步 LLM 调用。仅当调用方未显式配置 planner 时启用，
+    // 避免覆盖自定义。planner 复用 merged 后的 llm 配置（含 BYOK 用户覆盖），
+    // 规划调用与问答调用同样走用户独立额度，互不抢占限流。
+    // 影响面：仅 query 路径（非流式/流式/fallback 均经 merged.harnessConfig，自动继承），
+    // compile/podcast/health 等多步任务不经过此处，不被动启用。
+    if (!merged.harnessConfig.planner) {
+      merged.harnessConfig.planner = new LlmPlanner(
+        new OpenAICompatibleAdapter(merged.harnessConfig.llm),
+      );
+    }
+
+    // §P3-SubAgent：主问答路径注入显式子智能体配置 —— 仅当调用方未显式配置且 adapter 持有 subAgents 时启用。
+    // Harness 构造时会据此自动注册 spawn_<name> 工具（见 wiki-harness harness.ts），父智能体可委派子任务。
+    // 影响面同 planner：仅 query 路径（非流式/流式/fallback 均经 merged.harnessConfig 自动继承）；
+    // compile/podcast/health 等多步任务不经过此处，不被动启用。默认 adapter.subAgents 为空 → 零破坏。
+    if (!merged.harnessConfig.subAgents && this.subAgents?.length) {
+      merged.harnessConfig.subAgents = this.subAgents;
+    }
+
     yield* queryWorkflow(merged.harnessConfig, this.vault, effectiveInput, {
       webSearchConfig: merged.webSearchConfig,
       toolsConfig: merged.toolsConfig,

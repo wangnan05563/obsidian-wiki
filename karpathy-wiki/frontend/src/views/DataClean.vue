@@ -3,6 +3,7 @@ import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Sort } from '@element-plus/icons-vue';
+import { usePermission } from '../composables/usePermission';
 import type { PageQualityScore, DeduplicateResult, DuplicatePair, MergeResult, PrecheckResult, DiffResult } from '../types';
 
 const pages = ref<PageQualityScore[]>([]);
@@ -16,6 +17,8 @@ const loading = ref(false);
 const deduping = ref(false);
 const scanProgress = ref('');
 const selectedPages = ref<string[]>([]);
+// 永久删除端点为 requireAdmin，非管理员禁用按钮并提示
+const { isAdmin } = usePermission();
 const precheckResult = ref<PrecheckResult | null>(null);
 
 // 差异对比抽屉状态
@@ -156,6 +159,41 @@ async function archiveSelected() {
   } catch (err) { scanProgress.value = '归档失败'; ElMessage.error(err instanceof Error ? err.message : '归档操作失败'); }
 }
 
+// 永久删除：复用后端 DELETE /api/data-clean/delete（requireAdmin，支持 dry_run）。
+// 与归档不同，删除不可撤销，故强制二次确认 + 管理员校验 + 预览开关由后端 dry_run 控制（此处直接真实删除）。
+async function deleteSelected() {
+  if (selectedPages.value.length === 0) { ElMessage.warning('请选择要删除的页面'); return; }
+  if (!isAdmin.value) { ElMessage.warning('需管理员权限才能永久删除'); return; }
+  try {
+    await ElMessageBox.confirm(
+      `将永久删除 ${selectedPages.value.length} 个文件，此操作不可撤销，建议先归档备份。`,
+      '永久删除确认',
+      { confirmButtonText: '永久删除', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  scanProgress.value = '正在永久删除文件...';
+  try {
+    const res = await apiFetch(`${API_BASE}/data-clean/delete`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: selectedPages.value, dry_run: false }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = await res.json();
+    if (result.errors && result.errors.length > 0) {
+      ElMessage.warning(`删除完成但有错误：${result.errors.join('；')}`);
+    } else {
+      ElMessage.success(`已永久删除 ${result.deleted.length} 个文件`);
+    }
+    selectedPages.value = [];
+    await loadPages();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '删除失败');
+  }
+}
+
 async function fixFrontmatterFor(paths: string[]) {
   if (paths.length === 0) return;
   scanProgress.value = '正在修复 frontmatter...';
@@ -287,6 +325,13 @@ onMounted(() => loadPages());
       <!-- 操作工具栏 -->
       <div class="toolbar" v-if="selectedPages.length > 0">
         <el-button-group>
+          <el-button
+            type="danger"
+            size="small"
+            :disabled="!isAdmin"
+            :title="isAdmin ? '永久删除选中页面（不可撤销）' : '需管理员权限'"
+            @click="deleteSelected"
+          >永久删除 ({{ selectedPages.length }})</el-button>
           <el-button type="danger" size="small" @click="archiveSelected">归档 ({{ selectedPages.length }})</el-button>
           <el-button type="warning" size="small" @click="fixFrontmatterFor(selectedPages)">修复 Frontmatter</el-button>
           <el-button size="small" @click="selectedPages=[]">清除选择</el-button>

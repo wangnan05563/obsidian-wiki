@@ -6,9 +6,11 @@ import {
   saveHealthCheckConfig,
   saveBatchConfig,
   saveLoggingConfig,
+  saveSubAgentConfig,
 } from '../config.js';
 import type { AppConfig } from '../types.js';
 import type { HarnessAdapter } from '../engine/harness-adapter.js';
+import { resolveSubAgents } from '../engine/harness-adapter.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 
@@ -52,6 +54,8 @@ export function registerConfigRoute(
         maxFileSizeMb: 10,
       },
       logging: config.logging ?? { level: 'info', enableRequestLog: true },
+      // 子智能体（多步 Agent）开关：前端 Config 页面「系统配置」实时切换
+      enableSubAgents: config.enableSubAgents ?? false,
     });
   });
 
@@ -225,6 +229,32 @@ export function registerConfigRoute(
         ok: true,
         config: merged.logging,
         requireRestart: body.level === undefined ? [] : ['pino.level'],
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      return void reply.code(500).send({ error: msg });
+    }
+  });
+
+  // 保存子智能体（多步 Agent）开关到 config.json + 同步 adapter 运行时。
+  // 为什么需要：用户在 Config 页面「系统配置」实时开启/关闭 researcher 子智能体，
+  // 需即时生效（下次问答即可委派）并持久化（重启后仍保留）。
+  app.put('/api/config/sub-agents', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as {
+      enabled?: boolean;
+    };
+    if (!body || typeof body.enabled !== 'boolean') {
+      return void reply.code(400).send({ error: 'enabled 必须为 boolean' });
+    }
+    try {
+      const merged = await saveSubAgentConfig(body.enabled);
+      // 落盘后同步 adapter 运行时实例，下次 query 即按新开关注册/注销 spawn_researcher
+      adapter.updateConfig({
+        subAgents: resolveSubAgents(merged.enableSubAgents),
+      });
+      return void reply.send({
+        ok: true,
+        enabled: merged.enableSubAgents,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
