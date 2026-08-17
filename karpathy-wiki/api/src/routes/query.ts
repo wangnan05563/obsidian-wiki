@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto';
 import matter from 'gray-matter';
 import type { EngineAdapter, QueryInput, AnswerChunk } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
-import { createSSESender } from '../utils/sse.js';
+import { createSSESender, SSE_HEADERS } from '../utils/sse.js';
+// X-2 可恢复流式：流式运行管理器（detached run + 缓冲 + 订阅重连）
+import { streamRunManager } from '../workflows/stream-run-manager.js';
+import type { RunSink } from '../workflows/stream-run-manager.js';
 import { withCompileLock } from '../compile-queue.js';
 import { ThreadMemoryStore } from '../engine/thread-memory-store.js';
 import type { HistoryMessage } from '../engine/thread-memory-store.js';
@@ -36,7 +39,11 @@ async function resolveThreadContext(
   if (provided) {
     if (guards.enabled) {
       const existing = await store.getThread(provided);
-      if (!existing || (existing.ownerId ?? null) !== owner) {
+      // 跨用户访问防护：线程已存在且归属他人 → 拒绝（防猜测他人 UUID 续接会话）。
+      // 线程不存在（persist=false 时服务端不落盘、或重启/过期）时直接采用 provided
+      // 作为本次会话标识，不再 404——persist=false（默认部署）下服务端本就不维护线程态，
+      // 上下文由前端透传的 history 兜底；误 404 会中断所有多轮对话。
+      if (existing && (existing.ownerId ?? null) !== owner) {
         throw Object.assign(new Error(`非法的 threadId: ${provided}`), { statusCode: 404 });
       }
     }
@@ -72,6 +79,7 @@ export function registerQueryRoute(
   store: ThreadMemoryStore,
   governorConfig: ContextGovernorConfig,
   guards: IsolationGuards = createIsolationGuards(),
+  enableResumableStream = false,
 ) {
   app.post('/api/query', {
     // 破坏性端点更严格限流：query 触发 LLM 调用，20/min 防 token 耗尽
@@ -109,7 +117,17 @@ export function registerQueryRoute(
       llmConfig?: { provider: string; baseUrl: string; model: string; apiKey: string };
       searchConfig?: { provider: 'tavily' | 'bing'; apiKey: string; maxResults?: number };
       toolsConfig?: import('../types.js').ToolsConfig;
+      // X-2 可恢复流式：断线重连时携带首连拿到的 runId，后端据此订阅进行中的 run（不触发新问答）
+      resume?: string;
     };
+    // ── X-2 可恢复流式：断线重连分支 ──
+    // 客户端刷新/断网后，凭首连拿到的 runId 重新订阅进行中的 run，先回放已缓冲块再继续直播。
+    // 必须在 BYOK 校验之前短路：重连请求不携带 llmConfig，且 question 可能缺失（run 已存在）。
+    const resumeRunId = typeof body.resume === 'string' ? body.resume : undefined;
+    if (enableResumableStream && resumeRunId && UUID_RE.test(resumeRunId)) {
+      return void (await handleResumeRun(resumeRunId, reply, request));
+    }
+
     // 可选链合并 body nullish 守卫与字段访问（S6582）
     if (!body?.question || typeof body.question !== 'string') {
       return void reply.code(400).send({ error: '请求体须含 question 字段' });
@@ -192,6 +210,21 @@ export function registerQueryRoute(
     // §5.2 联网搜索外部链接：与 refs 并行发送
     let webRefs: Array<{ title: string; url: string; snippet: string }> = [];
 
+    // ── X-2 可恢复流式：首次启动分支 ──
+    // 把 harness 运行交给 StreamRunManager 解耦管理：首帧发 open 事件携带 runId（供前端断线重连），
+    // 后续块由管理器缓冲并扇出给订阅者。关闭时（enableResumableStream=false）完全不走此分支。
+    if (enableResumableStream) {
+      return void (await handleResumableStart({
+        input,
+        threadId,
+        governorStats,
+        adapter,
+        store,
+        request,
+        reply,
+      }));
+    }
+
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -268,7 +301,8 @@ export function registerQueryRoute(
         ]);
         // done 事件附带 threadId + sessionId + messageIndex，客户端保存供归档与记忆续接；
         // 同时回传上下文治理统计（压缩/清理/淘汰效果），便于观测
-        send('done', { threadId, sessionId, messageIndex, governor: governorStats });
+        // §X-1 步骤级追踪：附上 harness runId，前端凭此调 /api/query/runs/:runId 拉取每步耗时分解
+        send('done', { threadId, sessionId, messageIndex, governor: governorStats, runId: chunk.runId });
       };
 
       await withSessionLock(input.question, async () => {
@@ -306,6 +340,122 @@ export function registerQueryRoute(
       safeEnd();
     }
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// X-2 可恢复流式辅助函数
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 把单个 AnswerChunk 翻译为 SSE 事件（thinking/progress/image/ppt/followups/multimodal/
+// answer/refs）。被可恢复首连与重连订阅者共用；不含首连专属的 governor 逻辑。
+function dispatchStreamChunk(chunk: AnswerChunk, send: (event: string, data: unknown) => boolean): void {
+  if (chunk.thinking) send('thinking', chunk.thinking);
+  if (chunk.progress) send('progress', chunk.progress);
+  if (chunk.image) send('image', chunk.image);
+  if (chunk.ppt) send('ppt', chunk.ppt);
+  if (chunk.followups) send('followups', { followups: chunk.followups });
+  if (chunk.multimodal) send('multimodal', chunk.multimodal);
+  if (chunk.text) {
+    send('answer', { text: chunk.text });
+  } else if ((chunk.refs?.length ?? 0) > 0 && !chunk.done) {
+    // 非 done 时收到 refs 也下发（兼容 v1 行为）
+    send('refs', { refs: chunk.refs, webRefs: chunk.webRefs ?? [] });
+  }
+}
+
+// 首次启动：把 harness 运行交给 StreamRunManager 解耦管理。
+// 关键行为：
+//  - 首帧 open 事件携带 managerRunId，前端据此在断线时重连；
+//  - 持久化（会话 + 记忆）仅在 run 到达 done 时由 onDone 执行一次；
+//  - 客户端断开只退订，run 继续在后台跑完，避免重跑昂贵问答。
+async function handleResumableStart(ctx: {
+  input: QueryInput;
+  threadId: string;
+  governorStats: GovernorStats | null;
+  adapter: EngineAdapter;
+  store: ThreadMemoryStore;
+  request: FastifyRequest;
+  reply: FastifyReply;
+}): Promise<void> {
+  const { input, threadId, governorStats, adapter, store, request, reply } = ctx;
+  reply.raw.writeHead(200, SSE_HEADERS);
+  const { send, isAborted, safeEnd } = createSSESender(reply, request);
+
+  const managerRunId = randomUUID();
+  // 首帧：告知前端本 run 的重连 ID（前端在刷新/断网时用它调 ?resume=）
+  send('open', { runId: managerRunId });
+
+  const sink: RunSink = {
+    onChunk: (chunk) => dispatchStreamChunk(chunk, send),
+    onDone: (payload) => {
+      if ((payload.refs?.length ?? 0) > 0 || (payload.webRefs?.length ?? 0) > 0) {
+        send('refs', { refs: payload.refs, webRefs: payload.webRefs });
+      }
+      send('done', payload);
+    },
+    onError: (message) => send('error', { message }),
+    isAborted,
+    end: () => safeEnd(),
+  };
+  // 客户端断开：退订（run 继续后台跑），避免持有死连接
+  reply.raw.on('close', () => streamRunManager.unsubscribe(managerRunId, sink));
+
+  streamRunManager.start(managerRunId, {
+    producer: () => adapter.query(input),
+    lockKey: input.question,
+    governor: governorStats,
+    onDone: async ({ chunk, answer }) => {
+      const refs = chunk.refs ?? [];
+      const now = new Date().toISOString();
+      const { messageIndex } = await store.appendSessionMessage(threadId, {
+        question: input.question,
+        answer,
+        refs,
+        ts: now,
+      });
+      await store.appendMemory(threadId, [
+        { role: 'user', content: input.question, ts: now },
+        { role: 'assistant', content: answer, ts: now },
+      ]);
+      return { threadId, sessionId: threadId, messageIndex };
+    },
+  });
+
+  // 订阅：回放已完成部分 / 注册为直播订阅者；run 结束时 resolve，路由退出。
+  await streamRunManager.subscribe(managerRunId, sink);
+}
+
+// 断线重连：凭 managerRunId 订阅已有 run，先回放缓冲再继续直播。
+// 不做任何持久化（首连的 onDone 已写过一次），不重复加会话锁，不校验 BYOK。
+async function handleResumeRun(runId: string, reply: FastifyReply, request: FastifyRequest): Promise<void> {
+  reply.raw.writeHead(200, SSE_HEADERS);
+  const { send, isAborted, safeEnd } = createSSESender(reply, request);
+
+  if (!streamRunManager.has(runId)) {
+    send('error', {
+      message: '找不到可恢复的运行（可能已完成过久或被回收），请重新发起提问。',
+      code: 'RESUME_NOT_FOUND',
+    });
+    safeEnd();
+    return;
+  }
+
+  const sink: RunSink = {
+    onChunk: (chunk) => dispatchStreamChunk(chunk, send),
+    onDone: (payload) => {
+      if ((payload.refs?.length ?? 0) > 0 || (payload.webRefs?.length ?? 0) > 0) {
+        send('refs', { refs: payload.refs, webRefs: payload.webRefs });
+      }
+      send('done', payload);
+    },
+    onError: (message) => send('error', { message }),
+    isAborted,
+    end: () => safeEnd(),
+  };
+  reply.raw.on('close', () => streamRunManager.unsubscribe(runId, sink));
+
+  // subscribe 回放缓冲并（live 时）阻塞至 run 结束；finished 时同步回放后 end。
+  await streamRunManager.subscribe(runId, sink);
 }
 
 // 独立导出归档路由注册函数，在 index.ts 中与 query 路由一起注册。

@@ -4,14 +4,16 @@ import path from 'node:path';
 /**
  * 解析 SPA 静态资源根目录。
  *
- * 探测顺序（动态）：
- *   1. api/public_live_<ts>（每次部署全新时间戳目录，safe-delete 钩子放行新建写入）
- *      —— 按时间戳「数值」倒序取最新者，自动置首位
- *   2. api/public_live（旧部署兜底，index.html 已被钩子锁定，几乎不再刷新）
- *   3. api/../frontend/dist（vite 默认构建产物）
- *   4. CWD/public（exe 运行模式）
- *   5. api/public（开发/api/public 或 SEA/exe/public）
- *   6. api/static/spa（兼容旧路径）
+ * 探测顺序（动态，统一生成内容后 release/spa 为首要来源）：
+ *   1. release/spa/public_live_<ts>（统一生成内容后的主要来源；每次部署全新时间戳目录，
+ *      按时间戳「数值」倒序取最新者，自动置首位）
+ *   2. api/public_live_<ts>（兼容尚未迁移的旧部署）
+ *   3. api/public_live（旧部署兜底，index.html 已被钩子锁定，几乎不再刷新）
+ *   4. release/spa/public（vite 新输出位置，_deploy_build.mjs 同步目标）
+ *   5. api/../frontend/dist（vite 默认构建产物）
+ *   6. CWD/public（exe 运行模式）
+ *   7. api/public（开发/api/public 或 SEA/exe/public）
+ *   8. api/static/spa（兼容旧路径）
  *
  * 只要某个候选目录下存在 index.html 即采用，返回其绝对路径；都不存在返回 null。
  *
@@ -54,6 +56,38 @@ function isDeployComplete(dir: string): boolean {
 }
 
 export function resolveSpaRoot(apiDir: string): string | null {
+  // 统一生成内容根目录：项目根/release/spa（与 _deploy_live.mjs 的 DST 一致）。
+  // 开发模式下 apiDir = <root>/karpathy-wiki/api，故 ../../release/spa 即项目根/release/spa。
+  const releaseSpaDir = path.resolve(apiDir, '..', '..', 'release', 'spa');
+
+  // 扫描 release/spa 下的 public_live_<ts>（与 api/ 下同样的规则：数值倒序取最新、排除非数字后缀）
+  const releaseLiveDirs = (() => {
+    try {
+      return fs
+        .readdirSync(releaseSpaDir)
+        .filter((d) => d.startsWith('public_live_'))
+        .map((d) => {
+          const full = path.join(releaseSpaDir, d);
+          try {
+            const stat = fs.statSync(full);
+            const ts = Number(d.replace('public_live_', ''));
+            return { full, isDir: stat.isDirectory(), ts };
+          } catch {
+            return null;
+          }
+        })
+        .filter(
+          (x): x is { full: string; isDir: boolean; ts: number } =>
+            x !== null && x.isDir && Number.isFinite(x.ts),
+        )
+        .sort((a, b) => b.ts - a.ts)
+        .map((x) => x.full);
+    } catch {
+      // release/spa 不存在（尚未部署/首跑）：跳过，不阻塞启动
+      return [];
+    }
+  })();
+
   const liveDirs = fs
     .readdirSync(apiDir)
     .filter((d) => d.startsWith('public_live_'))
@@ -76,8 +110,10 @@ export function resolveSpaRoot(apiDir: string): string | null {
     .map((x) => x.full);
 
   const candidates = [
+    ...releaseLiveDirs, // 优先：release/spa 下的最新部署副本（统一生成内容后的主要来源）
     ...liveDirs,
     path.resolve(apiDir, 'public_live'),
+    path.resolve(releaseSpaDir, 'public'), // release/spa/public（vite 新输出位置）
     path.resolve(apiDir, '..', 'frontend', 'dist'),
     path.resolve(process.cwd(), 'public'),
     path.resolve(apiDir, 'public'),

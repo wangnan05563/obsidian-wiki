@@ -68,18 +68,6 @@
   --font-body: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
   --font-mono: 'SF Mono', 'JetBrains Mono', 'Courier New', monospace;
 
-  /* Robot IP 配色：浅色机身 + 蓝色点缀 */
-  --robot-head-1: #e8eef9;
-  --robot-head-2: #d6e2f5;
-  --robot-head-3: #eaf0f8;
-  --robot-body-1: #1554d1;
-  --robot-body-2: #e8eef9;
-  --robot-accent: #1554d1;
-  --robot-eye: #2f7de0;
-  --robot-eye-deep: #0f3f9e;
-  --robot-antenna: #2f7de0;
-  --robot-glow: rgba(21, 84, 209, 0.25);
-
   /* 图谱目录色：蓝色系节点 + 琥珀/绿状态 */
   --graph-entities: #1554d1;
   --graph-concepts: #2f7de0;

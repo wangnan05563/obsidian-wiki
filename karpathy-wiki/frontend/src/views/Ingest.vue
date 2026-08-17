@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
-import { ArrowDown, FolderOpened, UploadFilled } from '@element-plus/icons-vue';
+import { ArrowDown, FolderOpened, UploadFilled, WarningFilled } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
 import { consumeSSE } from '../utils/sse';
 import type { ConfigData, QqUploadEvent, DraftCompileEvent, UrlCrawlEvent, UrlCrawlPageSummary, UrlCrawlAttachment } from '../types';
@@ -13,7 +13,7 @@ const emit = defineEmits<(e: 'start') => void>();
 
 const store = useCompileStore();
 
-const activeTab = ref<'file' | 'folder' | 'url' | 'text' | 'bookmarks' | 'qq'>('file');
+const activeTab = ref<'file' | 'folder' | 'url' | 'text' | 'bookmarks' | 'qq' | 'capture'>('file');
 const urlInput = ref('');
 const textInput = ref('');
 
@@ -28,6 +28,94 @@ interface BookmarkParseResult {
 const bookmarkResult = ref<BookmarkParseResult | null>(null);
 const bookmarkCompiling = ref(false);
 const selectedFile = ref<File | null>(null);
+
+// ===================== A1 网页捕获（书签捕获）=====================
+// 解决被站点 WAF/出口 IP 黑名单拦截的页面（服务端 fetch 永远 420/黑名单页）：
+//   由用户本机浏览器访问目标页（走用户受信网络），bookmarklet 把页面 outerHTML 经
+//   window.open(同名窗口) + postMessage 跨域发回本页，再调 /api/ingest/raw-html 提取正文。
+//   注：不能走 BroadcastChannel（仅同源），书签在目标站域名下、捕获页在知识库域名下，必须跨域传输。
+interface CapturedPayload {
+  html?: string;
+  title?: string;
+  url?: string;
+}
+interface CapturedResult {
+  title: string;
+  url: string;
+  contentLength: number;
+  markdown: string;
+}
+const captured = ref<CapturedResult | null>(null);
+const captureLoading = ref(false);
+const captureError = ref('');
+
+// 可拖拽到书签栏的 bookmarklet：抓取当前页 outerHTML，经 window.open(同名窗口) 跨域 postMessage 发回知识库「网页捕获」页。
+// 为什么不用 BroadcastChannel：BroadcastChannel 仅同源可用，而书签运行在目标站点（如 shcpe.com.cn）、
+//   捕获页在知识库域名下，二者不同源 → BroadcastChannel 收不到。改用 window.open('','窗口名') 取得捕获页窗口引用
+//   （跨域也能拿到 WindowProxy），再用 postMessage 发送（postMessage 不受同源限制）。捕获页 onMounted 时
+//   设置 window.name='karpathy_capture_win' 并监听 window message，二者即可跨域对接。
+const bookmarkletCode = `javascript:(function(){try{var d=document.documentElement.outerHTML;var w=window.open('','karpathy_capture_win');if(!w){alert('请先在知识库打开「网页捕获」页面');return;}w.postMessage({type:'WIKI_CAPTURE',html:d,title:document.title,url:location.href},'*');alert('已捕获：'+document.title+'\\n请回到知识库「网页捕获」页点「编译投递」');}catch(e){alert('捕获失败：'+e.message);}})();`;
+
+function onWindowMessage(e: MessageEvent) {
+  if (e.data && e.data.type === 'WIKI_CAPTURE') onCaptureMessage(e.data);
+}
+function setupCaptureListener() {
+  // 设置窗口名，供 bookmarklet 经 window.open('', name) 跨域定位本窗口并 postMessage
+  try { window.name = 'karpathy_capture_win'; } catch { /* ignore */ }
+  window.addEventListener('message', onWindowMessage);
+}
+function teardownCaptureListener() {
+  window.removeEventListener('message', onWindowMessage);
+}
+function onCaptureMessage(payload: CapturedPayload) {
+  if (!payload || typeof payload.html !== 'string' || !payload.html.trim()) return;
+  void handleCaptureMessage(payload);
+}
+
+async function handleCaptureMessage(payload: CapturedPayload) {
+  captureLoading.value = true;
+  captureError.value = '';
+  try {
+    const res = await apiFetch(`${API_BASE}/ingest/raw-html`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html: payload.html, url: payload.url ?? '', title: payload.title ?? '' }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    captured.value = {
+      title: data.title,
+      url: data.sourceUrl ?? '',
+      contentLength: data.contentLength ?? 0,
+      markdown: data.combinedMarkdown ?? '',
+    };
+    ElMessage.success(`已捕获并解析：${data.title}`);
+  } catch (e) {
+    captureError.value = (e as Error).message;
+    ElMessage.error('捕获解析失败：' + (e as Error).message);
+  } finally {
+    captureLoading.value = false;
+  }
+}
+
+function compileCaptured() {
+  if (!captured.value || !captured.value.markdown) return;
+  if (store.isCompiling || submitting.value) return;
+  store.prepareCompile({ type: 'text', content: captured.value.markdown });
+  emit('start');
+}
+
+async function copyBookmarklet() {
+  try {
+    await navigator.clipboard.writeText(bookmarkletCode);
+    ElMessage.success('书签代码已复制到剪贴板');
+  } catch {
+    ElMessage.warning('复制失败，请手动选中书签代码复制');
+  }
+}
 // 文件夹模式：扫描得到的有效文件列表
 const folderFiles = ref<Array<{ name: string; file: File }>>([]);
 
@@ -80,6 +168,11 @@ async function loadBatchConfig(): Promise<void> {
 
 onMounted(() => {
   loadBatchConfig();
+  setupCaptureListener();
+});
+
+onUnmounted(() => {
+  teardownCaptureListener();
 });
 
 // canSubmit 仅覆盖共用 submit-bar 的 file/folder/text 三种模式
@@ -414,6 +507,8 @@ const urlCrawlResult = ref<{
   pages: UrlCrawlPageSummary[];
   attachments: UrlCrawlAttachment[];
   elapsedMs?: number;
+  diagnosis?: string;
+  errorCount?: number;
 } | null>(null);
 
 // 5.4.2 附件按类型分组展示：document/image/audio/video/other
@@ -484,6 +579,10 @@ function toggleAllPages() {
 // 上限与后端 url-ingest.ts 对齐：maxPages≤500、maxHops≤10
 const urlMaxPages = ref<number | null>(null);
 const urlMaxHops = ref<number | null>(null);
+// B 方案：可选的 egress 代理（绕开服务器出口 IP 黑名单）。留空则使用全局代理/直连。
+const urlProxy = ref('');
+// B 方案：代理连通性自检结果（爬取前由后端 proxy_probe 事件推送），null 表示未探测。
+const urlProxyProbe = ref<{ level: 'ok' | 'warn' | 'error'; message: string } | null>(null);
 
 // 阶段 1：触发 URL 爬取（POST /api/url-ingest/crawl SSE）
 async function startUrlCrawl() {
@@ -502,16 +601,21 @@ async function startUrlCrawl() {
   urlProgress.value = '开始爬取…';
   urlCrawlResult.value = null;
   urlCombinedMarkdown.value = '';
+  urlProxyProbe.value = null;
   urlAbortController = new AbortController();
 
   try {
     // 5.1.4 请求级覆盖：仅在用户显式输入时携带 maxPages/maxHops
-    const reqBody: { url: string; maxPages?: number; maxHops?: number } = { url: entryUrl };
+    const reqBody: { url: string; maxPages?: number; maxHops?: number; proxyUrl?: string } = { url: entryUrl };
     if (urlMaxPages.value !== null && urlMaxPages.value > 0) {
       reqBody.maxPages = Math.min(Math.floor(urlMaxPages.value), 500);
     }
     if (urlMaxHops.value !== null && urlMaxHops.value > 0) {
       reqBody.maxHops = Math.min(Math.floor(urlMaxHops.value), 10);
+    }
+    // B 方案：请求级 egress 代理（可选），覆盖服务端默认配置
+    if (urlProxy.value.trim()) {
+      reqBody.proxyUrl = urlProxy.value.trim();
     }
     const res = await apiFetch(`${API_BASE}/url-ingest/crawl`, {
       method: 'POST',
@@ -537,20 +641,34 @@ async function startUrlCrawl() {
   }
 }
 
-// SSE 事件分发：progress/page_start/page_done/page_error/page_skipped/attachment/done/error
+// SSE 事件分发：progress/page_start/page_done/page_error/page_skipped/attachment/done/error/proxy_probe
 function handleUrlCrawlEvent(eventType: string, data: UrlCrawlEvent) {
+  // B 方案：代理连通性自检结果（proxy_probe 事件）。显示分级状态，不阻断后续爬取事件。
+  if (eventType === 'proxy_probe') {
+    urlProgress.value = data.message ?? '代理探测完成';
+    const pd = (data.data ?? {}) as { level?: 'ok' | 'warn' | 'error'; message?: string };
+    urlProxyProbe.value = { level: pd.level ?? 'warn', message: data.message ?? '' };
+    return;
+  }
   // progress/page_start/page_done/page_skipped/attachment 都会更新进度文本
   if (eventType === 'progress' || eventType === 'page_start' || eventType === 'page_done' || eventType === 'page_skipped' || eventType === 'attachment') {
     urlProgress.value = data.message ?? '';
     return;
   }
   if (eventType === 'page_error') {
-    // 单页失败不阻断整体，仅记录到进度文本
-    urlProgress.value = data.message ?? '页面抓取失败';
+    // 单页失败不阻断整体，但按错误类型给出明确提示，避免"静默失败"
+    const errType = (data.data as { errorType?: string })?.errorType;
+    const typeLabel: Record<string, string> = {
+      timeout: '超时', http: 'HTTP错误', network: '网络错误', ssrf: '安全拦截', unknown: '未知错误',
+      blocked: '防火墙拦截', auth: '需登录',
+    };
+    const label = errType ? (typeLabel[errType] || '错误') : '错误';
+    urlProgress.value = `[${label}] ${data.message ?? '页面抓取失败'}`;
     return;
   }
   if (eventType === 'done') {
     // done 事件携带汇总数据：pagesCrawled/totalAttachmentCount/combinedMarkdown/pages/attachments/elapsedMs/pagesSkipped
+    //   + 错误诊断字段 errorCount/errors/diagnosis（0 页面时由后端聚合最可能是根因的提示）
     const d = data.data;
     if (d?.combinedMarkdown) {
       urlCombinedMarkdown.value = d.combinedMarkdown;
@@ -560,6 +678,8 @@ function handleUrlCrawlEvent(eventType: string, data: UrlCrawlEvent) {
         pages: d.pages ?? [],
         attachments: d.attachments ?? [],
         elapsedMs: d.elapsedMs,
+        // 代理探测结论（后端并入 done.diagnosis，形如「【代理探测】…」）随结果一并展示，便于事后回溯
+        diagnosis: d.diagnosis,
       };
       // 5.4.1 爬取预览：初始化勾选集合为全选
       selectedPageUrls.value = new Set((d.pages ?? []).map((p) => p.url));
@@ -567,8 +687,19 @@ function handleUrlCrawlEvent(eventType: string, data: UrlCrawlEvent) {
       // 5.4.4 耗时显示 + 5.1.3 跳过页面数
       const elapsedStr = formatElapsed(d.elapsedMs);
       const skippedStr = d.pagesSkipped && d.pagesSkipped > 0 ? `，跳过 ${d.pagesSkipped} 个未变更` : '';
+
+      // 0 页面但有错误 → 明确诊断，不再静默显示 0
+      if ((d.pagesCrawled ?? 0) === 0 && (d.errorCount ?? 0) > 0) {
+        const diag = d.diagnosis || '所有页面抓取失败，请查看后端日志';
+        urlProgress.value = `爬取失败（0 个页面）：${diag}`;
+        ElMessage.error(`爬取失败：${diag}`);
+        urlCrawlResult.value = { ...urlCrawlResult.value, diagnosis: diag, errorCount: d.errorCount };
+        return;
+      }
+
       urlProgress.value = `爬取完成：${d.pagesCrawled ?? 0} 个页面，${d.totalAttachmentCount ?? 0} 个附件${skippedStr}${elapsedStr ? `，耗时 ${elapsedStr}` : ''}`;
-      ElMessage.success(`爬取完成：共 ${d.pagesCrawled ?? 0} 个页面，${d.totalAttachmentCount ?? 0} 个附件${skippedStr}${elapsedStr ? `，耗时 ${elapsedStr}` : ''}`);
+      const errNote = (d.errorCount ?? 0) > 0 ? `（${d.errorCount} 个页面失败，已跳过）` : '';
+      ElMessage.success(`爬取完成：共 ${d.pagesCrawled ?? 0} 个页面，${d.totalAttachmentCount ?? 0} 个附件${errNote}${skippedStr}${elapsedStr ? `，耗时 ${elapsedStr}` : ''}`);
     } else {
       urlStage.value = 'crawled';
       urlProgress.value = data.message ?? '爬取完成';
@@ -819,6 +950,24 @@ function handleUrlInputChange() {
                   />
                 </div>
               </div>
+              <!-- B 方案：自定义 egress 代理（可选）。配置后爬取请求经该代理 egress，绕开服务器出口 IP 黑名单 -->
+              <div class="url-params-row" style="margin-top: 8px;">
+                <div class="url-param-item" style="flex: 1 1 100%;">
+                  <label class="url-param-label">出口代理（可选）</label>
+                  <el-input
+                    v-model="urlProxy"
+                    placeholder="http://127.0.0.1:7890 或 https://user:pass@proxy.example.com:443"
+                    clearable
+                    size="small"
+                    :disabled="urlStage === 'crawling'"
+                  />
+                  <p class="url-proxy-hint">仅支持 http/https 代理。目标站点把服务器出口 IP 拉黑时，填一个未被拉黑的代理即可绕开。留空则用全局代理/直连。</p>
+                  <p v-if="urlProxyProbe" class="url-proxy-probe" :class="'probe-' + urlProxyProbe.level">
+                    <span class="probe-tag">{{ urlProxyProbe.level === 'ok' ? '可用' : (urlProxyProbe.level === 'error' ? '不可用' : '注意') }}</span>
+                    {{ urlProxyProbe.message }}
+                  </p>
+                </div>
+              </div>
               <div class="url-action-row">
                 <el-button
                   type="primary"
@@ -856,6 +1005,11 @@ function handleUrlInputChange() {
                   <span class="meta-label">耗时</span>
                   <span class="meta-value">{{ formatElapsed(urlCrawlResult.elapsedMs) }}</span>
                 </div>
+              </div>
+              <!-- 0 页面诊断横幅：明确告知失败原因，避免"静默 0 页"无法定位 -->
+              <div v-if="urlCrawlResult.diagnosis" class="url-diagnosis-banner">
+                <el-icon><WarningFilled /></el-icon>
+                <span>{{ urlCrawlResult.diagnosis }}</span>
               </div>
               <!-- 已爬取页面列表（5.4.1 爬取预览：支持勾选式编译） -->
               <div v-if="urlCrawlResult.pages.length > 0" class="url-pages-card">
@@ -974,6 +1128,41 @@ function handleUrlInputChange() {
               >
                 开始编译
               </el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- A1 网页捕获：适用被服务器出口 IP 拉黑的站点，走用户本机浏览器抓内容回传 -->
+        <el-tab-pane label="网页捕获" name="capture">
+          <div class="capture-wrap">
+            <p class="input-hint">
+              适用于被 WAF / 出口 IP 黑名单拦截的站点（如 shcpe）：服务端抓取永远失败，
+              改用你本机浏览器访问目标页（走你自己的网络），再把页面内容发回知识库。
+            </p>
+            <ol class="capture-steps">
+              <li>把下面的「网页捕获」拖到浏览器书签栏（或右键复制链接地址）。</li>
+              <li>在你的浏览器打开目标网页（需能正常访问）。</li>
+              <li>点击该书签，页面内容会发回本页。</li>
+              <li>回到此页，点「编译投递」即可生成知识库页面。</li>
+            </ol>
+            <div class="bookmarklet-row">
+              <a class="bookmarklet" :href="bookmarkletCode" draggable="true">网页捕获</a>
+              <el-button size="small" @click="copyBookmarklet">复制书签代码</el-button>
+            </div>
+            <div v-if="captureLoading" class="capture-status">正在解析页面…</div>
+            <div v-else-if="captureError" class="capture-status capture-error">{{ captureError }}</div>
+            <div v-else-if="captured" class="capture-result">
+              <el-alert :title="`已捕获：${captured.title}`" type="success" :closable="false" show-icon />
+              <p class="input-hint">
+                来源：{{ captured.url || '（未提供）' }}<br />
+                正文长度：{{ captured.contentLength }} 字符
+              </p>
+              <el-button type="primary" :loading="store.isCompiling" @click="compileCaptured">
+                编译投递
+              </el-button>
+            </div>
+            <div v-else class="capture-status capture-muted">
+              尚未捕获。打开目标网页并点击书签后，这里会显示捕获内容。
             </div>
           </div>
         </el-tab-pane>
@@ -1106,8 +1295,8 @@ function handleUrlInputChange() {
         </el-tab-pane>
       </el-tabs>
 
-      <!-- QQ / URL Tab 自带操作按钮，file/folder/text 共用 submit-bar -->
-      <div v-if="activeTab !== 'qq' && activeTab !== 'url'" class="submit-bar">
+      <!-- QQ / URL / 网页捕获 Tab 自带操作按钮，file/folder/text 共用 submit-bar -->
+      <div v-if="activeTab !== 'qq' && activeTab !== 'url' && activeTab !== 'capture'" class="submit-bar">
         <el-button
           type="primary"
           size="large"
@@ -1248,6 +1437,56 @@ function handleUrlInputChange() {
   color: var(--text-soft);
   font-family: var(--font-mono);
   letter-spacing: 0.5px;
+}
+
+/* A1 网页捕获 Tab */
+.capture-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0;
+}
+.capture-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.9;
+}
+.bookmarklet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.bookmarklet {
+  display: inline-block;
+  padding: 8px 18px;
+  background: var(--color-primary, #0f4c81);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: grab;
+  user-select: none;
+}
+.bookmarklet:active {
+  cursor: grabbing;
+}
+.capture-status {
+  font-size: 13px;
+}
+.capture-muted {
+  color: var(--text-soft);
+}
+.capture-error {
+  color: #c0392b;
+}
+.capture-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
 }
 
 .submit-bar {
@@ -1661,6 +1900,26 @@ function handleUrlInputChange() {
   margin-bottom: 14px;
 }
 
+.url-diagnosis-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--accent-red-a08, rgba(255, 119, 158, 0.12));
+  border: 1px solid var(--accent-red-a30, rgba(255, 119, 158, 0.35));
+  border-radius: 10px;
+  margin-bottom: 14px;
+  color: var(--accent-red-text, #d6336c);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.url-diagnosis-banner .el-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: var(--accent-red-text, #d6336c);
+}
+
 .url-pages-title,
 .url-attachments-title {
   margin: 0 0 8px;
@@ -1790,4 +2049,27 @@ function handleUrlInputChange() {
 .progress-dot.crawled {
   background: var(--neon-magenta);
 }
+
+/* B 方案：代理连通性自检状态行（浅色主题下用文字色区分级别，避免花哨背景） */
+.url-proxy-probe {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.url-proxy-probe .probe-tag {
+  flex: 0 0 auto;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.url-proxy-probe.probe-ok { color: #1a7f37; }
+.url-proxy-probe.probe-ok .probe-tag { background: #e6f4ea; color: #1a7f37; }
+.url-proxy-probe.probe-warn { color: #9a6700; }
+.url-proxy-probe.probe-warn .probe-tag { background: #fdf3d7; color: #9a6700; }
+.url-proxy-probe.probe-error { color: #c62828; }
+.url-proxy-probe.probe-error .probe-tag { background: #fdecea; color: #c62828; }
 </style>

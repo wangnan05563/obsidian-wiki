@@ -46,3 +46,39 @@
 - （原有已覆盖：`dist/`、`build/`、`*.bak`、`test_screenshots/`、`_stale_js_quarantine/`、`_deploy_temp_quarantine/`、`*.log`、`**/public_live_*/` 等）
 
 **验证状态:** ✅ 全部 20 个候选目标已删除 (GONE)；preserve 根完好；源码/配置完好；REVIEW 项保留；0 错误。
+
+---
+
+## 2026-08-17 (批次 #20260817-release · release 统一化)
+
+**范围 (scope):** `release_unification` — 将所有构建/打包产物集中输出至根目录 `release/`，清理散落产物与旧 `prod_*` 手动部署残留
+
+**配置重定向 (全部指向 release/):**
+- `frontend/vite.config.ts` → outDir `../../release/spa/public`
+- `api/_deploy_live.mjs` → `release/spa/public_live_<ts>`；`_deploy_build.mjs` → `release/spa/public`
+- `api/src/spa-resolver.ts` 探测顺序首位改为 `release/spa/public_live_<ts>`（旧 `api/` 候选降为兜底，白屏安全）
+- `scripts/build-exe.ps1` + `installer.iss` → `release/app` + `release/installer`（引入 `$wsRoot = Split-Path $repoRoot`，因 release 在 git 根而非包根）
+- `wiki-harness/tsconfig.json` → `../release/harness`；`package.json` build 用 `cpSync` 回写 `dist`（保 pnpm `file:` 依赖克隆可读）
+- `api/tsconfig.json` → `../../release/api-dist`
+- 顺带修复 4 个旧脚本（`_rebuild-exe.ps1`/`_rebuild-sea.ps1`/`_rebuild-final.ps1`/`_quick-build.ps1`）、`automation.ps1` 构建校验路径、`cleanup-config.yaml` 的 `served_root_glob`、`setup-env.ps1` 的 gitignore 规则
+
+**物理迁移:**
+- `api/public`、`public_live`、`public_live_<ts>`(×10)、`prod_*`(×9)、`public_new`、`frontend/api/public` → `release/spa`(+`legacy`)
+- `karpathy-wiki/builds/dist_u*`(×5)、`frontend/builds/dist_u*`(×3) → `release/builds`
+- `karpathy-wiki/dist/karpathy-wiki`、`dist/*.exe` → `release/app`、`release/installer`
+- `wiki-harness/dist` → 复制至 `release/harness`（保留原 `dist` 供 pnpm `file:` 依赖）
+
+**验证:**
+- `resolveSpaRoot` 冒烟确认落到 `release/spa/public_live_1786821435990`（磁盘存在、含 index.html）
+- `release/` 已加 `.gitignore`；`wiki-harness/dist` 保留；源目录残留清零
+- 跨树同名 `dist_u1786783319495`：保留完整版(74 文件,含 mermaid 全 chunk)，删残缺子集源(59 文件)
+
+**git 索引同步 (Decision 11):**
+- 此前被 force-add 的生成产物（`api/prod_*`、`public_live_*`、`frontend` 构建物、`_shadow_js_trash_bak` 等 ~1013 项）已 `git rm --cached` unstage，暂存为删除态待提交
+- 87 个 `M` 为真实源码/配置改动（vite.config、build-exe.ps1 等），保留为修改；69 `A` + 29 `R` 为 tooling 重组新增/重命名
+
+**.gitignore 补充:** `release/`（所有编译/打包产物集中于此，不入仓）
+
+**收尾清理:** 删除临时迁移脚本 `_relocate_release.py` / `_smoke_spa.mts` / `_relocate.log`；旧 `cleanup-20260814-002042.log` 归至 `logs/`
+
+**验证状态:** ✅ SPA 解析器冒烟通过；preserve 根(`release/spa`)完好；源码/配置完好；0 数据丢失。

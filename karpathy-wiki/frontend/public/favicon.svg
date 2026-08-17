@@ -1,42 +1,41 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Karpathy Wiki">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a0533"/>
-      <stop offset="100%" stop-color="#0d1a3d"/>
+    <linearGradient id="bookLeft" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#a8e6cf"/>
+      <stop offset="100%" stop-color="#7fd8b8"/>
     </linearGradient>
-    <linearGradient id="head" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a0533"/>
-      <stop offset="50%" stop-color="#2d0a4a"/>
-      <stop offset="100%" stop-color="#0d1a3d"/>
+    <linearGradient id="bookRight" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffd3b6"/>
+      <stop offset="100%" stop-color="#ffaaa5"/>
     </linearGradient>
-    <radialGradient id="eye">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="40%" stop-color="#00f5ff"/>
-      <stop offset="100%" stop-color="#0088aa"/>
+    <radialGradient id="bulbGlow">
+      <stop offset="0%" stop-color="#fff9c4"/>
+      <stop offset="60%" stop-color="#ffeb3b"/>
+      <stop offset="100%" stop-color="#fbc02d"/>
     </radialGradient>
-    <radialGradient id="antenna">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="50%" stop-color="#ff006e"/>
-      <stop offset="100%" stop-color="#b026ff"/>
-    </radialGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="6" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
   </defs>
-  <rect width="512" height="512" fill="url(#bg)"/>
-  <line x1="256" y1="56" x2="256" y2="112" stroke="#b026ff" stroke-width="8" stroke-linecap="round" filter="url(#glow)"/>
-  <circle cx="256" cy="44" r="16" fill="url(#antenna)" filter="url(#glow)"/>
-  <rect x="96" y="120" width="320" height="240" rx="72" ry="72" fill="url(#head)" stroke="#b026ff" stroke-width="6"/>
-  <rect x="96" y="120" width="320" height="240" rx="72" ry="72" fill="none" stroke="#00f5ff" stroke-width="3" opacity="0.5"/>
-  <line x1="112" y1="156" x2="112" y2="324" stroke="#ff006e" stroke-width="3" opacity="0.5"/>
-  <line x1="400" y1="156" x2="400" y2="324" stroke="#00f5ff" stroke-width="3" opacity="0.5"/>
-  <circle cx="200" cy="220" r="30" fill="url(#eye)" filter="url(#glow)"/>
-  <circle cx="312" cy="220" r="30" fill="url(#eye)" filter="url(#glow)"/>
-  <circle cx="208" cy="212" r="8" fill="#ffffff" opacity="0.9"/>
-  <circle cx="320" cy="212" r="8" fill="#ffffff" opacity="0.9"/>
-  <polyline points="212,290 232,304 256,298 280,304 300,290" fill="none" stroke="#ff006e" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <!-- 背景 -->
+  <rect width="512" height="512" rx="96" ry="96" fill="#ffffff"/>
+
+  <!-- 打开的书本 -->
+  <path d="M128 320 Q128 272 176 272 L248 272 L248 384 L176 384 Q128 384 128 336 Z" fill="url(#bookLeft)"/>
+  <path d="M384 320 Q384 272 336 272 L264 272 L264 384 L336 384 Q384 384 384 336 Z" fill="url(#bookRight)"/>
+  <!-- 书脊 -->
+  <rect x="248" y="272" width="16" height="112" rx="4" fill="#81d4fa"/>
+  <!-- 书页纹理 -->
+  <line x1="152" y1="296" x2="232" y2="296" stroke="#ffffff" stroke-width="8" stroke-linecap="round" opacity="0.6"/>
+  <line x1="152" y1="328" x2="232" y2="328" stroke="#ffffff" stroke-width="8" stroke-linecap="round" opacity="0.6"/>
+  <line x1="280" y1="296" x2="360" y2="296" stroke="#ffffff" stroke-width="8" stroke-linecap="round" opacity="0.6"/>
+  <line x1="280" y1="328" x2="360" y2="328" stroke="#ffffff" stroke-width="8" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- 灯泡 -->
+  <circle cx="256" cy="176" r="56" fill="url(#bulbGlow)"/>
+  <!-- 灯泡底座 -->
+  <rect x="236" y="224" width="40" height="24" rx="8" fill="#90a4ae"/>
+  <rect x="244" y="248" width="24" height="12" rx="4" fill="#78909c"/>
+  <!-- 光芒 -->
+  <line x1="256" y1="88" x2="256" y2="104" stroke="#fbc02d" stroke-width="8" stroke-linecap="round"/>
+  <line x1="176" y1="128" x2="188" y2="140" stroke="#fbc02d" stroke-width="8" stroke-linecap="round"/>
+  <line x1="336" y1="128" x2="324" y2="140" stroke="#fbc02d" stroke-width="8" stroke-linecap="round"/>
 </svg>

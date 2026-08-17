@@ -5,14 +5,20 @@ import { Promotion, Close, Minus, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import RobotAvatar from './RobotAvatar.vue';
 import ThinkingBlock from './ThinkingBlock.vue';
+// §X-1 步骤级追踪面板：渲染每步耗时分解，定位长耗时瓶颈
+import QueryTracePanel from './QueryTracePanel.vue';
 import MessageToolbar from './MessageToolbar.vue';
 import RefsList from './RefsList.vue';
 import { useQueryStore } from '../stores/query';
-import { useConversationsStore, getLastActiveConversationId } from '../stores/conversations';
+import { useConversationsStore, getLastActiveConversationId, setLastActiveConversationId } from '../stores/conversations';
+import { useAuthStore } from '../stores/auth';
+import { useModelStore } from '../stores/model';
+import { loadAiUserConfigForPreset, loadSearchUserConfig, loadToolsUserConfig, type AiUserConfig } from '../services/userConfig';
+import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
 import { useChatAutoScroll } from '../composables/useChatAutoScroll';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
-import { consumeQuerySSE } from '../utils/sse';
+import { consumeQuerySSEResumable } from '../utils/sse';
 import { FLOATING_CHAT_CONFIG } from '../config/floatingChat';
 import { STORAGE_KEYS } from '../constants/storageKeys';
 import type { ChatMessage, Reference } from '../types';
@@ -24,6 +30,8 @@ const store = useQueryStore();
 // FR-RM-09：FloatingChat 与 Query 共享同一 useQueryStore 单例，但此前不参与持久化，
 // 刷新后状态丢失。引入 conversationsStore 补齐「落盘 + 续答」能力，使悬浮窗也能断点续答。
 const conversationsStore = useConversationsStore();
+const authStore = useAuthStore();
+const modelStore = useModelStore();
 const props = defineProps<{ inQueryPage?: boolean }>();
 
 // 面板展开状态持久化：用户刷新页面后保留偏好
@@ -96,40 +104,81 @@ watch(
 
 async function sendQuestion(question: string) {
   abortController = new AbortController();
+  // 捕获本请求专属的 AbortController 实例，供下方 initialFetch/resumeFetch 闭包使用，
+  // 避免「流断开重连窗口内用户点击停止，abortController 被 finally 置 null」时，
+  // 闭包内 abortController!.signal 在运行时解引用崩溃（续连分支）。与 MobileQuery.vue 写法一致。
+  const ac = abortController;
   abortReason = null;
-  // 线程隔离：已有线程时把 threadId 交给后端，由后端从本地记忆注入上下文；
-  // 不再重复发送前端 history。无线程时回退旧行为发送 history。
+  // 线程隔离：已有线程时把 threadId 交给后端；persist=false（默认部署）下服务端不维护
+  // 线程记忆，必须每轮透传完整 history 才能保证多轮上下文连贯，故不再因 activeThreadId
+  // 存在而抑制 history（否则 follow-up 会丢失上下文）。
   const activeThreadId = store.currentThreadId;
-  const history = activeThreadId
-    ? undefined
-    : store.messages.map((m) => ({ role: m.role, content: m.content }));
+  const history = store.messages.map((m) => ({ role: m.role, content: m.content }));
 
   const body: Record<string, unknown> = { question, stream: store.streamMode };
+  if (history && history.length > 0) {
+    body.history = history;
+  }
   if (activeThreadId) {
     body.threadId = activeThreadId;
-  } else if (history && history.length > 0) {
-    body.history = history;
+  }
+
+  // ── BYOK per-user 配置注入（与 Query.vue 口径一致）──
+  // 修复：FloatingChat 此前完全不下发 llmConfig，在 auth + BYOK 强制校验下对任意用户都会 400。
+  // 每个用户携带自己配置的 AI 服务 / 搜索引擎 / 工具配置（含 API Key），后端以这些覆盖项
+  // 替换服务端共享配置，实现「各用户独立额度、互不抢占限流」。密钥仅经请求体一次性发给后端代理。
+  const uid = authStore.user?.id || 'guest';
+  // auto（自动）模式：从「用户已配置 apiKey」的预设中按能力优先级择优（见 autoModel.resolveAutoPresetForUser），
+  // 保证 auto 选中的模型必然已配置，杜绝「解析到用户未配置的预设 → 前端判定无 apiKey 不发
+  // llmConfig → 后端 BYOK 校验 400（请求参数有误）」。选中具体预设时沿用其 key，走既有 BYOK 加载逻辑。
+  let aiCfg: AiUserConfig | null = null;
+  if (modelStore.selectedPresetKey === AUTO_MODEL) {
+    const resolved = await resolveAutoPresetForUser(uid, modelStore.presets);
+    aiCfg = resolved.config;
+  } else {
+    const activePreset = modelStore.presets.find((p) => p.key === modelStore.selectedPresetKey);
+    aiCfg = await loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset);
+  }
+  const [searchCfg, toolsCfg] = await Promise.all([
+    loadSearchUserConfig(uid),
+    loadToolsUserConfig(uid),
+  ]);
+  // 仅当该用户已填 API Key 才下发 llmConfig（空密钥视为未配置，交由后端 400 拦截）
+  if (aiCfg && aiCfg.apiKey) {
+    body.llmConfig = aiCfg;
+  }
+  if (searchCfg && searchCfg.apiKey) {
+    body.searchConfig = searchCfg;
+  }
+  // 工具配置：仅当用户实际配置了工具（非默认空配置）才下发，避免空对象整体替换服务端共享 MCP/CLI。
+  const hasOwnTools =
+    (toolsCfg.mcpServers?.length ?? 0) > 0 ||
+    (toolsCfg.cliTools?.length ?? 0) > 0 ||
+    (toolsCfg.scenes?.length ?? 0) > 0;
+  if (hasOwnTools) {
+    body.toolsConfig = toolsCfg;
   }
 
   try {
-    const response = await apiFetch(`${API_BASE}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // §真流式：复用主问答的 streamMode 偏好，与 Query 页面行为一致
-      body: JSON.stringify(body),
-      signal: abortController.signal,
-    });
-
-    if (!response.ok || !response.body) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
+    // X-2 可恢复流式：用带重连的 SSE 消费包装（首连发完整 body，异常断开时凭 managerRunId 重连续接）
+    const writer = store.getSessionWriter();
+    const initialFetch = () =>
+      apiFetch(`${API_BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+    const resumeFetch = (runId: string, threadId: string | null) =>
+      apiFetch(`${API_BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resume: runId, threadId: threadId ?? undefined }),
+        signal: ac.signal,
+      });
     // 启动超时滑动窗口（首字节前即开始计时；之后每个数据块经 onActivity 重置）
     resetQuestionTimeout();
-    // SSE 流消费统一委托给 utils/sse.ts，降低本函数认知复杂度（S3776）
-    // 传入 resetQuestionTimeout 作为 onActivity：每收到一个数据块即重置超时窗口，
-    // 保证"慢但正常流式输出"不会被固定墙钟误杀（仍保留对真·挂死的保护）。
-    await consumeQuerySSE(response, store.getSessionWriter(), abortController.signal, resetQuestionTimeout);
+    await consumeQuerySSEResumable(initialFetch, resumeFetch, writer, ac.signal, resetQuestionTimeout);
     // 持久化完整对话到 IndexedDB（支持断点续答）
     await conversationsStore.persistConversation(store.messages);
   } catch (err: unknown) {
@@ -171,7 +220,8 @@ function handleSubmit() {
 }
 
 // 删除单条消息：用户点击工具栏删除按钮时调用
-// FloatingChat 简化版无 conversationsStore 持久化，仅内存删除
+// 仅清内存气泡；索引层删除与 IndexedDB 落盘由侧栏删除路径负责。
+// 本组件已在 handleSubmit（L213）与 sendQuestion（L179）调用 persistConversation 落盘，并非「无持久化」。
 function handleRemoveMessage(idx: number) {
   store.removeMessage(idx);
 }
@@ -290,12 +340,19 @@ function resumeLastAnswer() {
 
 // FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
 // 切页后 SPA 重挂载且后台仍有活跃流（store.isLoading）时直接跳过，避免打断/重复续答。
+// 安全加固（跨账户泄漏防御）：localStorage 的 LAST_ACTIVE_CONVERSATION 是 per-origin 共享的，
+// 切换账户后可能残留上一用户的会话 ID。必须校验该会话的 ownerId 归属当前用户。
 async function maybeResumeOnLoad() {
   if (store.isLoading) return;
   const lastId = getLastActiveConversationId();
   if (!lastId) return;
   const rec = conversationsStore.conversations.find((c) => c.id === lastId);
   if (!rec) return;
+  // 所有权校验：仅恢复归属当前用户的会话，防止上一用户残留 ID 导致跨账户加载
+  if (rec.ownerId !== undefined && rec.ownerId !== authStore.user?.id) {
+    setLastActiveConversationId(null);
+    return;
+  }
   await conversationsStore.selectConversation(lastId);
   const msgs = store.messages;
   const last = msgs[msgs.length - 1];
@@ -451,6 +508,8 @@ onBeforeUnmount(() => {
                   v-if="normalizeRefs(msg.refs).length > 0"
                   :refs="normalizeRefs(msg.refs)"
                 />
+                <!-- §X-1 步骤级追踪面板：答案完成后展示每步耗时分解 -->
+                <QueryTracePanel v-if="msg.runId" :run-id="msg.runId" />
                 <!-- 消息时间戳：右下角小字，不抢占主要内容视觉 -->
                 <div v-if="msg.createdAt" class="msg-timestamp">{{ formatTime(msg.createdAt) }}</div>
               </div>

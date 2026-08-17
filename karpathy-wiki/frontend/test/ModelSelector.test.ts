@@ -48,6 +48,14 @@ vi.mock('../src/stores/model', () => {
       selectedPresetKey,
       presets: presetsRef,
       loadError,
+      // 展开面板后渲染「服务商真实模型」分组所需的字段（先前下拉框修复新增），
+      // 缺失会导致 store.availableModels 为 undefined、渲染 340 行 .length 时崩溃。
+      availableModels: [] as { id: string }[],
+      modelsLoading: false,
+      modelsError: '',
+      currentModel: '',
+      selectAuto: vi.fn(),
+      fetchModels: vi.fn(async () => false),
       loadPresets: vi.fn(async () => {}),
       switchModel: vi.fn(async () => {}),
     }),
@@ -66,6 +74,13 @@ vi.mock('../src/stores/auth', () => ({
 
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+}));
+
+// 组件展开面板时会调用 loadRealModels → loadAiUserConfigForPreset（依赖 IndexedDB）。
+// 在测试环境直接 stub 掉，避免真实 IndexedDB 依赖与异步噪声，使测试完全隔离。
+vi.mock('../services/userConfig', () => ({
+  loadAiUserConfigForPreset: vi.fn(async () => ({})),
+  saveAiUserConfigForPreset: vi.fn(async () => {}),
 }));
 
 import ModelSelector from '../src/components/ModelSelector.vue';
@@ -94,18 +109,24 @@ describe('ModelSelector 显示规范', () => {
     await wrapper.find('.model-selector-trigger').trigger('click');
 
     const items = wrapper.findAll('.model-selector-item');
-    expect(items).toHaveLength(2);
+    // 列表 = [系统自动选择(auto)] + 已配置预设（openai、glm），共 3 项
+    expect(items).toHaveLength(3);
+
+    // 第 0 项：系统自动选择（auto 哨兵，模型名「自动」· 厂商「系统自动选择」）
+    expect(items[0].find('.ms-item-model').text()).toBe('自动');
+    expect(items[0].find('.ms-item-provider').text()).toBe('系统自动选择');
+    expect(items[0].text()).toContain('·');
 
     // 第 1 项：gpt-4o-mini（模型） · OpenAI（厂商）
-    expect(items[0].find('.ms-item-model').text()).toBe('gpt-4o-mini');
-    expect(items[0].find('.ms-item-provider').text()).toBe('OpenAI');
-    expect(items[0].text()).toContain('·');
-    expect(items[0].text()).toContain('gpt-4o-mini');
-    expect(items[0].text()).toContain('OpenAI');
+    expect(items[1].find('.ms-item-model').text()).toBe('gpt-4o-mini');
+    expect(items[1].find('.ms-item-provider').text()).toBe('OpenAI');
+    expect(items[1].text()).toContain('·');
+    expect(items[1].text()).toContain('gpt-4o-mini');
+    expect(items[1].text()).toContain('OpenAI');
 
     // 第 2 项：glm-4-flash（模型） · 智谱 GLM（厂商）
-    expect(items[1].find('.ms-item-model').text()).toBe('glm-4-flash');
-    expect(items[1].find('.ms-item-provider').text()).toBe('智谱 GLM');
+    expect(items[2].find('.ms-item-model').text()).toBe('glm-4-flash');
+    expect(items[2].find('.ms-item-provider').text()).toBe('智谱 GLM');
   });
 
   it('展开态文本与收起态文本格式明确区分（展开含厂商，收起不含）', async () => {
@@ -136,6 +157,77 @@ describe('ModelSelector 显示规范', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('.model-selector-panel').exists()).toBe(false);
     outside.remove();
+    wrapper.unmount();
+  });
+});
+
+describe('ModelSelector 展开方向自适应', () => {
+  // 用 nextTick 让 toggle 内的方向计算在绘制前完成；再借 resize 事件重算方向。
+  function mockRect(el: Element, rect: Partial<DOMRect>) {
+    (el as HTMLElement).getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          top: 0,
+          bottom: 0,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+          ...rect,
+        }) as DOMRect,
+    );
+  }
+
+  it('下方空间充足时向下展开（不含 drop-up 类）', async () => {
+    const wrapper = mount(ModelSelector, { attachTo: document.body });
+    await wrapper.find('.model-selector-trigger').trigger('click');
+    const root = wrapper.element as HTMLElement;
+    const panel = wrapper.find('.model-selector-panel').element as HTMLElement;
+    // 触发器位于视口中上部（bottom=120），面板高 200：下方空间 ≈ 768-120-4=644 ≥ 200
+    mockRect(root, { top: 100, bottom: 120 });
+    mockRect(panel, { top: 124, bottom: 324, height: 200 });
+    window.dispatchEvent(new Event('resize'));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('.model-selector-panel').classes()).not.toContain('drop-up');
+    wrapper.unmount();
+  });
+
+  it('下方空间不足（触发器贴近视口底部）时自动向上展开', async () => {
+    const wrapper = mount(ModelSelector, { attachTo: document.body });
+    await wrapper.find('.model-selector-trigger').trigger('click');
+    const root = wrapper.element as HTMLElement;
+    const panel = wrapper.find('.model-selector-panel').element as HTMLElement;
+    // 触发器贴近底部（bottom=760），面板高 200：下方空间 ≈ 768-760-4=4 < 200，应向上
+    mockRect(root, { top: 740, bottom: 760 });
+    mockRect(panel, { top: 764, bottom: 964, height: 200 });
+    window.dispatchEvent(new Event('resize'));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('.model-selector-panel').classes()).toContain('drop-up');
+    wrapper.unmount();
+  });
+
+  it('视口缩小导致下方空间不足时，方向从向下翻转为向上', async () => {
+    const wrapper = mount(ModelSelector, { attachTo: document.body });
+    await wrapper.find('.model-selector-trigger').trigger('click');
+    const root = wrapper.element as HTMLElement;
+    const panel = wrapper.find('.model-selector-panel').element as HTMLElement;
+    mockRect(root, { top: 400, bottom: 420 });
+    mockRect(panel, { top: 424, bottom: 624, height: 200 });
+    // 初始空间足（768-420-4=344 ≥ 200）→ 向下
+    window.dispatchEvent(new Event('resize'));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('.model-selector-panel').classes()).not.toContain('drop-up');
+
+    // 模拟视口缩小到 500：下方空间 ≈ 500-420-4=76 < 200 → 翻转为向上
+    const orig = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { value: 500, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('.model-selector-panel').classes()).toContain('drop-up');
+    Object.defineProperty(window, 'innerHeight', { value: orig, configurable: true });
     wrapper.unmount();
   });
 });

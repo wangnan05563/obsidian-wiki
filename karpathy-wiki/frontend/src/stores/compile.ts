@@ -56,14 +56,15 @@ const STEP_LABEL: Record<CompileStep, string> = {
   finalize: '收尾'
 };
 
-// 从 ProgressData.data 提取 page 信息：仅当 path 和 title 都存在时返回
+// 从 ProgressData.data 提取 page 信息：path 必须存在；title 缺失时回退到 path 的 basename。
+// 为什么允许 title 缺失：后端 generate_page 事件目前只带 path 不带 title，若严格要求 title
+//   会导致「实际已生成页面但计数为 0」。回退 basename 既保证计数正确，又不破坏既有带 title 路径。
 // 为什么入参类型只取 path/title：调用方传入的可能是 ProgressData 与批量扩展的交叉类型，
 //   TS 对交叉类型的字段 narrow 不够智能，会导致返回类型推断失败。只取需要的字段更稳健。
 function extractPage(data: { path?: string; title?: string } | undefined): { path: string; title: string } | undefined {
-  if (data?.path && data?.title) {
-    return { path: data.path, title: data.title };
-  }
-  return undefined;
+  if (!data?.path) return undefined;
+  const title = data.title || data.path.split('/').pop() || data.path;
+  return { path: data.path, title };
 }
 
 export const useCompileStore = defineStore('compile', () => {
@@ -175,11 +176,24 @@ export const useCompileStore = defineStore('compile', () => {
   );
 
   // 已生成页面数（来自 generate_page 事件）
-  const generatedPages = computed(() =>
-    timeline.value
-      .filter((t) => t.step === 'generate_page' && t.page)
-      .map((t) => t.page!)
-  );
+  // 批量模式下事件进 batchGroups[*].timeline 而非全局 timeline，必须聚合分组；
+  // 同一页面可能在多个步骤被重复写入，用 Map 按 path 去重，保证「共生成 X 个页面」是页面数而非事件数。
+  const generatedPages = computed(() => {
+    const pages = new Map<string, { path: string; title: string }>();
+    const collect = (t: TimelineItem) => {
+      if (t.step === 'generate_page' && t.page && !pages.has(t.page.path)) {
+        pages.set(t.page.path, t.page);
+      }
+    };
+    if (isBatchMode.value) {
+      for (const g of batchGroups.value) {
+        g.timeline.forEach(collect);
+      }
+    } else {
+      timeline.value.forEach(collect);
+    }
+    return Array.from(pages.values());
+  });
 
   // 重置状态，用于"再投一篇"
   function reset() {
@@ -528,7 +542,16 @@ export const useCompileStore = defineStore('compile', () => {
     } else if (eventType === 'done') {
       // 后端 done 事件发送的是完整 ProgressEvent：{ step, status, message, data: { path, cached? } }
       // 从中提取 cached 标识和 message 供前端展示
-      const d = data as { message?: string; data?: { cached?: boolean; path?: string } };
+      const d = data as { status?: string; message?: string; data?: { cached?: boolean; path?: string } };
+      // 失败态的 done 事件（status='error'）必须走错误分支，不能显示"编译完成"
+      if (d.status === 'error') {
+        errorMessage.value = d.message || '编译失败';
+        isCompiling.value = false;
+        isDone.value = false;
+        finishAllStages();
+        clearPersistedState();
+        return;
+      }
       result.value = {
         pages: [],
         indexUpdated: false,
@@ -579,15 +602,16 @@ export const useCompileStore = defineStore('compile', () => {
 
   // 处理 page 事件：同时推送到分组 timeline 与 pages 列表
   function handleBatchPage(group: BatchFileGroup, d: BatchEventData): void {
+    const page = extractPage(d.data);
     group.timeline.push({
       step: d.step,
       status: d.status,
       message: d.message,
-      page: extractPage(d.data),
+      page,
       timestamp: Date.now(),
     });
-    if (d.data?.path && d.data?.title) {
-      group.pages.push({ path: d.data.path, title: d.data.title });
+    if (page && !group.pages.some((p) => p.path === page.path)) {
+      group.pages.push(page);
     }
   }
 
@@ -610,7 +634,13 @@ export const useCompileStore = defineStore('compile', () => {
 
     if (eventType === 'batch_done') {
       isCompiling.value = false;
-      isDone.value = true;
+      if (d.status === 'error') {
+        // 部分文件失败：整体显示错误，并保留 doneMessage 作为补充说明
+        isDone.value = false;
+        errorMessage.value = d.message || '批量编译部分文件失败';
+      } else {
+        isDone.value = true;
+      }
       doneMessage.value = d.message ?? '';
       currentStep.value = null;
       return;
@@ -637,13 +667,18 @@ export const useCompileStore = defineStore('compile', () => {
     }
 
     if (eventType === 'progress') {
+      const page = extractPage(d.data);
       group.timeline.push({
         step: d.step,
         status: d.status,
         message: d.message,
-        page: extractPage(d.data),
+        page,
         timestamp: Date.now(),
       });
+      // generate_page 事件（后端以 progress 发送）同步累加到分组 pages 列表，用于「生成页面：」展示。
+      if (d.step === 'generate_page' && page && !group.pages.some((p) => p.path === page.path)) {
+        group.pages.push(page);
+      }
       return;
     }
 
@@ -654,8 +689,13 @@ export const useCompileStore = defineStore('compile', () => {
     }
 
     if (eventType === 'file_done') {
-      // 单文件完成（成功）
-      group.status = 'done';
+      // 单文件完成：后端正常应只发 file_done 表示成功；若 status='error' 则降级为错误态兜底
+      if ((data as BatchEventData).status === 'error') {
+        group.status = 'error';
+        group.errorMessage = (data as BatchEventData).message || '编译失败';
+      } else {
+        group.status = 'done';
+      }
       return;
     }
 

@@ -23,7 +23,8 @@ describe('FileStateStore', () => {
     const state: RunState = {
       runId,
       task: 'test task',
-      messages: [{ role: 'user', content: 'hello' }],
+      // §事件溯源：持久化的是事件序列
+      events: [{ type: 'user', content: 'hello', ts: '2026-01-01T00:00:00.000Z' }],
       step: 5,
       tokenUsed: 1000,
       status: 'done',
@@ -39,7 +40,38 @@ describe('FileStateStore', () => {
     assert.equal(loaded!.step, 5);
     assert.equal(loaded!.tokenUsed, 1000);
     assert.equal(loaded!.status, 'done');
-    assert.deepEqual(loaded!.messages, [{ role: 'user', content: 'hello' }]);
+    assert.equal(loaded!.events.length, 1);
+    assert.equal(loaded!.events[0].type, 'user');
+    assert.equal((loaded!.events[0] as { content: string }).content, 'hello');
+  });
+
+  it('should migrate legacy state that only has messages (no events)', async () => {
+    const store = new FileStateStore(tmpDir);
+    const runId = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
+
+    // 模拟旧版图腾：仅含 messages，无 events 字段
+    const legacy = {
+      runId,
+      task: 'legacy task',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello there' },
+        { role: 'tool', content: '{"ok":true}', tool_call_id: 'tc1' },
+      ],
+      step: 3,
+      tokenUsed: 200,
+      status: 'done',
+      startedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await fs.writeFile(path.join(tmpDir, `${runId}.json`), JSON.stringify(legacy), 'utf-8');
+
+    const loaded = await store.load(runId);
+    assert.ok(loaded);
+    assert.equal(loaded!.events.length, 3);
+    assert.equal(loaded!.events[0].type, 'user');
+    assert.equal(loaded!.events[1].type, 'assistant');
+    assert.equal(loaded!.events[2].type, 'tool');
+    assert.equal((loaded!.events[2] as { tool_call_id: string }).tool_call_id, 'tc1');
   });
 
   it('should return null for non-existent runId', async () => {
@@ -66,8 +98,8 @@ describe('FileStateStore', () => {
     const runId1 = '11111111-1111-1111-1111-111111111111';
     const runId2 = '22222222-2222-2222-2222-222222222222';
 
-    await store.save(runId1, { runId: runId1, task: '', messages: [], step: 0, tokenUsed: 0, status: 'done', startedAt: '' });
-    await store.save(runId2, { runId: runId2, task: '', messages: [], step: 0, tokenUsed: 0, status: 'done', startedAt: '' });
+    await store.save(runId1, { runId: runId1, task: '', events: [], step: 0, tokenUsed: 0, status: 'done', startedAt: '' });
+    await store.save(runId2, { runId: runId2, task: '', events: [], step: 0, tokenUsed: 0, status: 'done', startedAt: '' });
 
     const list = await store.list();
     assert.ok(list.includes(runId1));

@@ -11,7 +11,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { EngineAdapter, AppConfig, UrlCrawlConfig } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { createSSESender } from '../utils/sse.js';
-import { crawlUrl, DEFAULT_CRAWL_CONFIG } from '../utils/url-crawl.js';
+import { crawlUrl, DEFAULT_CRAWL_CONFIG, validateProxyUrl, probeProxyEgress, type ProxyProbeResult } from '../utils/url-crawl.js';
 import { saveUrlCrawlConfig } from '../config.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
@@ -24,14 +24,19 @@ const URL_PATTERN = /^https?:\/\/[^\s]+$/i;
 // 覆盖优先级：请求 body > config.urlCrawl > DEFAULT_CRAWL_CONFIG
 function buildCrawlConfig(
   config: AppConfig,
-  body: { url?: string; maxPages?: number; maxHops?: number },
+  body: { url?: string; maxPages?: number; maxHops?: number; proxyUrl?: string },
 ): Partial<UrlCrawlConfig> {
+  // 继承 config.urlCrawl（含其中已配置的 egressProxyUrl 默认值），再叠加请求级覆盖
   const crawlConfig: Partial<UrlCrawlConfig> = { ...(config.urlCrawl ?? {}) };
   if (typeof body.maxPages === 'number' && body.maxPages > 0) {
     crawlConfig.maxPages = Math.min(Math.floor(body.maxPages), 500);
   }
   if (typeof body.maxHops === 'number' && body.maxHops > 0) {
     crawlConfig.maxHops = Math.min(Math.floor(body.maxHops), 10);
+  }
+  // B 方案：请求级代理覆盖服务端默认（config.urlCrawl.egressProxyUrl）；空则沿用服务端默认
+  if (typeof body.proxyUrl === 'string' && body.proxyUrl.trim()) {
+    crawlConfig.egressProxyUrl = body.proxyUrl.trim();
   }
   return crawlConfig;
 }
@@ -62,6 +67,7 @@ export function registerUrlIngestRoute(
       url?: string;
       maxPages?: number;
       maxHops?: number;
+      proxyUrl?: string;
     };
     const entryUrl = (body.url ?? '').trim();
 
@@ -72,6 +78,11 @@ export function registerUrlIngestRoute(
     // URL 格式校验：防 javascript:/data: 等危险协议
     if (!URL_PATTERN.test(entryUrl)) {
       return void reply.code(400).send({ error: 'URL 必须以 http:// 或 https:// 开头' });
+    }
+    // B 方案：egress 代理 URL 校验（仅 http/https），非法则拒绝，避免 ProxyAgent 构造报错或被利用为 pivot
+    const proxyUrl = (body.proxyUrl ?? '').trim();
+    if (proxyUrl && !validateProxyUrl(proxyUrl)) {
+      return void reply.code(400).send({ error: 'proxyUrl 无效（仅支持 http:// 或 https:// 代理地址）' });
     }
 
     // SSE headers
@@ -84,7 +95,39 @@ export function registerUrlIngestRoute(
 
     const { send, isAborted, safeEnd } = createSSESender(reply, request);
 
+    // 代理探测结论：爬取前若经代理预检，则记入最终诊断，便于事后查看本次爬取是否受代理出口影响
+    let proxyProbe: ProxyProbeResult | null = null;
+
     try {
+      // B 方案：爬取前经代理预检出口连通性，提前暴露"代理出口 IP 也进黑名单"等失效场景，
+      // 避免用户等整轮爬取跑完才拿到 0 页面、且难以定位是代理问题还是目标问题。
+      if (proxyUrl) {
+        try {
+          send('progress', { step: 'proxy_probe', message: '正在探测代理连通性…', data: {}, status: 'running' });
+          const probe = await probeProxyEgress(entryUrl, proxyUrl, 15000);
+          proxyProbe = probe;
+          send('proxy_probe', {
+            step: 'proxy_probe',
+            message: probe.message,
+            data: probe as unknown as Record<string, unknown>,
+            status: probe.level === 'ok' ? 'ok' : probe.level === 'warn' ? 'warn' : 'error',
+          });
+          // 代理本身不可达（网络/超时）→ 爬取必然失败，提前中止避免整轮无效等待
+          if (!probe.reachable) {
+            send('error', { step: 'proxy_probe', message: probe.message, data: {}, status: 'error' });
+            safeEnd();
+            return;
+          }
+        } catch (probeErr) {
+          // 预检异常不应阻断爬取（预检是顾问性质），仅告警后直接开始爬取
+          send('progress', {
+            step: 'proxy_probe',
+            message: '代理探测异常，将直接开始爬取：' + (probeErr instanceof Error ? probeErr.message : String(probeErr)),
+            data: {}, status: 'running',
+          });
+        }
+      }
+
       // 从 config 读取爬取参数：config.urlCrawl 缺失时由 crawlUrl 内部默认值兜底
       // 5.1.4 请求级覆盖：请求 body 中的 maxPages/maxHops 优先级高于 config
       // 请求级参数覆盖：提取为独立函数降低路由处理函数认知复杂度（S3776）
@@ -98,11 +141,18 @@ export function registerUrlIngestRoute(
 
         // 事件映射：直接透传 UrlCrawlEvent 的 type 字段作为 SSE event 名
         // 不同 type 携带不同 data，前端按 type 分发渲染
+        let data: Record<string, unknown> = (ev.data ?? {}) as Record<string, unknown>;
         let status: string;
         if (ev.type === 'error' || ev.type === 'page_error') {
           status = 'error';
         } else if (ev.type === 'done') {
           status = 'done';
+          // 将代理探测结论并入最终诊断：用户在爬取结果/历史中可回溯本次是否受代理出口影响
+          if (proxyProbe) {
+            const probeLine = `【代理探测】${proxyProbe.message}`;
+            const base = (ev.data as { diagnosis?: string } | undefined)?.diagnosis;
+            data = { ...(ev.data ?? {}), diagnosis: base ? `${probeLine}\n${base}` : probeLine };
+          }
         } else {
           status = 'running';
         }
@@ -111,7 +161,7 @@ export function registerUrlIngestRoute(
           message: ev.message,
           // 透传 data 字段（含 url/depth/title/attachment/combinedMarkdown 等）
           // 为什么用 ?? {}：data 可选，无 data 时推送空对象避免前端 JSON.parse(null) 报错
-          data: ev.data ?? {},
+          data,
           // 附加 status 字段：与 QQ ingest 路由事件格式对齐，便于前端复用 UI 组件
           status,
         });
@@ -143,6 +193,8 @@ export function registerUrlIngestRoute(
       const urlCrawl: Required<UrlCrawlConfig> = {
         ...DEFAULT_CRAWL_CONFIG,
         ...currentUrlCrawl,
+        // B 方案：egress 代理默认值（空字符串表示不启用），显式给 string 以满足 Required 约束
+        egressProxyUrl: currentUrlCrawl.egressProxyUrl ?? DEFAULT_CRAWL_CONFIG.egressProxyUrl,
         logging: {
           enabled: currentUrlCrawl.logging?.enabled ?? DEFAULT_CRAWL_CONFIG.logging.enabled,
           logFilePath: currentUrlCrawl.logging?.logFilePath ?? DEFAULT_CRAWL_CONFIG.logging.logFilePath,

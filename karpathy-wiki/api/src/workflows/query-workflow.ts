@@ -457,7 +457,9 @@ async function* queryWithHarness( // NOSONAR - S107 - 函数签名需要多个�
   });
 
   // 4. 执行问答。harness.run 抛异常时由上层 queryWorkflow catch 触发降级链，此处无需包裹 try/catch
+  const hrT0 = Date.now();
   const result = await harness.run({ task, context: { question: input.question } });
+  console.log('[query-stage]', JSON.stringify({ ts: Date.now(), phase: 'harness-run-done', elapsedMs: Date.now() - hrT0, status: result.status, q: input.question.slice(0, 24) }));
 
   if (result.status === 'failed') {
     throw new Error(result.finalContent || 'harness run failed');
@@ -507,7 +509,8 @@ async function* queryWithHarness( // NOSONAR - S107 - 函数签名需要多个�
       yield { followups };
     }
   }
-  yield { refs, webRefs, done: true };
+  // §X-1 步骤级追踪：把本次 harness runId 随 done 事件带回前端，供其拉取每步耗时分解
+  yield { refs, webRefs, done: true, runId: result.runId };
 }
 
 // 提取：处理单个 runStream 事件，返回需要 yield 的 chunks 和副作用
@@ -516,10 +519,12 @@ function processStreamEvent(
   evt: StepEvent,
   outputModes: Set<OutputMode> | null,
   collectedThinking: ThinkingChunk[],
-): { chunks: AnswerChunk[]; finalAnswerDelta: string; error: Error | null } {
+): { chunks: AnswerChunk[]; finalAnswerDelta: string; error: Error | null; runId?: string } {
   const chunks: AnswerChunk[] = [];
   let finalAnswerDelta = '';
   let error: Error | null = null;
+  // §X-1 步骤级追踪：done/error 事件携带 harness runId（tool-loop 注入），透传给外层
+  let runId: string | undefined;
 
   switch (evt.type) {
     case 'delta':
@@ -556,12 +561,14 @@ function processStreamEvent(
     case 'done':
       // done 事件只在外部处理 finalAnswer，不产生 chunk
       finalAnswerDelta = ''; // NOSONAR - 语义性清空，被 return 语句使用
+      runId = evt.runId;
       break;
     case 'error':
       error = new Error(evt.message);
+      runId = evt.runId;
       break;
   }
-  return { chunks, finalAnswerDelta, error };
+  return { chunks, finalAnswerDelta, error, runId };
 }
 
 // 提取：推流进度、思考过程、引用和后续问题
@@ -574,6 +581,8 @@ async function* emitPostStreamChunks(
   finalAnswer: string,
   vault: VaultService,
   input: QueryInput,
+  // §X-1 步骤级追踪：流式路径的 harness runId，随 done 事件带回前端拉取耗时分解
+  runId?: string,
 ): AsyncGenerator<AnswerChunk, void, unknown> {
   // progress 在流式分支也需推送（harness 阶段已收集）
   for (const p of collectedProgress) {
@@ -603,7 +612,8 @@ async function* emitPostStreamChunks(
       yield { followups };
     }
   }
-  yield { refs, webRefs, done: true };
+  // §X-1 步骤级追踪：把流式路径的 harness runId 随 done 事件带回前端
+  yield { refs, webRefs, done: true, runId };
 }
 
 // §真流式降级链第 1 级：queryWithHarnessStream
@@ -656,13 +666,25 @@ async function* queryWithHarnessStream( // NOSONAR - S107 - 函数签名需要�
   // §消费 runStream 事件流：通过 processStreamEvent 分发事件，降低 S3776 认知复杂度
   let finalAnswer = '';
   let encounteredError: Error | null = null;
+  const hsT0 = Date.now();
+  let firstDeltaLogged = false;
+  let streamEventCount = 0;
+  // §X-1 步骤级追踪：捕获流式 harness runId（done/error 事件透传），用于 done 时带回前端
+  let queryRunId: string | undefined;
 
   for await (const evt of harness.runStream({ task, context: { question: input.question } })) {
-    const { chunks, finalAnswerDelta, error } = processStreamEvent(evt, outputModes, collectedThinking);
+    const { chunks, finalAnswerDelta, error, runId } = processStreamEvent(evt, outputModes, collectedThinking);
     for (const chunk of chunks) {
       yield chunk;
     }
     finalAnswer += finalAnswerDelta;
+    streamEventCount++;
+    // §X-1 步骤级追踪：记录终端事件带来的 runId（done/error 各一次）
+    if (runId) queryRunId = runId;
+    if (evt.type === 'delta' && !firstDeltaLogged) {
+      firstDeltaLogged = true;
+      console.log('[query-stage]', JSON.stringify({ ts: Date.now(), phase: 'stream-first-delta', elapsedMs: Date.now() - hsT0, q: input.question.slice(0, 24) }));
+    }
     if (evt.type === 'done') {
       // finalContent 与累积的 finalAnswer 应一致；如未累积（outputModes 关闭 answer），用 done.finalContent
       finalAnswer = finalAnswer || evt.finalContent;
@@ -672,13 +694,14 @@ async function* queryWithHarnessStream( // NOSONAR - S107 - 函数签名需要�
       break;
     }
   }
+  console.log('[query-stage]', JSON.stringify({ ts: Date.now(), phase: 'stream-done', elapsedMs: Date.now() - hsT0, events: streamEventCount, q: input.question.slice(0, 24) }));
 
   if (encounteredError) {
     throw encounteredError;
   }
 
   // §收尾推流：通过 emitPostStreamChunks 处理 progress/thinking/refs/followups
-  yield* emitPostStreamChunks(collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input);
+  yield* emitPostStreamChunks(collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, queryRunId);
 }
 
 // 降级链第 2 级：queryWithSearchFallback
@@ -974,6 +997,16 @@ export async function* queryWorkflow(
   // F-3.10 progress 收集器：harness afterStep 中收集 web_search 进度
   const collectedProgress: QueryProgress[] = [];
 
+  // ── 阶段耗时埋点（logs-review 诊断项，纯增量）──
+  // 与路由层 query-pipeline 日志（accepted/first-token/done）配合，定位 143s 级长耗时卡点。
+  // 用 console.log('[query-stage]') 与现有 [query-mw]/[query-websearch] 约定一致，按时间戳 +
+  // 截断问题文本(q) 与路由日志串成完整时间线；不改任何业务行为。
+  const t0 = Date.now();
+  const stage = (phase: string, extra?: Record<string, unknown>): void => {
+    console.log('[query-stage]', JSON.stringify({ ts: Date.now(), phase, elapsedMs: Date.now() - t0, q: input.question.slice(0, 24), ...extra }));
+  };
+  stage('workflow-start');
+
   // v2: 解析 outputModes 过滤集合
   // input.outputModes 为空/未设置 → null（表示全开，让所有事件照常发送）
   // 设置了非空数组 → Set 形式（O(1) 查找）
@@ -985,6 +1018,7 @@ export async function* queryWorkflow(
 
   // 中间件与有效输入构造：提取为独立函数降低 queryWorkflow 认知复杂度（S3776）
   const { useDeepThinking, useStream, effectiveInput } = buildMiddlewareContext(input);
+  stage('mw-resolved', { stream: useStream, web: !!input.webSearch, deep: useDeepThinking });
 
   // 模式提示 thinking：在降级链各分支前 push 一次，harness 阶段 yield 出来
   // 为什么改用 useDeepThinking：middlewares 配置后覆盖 input.mode 判断
@@ -1005,6 +1039,7 @@ export async function* queryWorkflow(
   // 降级链第 1 级：queryWithHarness（默认）或 queryWithHarnessStream（真流式）
   // 委托 createHarnessWithMultimodal 处理流式切换与 multimodal 包装，降低认知复杂度（S3776）
   let harnessSucceeded = false;
+  stage('harness-start');
   try {
     for await (const chunk of createHarnessWithMultimodal(
       useStream, harnessConfig, vault, effectiveInput, options,
@@ -1013,8 +1048,10 @@ export async function* queryWorkflow(
       yield chunk;
     }
     harnessSucceeded = true;
+    stage('harness-done');
   } catch {
     // harness 失败（LLM 异常、预算耗尽、工具循环错误），落入降级链
+    stage('harness-failed');
   }
 
   if (harnessSucceeded) return;
@@ -1024,6 +1061,7 @@ export async function* queryWorkflow(
     yield { thinking: { phase: 'composing', message: '降级搜索中...', ts: new Date().toISOString() } };
   }
   let fallbackSucceeded = false;
+  stage('fallback-start');
   try {
     for await (const chunk of createFallbackWithMultimodal(
       harnessConfig, vault, input, options, outputModes,
@@ -1031,8 +1069,10 @@ export async function* queryWorkflow(
       yield chunk;
     }
     fallbackSucceeded = true;
+    stage('fallback-done');
   } catch {
     // fallback 也失败，落入兜底
+    stage('fallback-failed');
   }
 
   if (fallbackSucceeded) return;
@@ -1043,5 +1083,6 @@ export async function* queryWorkflow(
   if (shouldEmit('answer', outputModes)) {
     yield { text: '知识库未覆盖此问题，或当前问答服务暂不可用。' };
   }
+  stage('workflow-done');
   yield { refs: [], done: true };
 }

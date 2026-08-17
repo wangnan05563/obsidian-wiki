@@ -180,6 +180,10 @@ export interface AnswerChunk {
   messageIndex?: number;
   // FR-09-2 多模态结构化输出：done 前追加的思维导图/FAQ/时间线
   multimodal?: MultimodalOutput;
+  // §X-1 步骤级追踪：本次问答对应的 harness runId，前端凭此调 /api/query/runs/:runId
+  //   拉取每步耗时分解（llmMs/toolMs/tokens/toolNames），定位 143s/282s 级长耗时瓶颈。
+  //   缺省不携带：仅 harness 路径（非流式/流式）在 done 事件附上，降级链兜底不携带。
+  runId?: string;
 }
 
 export interface HealthReport {
@@ -333,6 +337,15 @@ export interface AppConfig {
   // 默认开启：在把线程记忆注入 LLM 前，自动做语义压缩/清理/重组/容量淘汰。
   // 为什么可选：保留向后兼容，老配置文件无此字段时由 defaultConfig 提供默认值（开启）。
   contextGovernor?: ContextGovernorConfig;
+  // 子智能体（多步 Agent）开关：开启时主问答路径自动注册 researcher 子智能体，
+  // 父智能体可委派其在隔离上下文独立检索/研读知识库。默认关闭（零破坏，聚焦问答不受影响）。
+  // 为什么可选：保留向后兼容，老配置文件无此字段时由 defaultConfig 提供默认值（false）。
+  enableSubAgents?: boolean;
+  // X-2 可恢复流式（resumable streaming）开关：开启后问答运行与 HTTP 请求解耦，
+  // 客户端刷新/断网可凭 runId 重连继续接收同一响应，避免重跑昂贵的长耗时问答。
+  // 默认关闭（零破坏）：关闭时路由走原有内联 SSE，完全不启用 StreamRunManager。
+  // 为什么可选：保留向后兼容，老配置文件无此字段时由 defaultConfig 提供默认值（false）。
+  enableResumableStream?: boolean;
 }
 
 
@@ -442,7 +455,7 @@ export interface VideoTaskResult {
 export interface MultimodalOutput {
   type: 'mindmap' | 'faq' | 'timeline' | 'image' | 'ppt';
   content: string;
-  // image 模式：图片访问 URL（/api/files?path=...），与 content 互补
+  // image 模式：图片访问 URL（公开路由 /api/media/file/...，无需认证，浏览器 <img> 可直接加载）
   imageUrl?: string;
   // ppt 模式：Marp Markdown 源码，前端用 @marp-team/marp-core 渲染
   pptMarkdown?: string;

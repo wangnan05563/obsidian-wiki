@@ -58,6 +58,14 @@ export interface SessionBuffer {
   // 当前问答线程隔离键：本轮会话所属的 threadId。
   // 后端据此从本地记忆注入历史上下文并持久化会话/记忆；null 表示新会话（后端自动建线程）。
   currentThreadId: string | null;
+  // §X-1 步骤级追踪：本轮问答 harness runId 暂存，finalizeAnswer 时附加到 assistant 消息，
+  // 供前端 QueryTracePanel 调 /api/query/runs/:runId 拉取每步耗时分解。null 表示无（降级链兜底）。
+  currentRunId: string | null;
+  // X-2 可恢复流式：本轮问答 manager runId 暂存（后端 StreamRunManager 分配），由 open 事件写入。
+  // 断线重连时凭此调 resume。null 表示后端未开启可恢复流式（旧服务端/开关关闭）。
+  currentManagerRunId: string | null;
+  // X-2 流式生命周期：本轮 SSE 是否已收到 done 事件。用于重连逻辑判定"流异常结束 vs 正常完成"。
+  currentDidDone: boolean;
 }
 
 function createEmptyBuffer(): SessionBuffer {
@@ -74,6 +82,9 @@ function createEmptyBuffer(): SessionBuffer {
     currentImage: null,
     currentPpt: null,
     currentThreadId: null,
+    currentRunId: null,
+    currentManagerRunId: null,
+    currentDidDone: false,
   };
 }
 
@@ -146,6 +157,26 @@ function bufClearCurrentRound(b: SessionBuffer) {
   // v3 清理图像/PPT 暂存，避免下一轮问答残留上一轮的生成结果
   b.currentImage = null;
   b.currentPpt = null;
+  // §X-1 清理 runId 暂存，避免下一轮问答残留上一轮的 harness runId
+  b.currentRunId = null;
+  // X-2 清理可恢复流式态，避免下一轮问答误用上一轮的 managerRunId / didDone
+  b.currentManagerRunId = null;
+  b.currentDidDone = false;
+}
+
+// X-2 断线重连：清掉"已收到但未 finalize"的部分内容，等待后端回放完整响应。
+// 与 bufClearCurrentRound 的区别：保留 currentManagerRunId / currentThreadId / currentRunId
+// （重连仍需它们定位 run），仅清空本轮流式产物，避免回放时重复追加。
+function bufResetForResume(b: SessionBuffer) {
+  b.streamingAnswer = '';
+  b.currentRefs = [];
+  b.currentFollowups = [];
+  b.currentThinking = [];
+  b.searchProgress = null;
+  b.currentMultimodal = null;
+  b.currentImage = null;
+  b.currentPpt = null;
+  b.currentDidDone = false;
 }
 
 function bufFinalizeAnswer(
@@ -177,6 +208,10 @@ function bufFinalizeAnswer(
       // v3 图像/PPT 生成结果附加到消息
       image: b.currentImage ?? undefined,
       ppt: b.currentPpt ?? undefined,
+      // §X-1 步骤级追踪：附加 harness runId，前端凭此拉取每步耗时分解
+      runId: b.currentRunId ?? undefined,
+      // X-2 可恢复流式：附加 manager runId（后端开启时存在），供断线重连续接
+      managerRunId: b.currentManagerRunId ?? undefined,
     });
   }
   bufClearCurrentRound(b);
@@ -316,6 +351,10 @@ function bufSetProgress(b: SessionBuffer, step: string, count?: number) {
 
 function bufSetThreadId(b: SessionBuffer, id: string | null) {
   b.currentThreadId = id;
+}
+
+function bufSetRunId(b: SessionBuffer, id: string | null) {
+  b.currentRunId = id;
 }
 
 function bufSetErrorMessage(b: SessionBuffer, message: string) {
@@ -501,12 +540,32 @@ export const useQueryStore = defineStore('query', () => {
       setImage: (payload: NonNullable<ChatMessage['image']>) => bufSetImage(b(), payload),
       setPpt: (payload: NonNullable<ChatMessage['ppt']>) => bufSetPpt(b(), payload),
       setThreadId: (id: string | null) => bufSetThreadId(b(), id),
+      // §X-1 步骤级追踪：done 事件携带的 harness runId 暂存到缓冲，finalizeAnswer 时附加到消息
+      setRunId: (id?: string) => bufSetRunId(b(), id ?? null),
+      // X-2 可恢复流式：open 事件携带的 manager runId 暂存到缓冲，断线重连时凭此 resume
+      setManagerRunId: (id?: string) => {
+        b().currentManagerRunId = id ?? null;
+      },
+      get managerRunId() {
+        return b().currentManagerRunId;
+      },
+      get threadId() {
+        return b().currentThreadId;
+      },
+      get didDone() {
+        return b().currentDidDone;
+      },
+      // X-2 断线重连：清掉已收到但未 finalize 的部分内容，等待后端回放完整响应（避免重复追加）
+      resetForResume: () => bufResetForResume(b()),
       finalizeAnswer: (
         sessionId?: string,
         messageIndex?: number,
         threadId?: string,
         followups?: string[],
-      ) => bufFinalizeAnswer(b(), sessionId, messageIndex, threadId, followups),
+      ) => {
+        b().currentDidDone = true;
+        bufFinalizeAnswer(b(), sessionId, messageIndex, threadId, followups);
+      },
       handleError: (message: string) => bufHandleError(b(), message),
     };
   }

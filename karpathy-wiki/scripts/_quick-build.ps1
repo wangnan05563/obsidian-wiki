@@ -3,7 +3,7 @@ $env:PATH = "D:\code\nodejs24;" + $env:PATH
 $NodeExe = "D:\code\nodejs24\node.exe"
 $pkgBin = "node_modules\@yao-pkg\pkg\lib-es5\bin.js"
 $bundleFile = ".build\bundle.cjs"
-$exeDir = "dist\karpathy-wiki"
+$exeDir = "..\release\app\karpathy-wiki"
 $exePath = Join-Path $exeDir "karpathy-wiki.exe"
 
 if (Test-Path $exePath) { Remove-Item $exePath -Force -ErrorAction SilentlyContinue }

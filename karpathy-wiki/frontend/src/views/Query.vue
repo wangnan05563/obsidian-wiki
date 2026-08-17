@@ -7,6 +7,8 @@ import ConversationSidebar from '../components/ConversationSidebar.vue';
 import AttachmentUploader from '../components/AttachmentUploader.vue';
 import InputToolbar from '../components/InputToolbar.vue';
 import ThinkingBlock from '../components/ThinkingBlock.vue';
+// §X-1 步骤级追踪面板：渲染每步耗时分解，定位长耗时瓶颈
+import QueryTracePanel from '../components/QueryTracePanel.vue';
 import ModelSelector from '../components/ModelSelector.vue';
 import RefsList from '../components/RefsList.vue';
 import MessageToolbar from '../components/MessageToolbar.vue';
@@ -14,7 +16,7 @@ import MessageToolbar from '../components/MessageToolbar.vue';
 import MultimodalOutputCard from '../components/MultimodalOutputCard.vue';
 import { useQueryStore, ALL_OUTPUT_MODES, OUTPUT_MODE_LABELS, type OutputMode, ALL_MIDDLEWARES, MIDDLEWARE_LABELS, type Middleware } from '../stores/query';
 import { useAuthStore } from '../stores/auth';
-import { useConversationsStore, getLastActiveConversationId } from '../stores/conversations';
+import { useConversationsStore, getLastActiveConversationId, setLastActiveConversationId } from '../stores/conversations';
 import { useModelStore } from '../stores/model';
 import { useAttachmentsStore } from '../stores/attachments';
 // 消息输入框个人偏好（按用户隔离）：字体大小 / 主题 / 快捷回复 / 历史偏好 / 回车发送 / 紧凑模式
@@ -26,10 +28,12 @@ import {
   loadAiUserConfigForPreset,
   loadSearchUserConfig,
   loadToolsUserConfig,
+  type AiUserConfig,
 } from '../services/userConfig';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
-import { consumeQuerySSE } from '../utils/sse';
+import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
+import { consumeQuerySSEResumable } from '../utils/sse';
 import { useChatAutoScroll } from '../composables/useChatAutoScroll';
 import type { Attachment, Reference } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
@@ -130,12 +134,16 @@ const inputBoxStore = useInputBoxSettings();
 
 // 登录态变化（登录 / 登出 / 切换账户 / restoreSession 完成）后重新按 owner 隔离加载会话，
 // 避免挂载时 auth 尚未就绪导致侧栏停在未过滤快照（多账户隔离防御）。
-// 关键：先 resetSession() 作废上一账户的会话作用域（currentConversationId / scopedOwnerId），
-// 再 loadConversations()。否则上一账户的 currentConversationId 被下一账户复用，调 persistConversation
-// 时覆盖并改属上一用户的会话，造成「admin 历史消失 / 人人可见」的跨账户泄漏（FR-RM-06）。
+// 顺序与移动端 MobileShell.vue 对齐：① 先清空内存问答缓冲（messages + currentThreadId），
+// 阻断上一账户问答在窗口残留可见与 threadId 串台；② 再 resetSession() 作废会话作用域
+// （currentConversationId / scopedOwnerId）；③ 最后 loadConversations() 按新 ownerId 隔离加载。
+// ① 为移动端同源修复的防御性双保险（resetSession 内部虽已调 useQueryStore().reset()，
+// 桌面端显式补一行 store.reset() 防止后续重构误删内部调用导致回退）。
 watch(
   () => authStore.user?.id,
   async () => {
+    // ① 清空内存问答窗口（与移动端 queryStore.reset() 对齐）
+    store.reset();
     try {
       conversationsStore.resetSession();
       await conversationsStore.loadConversations();
@@ -205,6 +213,10 @@ let abortController: AbortController | null = null;
 // 编辑重发：正在编辑的消息索引与其草稿文本；editingIdx===idx 时该 user 气泡渲染为可编辑态
 const editingIdx = ref<number | null>(null);
 const editingText = ref('');
+// Nit2：编辑态 textarea 的组件内 ref，替代全局 document.querySelector 聚焦（FR-044 选择器稳定性）。
+// focus 标为可选：el-input 经 defineExpose 暴露 focus（真机有效）；测试中对 ElementPlus 组件 stub 时，
+// 实例无 focus 方法，用 ?.focus?.() 静默跳过，避免 nextTick 回调抛 Unhandled Rejection。
+const editInputRef = ref<{ focus?: () => void } | null>(null);
 
 // 问答超时机制：LLM 长时间无响应时自动中断，避免用户卡在"正在思考"
 // 为什么 120 秒：覆盖 MCP 扩展工具加载（最多 30s，已并行优化）+ LLM 首字节延迟（5-15s）
@@ -230,6 +242,12 @@ let abortReason: 'user' | 'timeout' | 'edit' | null = null;
 // 编辑重发：当前回复被终止后，需丢弃被编辑的 user 消息及其后续并重发的缓存
 let pendingResendQuestion: string | null = null;
 let pendingResendIdx: number | null = null;
+// S3 兜底定时器阈值：abort 后等待 sendQuestion.finally 消费 pendingResend 的最长时间，
+// 超时则主动触发重发。不宜过短（正常 abort→finally 通常数百毫秒内完成），也不宜过长（否则失效观感明显）。
+const EDIT_RESEND_FALLBACK_MS = 3000;
+// S3 兜底定时器句柄：编辑重发走「abort 后等 finally」时，若传输层吞掉中断致 finally 未执行，
+// 此定时器主动触发重发，避免编辑功能静默失效；在 triggerResend 内被清理（幂等）。
+let editResendFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
 // F-3.11 二态侧栏：expanded(280px) / hidden(0,完全隐藏，仅浮动展开按钮)
 // 为什么改二态：原三态 expanded→collapsed→hidden 需点两次才能完全折叠，
@@ -512,6 +530,10 @@ function normalizeRefs(refs: string[] | Reference[] | undefined): Reference[] {
 
 async function sendQuestion(question: string) {
   abortController = new AbortController();
+  // 捕获本请求专属的 AbortController 实例，供下方 initialFetch/resumeFetch 闭包使用，
+  // 避免「流断开重连窗口内用户点击停止，abortController 被 finally 置 null」时，
+  // 闭包内 abortController!.signal 在运行时解引用为 undefined 而抛 TypeError（续连分支崩溃）。
+  const ac = abortController;
   abortReason = null;
   // F-3.13 修复：立即标记 loading，让流式气泡（loading dots / 实时思考 / 流式答案）即时出现。
   // 关键：重新生成路径（handleRegenerate）不走 submitQuestion，此前 isLoading 始终为 false，
@@ -522,11 +544,13 @@ async function sendQuestion(question: string) {
   // 无线程（新会话首问）时回退为前端透传完整 history（向后兼容，后端记忆为空时亦会回退）。
   const activeThreadId = store.currentThreadId;
   // 历史记录偏好（按用户隔离）：rely=依赖服务端线程记忆，绝不发送本地 history；
-  // send=新会话首问携带本地 history（默认）。
-  const history =
-    activeThreadId || inputBoxStore.settings.historyPreference === 'rely'
-      ? undefined
-      : store.messages.map((m) => ({ role: m.role, content: m.content }));
+  // send=每轮携带本地 history（默认）。persist=false（默认部署）下服务端不维护线程记忆，
+  // 必须由前端每轮透传完整 history 才能保证多轮上下文连贯，故只要非 rely 即发送，
+  // 不再因 activeThreadId 存在而抑制 history（否则 follow-up 会丢失上下文）。
+  const relyOnServerMemory = inputBoxStore.settings.historyPreference === 'rely';
+  const history = !relyOnServerMemory
+    ? store.messages.map((m) => ({ role: m.role, content: m.content }))
+    : undefined;
 
   // 启动超时定时器：以"最近一次收到 SSE 数据"为基准的滑动窗口，
   // 连续 QUESTION_TIMEOUT_MS 无任何数据才判定超时中断（见 resetQuestionTimeout）。
@@ -543,9 +567,9 @@ async function sendQuestion(question: string) {
   // 构造请求体：F-3.4 工具栏 mode 字段统一传递到 SSE
   // 模型切换由 PUT /api/ai/config 统一处理，不在此处传 model
   const body: Record<string, unknown> = { question };
-  // 仅当无 threadId（新会话首问）时携带前端 history 作为上下文回退；
-  // 有 threadId 时后端从本地记忆注入，前端不再发送 history（避免重复上下文）
-  if (!activeThreadId && history && history.length > 0) {
+  // 每轮携带前端 history 作为上下文（persist=false 下服务端不维护记忆，必靠此兜底多轮连贯）；
+  // 服务端在自身记忆非空时优先用记忆、否则回退本 history，故发送 history 对 persist=true 部署无副作用。
+  if (history && history.length > 0) {
     body.history = history;
   }
   // 携带 threadId 供后端定位本地记忆与归档（后端在记忆非空时优先用记忆，否则回退 history）
@@ -586,11 +610,18 @@ async function sendQuestion(question: string) {
   // 后端以这些覆盖项替换服务端共享配置，实现"各用户独立额度、互不抢占限流"。
   // 密钥仅经此请求体一次性发给后端代理，后端不持久化到磁盘（参见 services/userConfig.ts）。
   const uid = authStore.user?.id || 'guest';
-  // 传入当前预设模板：预设槽位为空时让 provider/baseUrl/model 跟随该预设（而非 legacy 扁平配置），
-  // 修复「切换模型后实际模型不跟随变化」。
-  const activePreset = modelStore.presets.find(p => p.key === modelStore.selectedPresetKey);
-  const [aiCfg, searchCfg, toolsCfg] = await Promise.all([
-    loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset),
+  // auto（自动）模式：从「用户已配置 apiKey」的预设中按能力优先级择优（见 autoModel.resolveAutoPresetForUser），
+  // 保证 auto 选中的模型必然已配置，杜绝「解析到用户未配置的预设 → 前端判定无 apiKey 不发
+  // llmConfig → 后端 BYOK 校验 400（请求参数有误）」。选中具体预设时沿用其 key，走既有 BYOK 加载逻辑。
+  let aiCfg: AiUserConfig | null = null;
+  if (modelStore.selectedPresetKey === AUTO_MODEL) {
+    const resolved = await resolveAutoPresetForUser(uid, modelStore.presets);
+    aiCfg = resolved.config;
+  } else {
+    const activePreset = modelStore.presets.find((p) => p.key === modelStore.selectedPresetKey);
+    aiCfg = await loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset);
+  }
+  const [searchCfg, toolsCfg] = await Promise.all([
     loadSearchUserConfig(uid),
     loadToolsUserConfig(uid),
   ]);
@@ -613,25 +644,31 @@ async function sendQuestion(question: string) {
   }
 
   try {
-    const response = await authStore.authFetch(`${API_BASE}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: abortController.signal,
-    });
-
-    if (!response.ok || !response.body) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    // SSE 流消费统一委托给 utils/sse.ts，降低本函数认知复杂度（S3776）
-    // 同时传入 signal 以便主动取消时释放 reader
+    // X-2 可恢复流式：用带重连的 SSE 消费包装。
+    // 首连请求工厂 initialFetch 发送完整 body；若流异常断开且后端已下发 managerRunId，
+    // 包装层自动以 resumeFetch 凭 runId 重连回放完整响应（resetForResume 避免重复追加）。
+    const writer = store.getSessionWriter();
+    const initialFetch = () =>
+      authStore.authFetch(`${API_BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+    const resumeFetch = (runId: string, threadId: string | null) =>
+      authStore.authFetch(`${API_BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // 重连仅需 runId（订阅进行中的 run）；threadId 一并带上是为兼容后端未来做归属校验
+        body: JSON.stringify({ resume: runId, threadId: threadId ?? undefined }),
+        signal: ac.signal,
+      });
     // onActivity=resetQuestionTimeout：每收到一个网络数据块即重置超时滑动窗口，
     // 保证"慢但正常流式输出"的问答不会被固定墙钟误杀（仍保留对真·挂死的保护）。
-    // consumeQuerySSE 在 AbortError 时正常返回，不抛错，由 finally 处理停止态
-    await consumeQuerySSE(response, store.getSessionWriter(), abortController.signal, resetQuestionTimeout);
+    await consumeQuerySSEResumable(initialFetch, resumeFetch, writer, ac.signal, resetQuestionTimeout);
     // 持久化对话到 IndexedDB（支持侧栏历史列表）
-    await conversationsStore.persistConversation(store.messages);
+    // S4：统一以 messagesWithStreaming 取源（与编辑重发 triggerResend 一致），安全覆盖进行中流式态
+    await conversationsStore.persistConversation(store.messagesWithStreaming());
   } catch (err: unknown) {
     // 对称守护（与 FloatingChat 一致）：AbortError 由超时/用户停止触发，交由 finally 按
     // abortReason 提交部分答案并打 timedOut 标记，此处不再推送 error 消息，也不污染
@@ -673,12 +710,7 @@ async function sendQuestion(question: string) {
       const i = pendingResendIdx;
       pendingResendQuestion = null;
       pendingResendIdx = null;
-      if (i >= 0 && i < store.messages.length) {
-        store.removeMessagesFrom(i);
-        // 编辑重发：被编辑的 user 消息已被 removeMessagesFrom 丢弃，必须 submitQuestion 重新插入，否则对话里只剩悬空答案
-        store.submitQuestion(q);
-        void sendQuestion(q);
-      }
+      triggerResend(i, q);
     }
   }
 }
@@ -740,12 +772,21 @@ function resumeLastAnswer() {
 
 // FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
 // 切页后 SPA 重挂载且后台仍有活跃流（store.isLoading）时直接跳过，避免打断/重复续答。
+// 安全加固（跨账户泄漏防御）：localStorage 的 LAST_ACTIVE_CONVERSATION 是 per-origin 共享的，
+// 切换账户后可能残留上一用户的会话 ID。必须校验该会话的 ownerId 归属当前用户，
+// 否则切换账户后新用户会通过此路径加载上一用户的问答内容到窗口。
 async function maybeResumeOnLoad() {
   if (store.isLoading) return;
   const lastId = getLastActiveConversationId();
   if (!lastId) return;
   const rec = conversationsStore.conversations.find((c) => c.id === lastId);
   if (!rec) return;
+  // 所有权校验：仅恢复归属当前用户的会话，防止上一用户残留 ID 导致跨账户加载
+  if (rec.ownerId !== undefined && rec.ownerId !== authStore.user?.id) {
+    // 清除残留的跨账户引用，避免每次重载都触发此无效查找
+    setLastActiveConversationId(null);
+    return;
+  }
   await conversationsStore.selectConversation(lastId);
   const msgs = store.messages;
   const last = msgs[msgs.length - 1];
@@ -978,16 +1019,36 @@ function handleRemoveMessage(idx: number) {
   void conversationsStore.persistConversation(store.messages);
 }
 
+// 编辑重发统一入口：丢弃 idx 起的尾部（含被编辑的 user 消息），重插编辑后的 user 消息并重新流式回答。
+// 为什么抽成独立函数：Case A（无活跃流，直接重发）、Case B（流式 abort 后由 finally 重发）、
+// 以及 S3 的 abort 兜底定时器三处共用同一逻辑，避免三份拷贝漂移（S4：统一以 messagesWithStreaming 取源）。
+function triggerResend(i: number, q: string) {
+  if (i < 0 || i >= store.messages.length) return;
+  // 防御：若仍有在途流（如兜底定时器触发而 finally 尚未跑），先停止以固化状态机（edit 不追加/不提示）
+  if (store.isLoading) store.stopLoading('edit');
+  // 清理 S3 兜底定时器（若 pendingResend 由 finally 正常消费，timer 已是 null；若由兜底触发，清掉自身，避免重复重发）
+  if (editResendFallbackTimer) {
+    clearTimeout(editResendFallbackTimer);
+    editResendFallbackTimer = null;
+  }
+  store.removeMessagesFrom(i);
+  // 编辑重发：被编辑的 user 消息已被 removeMessagesFrom 丢弃，必须 submitQuestion 重新插入，否则对话里只剩悬空答案
+  store.submitQuestion(q);
+  // FR-RM-09：立即落盘编辑后的用户问题，确保刷新/切页后可恢复（与 Case A 对称，消除 S2 路径不落盘缺口）
+  void conversationsStore.persistConversation(store.messagesWithStreaming());
+  void sendQuestion(q);
+}
+
 // 编辑 user 消息：将气泡切换为可编辑态，预填当前内容
 function handleEditMessage(idx: number) {
   const msg = store.messages[idx];
   if (!msg || msg.role !== 'user') return;
   editingIdx.value = idx;
   editingText.value = msg.content;
-  // 自动聚焦编辑框，提升重发效率
+  // 自动聚焦编辑框，提升重发效率；用组件内 ref 而非全局 document.querySelector，
+  // 避免多编辑态（理论不应出现）误聚焦首个，且 v-if 未挂载时更可预测（FR-044 选择器稳定性）
   nextTick(() => {
-    const el = document.querySelector<HTMLTextAreaElement>('.msg-edit textarea');
-    el?.focus();
+    editInputRef.value?.focus?.();
   });
 }
 
@@ -1000,7 +1061,7 @@ function handleCancelEdit() {
 // 确认编辑并重发：终止当前 AI 回复（若正在生成），丢弃被编辑的 user 消息及其后续，重新触发思考
 // 竞态处理：AI 正在生成时不能直接 removeMessagesFrom（会与 sendQuestion 的流式状态交错），
 // 而是标记 pendingResend 并 abort 当前回复，待 sendQuestion 的 finally 清理后再丢弃+重发。
-async function handleConfirmEdit() {
+function handleConfirmEdit() {
   const idx = editingIdx.value;
   if (idx === null) return;
   const original = store.messages[idx]?.content ?? '';
@@ -1012,21 +1073,35 @@ async function handleConfirmEdit() {
     return;
   }
   if (newText === original) return; // 未修改，直接退出编辑态，不重发
-  if (!store.isLoading) {
-    // 当前无 AI 回复在生成：直接丢弃 idx 起的全部消息（含本 user 消息），
-    // 先用 submitQuestion 把编辑后的 user 消息重新插入对话（否则 sendQuestion 不会添加 user 气泡），再触发流式重答
-    store.removeMessagesFrom(idx);
-    store.submitQuestion(newText);
-    // FR-RM-09：立即落盘编辑后的用户问题，确保刷新/切页后可恢复
-    void conversationsStore.persistConversation(store.messagesWithStreaming());
-    void sendQuestion(newText);
+  // 能否安全 abort 当前在途流：必须同时满足「正在生成」且存在活跃 abortController。
+  // 注意：若上一次回答以错误结束（sendQuestion 的 catch 分支仅 handleError、未 stopLoading），
+  // 会残留 isLoading=true 但 abortController=null 的卡死态。此时若走「abort 后等 finally 重发」
+  // 分支，abort() 是空操作、finally 永不触发，重发永远不执行——编辑功能彻底失效。
+  // 故只要没有活跃 abortController，就直接截断+重发（同时覆盖空闲态与错误卡死态）。
+  // 直接以「正在生成 且 存在活跃 abortController」判定；TS 据此在下方收窄为非空，
+  // 免去 `abortController!.abort()` 的非空断言（更干净）。
+  if (!store.isLoading || !abortController) {
+    triggerResend(idx, newText);
     return;
   }
-  // 正在生成：终止当前回复，待 finally 清理后再丢弃并重发
+  // 正在生成且存在活跃流：终止当前回复，待 finally 清理后再丢弃并重发
+  // （上方 !abortController 守卫已保证此处 abortController 非空，TS 自然收窄）
   pendingResendQuestion = newText;
   pendingResendIdx = idx;
   abortReason = 'edit';
-  abortController?.abort();
+  abortController.abort();
+  // S3 兜底：若 abort 因传输层吞掉中断（后端/代理不尊重 AbortSignal）而未能让
+  // sendQuestion 的 finally 执行，pendingResend 将永不消费，编辑功能静默失效。
+  // 一次性超时主动兜底：超时后若 pendingResend 仍未被 finally 消费，则主动触发重发。
+  editResendFallbackTimer = setTimeout(() => {
+    // finally 已消费（pendingResend 已清空）则无需兜底，避免与 finally 重发重复
+    if (pendingResendQuestion === null || pendingResendIdx === null) return;
+    const q = pendingResendQuestion;
+    const i = pendingResendIdx;
+    pendingResendQuestion = null;
+    pendingResendIdx = null;
+    triggerResend(i, q);
+  }, EDIT_RESEND_FALLBACK_MS);
 }
 
 // 工具栏高级设置面板：齿轮按钮点击展开/收起，集中展示输出相关非高频设置
@@ -1199,6 +1274,7 @@ onBeforeUnmount(() => {
               <!-- 编辑态：user 消息切换为可编辑 textarea + 确认/取消（终止当前回复后重发） -->
               <div v-if="msg.role === 'user' && editingIdx === idx" class="msg-edit" @click.stop>
                 <el-input
+                  ref="editInputRef"
                   v-model="editingText"
                   type="textarea"
                   :autosize="{ minRows: 2, maxRows: 10 }"
@@ -1242,6 +1318,8 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <RefsList v-if="normalizeRefs(msg.refs).length > 0" :refs="normalizeRefs(msg.refs)" />
+              <!-- §X-1 步骤级追踪面板：答案完成后展示每步耗时分解（定位长耗时瓶颈） -->
+              <QueryTracePanel v-if="msg.runId" :run-id="msg.runId" />
               </template>
             </div>
               <!-- F-3.7 / F-3.13 工具栏：气泡外部下方显示，hover 气泡时淡入，避免挡住气泡内文字

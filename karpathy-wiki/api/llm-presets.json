@@ -14,7 +14,7 @@
     "label": "DeepSeek",
     "provider": "deepseek",
     "baseUrl": "https://api.deepseek.com",
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-flash",
     "apiKeyRef": "DEEPSEEK_KEY",
     "apiKeyUrl": "https://platform.deepseek.com/api_keys",
     "vision": false
@@ -74,7 +74,7 @@
     "label": "Agnes AI",
     "provider": "agnes",
     "baseUrl": "https://apihub.agnes-ai.com/v1",
-    "model": "agnes-2.0-flash",
+    "model": "agnes-2.5-flash",
     "apiKeyRef": "AGNES_API_KEY",
     "apiKeyUrl": "https://agnes-ai.com",
     "vision": true

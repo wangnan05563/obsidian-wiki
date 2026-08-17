@@ -14,11 +14,11 @@ import { resolveSpaRoot, resolveSpaAsset } from './spa-resolver.js';
 import { setupSpaStatic } from './spa-static.js';
 import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 import { VaultService } from './vault/vault-service.js';
-import { HarnessAdapter } from './engine/harness-adapter.js';
+import { HarnessAdapter, resolveSubAgents } from './engine/harness-adapter.js';
 import { registerCompileRoute } from './routes/compile.js';
 import { registerQueryRoute, registerQueryArchiveRoute } from './routes/query.js';
 import { registerHealthCheckRoute } from './routes/health-check.js';
-import { registerFilesRoutes } from './routes/files.js';
+import { registerFilesRoutes, registerPublicMediaServeRoute } from './routes/files.js';
 import { registerGraphRoute } from './routes/graph.js';
 import { registerStatsRoute } from './routes/stats.js';
 import { registerSchemaRoutes } from './routes/schema.js';
@@ -31,6 +31,7 @@ import { registerCleanupRoute } from './routes/cleanup.js';
 import { registerDataCleanRoute } from './routes/data-clean.js';
 import { registerQqIngestRoute } from './routes/qq-ingest.js';
 import { registerUrlIngestRoute } from './routes/url-ingest.js';
+import { registerRawIngestRoute } from './routes/raw-ingest.js';
 import { registerBookmarkIngestRoute } from './routes/bookmark-ingest.js';
 import { registerConversationsRoute } from './routes/conversations.js';
 import { ThreadMemoryStore } from './engine/thread-memory-store.js';
@@ -240,6 +241,12 @@ export async function buildApp(): Promise<BuiltApp> {
   // 为什么用 getEffectiveApiKey：开发模式不加载 .env，仅靠环境变量会拿到空串导致 401
   // §5.2 传�?webSearchConfig：query workflow 注入 web_search 工具时使�?
   const apiKey = getEffectiveApiKey(config);
+
+  // §P3-SubAgent 显式配置：默认关闭（零破坏）。由 config.json 的 enableSubAgents 控制，
+  // 可在前端 Config 页面「系统配置」实时开关；开启时注入 researcher 子智能体
+  // （隔离上下文独立检索/研读知识库，返回聚焦结论）。亦可在运行时经 updateConfig 切换。
+  const subAgentsConfig = resolveSubAgents(config.enableSubAgents);
+
   const adapter = new HarnessAdapter(
     {
       llm: {
@@ -256,6 +263,7 @@ export async function buildApp(): Promise<BuiltApp> {
     config.webSearch,
     config.tools,
     config,
+    subAgentsConfig,
   );
 
   // 配置驱动�?Fastify logger：level �?config.json 读取，默�?info
@@ -393,7 +401,7 @@ export async function buildApp(): Promise<BuiltApp> {
   registerCompileRoute(app, adapter, config.batch, config);
   // 上下文记忆治理配置：默认开启，注入 LLM 前主动压缩/清理/重组/淘汰历史
   const governorConfig = config.contextGovernor ?? DEFAULT_GOVERNOR_CONFIG;
-  registerQueryRoute(app, adapter, threadStore, governorConfig, isolationGuards);
+  registerQueryRoute(app, adapter, threadStore, governorConfig, isolationGuards, config.enableResumableStream ?? false);
   // v3 媒体生成：视频任务创建与轮询
   registerMediaRoute(app, adapter, config);
   registerQueryArchiveRoute(app, vault, threadStore, isolationGuards);
@@ -402,13 +410,15 @@ export async function buildApp(): Promise<BuiltApp> {
   registerHealthCheckRoute(app, adapter, isolationGuards);
   // files/graph/stats 路由直接操作 Vault，不经过 adapter（纯确定性操作）
   registerFilesRoutes(app, vault, isolationGuards, { filesReadAuthRequired: config.auth?.filesReadAuthRequired ?? false });
+  // 公开媒体文件服务：queries/ 下生成的图像/视频无需认证（浏览器 img/video 标签无法带 Authorization header）
+  registerPublicMediaServeRoute(app, vault);
   registerGraphRoute(app, vault);
   registerStatsRoute(app, vault);
   registerSchemaRoutes(app, vault, isolationGuards);
   registerConfigRoute(app, adapter, isolationGuards);
   // §11.2 断点续传：查询中断任务列表（完整 resume 待详细设计）
   const stateDir = path.join(getDataDir(), '.harness', 'state');
-  registerRunsRoute(app, stateDir);
+  registerRunsRoute(app, stateDir, isolationGuards);
   // 历史会话后端持久化（dataDir/conversations/）默认关闭（对应「会话不存服务端、仅本地维护」核心需求）。
   // 仅当 sessionPersistence.conversationsPersist === true 才注册 /api/conversations 路由，
   // 后端将历史会话落盘 data/conversations/；默认 false 即服务端不暴露任何会话 CRUD 端点（FR-RM-04/FR-RM-08）。
@@ -431,6 +441,8 @@ registerDataCleanRoute(app, vault, isolationGuards);
   // URL 爬取子系统：从入�?URL 出发 BFS 爬取同级/子路径下、最�?N 跳内页面与附�?
   // 为什么需�?config 完整对象：路由内�?config.urlCrawl ?? defaultUrlCrawlConfig 兜底
   registerUrlIngestRoute(app, adapter, vault, config, isolationGuards);
+  // A1 网页捕获（书签捕获）：接收 bookmarklet 抓回的 outerHTML → 提取正文 → 合并 Markdown，供前端走 /api/compile text 模式
+  registerRawIngestRoute(app, config, isolationGuards);
   // FR-16-2 浏览器书签导入：解析书签 HTML → Markdown → raw/ → compile
   // 为什么传入 vaultPath：路由需要将 combinedMarkdown 写入 raw/ 目录
   registerBookmarkIngestRoute(app, config.vaultPath, isolationGuards);

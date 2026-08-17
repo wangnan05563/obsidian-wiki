@@ -14,7 +14,7 @@ const { mockDb, mockQuery } = vi.hoisted(() => ({
     dbDelete: vi.fn(),
     dbHasSealed: vi.fn(),
   },
-  mockQuery: { setThreadId: vi.fn(), loadMessages: vi.fn(), currentThreadId: null as string | null },
+  mockQuery: { setThreadId: vi.fn(), loadMessages: vi.fn(), reset: vi.fn(), currentThreadId: null as string | null },
 }));
 
 // 模拟本地存储层，保证测试确定性（happy-dom 的 IndexedDB 不可靠）
@@ -74,6 +74,7 @@ beforeEach(() => {
   mockDb.dbHasSealed.mockResolvedValue(false);
   mockQuery.setThreadId.mockClear();
   mockQuery.loadMessages.mockClear();
+  mockQuery.reset.mockClear();
 });
 
 describe('filterByOwner 纯函数隔离（严格）', () => {
@@ -148,6 +149,44 @@ describe('loadConversations 隔离 + 老数据盖章', () => {
     expect(ids).not.toContain('c');
     expect(ids).not.toContain('a');
     expect(ids).toContain('b');
+  });
+});
+
+describe('resetSession 同步清空问答窗口（账户切换隔离，FR-RM-06）', () => {
+  it('resetSession 必须清空 query store 的 messages 缓冲，避免上一用户问答残留在聊天窗口', () => {
+    const store = useConversationsStore();
+    store.resetSession();
+    // 不清则桌面端切换用户后问答窗口仍显示上一用户内容（本次修复点）
+    expect(mockQuery.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it('resetSession 必须重置 viewingConversationId，避免上一账户"正在查看"状态跨账户残留', () => {
+    const store = useConversationsStore();
+    // 模拟已处于"正在查看某会话"状态（来自上一账户）
+    store.setViewing('some-old-conversation-id');
+    expect(store.viewingConversationId).not.toBeNull();
+    store.resetSession();
+    // 账户切换/登出隔离钩子须一并作废查看态，否则隔离态不完整（与窗口残留同源）
+    expect(store.viewingConversationId).toBeNull();
+  });
+
+  it('账户切换典型流程（resetSession -> loadConversations）下，窗口已清空且历史按新 owner 隔离', async () => {
+    // 模拟先以 admin 加载，再切换到 05563
+    setUser('admin');
+    const store = useConversationsStore();
+    mockDb.dbGetAll.mockResolvedValue([rec('a', 'admin'), rec('b', '05563')]);
+    await store.loadConversations();
+    expect(store.conversations.map((x) => x.id)).toContain('a');
+
+    // 切到 05563：消费侧（Query.vue / MobileShell.vue）先调 resetSession
+    setUser('05563');
+    store.resetSession();
+    expect(mockQuery.reset).toHaveBeenCalled();
+    await store.loadConversations();
+
+    // 历史隔离：看不到 admin 的会话
+    expect(store.conversations.map((x) => x.id)).not.toContain('a');
+    expect(store.conversations.map((x) => x.id)).toContain('b');
   });
 });
 

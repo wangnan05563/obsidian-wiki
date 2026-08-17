@@ -7,6 +7,7 @@
 
 
 import * as fs from 'node:fs';
+import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 
 // NOSONAR - S1128 path 通过 require('path') 动态使用
 
@@ -62,6 +63,16 @@ export interface UrlCrawlConfig {
 
   incrementalStatePath?: string; resumeCrawl?: boolean;
 
+  // 自定义请求头（合并到 User-Agent 之上）。默认由 DEFAULT_CRAWL_CONFIG 补齐浏览器基础头，
+  // 避免仅带 UA 的请求被站点 WAF 识别为自动化探针而返回 420/黑名单页
+  requestHeaders?: Record<string, string>;
+
+  // B 方案：自定义 egress 代理（绕开服务器出口 IP 黑名单）。
+  // 配置后，爬取请求经该 HTTP(S) 代理 egress（覆盖全局 setGlobalDispatcher），
+  // 适用于目标站点把服务器出口 IP 拉黑、但代理出口 IP 未被拉黑的场景。
+  // 仅当显式配置时才生效；为空则走全局 dispatcher（原行为不变）。
+  egressProxyUrl?: string;
+
 }
 
 
@@ -96,15 +107,32 @@ interface RequiredUrlCrawlConfig extends UrlCrawlConfig {
 
   incrementalStatePath: string; resumeCrawl: boolean;
 
+  requestHeaders: Record<string, string>;
+  egressProxyUrl: string;
+
 }
 
 
 
 export const DEFAULT_CRAWL_CONFIG: RequiredUrlCrawlConfig = {
 
-  maxHops: 3, timeoutMs: 10000, maxPages: 50,
+  // timeoutMs 30s：shcpe 等外网站点首次响应常 >10s（DNS/服务器延迟），
+  // 原 10s 超时导致首页面 fetch abort → 静默 0 页。提至 30s 降低误判。
+  maxHops: 3, timeoutMs: 30000, maxPages: 50,
 
   userAgent: 'KarpathyWikiBot/1.0',
+
+  // 浏览器化基础请求头：部分站点 WAF 对"仅带 UA、无 Accept/Accept-Language 等"的请求直接拦截（420/黑名单页）。
+  // 默认补齐常见浏览器头，提高对真实站点的可达性；User-Agent 仍由 userAgent 字段独立控制以便覆盖。
+  requestHeaders: {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+  },
+
+  egressProxyUrl: '',
 
   allowedAttachmentTypes: [
 
@@ -144,30 +172,64 @@ export const DEFAULT_CRAWL_CONFIG: RequiredUrlCrawlConfig = {
 
 
 
-async function checkSSRF(urlStr: string) {
+// 判断 IP 地址（含 IPv4/IPv6 字面量，去掉方括号）是否属于应被拦截的私网/保留/链路本地范围。
+// 覆盖：10./8、172.16-31./12、192.168./16、127./8、0.0.0.0/8（IPv4 回环/私网/不可路由）；
+// 169.254.0.0/16（链路本地 / 云元数据 169.254.169.254）、100.64.0.0/10（CGNAT 运营商级 NAT）；
+// IPv6：::1/128（回环）、::（未指定）、fe80::/10（链路本地）、fc00::/7（唯一本地 ULA fc/fd 前缀）、
+// ::ffff:<v4>（IPv4 映射，递归判定内嵌 v4）。
+// 为什么集中成纯函数：原 checkSSRF 仅拦截部分 IPv4 段且漏了链路本地/CGNAT/IPv6，
+// 且原 throw 被外层 catch 吞掉导致完全不生效——此处统一收紧。
+function isRestrictedIp(rawAddr: string): boolean {
+  const a = rawAddr.replace(/^\[|\]$/g, '').toLowerCase();
+  // IPv4 字面量
+  if (a.includes('.')) {
+    if (a === '0.0.0.0' || a.startsWith('0.')) return true;
+    if (a.startsWith('10.')) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(a)) return true; // NOSONAR - S6557+S6353 - 范围检查无法用 startsWith
+    if (a.startsWith('192.168.')) return true;
+    if (a.startsWith('127.')) return true;
+    if (a.startsWith('169.254.')) return true; // 链路本地 / 云元数据
+    if (a.startsWith('100.64.')) return true; // CGNAT
+    return false;
+  }
+  // IPv6 字面量
+  if (a === '::1' || a === '::') return true;
+  if (a.startsWith('fe80:')) return true; // 链路本地
+  if (a.startsWith('fc') || a.startsWith('fd')) return true; // 唯一本地 ULA
+  // IPv4-mapped（::ffff:<v4>）：new URL 会规范化为 ::ffff:7f00:1 等无点形式，无法可靠还原内嵌 v4；
+  // SSRF 应偏保守，凡 ::ffff: 前缀一律拦截（它本质是 IPv4 地址）。
+  if (a.startsWith('::ffff:')) return true;
+  return false;
+}
 
-  const hostname = new URL(urlStr).hostname;
-
+// SSRF 防护：拦截解析到内网/保留/链路本地地址的入口 URL，避免后端被诱导抓取内网资源（如云元数据）。
+// 关键修复：原实现对命中私网地址主动 throw，但该 throw 处于 try 内被 catch {} 吞掉 → 拦截从未生效。
+// 现改为：DNS 解析失败才静默放行（保持原"解析不了就交给 fetch 决定"的行为），命中私网必须上抛，
+// 由调用方（crawlUrl 主循环 / probeProxyEgress 探针）捕获并归类为 ssrf 错误。
+// 同时支持 IPv4/IPv6 双栈解析（resolve4 + resolve6），并对 IP 字面量直接判定（无需 DNS）。
+export async function checkSSRF(urlStr: string) {
+  let hostname: string;
   try {
-
+    hostname = new URL(urlStr).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return; // 非法 URL 由调用方 fetch 决定成败
+  }
+  // IP 字面量：直接判定，避免无谓 DNS
+  if (isRestrictedIp(hostname)) throw new Error('SSRF blocked: ' + hostname);
+  // 域名：解析 A / AAAA 记录后逐条判定
+  try {
     const dns = await import('node:dns');
-
-    const ipv4s = await dns.promises.resolve4(hostname);
-
-    for (const addr of ipv4s) {
-
-      if (addr.startsWith('10.') ||
-          /^172\.(1[6-9]|2\d|3[01])\./.test(addr) || // NOSONAR - S6557+S6353 - 范围检查无法用 startsWith
-          addr.startsWith('192.168.') || addr.startsWith('127.')) {
-
-        throw new Error("SSRF blocked: " + hostname);
-
-      }
-
+    const [ipv4s, ipv6s] = await Promise.all([
+      dns.promises.resolve4(hostname).catch(() => [] as string[]),
+      dns.promises.resolve6(hostname).catch(() => [] as string[]),
+    ]);
+    for (const addr of [...ipv4s, ...ipv6s]) {
+      if (isRestrictedIp(addr)) throw new Error('SSRF blocked: ' + hostname);
     }
-
-  } catch { }
-
+  } catch (e) {
+    // 仅当我们主动抛出的 SSRF 拦截才继续上抛；DNS 解析失败（catch 到 []）放行（保持原行为）
+    if (e instanceof Error && e.message.startsWith('SSRF blocked')) throw e;
+  }
 }
 
 
@@ -250,7 +312,7 @@ function robotsPatternToRegex(pattern: string) {
 
 }
 
-function extractHtmlContent(html: string, _baseUrl: string) {
+export function extractHtmlContent(html: string, _baseUrl: string) {
   let text = html;
   text = text.replace(/<!--[\s\S]*?-->/g, '');
   // 移除无文本价值的块级元素：JS/CSS/模板占位/内联图标
@@ -275,6 +337,98 @@ function extractHtmlContent(html: string, _baseUrl: string) {
   text = text.replace(/\s+/g, ' ').trim();
   text = text.replace(/\n{3,}/g, '\n\n');
   return { text };
+}
+
+// 校验 egress 代理 URL（B 方案）。
+// 约束：① 非空；② 必须是合法 URL；③ 仅允许 http/https 协议（undici ProxyAgent 只支持 HTTP CONNECT 代理，不支持 SOCKS）。
+// 返回规范化后的 URL 字符串；非法/空返回 null。
+// 为什么单独校验：代理 URL 若指向 file:/data:/socks: 等，要么 ProxyAgent 构造即报错，要么可被利用为 pivot 打内网；
+// 这里在入口处强制 http/https，配合目标 URL 自身的 checkSSRF，杜绝经代理访问内网资源。
+export function validateProxyUrl(raw?: string): string | null {
+  if (!raw || !raw.trim()) return null;
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  return u.toString();
+}
+
+// B 方案：爬取前的代理连通性自检。
+// 为什么需要：B 最大失效场景是"用户填的代理出口 IP 也被目标站点拉黑"——
+// 若不做预检，用户要等整轮爬取跑完才拿到 0 页面、且难以定位是代理问题还是目标问题。
+// 预检经该代理发一次轻量 GET 到入口 URL，按结果分级：
+//   - ok：代理出口可达目标（2xx）→ 爬取应正常
+//   - blocked：代理出口仍被目标 WAF/黑名单拦截（420/403/WAF 页）→ 提示换代理或用 A1 书签捕获
+//   - 网络/超时（reachable=false）：代理本身不可用或出口不通 → 调用方应中止爬取，避免注定失败的整轮等待
+// 复用 undiciFetch + ProxyAgent（同实例，见 crawlUrl 注释），finally 关闭 dispatcher 防连接泄漏。
+export interface ProxyProbeResult {
+  ok: boolean;
+  reachable: boolean;
+  blocked: boolean;
+  status: number;
+  level: 'ok' | 'warn' | 'error';
+  message: string;
+}
+
+export async function probeProxyEgress(
+  targetUrl: string,
+  proxyUrl: string,
+  timeoutMs = 15000,
+): Promise<ProxyProbeResult> {
+  const pv = validateProxyUrl(proxyUrl);
+  if (!pv) {
+    return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: '代理地址无效（仅支持 http:// 或 https://）' };
+  }
+  // SSRF 防护：探针同样会经代理请求 targetUrl，必须与 crawlUrl 主循环一致先校验目标地址，
+  // 杜绝"探针绕过 checkSSRF 经代理探测内网/云元数据"的盲 SSRF 窗口（见 checkSSRF 修复说明）。
+  try {
+    await checkSSRF(targetUrl);
+  } catch (ssrfErr) {
+    const msg = ssrfErr instanceof Error ? ssrfErr.message : String(ssrfErr);
+    return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: '目标 URL 被 SSRF 防护拦截（' + msg + '），请确认使用公网可访问 URL' };
+  }
+  const dispatcher = new ProxyAgent(pv);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await undiciFetch(targetUrl, {
+      method: 'GET',
+      headers: { 'User-Agent': DEFAULT_CRAWL_CONFIG.userAgent, ...DEFAULT_CRAWL_CONFIG.requestHeaders },
+      signal: controller.signal,
+      dispatcher,
+    });
+    clearTimeout(timer);
+    const status = response.status;
+    if (response.ok) {
+      // 不读取正文，仅取消响应体释放连接
+      try { await (response.body as { cancel?: () => Promise<void> } | null)?.cancel?.(); } catch { /* ignore */ }
+      return { ok: true, reachable: true, blocked: false, status, level: 'ok', message: `代理出口 IP 可达目标（HTTP ${status}），爬取应正常` };
+    }
+    // 非 2xx：读少量响应体判断是否为 WAF/黑名单拦截页
+    let bodyText = '';
+    try { const raw = await response.text(); bodyText = raw.slice(0, 2000).replace(/<[^>]+>/g, ' '); } catch { /* ignore */ }
+    const isWaf = /黑名单|访问受限|禁止访问|拒绝访问|forbidden|security|防火墙|拦截|非法请求|access denied|bot detection/i.test(bodyText);
+    if (status === 420 || status === 403 || isWaf) {
+      return { ok: false, reachable: true, blocked: true, status, level: 'warn', message: `代理出口 IP 仍被目标拦截（HTTP ${status}${isWaf ? '，疑似防火墙/黑名单页' : ''}）。建议换一个未被拉黑的代理，或用「网页捕获」书签直接投递` };
+    }
+    return { ok: false, reachable: true, blocked: false, status, level: 'warn', message: `代理可达目标但返回 HTTP ${status}，爬取可能被拦截或需登录` };
+  } catch (err) {
+    clearTimeout(timer);
+    const msg = err instanceof Error ? err.message : String(err);
+    const name = err instanceof Error ? err.name : '';
+    if (name === 'AbortError' || /abort|timeout/i.test(msg)) {
+      return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理探测超时（>${Math.round(timeoutMs / 1000)}s 无响应），代理可能不可用或出口不通` };
+    }
+    if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|getaddrinfo|TLS|certificate|UND_ERR|socket/i.test(msg)) {
+      return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理不可达或代理出口无法连接目标（${msg}）` };
+    }
+    return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理探测失败：${msg}` };
+  } finally {
+    try { dispatcher.close(); } catch { /* ignore */ }
+  }
 }
 
 function stripTags(html: string) {
@@ -398,6 +552,19 @@ export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): Asyn
     if (logEnabled && config.logging.logFilePath) appendLog(config.logging.logFilePath, '[' + new Date().toISOString() + '] ' + line);
   };
 
+  // B 方案：自定义 egress 代理。仅当显式配置 egressProxyUrl 时接管 fetch 的 dispatcher，
+  // 覆盖全局 setGlobalDispatcher；未配置则 proxyDispatcher 为 undefined，fetch 仍走全局 dispatcher（原行为不变）。
+  let proxyDispatcher: Dispatcher | undefined;
+  if (config.egressProxyUrl) {
+    const pv = validateProxyUrl(config.egressProxyUrl);
+    if (!pv) {
+      yield { type: 'error', step: 'init', message: 'egressProxyUrl 无效（仅支持 http:// 或 https:// 代理地址）：' + config.egressProxyUrl };
+      return;
+    }
+    proxyDispatcher = new ProxyAgent(pv);
+  }
+
+  try {
   const normalizedEntry = normalizeUrl(entryUrl, entryUrl);
   if (!normalizedEntry) {
     yield { type: 'error', step: 'init', message: 'Invalid entry URL' };
@@ -410,6 +577,8 @@ export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): Asyn
   const allPages: UrlCrawlPage[] = [];
   const allAttachments: UrlCrawlAttachment[] = [];
   let pagesSkipped = 0;
+  // 错误汇总：0 页面时用于 done 事件给出明确诊断（避免静默 0 页无法定位）
+  const crawlErrors: Array<{ url: string; errorType: string; message: string }> = [];
 
   yield { type: 'progress', step: 'init', message: 'Starting crawl from: ' + normalizedEntry };
   // 为什么不在此处把入口 URL 加入 visited：循环体会统一执行 visited 检查与 add，
@@ -465,13 +634,45 @@ export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): Asyn
 
       try {
         await checkSSRF(url);
-        const response = await fetch(url, {
-          headers: { 'User-Agent': config.userAgent },
+        const requestHeaders: Record<string, string> = {
+          'User-Agent': config.userAgent,
+          ...config.requestHeaders,
+        };
+        const response = await undiciFetch(url, {
+          headers: requestHeaders,
           signal: controller.signal,
+          // B 方案：配置 egress 代理时经该代理 egress，绕开服务器出口 IP 黑名单。
+          // 必须用 undici 包导出的 fetch（与 ProxyAgent 同实例）；若用全局 fetch（Node 内置 undici），
+          // 会因 dispatcher 实例类型不匹配抛出 UND_ERR_INVALID_ARG，导致代理完全不生效。
+          dispatcher: proxyDispatcher,
         });
         clearTimeout(timeoutId);
 
-        if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+        if (!response.ok) {
+          // 读取少量响应体用于判断是否为 WAF/黑名单拦截页（如 shcpe 返回 420 + 「黑名单页面」）。
+          // 仅看状态码会把"站点防火墙拦截"误判为"需登录/不存在"，读 body 文本能给出更准确的诊断。
+          let bodyText = '';
+          try {
+            const raw = await response.text();
+            bodyText = raw.slice(0, 4000).replace(/<[^>]+>/g, ' ');
+          } catch { /* ignore body read failure */ }
+          const status = response.status;
+          const isWafBlock = /黑名单|访问受限|禁止访问|拒绝访问|forbidden|security|防火墙|拦截|非法请求|access denied|bot detection/i.test(bodyText);
+          let errorType = 'http';
+          let userMessage = 'HTTP ' + status + ' ' + response.statusText;
+          if (status === 401) {
+            errorType = 'auth';
+            userMessage = '站点要求登录鉴权（HTTP 401）：该 URL 需登录后才能访问，URL 爬取暂不支持自动登录';
+          } else if (status === 403 || status === 420 || status === 406 || status === 407 || status === 423 || status === 451 || isWafBlock) {
+            errorType = 'blocked';
+            userMessage = '站点返回 HTTP ' + status + (isWafBlock ? '（防火墙/黑名单拦截页）' : '') +
+              '：运行后端的服务器出口 IP 可能被站点 WAF 拉黑（你本机浏览器可访问，但后端所在网络被拦截）';
+          }
+          const httpErr = new Error(userMessage);
+          httpErr.name = 'HttpError';
+          (httpErr as Error & { errorType?: string }).errorType = errorType;
+          throw httpErr;
+        }
 
         html = await response.text();
         const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
@@ -518,9 +719,32 @@ export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): Asyn
       } catch (err) {
         clearTimeout(timeoutId);
         pageError = err instanceof Error ? err : new Error(String(err));
-        yield { type: 'page_error', step: 'fetch', message: 'Failed: ' + url + ' -- ' + pageError.message,
-          data: { url, depth, error: pageError.message } };
-        log('Error fetching ' + url + ': ' + pageError.message);
+
+        // 错误分类：让前端显示明确原因，避免"静默 0 页"无法定位
+        // 优先级：① 已在 try 中附加的精确 errorType（auth/blocked/http，含 WAF/黑名单判定）；
+        //          ② 超时（AbortController 信号中断）；③ 网络底层错误；④ SSRF 拦截。
+        // - timeout: AbortController 在 timeoutMs 后 abort（信号中断）
+        // - http: 响应状态码非 2xx（已在 try 中抛出 HttpError，未细分时回退为 http）
+        // - network: fetch 失败（DNS/连接拒绝/TLS 等底层错误）
+        // - ssrf: checkSSRF 拦截内网地址
+        let errorType = (pageError as Error & { errorType?: string }).errorType || 'unknown';
+        let userMessage = pageError.message;
+        if (pageError.name === 'AbortError' || (controller.signal as { aborted?: boolean }).aborted) {
+          errorType = 'timeout';
+          userMessage = `请求超时（>${Math.round(timeoutMs / 1000)}s 无响应），站点可能响应缓慢或网络不通`;
+        } else if (pageError.name === 'HttpError' && !errorType) {
+          errorType = 'http';
+        } else if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|getaddrinfo|TLS|certificate/i.test(pageError.message)) {
+          errorType = 'network';
+          userMessage = '网络连接失败：' + pageError.message;
+        } else if (/SSRF blocked/i.test(pageError.message)) {
+          errorType = 'ssrf';
+        }
+
+        yield { type: 'page_error', step: 'fetch', message: 'Failed: ' + url + ' -- ' + userMessage,
+          data: { url, depth, error: userMessage, errorType } };
+        crawlErrors.push({ url, errorType, message: pageError.message });
+        log('Error fetching ' + url + ' [' + errorType + ']: ' + pageError.message);
       }
     }
   }
@@ -529,14 +753,42 @@ export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): Asyn
   try {
     const elapsed = Date.now() - startTime;
     const combinedMarkdown = combinePagesToMarkdown(allPages, config.copyrightNotice);
+
+    // 0 页面诊断：聚合错误类型，给出最可能是根因的提示（静默 0 页 → 明确原因）
+    let diagnosis: string | undefined;
+    if (allPages.length === 0 && crawlErrors.length > 0) {
+      const typeCounts: Record<string, number> = {};
+      for (const e of crawlErrors) typeCounts[e.errorType] = (typeCounts[e.errorType] || 0) + 1;
+      const topType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0];
+      const diagMap: Record<string, string> = {
+        timeout: '所有页面请求超时，站点响应过慢或网络不通，建议提高 timeoutMs 或稍后重试',
+        http: '所有页面返回非 2xx 状态码（可能被拦截或需登录），请检查站点可访问性',
+        blocked: '所有页面被站点防火墙/WAF 拦截（返回 403/420 或黑名单页面）：运行后端的服务器出口 IP 可能被拉黑。你本机浏览器可访问，但后端所在网络被拦截 —— 建议改用「文本/文件」方式直接投递页面内容',
+        auth: '所有页面要求登录鉴权（HTTP 401）：该站点需登录后才能访问，URL 爬取暂不支持自动登录，请改用「文本/文件」方式投递已登录后保存的页面',
+        network: '所有页面网络连接失败（DNS/TLS/拒绝连接），请检查网络或站点是否下线',
+        ssrf: '入口 URL 被 SSRF 防护拦截（解析到内网地址），请确认使用公网可访问 URL',
+        unknown: '所有页面抓取失败，原因未知，请查看后端日志',
+      };
+      diagnosis = diagMap[topType] || diagMap.unknown;
+    }
+
     yield { type: 'done', step: 'done', message: 'Crawl complete: ' + allPages.length + ' pages',
       data: {
         pagesCrawled: allPages.length, totalAttachmentCount: allAttachments.length,
         pages: allPages.map((p) => ({ url: p.url, title: p.title, depth: p.depth, contentLength: p.content.length, attachmentCount: p.attachments.length })),
         attachments: allAttachments, combinedMarkdown, elapsedMs: elapsed, pagesSkipped,
+        errorCount: crawlErrors.length,
+        errors: crawlErrors.slice(0, 20),
+        diagnosis,
       }};
   } catch (err) {
     yield { type: 'error', step: 'done', message: err instanceof Error ? err.message : String(err) };
+  }
+  } finally {
+    // B 方案：爬取结束（无论成功/异常/提前 return）均关闭代理连接池，避免长连接泄漏
+    if (proxyDispatcher) {
+      try { proxyDispatcher.close(); } catch { /* ignore */ }
+    }
   }
 }
 

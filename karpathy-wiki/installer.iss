@@ -10,7 +10,7 @@ AppPublisher=Karpathy-Wiki
 DefaultDirName={autopf}\KarpathyWiki
 DefaultGroupName=KarpathyWiki
 UninstallDisplayIcon={app}\app.ico
-OutputDir=dist
+OutputDir=..\release\installer
 OutputBaseFilename=KarpathyWiki-Setup-v{#MyAppVersion}
 SetupIconFile=assets\app.ico
 Compression=lzma2
@@ -25,13 +25,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"
 [Files]
 ; ---- 程序文件 / 资源：每次安装都覆盖（只读应用代码与资源，随版本更新）----
-; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "dist\karpathy-wiki\*" 通配。
-Source: "dist\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "dist\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "dist\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "dist\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
+; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "..\release\app\karpathy-wiki\*" 通配。
+Source: "..\release\app\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release\app\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release\app\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 ; 品牌图标：安装到 {app} 供快捷方式 / 卸载项引用（exe 图标另由 build-exe.ps1 用 rcedit 注入）
 Source: "assets\app.ico"; DestDir: "{app}"; Flags: ignoreversion
 

@@ -6,11 +6,11 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "dist",
+    "outDir": "../../release/api-dist",
     "declaration": true,
     "sourceMap": true,
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["dist"]
+  "exclude": ["../../release/api-dist"]
 }

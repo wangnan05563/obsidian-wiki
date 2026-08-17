@@ -416,14 +416,14 @@ function Action-Rebuild {
     }
 
     # 验证构建产物
-    if (-not (Test-Path -LiteralPath "api\public\index.html")) {
+    if (-not (Test-Path -LiteralPath "..\release\spa\public\index.html")) {
         Write-Host ""
-        Write-Host "[ERROR] 构建完成但未找到 api\public\index.html" -ForegroundColor Red
+        Write-Host "[ERROR] 构建完成但未找到 ..\release\spa\public\index.html" -ForegroundColor Red
         Write-Host "        请检查 vite.config.ts 的 outDir 配置" -ForegroundColor Yellow
         Write-Log -LogAction "rebuild" -Step "build" -Result "fail" -Msg "index.html not found after build"
         return 1
     }
-    Write-Host "  [OK] 构建产物验证通过：api\public\index.html" -ForegroundColor Green
+    Write-Host "  [OK] 构建产物验证通过：..\release\spa\public\index.html" -ForegroundColor Green
     Write-Log -LogAction "rebuild" -Step "build" -Result "pass"
 
     # Step 3/3：重新启动
@@ -545,8 +545,8 @@ function Action-Check {
 
     # 8. 构建产物（开发模式可选，生产模式必需）
     Write-Host ""
-    Write-Host "[8/11] 构建产物 api\public\index.html..." -ForegroundColor Cyan
-    if (Test-Path -LiteralPath "api\public\index.html") {
+    Write-Host "[8/11] 构建产物 ..\release\spa\public\index.html..." -ForegroundColor Cyan
+    if (Test-Path -LiteralPath "..\release\spa\public\index.html") {
         Write-Host "  [OK] 存在（生产模式可启动）" -ForegroundColor Green
     }
     else {

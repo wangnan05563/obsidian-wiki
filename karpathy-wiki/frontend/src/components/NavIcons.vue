@@ -1,8 +1,7 @@
 <script setup lang="ts">
 // 菜单图标组件：12 个手绘 SVG 矢量图标，stroke 线条风格
-// 设计语言：复用 RobotAvatar 的霓虹赛博风（线条 + 节点强调 + 几何感）
 // 颜色策略：使用 currentColor，父级通过 CSS color 控制实际颜色，
-// 从而自动跟随主题 CSS 变量（var(--neon-cyan) 等）变色，无需为每个主题单独配色
+// 从而自动跟随主题 CSS 变量变色，无需为每个主题单独配色
 // 不使用任何第三方图标库（@element-plus/icons 等），全部原创绘制
 
 defineProps<{

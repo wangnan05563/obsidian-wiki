@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').cpSync('../release/harness','dist',{recursive:true})\"",
     "test": "node --import tsx --test"
   },
   "devDependencies": {

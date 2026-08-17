@@ -216,10 +216,12 @@ export function registerCompileRoute(
     } catch (err: unknown) {
       request.log.error({ err }, 'batch compile multipart parse error');
       reply.code(400).send({ error: '文件解析失败' });
+      return;
     }
 
     if (uploaded.length === 0) {
       reply.code(400).send({ error: '缺少 files 字段或文件为空' });
+      return;
     }
 
     // 扩展名白名单校验：为什么用白名单而非黑名单：黑名单无法覆盖所有危险类型（如 .exe/.js），白名单更安全
@@ -230,6 +232,7 @@ export function registerCompileRoute(
         error: '没有符合白名单的文件',
         rejected,
       });
+      return;
     }
 
     // 批量大小上限校验：防止单请求触发过多 LLM 调用导致 token 耗尽
@@ -237,6 +240,7 @@ export function registerCompileRoute(
       reply.code(400).send({
         error: `批量编译文件数 ${validFiles.length} 超过上限 ${batch.maxBatchSize}`,
       });
+      return;
     }
 
     // SSE headers
@@ -288,7 +292,19 @@ export function registerCompileRoute(
             },
           };
           if (ev.step === 'done') {
-            send('file_done', evWithData);
+            // 单文件编译失败时，done 事件的 status 为 error，必须转发为 file_error，
+            // 避免前端把失败误标为 DONE（之前 0 页面且显示成功即因此）。
+            if (ev.status === 'error') {
+              fileFailed = true;
+              send('file_error', {
+                step: 'finalize',
+                status: 'error',
+                message: ev.message || '编译失败',
+                data: { fileIndex, fileCount, fileName },
+              });
+            } else {
+              send('file_done', evWithData);
+            }
           } else if (ev.data?.path && ev.data?.title) {
             send('page', evWithData);
           } else {
@@ -312,6 +328,7 @@ export function registerCompileRoute(
       return !fileFailed;
     };
 
+    let batchHasError = false;
     try {
       // batch 整体作为 withCompileLock 的一个任务，保证与其他 compile/resume 请求串行
       await withCompileLock(async () => {
@@ -335,6 +352,9 @@ export function registerCompileRoute(
           });
 
           const success = await streamFileCompile(input, i, f.name);
+          if (!success) {
+            batchHasError = true;
+          }
           // 文件结束事件：标记该分组完成（仅成功时），前端据此切换 UI 状态
           if (success) {
             send('file_complete', {
@@ -347,13 +367,14 @@ export function registerCompileRoute(
         }
       });
 
-      // 整体完成事件：包含总文件数与失败计数（前端需统计 file_error 事件）
-      // 客户端可能已断开，send 内部会自动短路
+      // 整体完成事件：任一文件失败即标记为 error，让批量结果页正确显示"出错了"
       send('batch_done', {
         step: 'done',
-        status: 'done',
-        message: `批量编译完成，共处理 ${fileCount} 个文件`,
-        data: { fileCount },
+        status: batchHasError ? 'error' : 'done',
+        message: batchHasError
+          ? `批量编译完成，但部分文件失败，请查看下方文件详情`
+          : `批量编译完成，共处理 ${fileCount} 个文件`,
+        data: { fileCount, hasError: batchHasError },
       });
     } catch (err: unknown) {
       request.log.error({ err }, 'batch compile SSE stream error');

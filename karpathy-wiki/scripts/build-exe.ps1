@@ -7,12 +7,12 @@
 #   powershell -File scripts/build-exe.ps1 -SkipDeps  # 跳过依赖安装（依赖无变更时用）
 #   powershell -File scripts/build-exe.ps1 -Clean     # 清理所有缓存重新构建
 #
-# 产物：dist/karpathy-wiki/ 目录 + dist/KarpathyWiki-Setup-v*.exe
+# 产物：release/app/karpathy-wiki/ 目录 + release/installer/KarpathyWiki-Setup-v*.exe
 #
 # 构建步骤：
 # 1. 检查依赖（Node.js / pnpm / @yao-pkg/pkg / esbuild）
 # 2. 构建 @wiki/harness（如存在本地包）
-# 3. 构建 SPA（vite build → api/public）
+# 3. 构建 SPA（vite build → release/spa/public）
 # 4. esbuild 打包后端 TS → CJS 单文件 bundle
 # 5. @yao-pkg/pkg 打包 → exe
 # 6. 复制外置资源（SPA + vault 默认结构）
@@ -26,6 +26,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
+$wsRoot = Split-Path $repoRoot   # 项目（git 仓库）根目录：karpathy-wiki 的上级，统一发布目录 release/ 位于此
 Set-Location $repoRoot
 
 # 加载 node 路径解析模块（配置驱动，避免 PATH 旧版 node 优先）
@@ -41,7 +42,7 @@ Invoke-WithNodePath -NodeExePath $NodeExe
 # 缓存与产物目录（必须在引用 $cacheDir 前定义）
 $cacheDir = "$repoRoot\.cache"
 $buildDir = "$repoRoot\.build"
-$distDir = "$repoRoot\dist"
+$releaseDir = Join-Path $wsRoot "release"
 $buildReadyMarker = "$buildDir\.kw-build-ready"
 
 # 自动检测 Git 的 patch.exe 并添加到 PATH（pkg-fetch 从源码构建 Node 二进制时需要）
@@ -79,7 +80,7 @@ function Write-Err { param($msg) Write-Host "[Build]   [FAIL] $msg" -ForegroundC
 # -Clean：清理所有缓存
 if ($Clean) {
     Write-Host "[Clean] 清理所有缓存..." -ForegroundColor Yellow
-    foreach ($p in @(".build", $cacheDir, $distDir)) {
+    foreach ($p in @(".build", $cacheDir, $releaseDir)) {
         if (Test-Path $p) {
             Write-Host "  删除 $p"
             Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue
@@ -95,7 +96,7 @@ Write-Host "  Karpathy-Wiki EXE Build" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Repo: $repoRoot"
 Write-Host "Build: $buildDir"
-Write-Host "Dist: $distDir"
+Write-Host "Dist: $releaseDir"
 if ($SkipDeps) { Write-Host "Mode: SkipDeps（跳过依赖安装）" }
 if ($SkipSPA)  { Write-Host "Mode: SkipSPA（跳过 SPA 构建）" }
 
@@ -176,11 +177,11 @@ if (Test-Path (Join-Path $harnessPath "package.json")) {
 # ============== 3. 构建 SPA ==============
 Write-Host "`n[3/8] 构建 SPA..." -ForegroundColor Yellow
 
-$spaIndex = Join-Path $repoRoot "api\public\index.html"
+$spaIndex = Join-Path $wsRoot "release\spa\public\index.html"
 if ($SkipSPA -and (Test-Path $spaIndex)) {
     Write-Ok "SPA 已存在且 -SkipSPA 已指定，跳过构建"
 } else {
-    # 构建前端：vite.config.ts 中 outDir 指向 api/public
+    # 构建前端：vite.config.ts 中 outDir 指向 release/spa/public（项目根/release/spa/public）
     # 为什么加 ：vite 默认 base='/wiki/'（Tailscale Funnel 模式），
     #   exe 本地运行时不经过 Funnel 剥离前缀，前端 API 请求若带 /wiki/ 前缀会 404。
     #    覆盖默认值，让 fetch 路径为 /api/xxx 直接命中后端路由。
@@ -262,7 +263,7 @@ Write-Ok "esbuild 打包完成：$bundleFile"
 Write-Host "`n[5/8] pkg 打包 exe..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-3 分钟（首次需下载 Node.js 二进制）" -ForegroundColor DarkGray
 
-$pkgOutputDir = Join-Path $distDir "karpathy-wiki"
+$pkgOutputDir = Join-Path $releaseDir "app\karpathy-wiki"
 # 清理旧产物
 if (Test-Path $pkgOutputDir) {
     Remove-Item -Recurse -Force $pkgOutputDir
@@ -378,7 +379,7 @@ Write-Host "`n[7/8] 复制外置资源..." -ForegroundColor Yellow
 
 # 6.1 SPA 静态资源（前端构建产物）
 Write-Host "  [6.1] 复制 SPA 静态资源..."
-$spaSource = Join-Path $repoRoot "api\public"
+$spaSource = Join-Path $wsRoot "release\spa\public"
 $spaTarget = Join-Path $pkgOutputDir "public"
 if (Test-Path $spaSource) {
     Copy-Item -Recurse -Force $spaSource $spaTarget
@@ -577,7 +578,7 @@ AppPublisher=Karpathy-Wiki
 DefaultDirName={autopf}\KarpathyWiki
 DefaultGroupName=KarpathyWiki
 UninstallDisplayIcon={app}\app.ico
-OutputDir=dist
+OutputDir=..\release\installer
 OutputBaseFilename=KarpathyWiki-Setup-v{#MyAppVersion}
 SetupIconFile=assets\app.ico
 Compression=lzma2
@@ -592,13 +593,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"
 [Files]
 ; ---- 程序文件 / 资源：每次安装都覆盖（只读应用代码与资源，随版本更新）----
-; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "dist\karpathy-wiki\*" 通配。
-Source: "dist\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "dist\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "dist\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "dist\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
+; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "..\release\app\karpathy-wiki\*" 通配。
+Source: "..\release\app\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release\app\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release\app\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 ; 品牌图标：安装到 {app} 供快捷方式 / 卸载项引用（exe 图标另由 build-exe.ps1 用 Windows API 注入，不依赖 rcedit）
 Source: "assets\app.ico"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -634,7 +635,7 @@ if (-not $iscc) {
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "安装包编译失败"
     } else {
-        $setupExe = "dist\KarpathyWiki-Setup-v$version.exe"
+        $setupExe = Join-Path $releaseDir "installer\KarpathyWiki-Setup-v$version.exe"
         Write-Ok "安装包已生成：$setupExe"
     }
 }
@@ -650,8 +651,8 @@ Write-Host "  EXE:   $pkgOutputDir\karpathy-wiki.exe"
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  使用方式："
-Write-Host "  - 直接运行：dist\karpathy-wiki\karpathy-wiki.exe"
-Write-Host "  - 安装包：dist\KarpathyWiki-Setup-v*.exe（如 Inno Setup 可用）"
+Write-Host "  - 直接运行：..\release\app\karpathy-wiki\karpathy-wiki.exe"
+Write-Host "  - 安装包：$releaseDir\installer\KarpathyWiki-Setup-v*.exe（如 Inno Setup 可用）"
 Write-Host ""
 Write-Host "  首次运行前（配置位于 %LOCALAPPDATA%\KarpathyWiki）："
 Write-Host "  1. config.json 首次启动自动生成，可直接编辑该文件调整模型/provider"

@@ -1,4 +1,5 @@
-import type { StateStore, RunState } from '../types.js';
+import type { StateStore, RunState, Message } from '../types.js';
+import { messagesToEvents } from '../session/session-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -30,7 +31,13 @@ export class FileStateStore implements StateStore {
     const filePath = path.join(this.dir, `${runId}.json`);
     try {
       const content = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(content) as RunState;
+      const parsed = JSON.parse(content) as RunState & { messages?: Message[] };
+      // §兼容性迁移：旧版图腾仅含 messages 无 events 时，按事件溯源重建事件序列，
+      // 保证历史持久化状态在升级后仍可被 resume / 重放。
+      if (!parsed.events && parsed.messages) {
+        parsed.events = messagesToEvents(parsed.messages);
+      }
+      return parsed as RunState;
     } catch {
       // 文件不存在或解析失败均返回 null，调用方按无状态处理
       return null;

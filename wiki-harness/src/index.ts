@@ -14,13 +14,30 @@ export type {
   RetryConfig,
   StateStore,
   StepResult,
+  StepTiming,
   StepEvent,
   LLMResponse,
   LLMChunk,
+  SessionEvent,
+  SessionLog,
+  Compactor,
+  Planner,
+  SubAgentConfig,
+  Interceptors,
+  LlmRequestPayload,
+  LlmRequestInterceptor,
+  ToolCallPayload,
+  ToolCallInterceptor,
+  ToolResultPayload,
+  ToolResultInterceptor,
 } from './types.js';
 export type { LLMAdapter } from './llm/llm-adapter.js';
 export { OpenAICompatibleAdapter } from './llm/openai-compatible.js';
 export { FileStateStore } from './state/file-state-store.js';
+export { InMemorySessionLog, messagesToEvents, sessionLogFromMessages } from './session/session-log.js';
+export { SimpleConcatCompactor, compactLog, findSafeBoundary, DEFAULT_COMPACT_THRESHOLD } from './session/compaction.js';
+export { LlmPlanner, StaticPlanner } from './session/planning.js';
+export { createSubAgentTool } from './subagent.js';
 export { runLoop, runLoopStream } from './loop/tool-loop.js';
 export { checkBudget } from './budget/budget-guard.js';
 export { withRetry } from './retry/retry-policy.js';

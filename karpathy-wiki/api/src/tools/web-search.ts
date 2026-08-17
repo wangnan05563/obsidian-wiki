@@ -104,3 +104,50 @@ async function bingSearch(apiKey: string, query: string, count: number): Promise
     snippet: r.snippet,
   }));
 }
+
+// 联网搜索连接测试结果。
+export interface WebSearchTestResult {
+  ok: boolean;
+  detail: string;
+  count?: number;
+  provider?: string;
+}
+
+// 测试联网搜索连接是否可用：用真实 query 打一次对应 provider，验证 API Key + 网络连通性。
+// 复用 tavilySearch/bingSearch（已含 5s 超时降级），避免重复维护 provider 分支。
+// 为什么单独导出而非直接复用 createWebSearchTool：测试不需要注册进 workflow，且要区分「缺 key」
+//   与「鉴权/网络失败」两类错误，直接调用底层 provider 函数更可控。
+export async function testWebSearchConnection(config: {
+  provider: 'tavily' | 'bing';
+  apiKey: string;
+  maxResults?: number;
+}): Promise<WebSearchTestResult> {
+  const provider = config.provider;
+  const apiKey = config.apiKey;
+  if (!apiKey) {
+    return { ok: false, detail: 'API Key 未设置，请先填写 API Key', provider };
+  }
+  try {
+    const query = 'test connectivity';
+    const results = provider === 'tavily'
+      ? await tavilySearch(apiKey, query, config.maxResults || 5)
+      : await bingSearch(apiKey, query, config.maxResults || 5);
+    return {
+      ok: true,
+      detail: `连接成功，返回 ${results.length} 条结果`,
+      count: results.length,
+      provider,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // 超时（AbortError / TimeoutError）通常源于网络不通或 Key 无效导致握手挂起，给出友好提示
+    const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+    return {
+      ok: false,
+      detail: isTimeout
+        ? '连接超时（>5s），请检查网络或 API Key 是否有效'
+        : `连接失败：${msg}`,
+      provider,
+    };
+  }
+}

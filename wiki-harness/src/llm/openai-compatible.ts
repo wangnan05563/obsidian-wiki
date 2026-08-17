@@ -38,6 +38,50 @@ function toOpenAITools(tools: ToolDefinition[]) {
 export class OpenAICompatibleAdapter implements LLMAdapter {
   constructor(private config: LLMConfig) {}
 
+  // 网络层错误判定：仅这些错误值得重试（代理抖动/连接重置/DNS 失败/超时）。
+  // 与 HTTP 4xx/5xx 区分：后者是确定性错误，重试无意义。
+  private isRetryableNetworkError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: string } | null)?.code ?? '';
+    return (
+      /fetch failed|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNABORTED|timeout|abort/i.test(msg) ||
+      /^(ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNABORTED)$/.test(code)
+    );
+  }
+
+  // 带指数退避重试的 fetch 封装。
+  // 为什么集中于此：本适配器是全部 LLM 请求的出口，HTTP(S) 代理（如 Clash 127.0.0.1:10808）
+  // 偶发抖动会触发原生 "fetch failed"，直接抛错会让编译/问答整轮失败；加重试可自愈多数瞬时故障。
+  // 每次重试重建 AbortController：复用已 abort 的 signal 会使后续请求立即失败。
+  private async fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    retries = 3,
+    baseDelayMs = 2000,
+  ): Promise<Response> {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60000); // 单次 60s 超时
+      try {
+        const response = await fetch(url, { ...init, signal: controller.signal });
+        clearTimeout(timer);
+        return response;
+      } catch (err) {
+        clearTimeout(timer);
+        lastErr = err;
+        const retryable = this.isRetryableNetworkError(err);
+        if (retryable && attempt < retries) {
+          const delay = baseDelayMs * attempt; // 2s, 4s 指数退避
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr;
+  }
+
   async chat(messages: Message[], tools?: ToolDefinition[]): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: this.config.model,
@@ -47,15 +91,14 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
       body.tools = toOpenAITools(tools);
     }
 
-    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+    // 带重试的网络请求：代理抖动自愈，避免整轮编译/问答因单次网络抖动失败
+    const response = await this.fetchWithRetry(`${this.config.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
-      // 60s 超时：防止网络挂起导致整个 agent loop 卡死无响应
-      signal: AbortSignal.timeout(60000),
     });
 
     if (!response.ok) {
@@ -86,15 +129,14 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
       body.tools = toOpenAITools(tools);
     }
 
-    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+    // 带重试的网络请求：代理抖动自愈，避免流式问答因单次网络抖动失败
+    const response = await this.fetchWithRetry(`${this.config.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
-      // 60s 超时：防止网络挂起导致整个 agent loop 卡死无响应
-      signal: AbortSignal.timeout(60000),
     });
 
     if (!response.ok) {
