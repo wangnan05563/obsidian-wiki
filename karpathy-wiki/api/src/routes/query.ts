@@ -117,15 +117,22 @@ export function registerQueryRoute(
       llmConfig?: { provider: string; baseUrl: string; model: string; apiKey: string };
       searchConfig?: { provider: 'tavily' | 'bing'; apiKey: string; maxResults?: number };
       toolsConfig?: import('../types.js').ToolsConfig;
+      // 生图 BYOK：outputMode='image' 时透传的用户生图配置（baseUrl/key/model/size 等），
+      // 优先生效于服务端 media.agnes，并支撑前端"用户独立额度"。
+      imageConfig?: import('../types.js').MediaImageUserConfig;
       // X-2 可恢复流式：断线重连时携带首连拿到的 runId，后端据此订阅进行中的 run（不触发新问答）
       resume?: string;
+      // ── 意图澄清续答字段 ──
+      // 首轮不携带；收到 clarify 中断事件后，前端带同一 clarifyId + choiceIndex 重发本问题。
+      clarifyId?: string;
+      choiceIndex?: number;
     };
     // ── X-2 可恢复流式：断线重连分支 ──
     // 客户端刷新/断网后，凭首连拿到的 runId 重新订阅进行中的 run，先回放已缓冲块再继续直播。
     // 必须在 BYOK 校验之前短路：重连请求不携带 llmConfig，且 question 可能缺失（run 已存在）。
     const resumeRunId = typeof body.resume === 'string' ? body.resume : undefined;
     if (enableResumableStream && resumeRunId && UUID_RE.test(resumeRunId)) {
-      return void (await handleResumeRun(resumeRunId, reply, request));
+      return await handleResumeRun(resumeRunId, reply, request);
     }
 
     // 可选链合并 body nullish 守卫与字段访问（S6582）
@@ -177,6 +184,12 @@ export function registerQueryRoute(
       searchConfig: body.searchConfig,
       // toolsConfig：始终下发（即便空），整体替换服务端共享 MCP/CLI，落实用户维度工具隔离。
       toolsConfig: body.toolsConfig,
+      // 生图 BYOK：outputMode='image' 时透传用户生图配置（adapter→queryWorkflow→generateImage 优先生效）
+      mediaImageConfig: body.imageConfig,
+      // 意图澄清续答字段透传：首轮无；用户选择后携带 clarifyId + choiceIndex 重发。
+      // 合法性（会话存在/问题一致/选项越界）由澄清门禁校验，非法时按新提问处理。
+      clarifyId: typeof body.clarifyId === 'string' && body.clarifyId.trim() ? body.clarifyId.trim() : undefined,
+      choiceIndex: typeof body.choiceIndex === 'number' ? body.choiceIndex : undefined,
     };
 
     // ── 线程隔离 + 本地记忆解析 ──────────────────────────────────────────
@@ -191,6 +204,9 @@ export function registerQueryRoute(
       const errAny = err as { statusCode?: number; message?: string };
       return void reply.code(errAny.statusCode ?? 500).send({ error: errAny.message ?? String(err) });
     }
+    // 回填线程 id 到 input：澄清会话归属校验依赖它（携带 clarifyId 时须与创建时线程一致，
+    // 防跨线程复用澄清上下文）；对 harness 其他路径无副作用。
+    input.threadId = threadId;
 
     // ── Q&A 管线 stage 日志（logs-review 诊断项）──
     // 纯增量：不改变任何业务行为，仅用于定位长耗时（历史出现 143s/282s）卡在哪一环。
@@ -214,7 +230,7 @@ export function registerQueryRoute(
     // 把 harness 运行交给 StreamRunManager 解耦管理：首帧发 open 事件携带 runId（供前端断线重连），
     // 后续块由管理器缓冲并扇出给订阅者。关闭时（enableResumableStream=false）完全不走此分支。
     if (enableResumableStream) {
-      return void (await handleResumableStart({
+      await handleResumableStart({
         input,
         threadId,
         governorStats,
@@ -222,7 +238,8 @@ export function registerQueryRoute(
         store,
         request,
         reply,
-      }));
+      });
+      return;
     }
 
     reply.raw.writeHead(200, {
@@ -244,6 +261,10 @@ export function registerQueryRoute(
       // 代价：用户同问题重复点击会卡住等前一次完成，这是 SRS 设计意图
       // 进度类事件分发：提取为函数降低主循环认知复杂度
       const dispatchProgressEvents = (chunk: AnswerChunk): void => {
+        // 意图澄清中断事件：携带后即本轮终点（工作流已 return，不再有 done 事件）
+        if (chunk.clarify) {
+          send('clarify', chunk.clarify);
+        }
         // §5.2 thinking 事件：前端 ThinkingBlock 渲染
         if (chunk.thinking) {
           send('thinking', chunk.thinking);
@@ -279,7 +300,7 @@ export function registerQueryRoute(
       // 注意：改为 async，因为持久化走 ThreadMemoryStore（文件 IO）。
       const handleDoneChunk = async (chunk: AnswerChunk): Promise<void> => {
         if ((chunk.refs?.length ?? 0) > 0) {
-          refs = chunk.refs ?? [];
+          refs = (chunk.refs ?? []).map((r) => (typeof r === "string" ? r : r.path));
         }
         // refs 与 webRefs 一起发送：前端 RefsList 合并渲染"参考来源"
         send('refs', { refs, webRefs });
@@ -302,7 +323,8 @@ export function registerQueryRoute(
         // done 事件附带 threadId + sessionId + messageIndex，客户端保存供归档与记忆续接；
         // 同时回传上下文治理统计（压缩/清理/淘汰效果），便于观测
         // §X-1 步骤级追踪：附上 harness runId，前端凭此调 /api/query/runs/:runId 拉取每步耗时分解
-        send('done', { threadId, sessionId, messageIndex, governor: governorStats, runId: chunk.runId });
+        // T00265：附上 maxTokens（上下文预算上限），前端据此计算上下文占用百分比
+        send('done', { threadId, sessionId, messageIndex, governor: governorStats, runId: chunk.runId, maxTokens: governorConfig.maxTokens });
       };
 
       await withSessionLock(input.question, async () => {
@@ -349,6 +371,8 @@ export function registerQueryRoute(
 // 把单个 AnswerChunk 翻译为 SSE 事件（thinking/progress/image/ppt/followups/multimodal/
 // answer/refs）。被可恢复首连与重连订阅者共用；不含首连专属的 governor 逻辑。
 function dispatchStreamChunk(chunk: AnswerChunk, send: (event: string, data: unknown) => boolean): void {
+  // 意图澄清中断事件：携带后即本轮终点（可恢复流式下 run 随之结束）
+  if (chunk.clarify) send('clarify', chunk.clarify);
   if (chunk.thinking) send('thinking', chunk.thinking);
   if (chunk.progress) send('progress', chunk.progress);
   if (chunk.image) send('image', chunk.image);
@@ -405,7 +429,7 @@ async function handleResumableStart(ctx: {
     lockKey: input.question,
     governor: governorStats,
     onDone: async ({ chunk, answer }) => {
-      const refs = chunk.refs ?? [];
+      const refs = (chunk.refs ?? []).map((r) => (typeof r === "string" ? r : r.path));
       const now = new Date().toISOString();
       const { messageIndex } = await store.appendSessionMessage(threadId, {
         question: input.question,

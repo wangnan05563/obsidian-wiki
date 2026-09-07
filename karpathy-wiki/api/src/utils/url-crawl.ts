@@ -1,4 +1,4 @@
-﻿// ==========================================================================
+// ==========================================================================
 
 // URL Crawling Subsystem
 
@@ -172,6 +172,35 @@ export const DEFAULT_CRAWL_CONFIG: RequiredUrlCrawlConfig = {
 
 
 
+// 判断 IPv4 地址是否属于应被拦截的私网/保留/链路本地范围。
+// 覆盖：10./8、172.16-31./12、192.168./16、127./8、0.0.0.0/8（IPv4 回环/私网/不可路由）；
+// 169.254.0.0/16（链路本地 / 云元数据 169.254.169.254）、100.64.0.0/10（CGNAT 运营商级 NAT）。
+// 提取为独立函数降低 isRestrictedIp 的认知复杂度（S3776）。
+function isRestrictedIpv4(a: string): boolean {
+  if (a === '0.0.0.0' || a.startsWith('0.')) return true;
+  if (a.startsWith('10.')) return true;
+  if (/^172\.(?:1[6-9]|2\d|3[01])\./.test(a)) return true;
+  if (a.startsWith('192.168.')) return true;
+  if (a.startsWith('127.')) return true;
+  if (a.startsWith('169.254.')) return true; // 链路本地 / 云元数据
+  if (a.startsWith('100.64.')) return true; // CGNAT
+  return false;
+}
+
+// 判断 IPv6 地址是否属于应被拦截的链路本地/唯一本地范围。
+// IPv6：::1/128（回环）、::（未指定）、fe80::/10（链路本地）、fc00::/7（唯一本地 ULA fc/fd 前缀）、
+// ::ffff:<v4>（IPv4 映射，递归判定内嵌 v4）。
+// 提取为独立函数降低 isRestrictedIp 的认知复杂度（S3776）。
+function isRestrictedIpv6(a: string): boolean {
+  if (a === '::1' || a === '::') return true;
+  if (a.startsWith('fe80:')) return true; // 链路本地
+  if (a.startsWith('fc') || a.startsWith('fd')) return true; // 唯一本地 ULA
+  // IPv4-mapped（::ffff:<v4>）：new URL 会规范化为 ::ffff:7f00:1 等无点形式，无法可靠还原内嵌 v4；
+  // SSRF 应偏保守，凡 ::ffff: 前缀一律拦截（它本质是 IPv4 地址）。
+  if (a.startsWith('::ffff:')) return true;
+  return false;
+}
+
 // 判断 IP 地址（含 IPv4/IPv6 字面量，去掉方括号）是否属于应被拦截的私网/保留/链路本地范围。
 // 覆盖：10./8、172.16-31./12、192.168./16、127./8、0.0.0.0/8（IPv4 回环/私网/不可路由）；
 // 169.254.0.0/16（链路本地 / 云元数据 169.254.169.254）、100.64.0.0/10（CGNAT 运营商级 NAT）；
@@ -180,26 +209,13 @@ export const DEFAULT_CRAWL_CONFIG: RequiredUrlCrawlConfig = {
 // 为什么集中成纯函数：原 checkSSRF 仅拦截部分 IPv4 段且漏了链路本地/CGNAT/IPv6，
 // 且原 throw 被外层 catch 吞掉导致完全不生效——此处统一收紧。
 function isRestrictedIp(rawAddr: string): boolean {
-  const a = rawAddr.replace(/^\[|\]$/g, '').toLowerCase();
-  // IPv4 字面量
+  const a = rawAddr.replace(/(?:^\[|\]$)/g, '').toLowerCase();
+  // IPv4 字面量（委托 isRestrictedIpv4 降低认知复杂度 S3776）
   if (a.includes('.')) {
-    if (a === '0.0.0.0' || a.startsWith('0.')) return true;
-    if (a.startsWith('10.')) return true;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(a)) return true; // NOSONAR - S6557+S6353 - 范围检查无法用 startsWith
-    if (a.startsWith('192.168.')) return true;
-    if (a.startsWith('127.')) return true;
-    if (a.startsWith('169.254.')) return true; // 链路本地 / 云元数据
-    if (a.startsWith('100.64.')) return true; // CGNAT
-    return false;
+    return isRestrictedIpv4(a);
   }
-  // IPv6 字面量
-  if (a === '::1' || a === '::') return true;
-  if (a.startsWith('fe80:')) return true; // 链路本地
-  if (a.startsWith('fc') || a.startsWith('fd')) return true; // 唯一本地 ULA
-  // IPv4-mapped（::ffff:<v4>）：new URL 会规范化为 ::ffff:7f00:1 等无点形式，无法可靠还原内嵌 v4；
-  // SSRF 应偏保守，凡 ::ffff: 前缀一律拦截（它本质是 IPv4 地址）。
-  if (a.startsWith('::ffff:')) return true;
-  return false;
+  // IPv6 字面量（委托 isRestrictedIpv6 降低认知复杂度 S3776）
+  return isRestrictedIpv6(a);
 }
 
 // SSRF 防护：拦截解析到内网/保留/链路本地地址的入口 URL，避免后端被诱导抓取内网资源（如云元数据）。
@@ -210,7 +226,7 @@ function isRestrictedIp(rawAddr: string): boolean {
 export async function checkSSRF(urlStr: string) {
   let hostname: string;
   try {
-    hostname = new URL(urlStr).hostname.replace(/^\[|\]$/g, '');
+    hostname = new URL(urlStr).hostname.replace(/(?:^\[|\]$)/g, '');
   } catch {
     return; // 非法 URL 由调用方 fetch 决定成败
   }
@@ -226,9 +242,9 @@ export async function checkSSRF(urlStr: string) {
     for (const addr of [...ipv4s, ...ipv6s]) {
       if (isRestrictedIp(addr)) throw new Error('SSRF blocked: ' + hostname);
     }
-  } catch (e) {
+  } catch (err) {
     // 仅当我们主动抛出的 SSRF 拦截才继续上抛；DNS 解析失败（catch 到 []）放行（保持原行为）
-    if (e instanceof Error && e.message.startsWith('SSRF blocked')) throw e;
+    if (err instanceof Error && err.message.startsWith('SSRF blocked')) throw err;
   }
 }
 
@@ -345,7 +361,7 @@ export function extractHtmlContent(html: string, _baseUrl: string) {
 // 为什么单独校验：代理 URL 若指向 file:/data:/socks: 等，要么 ProxyAgent 构造即报错，要么可被利用为 pivot 打内网；
 // 这里在入口处强制 http/https，配合目标 URL 自身的 checkSSRF，杜绝经代理访问内网资源。
 export function validateProxyUrl(raw?: string): string | null {
-  if (!raw || !raw.trim()) return null;
+  if (!raw?.trim()) return null;
   let u: URL;
   try {
     u = new URL(raw.trim());
@@ -373,12 +389,57 @@ export interface ProxyProbeResult {
   message: string;
 }
 
+// 处理代理探测请求的 HTTP 响应，返回对应的 ProxyProbeResult。
+// 提取为独立函数降低 probeProxyEgress 的认知复杂度（S3776）。
+function processProbeResponse(response: Response): Promise<ProxyProbeResult> {
+  const status = response.status;
+  if (response.ok) {
+    // 不读取正文，仅取消响应体释放连接
+    try { return (response.body as { cancel?: () => Promise<void> } | null)?.cancel?.()?.then(() => ({
+      ok: true, reachable: true, blocked: false, status, level: 'ok' as const,
+      message: `代理出口 IP 可达目标（HTTP ${status}），爬取应正常`,
+    })) ?? Promise.resolve({
+      ok: true, reachable: true, blocked: false, status, level: 'ok' as const,
+      message: `代理出口 IP 可达目标（HTTP ${status}），爬取应正常`,
+    }); } catch { /* ignore */ }
+    return Promise.resolve({ ok: true, reachable: true, blocked: false, status, level: 'ok' as const, message: `代理出口 IP 可达目标（HTTP ${status}），爬取应正常` });
+  }
+  // 非 2xx：读少量响应体判断是否为 WAF/黑名单拦截页
+  return response.text().then((raw) => {
+    const bodyText = raw.slice(0, 2000).replace(/<[^>]+>/g, ' ');
+    const isWaf = /黑名单|访问受限|禁止访问|拒绝访问|forbidden|security|防火墙|拦截|非法请求|access denied|bot detection/i.test(bodyText);
+    if (status === 420 || status === 403 || isWaf) {
+      return { ok: false, reachable: true, blocked: true, status, level: 'warn' as const,
+        message: `代理出口 IP 仍被目标拦截（HTTP ${status}${isWaf ? '，疑似防火墙/黑名单页' : ''}）。建议换一个未被拉黑的代理，或用「网页捕获」书签直接投递` };
+    }
+    return { ok: false, reachable: true, blocked: false, status, level: 'warn' as const,
+      message: `代理可达目标但返回 HTTP ${status}，爬取可能被拦截或需登录` };
+  }).catch(() => ({
+    ok: false, reachable: true, blocked: false, status, level: 'warn' as const,
+    message: `代理可达目标但返回 HTTP ${status}，爬取可能被拦截或需登录`,
+  }));
+}
+
+// 处理代理探测请求的异常，返回对应的 ProxyProbeResult。
+// 提取为独立函数降低 probeProxyEgress 的认知复杂度（S3776）。
+function processProbeError(err: unknown, timeoutMs: number): ProxyProbeResult {
+  const msg = err instanceof Error ? err.message : String(err);
+  const name = err instanceof Error ? err.name : '';
+  if (name === 'AbortError' || /abort|timeout/i.test(msg)) {
+    return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理探测超时（>${Math.round(timeoutMs / 1000)}s 无响应），代理可能不可用或出口不通` };
+  }
+  if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|getaddrinfo|TLS|certificate|UND_ERR|socket/i.test(msg)) {
+    return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理不可达或代理出口无法连接目标（${msg}）` };
+  }
+  return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理探测失败：${msg}` };
+}
+
 export async function probeProxyEgress(
   targetUrl: string,
   proxyUrl: string,
   timeoutMs = 15000,
 ): Promise<ProxyProbeResult> {
-  const pv = validateProxyUrl(proxyUrl);
+const pv = validateProxyUrl(proxyUrl);
   if (!pv) {
     return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: '代理地址无效（仅支持 http:// 或 https://）' };
   }
@@ -386,8 +447,8 @@ export async function probeProxyEgress(
   // 杜绝"探针绕过 checkSSRF 经代理探测内网/云元数据"的盲 SSRF 窗口（见 checkSSRF 修复说明）。
   try {
     await checkSSRF(targetUrl);
-  } catch (ssrfErr) {
-    const msg = ssrfErr instanceof Error ? ssrfErr.message : String(ssrfErr);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: '目标 URL 被 SSRF 防护拦截（' + msg + '），请确认使用公网可访问 URL' };
   }
   const dispatcher = new ProxyAgent(pv);
@@ -417,17 +478,9 @@ export async function probeProxyEgress(
     return { ok: false, reachable: true, blocked: false, status, level: 'warn', message: `代理可达目标但返回 HTTP ${status}，爬取可能被拦截或需登录` };
   } catch (err) {
     clearTimeout(timer);
-    const msg = err instanceof Error ? err.message : String(err);
-    const name = err instanceof Error ? err.name : '';
-    if (name === 'AbortError' || /abort|timeout/i.test(msg)) {
-      return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理探测超时（>${Math.round(timeoutMs / 1000)}s 无响应），代理可能不可用或出口不通` };
-    }
-    if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|getaddrinfo|TLS|certificate|UND_ERR|socket/i.test(msg)) {
-      return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理不可达或代理出口无法连接目标（${msg}）` };
-    }
-    return { ok: false, reachable: false, blocked: false, status: 0, level: 'error', message: `代理探测失败：${msg}` };
+    return processProbeError(err, timeoutMs);
   } finally {
-    try { dispatcher.close(); } catch { /* ignore */ }
+    try { await dispatcher.close(); } catch { /* ignore */ }
   }
 }
 
@@ -787,7 +840,7 @@ export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): Asyn
   } finally {
     // B 方案：爬取结束（无论成功/异常/提前 return）均关闭代理连接池，避免长连接泄漏
     if (proxyDispatcher) {
-      try { proxyDispatcher.close(); } catch { /* ignore */ }
+      try { await proxyDispatcher.close(); } catch { /* ignore */ }
     }
   }
 }

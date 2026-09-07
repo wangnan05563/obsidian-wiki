@@ -6,6 +6,8 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+# 构建缓存残留目录（非标准产物，任意层级均忽略，防止误入仓）
+**/.npmcache/
 # SPA 部署产物（按时间戳的 public_live_* 与前端构建输出 builds/，仅运行时/部署用，不入仓）
 # 用 **/ 覆盖任意深度：真实路径为 karpathy-wiki/api/public_live_* 与 karpathy-wiki/frontend/builds/
 **/public_live_*/

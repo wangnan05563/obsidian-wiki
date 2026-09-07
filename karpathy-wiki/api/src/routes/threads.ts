@@ -20,7 +20,6 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { ThreadMemoryStore, HistoryMessage } from '../engine/thread-memory-store.js';
-import { InvalidThreadIdError } from '../engine/thread-memory-store.js';
 // 上下文记忆治理：预览治理后的注入上下文（GET /context）、显式折叠记忆（POST /compact）
 import { govern } from '../engine/context-governor.js';
 import type { ContextGovernorConfig } from '../engine/context-governor.js';
@@ -56,6 +55,14 @@ export function registerThreadsRoute(
       return false;
     }
     return true;
+  };
+
+  // T00265：context/compact 接口的归属校验——persist=false（会话不落盘，默认部署）时
+  // 线程不存在属正常现象，放行（返回空上下文/空压缩，前端流程闭环）；
+  // persist=true 时仍走严格归属校验，防止越权访问他人线程记忆。
+  const assertAccessible = async (req: FastifyRequest, id: string, reply: FastifyReply): Promise<boolean> => {
+    if (!store.isPersistent) return true;
+    return assertOwned(req, id, reply);
   };
 
   // 创建线程（盖章 owner）
@@ -188,7 +195,7 @@ export function registerThreadsRoute(
     async (request, reply) => {
       const { id } = request.params;
       if (!UUID_RE.test(id)) return badId(reply, id);
-      if (!(await assertOwned(request, id, reply))) return;
+      if (!(await assertAccessible(request, id, reply))) return;
       const memory = await store.getMemory(id);
       if (!memory) return void reply.code(404).send({ error: '线程不存在' });
       const existingSummary = memory.summary ?? '';
@@ -201,6 +208,8 @@ export function registerThreadsRoute(
         context: governed.messages,
         summary: governed.summary,
         stats: governed.stats,
+        // 上下文预算上限（治理 maxTokens）：前端据此计算上下文占用百分比
+        maxTokens: governorConfig.maxTokens,
       });
     },
   );
@@ -210,7 +219,7 @@ export function registerThreadsRoute(
   app.post<{ Params: { id: string } }>('/api/threads/:id/compact', { preHandler: guards.requireAuth }, async (request, reply) => {
     const { id } = request.params;
     if (!UUID_RE.test(id)) return badId(reply, id);
-    if (!(await assertOwned(request, id, reply))) return;
+    if (!(await assertAccessible(request, id, reply))) return;
     const body = (request.body ?? {}) as { keepRecent?: number; summaryMaxChars?: number };
     const updated = await store.compactMemory(id, {
       keepRecent: body.keepRecent,
@@ -221,4 +230,4 @@ export function registerThreadsRoute(
 }
 
 // 重新导出错误类型，便于调用方（query 路由）做类型判断
-export { InvalidThreadIdError };
+export { InvalidThreadIdError } from '../engine/thread-memory-store.js';

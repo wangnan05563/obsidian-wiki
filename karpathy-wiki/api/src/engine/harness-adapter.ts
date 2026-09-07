@@ -2,7 +2,7 @@ import { OpenAICompatibleAdapter, LlmPlanner } from '@wiki/harness';
 import type { HarnessConfig, SubAgentConfig } from '@wiki/harness';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent, WebSearchConfig, ToolsConfig, AppConfig, PodcastResult, SkillPreset, VideoTaskResult } from '../types.js';
+import type { EngineAdapter, CompileInput, ProgressEvent, QueryInput, AnswerChunk, HealthReport, FixInput, FixProgressEvent, WebSearchConfig, ToolsConfig, AppConfig, PodcastResult, SkillPreset, VideoTaskResult, MediaVideoUserConfig } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { compileWorkflow, resumeCompileWorkflow } from '../workflows/compile-workflow.js';
 import { queryWorkflow } from '../workflows/query-workflow.js';
@@ -10,6 +10,12 @@ import { healthCheckFixWorkflow } from '../workflows/health-check-fix-workflow.j
 import { generatePodcast } from '../workflows/podcast-workflow.js';
 // v3 媒体生成：视频生成异步任务委托给 media-generation-workflow
 import { generateVideo, pollVideoTask } from '../workflows/media-generation-workflow.js';
+// 意图澄清：澄清会话内存存储（跨请求共享同一 store，clarifyId 才能跨轮校验轮次/选项）
+import { ClarifySessionStore } from '../workflows/clarify/clarify-store.js';
+// UMD 默认导出兼容：gray-matter 的默认导出可能是函数或带 .default 的模块对象
+import matter from 'gray-matter';
+// FR-18 知识时效判定：healthCheck 复检项复用同一判定规则，保证与浏览/问答取值一致
+import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
 
 // BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
 import { applyPerRequestOverride } from './byok-override.js';
@@ -51,6 +57,10 @@ export class HarnessAdapter implements EngineAdapter {
   // 由 query 路径注入 merged.harnessConfig，使 Harness 自动注册 spawn_<name> 工具。
   // 默认关闭、零破坏：生产聚焦问答不受影响，需显式开启（如 ENABLE_SUBAGENTS 环境变量或运行时 updateConfig）。
   private subAgents?: SubAgentConfig[];
+  // 意图澄清会话存储：跨请求共享（每轮确认需按 clarifyId 找回会话并递增轮次）。
+  // 为什么放 adapter 而非 queryWorkflow 内部：queryWorkflow 每次调用是新实例，
+  // 模块级单例会跨 adapter 泄漏，放 adapter 持有即可随服务生命周期管理。
+  private readonly clarifyStore = new ClarifySessionStore();
 
   // 健康检查缓存
   private healthReportCache: HealthReport | null = null;
@@ -184,6 +194,11 @@ export class HarnessAdapter implements EngineAdapter {
       // v3 媒体生成：image 模式需要 mediaConfig 调用 Agnes API
       mediaConfig: this.appConfig?.media,
       appConfig: this.appConfig,
+      // 生图 BYOK：透传请求携带的用户生图配置（generateImage 优先生效），随各请求独立隔离
+      mediaImageConfig: input.mediaImageConfig,
+      // 意图澄清：配置 + 跨请求共享的会话 store
+      clarify: this.appConfig?.clarify,
+      clarifyStore: this.clarifyStore,
     });
   }
 
@@ -287,13 +302,48 @@ export class HarnessAdapter implements EngineAdapter {
     const brokenLinks = brokenByDir.flat();
     const stale = staleResults.filter((n): n is string => n !== null);
 
-    return { orphans, brokenLinks, stale };
+    // FR-18：知识时效复检项。复用 listAllPages 已解析的 frontmatter，用统一规则判定
+    // knowledge_status = stale 的页面。与上面的 stale（lastModified 过期页）概念区分：
+    //   - stale（原）：任意页面，仅按 lastModified 距今超 staleDays（healthCheck.staleDays）
+    //   - knowledgeStale：仅 knowledge_class=dated 且已过知识时效阈值（knowledge.staleDays）的页面
+    // 为什么复用 listAllPages：它已并行解析全库 frontmatter，避免 doHealthCheck 二次读盘
+    const knowledgeStaleDays = this.appConfig?.knowledge?.staleDays ?? 365;
+    const pages = await this.vault.listAllPages();
+    const knowledgeStale = pages
+      .filter((p) => computeKnowledgeStatus(p.frontmatter, knowledgeStaleDays) === 'stale')
+      .map((p) => p.path);
+    return { orphans, brokenLinks, stale, knowledgeStale };
   }
 
   // 清除健康检查缓存（用于手动触发重新体检）
   invalidateHealthCheckCache(): void {
     this.healthReportCache = null;
     this.healthReportCachedAt = 0;
+  }
+
+  // FR-18 AC-18-4：确定性"人工复核"动作——为指定 dated 页面追加 reviewed_at 到 frontmatter。
+  // 为什么是方法而非走通用 fix 流程：追加 reviewed_at 是纯 frontmatter 写操作，无需调用 LLM；
+  //   走 LLM 既浪费 token，又可能改写正文。这里用 gray-matter 读→改→写，仅更新日期字段，不触碰正文。
+  // 为什么在 adapter：harness-adapter 持有 private vault，路由层通过 adapter 访问，保持抽象边界。
+  async markKnowledgeReviewed(paths: string[]): Promise<{ ok: boolean; paths: string[]; message: string }> {
+    const reviewedAt = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    let done = 0;
+    for (const rel of paths) {
+      try {
+        const content = await this.vault.readFile(rel);
+        // 跳过非 dated 页面（非 dated 无需复核；复用统一判定可保证防御性）
+        const parsed = matter(content);
+        const kc = typeof parsed.data.knowledge_class === 'string' ? parsed.data.knowledge_class.toLowerCase() : '';
+        if (kc !== 'dated') continue;
+        parsed.data.reviewed_at = reviewedAt;
+        await this.vault.writeFile(rel, matter.stringify(parsed.content, parsed.data));
+        done++;
+      } catch (err: unknown) {
+        // 单页失败不阻断其它页面（批量复核应尽力而为）
+        console.warn(`markKnowledgeReviewed 失败: ${rel} - ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { ok: done > 0, paths, message: `复核完成：${done}/${paths.length} 个 dated 页面已追加 reviewed_at=${reviewedAt}` };
   }
 
   // FR-09-3 Podcast 生成：委托给 podcast-workflow，复用 this.harnessConfig 的 LLM 配置
@@ -309,14 +359,14 @@ export class HarnessAdapter implements EngineAdapter {
 
   // v3 视频生成：委托给 media-generation-workflow，创建 Agnes Video 异步任务
   // appConfig 参数优先于构造函数注入的 this.appConfig（与 podcast 一致的优先级模式）
-  async generateVideo(prompt: string, appConfig?: AppConfig): Promise<VideoTaskResult> {
+  async generateVideo(prompt: string, appConfig?: AppConfig, overrides?: MediaVideoUserConfig): Promise<VideoTaskResult> {
     const cfg = appConfig ?? this.appConfig;
-    return generateVideo(prompt, cfg?.media, cfg);
+    return generateVideo(prompt, cfg?.media, cfg, overrides);
   }
 
   // v3 视频任务轮询：委托给 media-generation-workflow，完成时下载视频并归档到 vault
-  async pollVideoTask(taskId: string, appConfig?: AppConfig): Promise<VideoTaskResult> {
+  async pollVideoTask(taskId: string, appConfig?: AppConfig, overrides?: MediaVideoUserConfig): Promise<VideoTaskResult> {
     const cfg = appConfig ?? this.appConfig;
-    return pollVideoTask(taskId, this.vault, cfg?.media, cfg);
+    return pollVideoTask(taskId, this.vault, cfg?.media, cfg, overrides);
   }
 }

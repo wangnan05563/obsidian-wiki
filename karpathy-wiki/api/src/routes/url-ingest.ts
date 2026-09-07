@@ -41,6 +41,48 @@ function buildCrawlConfig(
   return crawlConfig;
 }
 
+// 处理爬取事件的 SSE 推送循环。
+// 提取为独立函数降低路由处理函数的认知复杂度（S3776）。
+async function processCrawlEvents(
+  entryUrl: string,
+  crawlConfig: Partial<UrlCrawlConfig>,
+  send: (event: string, data: unknown) => boolean,
+  isAborted: () => boolean,
+  proxyProbe: ProxyProbeResult | null,
+): Promise<void> {
+  for await (const ev of crawlUrl(entryUrl, crawlConfig)) {
+    // 客户端已断开：提前退出迭代，停止后续页面抓取
+    if (isAborted()) break;
+
+    // 事件映射：直接透传 UrlCrawlEvent 的 type 字段作为 SSE event 名
+    // 不同 type 携带不同 data，前端按 type 分发渲染
+    let data: Record<string, unknown> = (ev.data ?? {});
+    let status: string;
+    if (ev.type === 'error' || ev.type === 'page_error') {
+      status = 'error';
+    } else if (ev.type === 'done') {
+      status = 'done';
+      // 将代理探测结论并入最终诊断：用户在爬取结果/历史中可回溯本次是否受代理出口影响
+      if (proxyProbe) {
+        const probeLine = `【代理探测】${proxyProbe.message}`;
+        const base = (ev.data as { diagnosis?: string } | undefined)?.diagnosis;
+        data = { ...(ev.data ?? {}), diagnosis: base ? `${probeLine}\n${base}` : probeLine };
+      }
+    } else {
+      status = 'running';
+    }
+    send(ev.type, {
+      step: ev.step,
+      message: ev.message,
+      // 透传 data 字段（含 url/depth/title/attachment/combinedMarkdown 等）
+      // 为什么用 ?? {}：data 可选，无 data 时推送空对象避免前端 JSON.parse(null) 报错
+      data,
+      // 附加 status 字段：与 QQ ingest 路由事件格式对齐，便于前端复用 UI 组件
+      status,
+    });
+  }
+}
+
 // 注册 URL 爬取路由族
 export function registerUrlIngestRoute(
   app: FastifyInstance,
@@ -106,11 +148,12 @@ export function registerUrlIngestRoute(
           send('progress', { step: 'proxy_probe', message: '正在探测代理连通性…', data: {}, status: 'running' });
           const probe = await probeProxyEgress(entryUrl, proxyUrl, 15000);
           proxyProbe = probe;
+          // 将代理探测级别映射为 status 字符串（level 已是 'ok'/'warn'/'error' 字面量）
           send('proxy_probe', {
             step: 'proxy_probe',
             message: probe.message,
             data: probe as unknown as Record<string, unknown>,
-            status: probe.level === 'ok' ? 'ok' : probe.level === 'warn' ? 'warn' : 'error',
+            status: probe.level,
           });
           // 代理本身不可达（网络/超时）→ 爬取必然失败，提前中止避免整轮无效等待
           if (!probe.reachable) {
@@ -118,11 +161,11 @@ export function registerUrlIngestRoute(
             safeEnd();
             return;
           }
-        } catch (probeErr) {
+        } catch (err) {
           // 预检异常不应阻断爬取（预检是顾问性质），仅告警后直接开始爬取
           send('progress', {
             step: 'proxy_probe',
-            message: '代理探测异常，将直接开始爬取：' + (probeErr instanceof Error ? probeErr.message : String(probeErr)),
+            message: '代理探测异常，将直接开始爬取：' + (err instanceof Error ? err.message : String(err)),
             data: {}, status: 'running',
           });
         }
@@ -135,37 +178,8 @@ export function registerUrlIngestRoute(
       
 
       // 遍历爬取生成器，逐事件推送给前端
-      for await (const ev of crawlUrl(entryUrl, crawlConfig)) {
-        // 客户端已断开：提前退出迭代，停止后续页面抓取
-        if (isAborted()) break;
-
-        // 事件映射：直接透传 UrlCrawlEvent 的 type 字段作为 SSE event 名
-        // 不同 type 携带不同 data，前端按 type 分发渲染
-        let data: Record<string, unknown> = (ev.data ?? {}) as Record<string, unknown>;
-        let status: string;
-        if (ev.type === 'error' || ev.type === 'page_error') {
-          status = 'error';
-        } else if (ev.type === 'done') {
-          status = 'done';
-          // 将代理探测结论并入最终诊断：用户在爬取结果/历史中可回溯本次是否受代理出口影响
-          if (proxyProbe) {
-            const probeLine = `【代理探测】${proxyProbe.message}`;
-            const base = (ev.data as { diagnosis?: string } | undefined)?.diagnosis;
-            data = { ...(ev.data ?? {}), diagnosis: base ? `${probeLine}\n${base}` : probeLine };
-          }
-        } else {
-          status = 'running';
-        }
-        send(ev.type, {
-          step: ev.step,
-          message: ev.message,
-          // 透传 data 字段（含 url/depth/title/attachment/combinedMarkdown 等）
-          // 为什么用 ?? {}：data 可选，无 data 时推送空对象避免前端 JSON.parse(null) 报错
-          data,
-          // 附加 status 字段：与 QQ ingest 路由事件格式对齐，便于前端复用 UI 组件
-          status,
-        });
-      }
+      // 提取为 processCrawlEvents 独立函数降低处理函数认知复杂度（S3776）
+      await processCrawlEvents(entryUrl, crawlConfig, send, isAborted, proxyProbe);
     } catch (err: unknown) {
       // SSE 错误双写：前端推送 + 后端日志（硬约束：SSE catch 必须 request.log.error）
       request.log.error({ err, entryUrl }, 'url-ingest crawl error');

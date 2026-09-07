@@ -32,7 +32,7 @@ export interface RecommendedPage {
 }
 
 // 页面元数据：推荐算法内部数据结构
-interface PageMetadata {
+export interface PageMetadata {
   path: string;
   title: string;
   tags: string[];
@@ -91,7 +91,7 @@ async function readDirectoryPages(vault: VaultService, vaultPath: string, dir: s
 
 // 一次性收集所有页面元数据，供推荐算法使用
 // 为什么一次性收集：避免对每个候选页面都重复扫描整个 vault（O(n²) → O(n)）
-async function collectAllPageMetadata(vault: VaultService): Promise<PageMetadata[]> {
+export async function collectAllPageMetadata(vault: VaultService): Promise<PageMetadata[]> {
   const vaultPath = vault.getVaultPath();
   const pages: PageMetadata[] = [];
 

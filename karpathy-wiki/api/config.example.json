@@ -49,5 +49,27 @@
     "allowedExtensions": ["md", "txt", "pdf", "html", "json"],
     "maxBatchSize": 20,
     "maxFileSizeMb": 10
+  },
+  "mcp": {
+    "enabled": false,
+    "endpointPath": "/mcp",
+    "name": "karpathy-wiki",
+    "version": "1.0.0",
+    "userToken": "",
+    "adminToken": "",
+    "authenticated": true
+  },
+  "knowledge": {
+    "staleDays": 365
+  },
+  "graph": {
+    "minPages": 20
+  },
+  "refs": {
+    "authorityMap": {
+      "web": "high",
+      "manual": "medium",
+      "qq-chat": "low"
+    }
   }
 }

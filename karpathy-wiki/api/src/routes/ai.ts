@@ -7,7 +7,7 @@ import type { EngineAdapter, LlmPreset } from '../types.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 import { testWebSearchConnection } from '../tools/web-search.js';
-import { testImageGeneration } from '../workflows/media-generation-workflow.js';
+import { testImageGeneration, applyImageOverride } from '../workflows/media-generation-workflow.js';
 
 // 模块加载时一次性读取 LLM 预设列表，避免每次请求都读盘。
 // 为什么外置到 llm-presets.json：厂商预设（baseUrl/model/apiKeyRef）会随厂商更新迭代，
@@ -263,7 +263,11 @@ export function registerAiRoute(
 
   // POST /api/ai/test-connection：测试 LLM 连接是否可用。
   // 使用 OpenAI 兼容协议发送最小化请求（max_tokens=5），超时 15s。
-  app.post('/api/ai/test-connection', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
+  // 鉴权：requireAuth（与 /api/ai/models、/api/ai/web-search/test 一致）。测试连接只做连通性自检，
+  //   不写入任何配置，也不把服务端密钥返显给前端（key 仅在服务端 fetch 内使用）；
+  //   而「配置 → AI 服务」为 BYOK 每用户独立密钥，任何登录用户都需能测试自己保存的 Key，
+  //   故普通用户也应可用，不能用 requireAdmin 拦截（否则 user 角色会报 403「无权限访问该资源」）。
+  app.post('/api/ai/test-connection', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
       baseUrl?: string;
       model?: string;
@@ -276,18 +280,18 @@ export function registerAiRoute(
     const baseUrl = (body.baseUrl || config.llm.baseUrl).trim();
     const model = (body.model || config.llm.model).trim();
 
-    // API Key 解析：请求体新值 > config.json > 环境变量
-    let apiKey: string;
-    if (body.apiKey && !body.apiKey.startsWith('****')) {
-      apiKey = body.apiKey;
-    } else {
-      apiKey = getEffectiveApiKey(config);
-    }
+    // API Key：仅使用请求体传入的真实 Key（BYOK 每用户独立密钥）。
+    // 为何不再回落服务端/环境变量 key：测试连接与问答口径必须一致，
+    //   否则「user 已配置、guest 未配置」时，guest 也会借服务端共享 key 测通，
+    //   造成"测试通过却问答失败"的误导。未配置的用户应明确得到"请配置自己的 API Key"，
+    //   而非借用共享额度测通（问答本就强 BYOK，服务端 key 不为其提供额度）。
+    const rawKey = body.apiKey && !body.apiKey.startsWith('****') ? body.apiKey : '';
+    const apiKey: string = rawKey;
 
     if (!apiKey && !baseUrl.includes('localhost')) {
       return void reply.send({
         ok: false,
-        detail: 'API Key 未设置，请先配置 API Key 或设置环境变量 ' + config.llm.apiKeyRef,
+        detail: 'API Key 未设置：测试连接按个人 BYOK 密钥校验（与问答口径一致），请在「配置 → AI 服务」填写你自己的 API Key 后再测试',
       });
     }
 
@@ -488,26 +492,39 @@ export function registerAiRoute(
     return void reply.send(result);
   });
 
-  // 图像生成（生图）连接测试：媒体配置为服务端统一配置（非 BYOK），测试服务端 media.agnes 的连通性。
-  // 入参（可选）：{ baseUrl?, imageModel? } 用于覆盖服务端配置做临时验证；缺省回退 config.media.agnes。
-  // 为什么需要：生图链路此前因 fetch 未跟随 POST 301 重定向而 60s 超时失败，提供连通性自检便于提前发现。
-  // 鉴权：requireAuth——登录用户即可查看服务端生图配置是否可用（不暴露密钥）。
+  // 图像生成（生图）连接测试：验证生图服务连通性。
+  // 入参（可选）：
+  //   - imageConfig：前端 BYOK 透传的用户生图配置（baseUrl/apiKey/model/size 等），优先生效；
+  //     用于测试"用户自己的 key/模型"连通性（BYOK 兼容，测试口径与真实生成 generateImage 一致）。
+  //   - baseUrl / imageModel：兼容旧调用的裸字段覆盖（对服务端 media.agnes 做临时验证）。
+  // 缺省：回退服务端 media.agnes 的连通性自检。
+  // 鉴权：requireAuth——登录用户即可校验自己的生图配置（不暴露明文密钥）。
   app.post('/api/ai/image/test', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request: FastifyRequest, reply: FastifyReply) => {
-    const body = (_request.body ?? {}) as { baseUrl?: string; imageModel?: string };
+    const body = (_request.body ?? {}) as {
+      imageConfig?: import('../types.js').MediaImageUserConfig;
+      baseUrl?: string;
+      imageModel?: string;
+    };
     const config = await loadConfig();
     const media = config.media;
     if (!media) {
       return void reply.send({ ok: false, detail: '服务端未配置 media.agnes（生图服务）' });
     }
-    // 允许临时覆盖 baseUrl / imageModel 做验证；其余字段沿用服务端配置
-    const overridden = {
-      ...media,
-      agnes: {
-        ...media.agnes,
-        ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
-        ...(body.imageModel ? { imageModel: body.imageModel } : {}),
-      },
-    };
+    let overridden;
+    if (body.imageConfig && (body.imageConfig.apiKey || body.imageConfig.model)) {
+      // 用户 BYOK 配置优先：复用 applyImageOverride 保证与真实生成相同覆盖语义
+      overridden = applyImageOverride(media, body.imageConfig);
+    } else {
+      // 兼容旧调用：仅覆盖 baseUrl/imageModel，其余沿用服务端配置
+      overridden = {
+        ...media,
+        agnes: {
+          ...media.agnes,
+          ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
+          ...(body.imageModel ? { imageModel: body.imageModel } : {}),
+        },
+      };
+    }
     const result = await testImageGeneration(overridden, config);
     return void reply.send(result);
   });

@@ -1,10 +1,16 @@
 ---
 title: Batch Compile
 type: concept
-created: 2025-01-14
-updated: 2025-04-17
+created: 2025-01-14T00:00:00.000Z
+updated: 2025-04-17T00:00:00.000Z
 source: raw/test-15.md
-tags: [compilation, pipeline, testing]
+tags:
+  - compilation
+  - pipeline
+  - testing
+  - test
+  - batch-compile
+  - workflow
 ---
 
 # Batch Compile
@@ -29,3 +35,23 @@ The batch compile process is validated using test document collections such as [
 - Entity extraction using [[LLM]]
 - Markdown parsing
 - Knowledge graph construction
+
+---
+## Merged from wiki-batch-compile
+
+# Wiki Batch Compile
+
+**Wiki Batch Compile** is a compilation workflow for transforming raw markdown files into structured knowledge base wiki pages. It processes documents through a pipeline that validates frontmatter, extracts entities, and builds cross-linked wiki pages.
+
+## Process
+
+1. Read raw material from the vault
+2. Determine page type (entity, concept, comparison, or query)
+3. Generate structured pages with frontmatter
+4. Establish bidirectional links between related pages
+5. Append entries to index and log files
+
+## Related Documents
+
+- [[Test Document 17]] — an example test document processed by this system
+- [[test-document-series]] — the series of test documents used for validation

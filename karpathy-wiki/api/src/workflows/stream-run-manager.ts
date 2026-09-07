@@ -68,6 +68,10 @@ interface RunEntry {
   subscribers: Set<RunSink>;
   done: boolean;
   failed: boolean;
+  // 提前正常结束（generator 耗尽但无 done chunk）：典型场景为意图澄清中断——
+  // 工作流 yield clarify 卡片后 return，本轮本就没有"最终答案"。必须标记终态并
+  // 结束订阅者连接，否则 subscribe 的 Promise 永不 resolve → HTTP 响应挂起。
+  interrupted: boolean;
   finishedAt: number | null;
   evictTimer: ReturnType<typeof setTimeout> | null;
   ttlMs: number;
@@ -76,7 +80,7 @@ interface RunEntry {
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 完成后保留 5 分钟，足够覆盖刷新/短暂断网
 
 class StreamRunManager {
-  private runs = new Map<string, RunEntry>();
+  private readonly runs = new Map<string, RunEntry>();
 
   /** 启动一个 detached 运行。立即返回，产出在后台扇出给订阅者。 */
   start(runId: string, opts: StartOptions): void {
@@ -87,6 +91,7 @@ class StreamRunManager {
       subscribers: new Set(),
       done: false,
       failed: false,
+      interrupted: false,
       finishedAt: null,
       evictTimer: null,
       ttlMs,
@@ -102,15 +107,15 @@ class StreamRunManager {
             .map((b) => b.chunk.text ?? '')
             .join('');
           const webRefs = (chunk.webRefs ?? []) as WebRef[];
-          let meta = { threadId: '', sessionId: '', messageIndex: -1 };
+          let meta: { threadId: string; sessionId: string; messageIndex: number };
           try {
             meta = await opts.onDone({ chunk, answer, webRefs });
-          } catch (e) {
+          } catch (err) {
             // F1: 持久化失败不得伪装成成功 done。若直接广播带空 threadId/messageIndex 的伪 done，
             // 客户端会 finalize 一个 threadId='' 的消息，下一轮提问因 threadId 为空而新建线程，
             // 静默破坏多轮上下文连续性且本轮问答未落盘。改为走 run 失败路径（广播 error）。
-            console.error('[stream-run] onDone failed', e);
-            const message = e instanceof Error ? e.message : String(e);
+            console.error('[stream-run] onDone failed', err);
+            const message = err instanceof Error ? err.message : String(err);
             entry.buffer.push({ kind: 'error', message });
             this.broadcastError(entry, message);
             entry.failed = true;
@@ -126,7 +131,7 @@ class StreamRunManager {
             sessionId: meta.sessionId,
             messageIndex: meta.messageIndex,
             governor: opts.governor,
-            refs: chunk.refs ?? [],
+            refs: (chunk.refs ?? []).map((r) => (typeof r === "string" ? r : r.path)),
             webRefs,
           };
           entry.buffer.push({ kind: 'done', payload });
@@ -144,8 +149,12 @@ class StreamRunManager {
     const runTask = async (): Promise<void> => {
       try {
         await iterate();
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
+        // iterate 正常 resolve 且未走 done/error 分支（二者均已 return）→ producer 自然耗尽。
+        // 典型场景：意图澄清中断（yield clarify 后无 done 即结束）。此时没有"最终答案"，
+        // 但必须结束订阅者连接并标记终态，否则 subscribe 的 Promise 永不 resolve → HTTP 挂起。
+        this.finishInterrupted(entry);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         entry.buffer.push({ kind: 'error', message });
         this.broadcastError(entry, message);
         entry.failed = true;
@@ -179,7 +188,7 @@ class StreamRunManager {
       else if (item.kind === 'done') sink.onDone(item.payload);
       else sink.onError(item.message);
     }
-    if (entry.done || entry.failed) {
+    if (entry.done || entry.failed || entry.interrupted) {
       sink.end();
       return Promise.resolve('finished');
     }
@@ -260,6 +269,27 @@ class StreamRunManager {
       }
     }
     entry.subscribers.clear();
+  }
+
+  // 提前正常结束（无 done/error）：结束订阅者连接并标记终态，不广播任何终端事件——
+  // 前端已收到 clarify 卡片（或收到截断的流），由消费端按"流正常结束但无 done"处理。
+  // 为什么 resolve('live')：与 broadcastDone/broadcastError 保持一致，subscribe 的
+  // Promise 以 'live' resolve（调用方仅关心 Promise 落定，不关心取值）。
+  private finishInterrupted(entry: RunEntry): void {
+    entry.interrupted = true;
+    for (const s of entry.subscribers) {
+      try {
+        s.end();
+      } catch {
+        /* ignore */
+      }
+      if (s._resolve) {
+        s._resolve('live');
+        s._resolve = undefined;
+      }
+    }
+    entry.subscribers.clear();
+    this.finishRun(entry);
   }
 
   private finishRun(entry: RunEntry): void {

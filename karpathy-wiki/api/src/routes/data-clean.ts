@@ -1,7 +1,9 @@
 ﻿import type { FastifyInstance } from 'fastify';
+import type { AppConfig } from '../types.js';
 import { VaultService } from '../vault/vault-service.js';
-import { scanVault, archiveFiles, fixFrontmatter, mergeDuplicatePages, deleteFiles, precheckVault } from '../data-clean/quality-scanner.js';
+import { scanVault, archiveFiles, fixFrontmatter, mergeDuplicatePages, deleteFiles, precheckVault, batchRename, batchDedupPages } from '../data-clean/quality-scanner.js';
 import { deduplicatePages } from '../data-clean/dedup-engine.js';
+import { analyzeVaultForCleanup } from '../data-clean/ai-analysis-workflow.js';
 import { compareFiles, isValidVaultPath } from '../data-clean/diff-engine.js';
 import { SchedulerManager } from '../data-clean/scheduler-manager.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
@@ -112,6 +114,83 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
   app.get('/api/data-clean/precheck', async (_req, reply) => {
     try {
       const result = await precheckVault(vault);
+      return void reply.send(result);
+    } catch (err) {
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ─── AI 智能清洗分析 ─────────────────────────────────────
+  // POST /api/data-clean/ai-analyze：对当前文档集合做 AI 分类（冗余删除 / 重复去重 / 规范重命名）。
+  // BYOK：必须用请求体携带用户自有 llmConfig（provider/baseUrl/model/apiKey），
+  //   缺 key 或字段不全 → 400 明确指引（不回落服务端共享 key，与 query 管线一致）。
+  // requireAuth：分析本身只读、调用用户自有模型；破坏性批量操作另由管理员门控端点执行。
+  app.post('/api/data-clean/ai-analyze', { preHandler: guards.requireAuth }, async (req, reply) => {
+    try {
+      const body = req.body as any;
+      const llm = body?.llmConfig;
+      const keyOk = !!llm && typeof llm.apiKey === 'string' && llm.apiKey.trim() !== '';
+      const fieldsOk =
+        !!llm &&
+        typeof llm.provider === 'string' && llm.provider.trim() !== '' &&
+        typeof llm.baseUrl === 'string' && llm.baseUrl.trim() !== '' &&
+        typeof llm.model === 'string' && llm.model.trim() !== '';
+      if (!keyOk || !fieldsOk) {
+        return void reply.code(400).send({
+          error: '请先在「配置 / 我的」中填写完整的 API Key（BYOK），AI 分析需要用户自有模型',
+        });
+      }
+      // 仅用请求体 llmConfig 构造 AppConfig（密钥不落服务端）
+      const config = {
+        llm: {
+          provider: llm.provider,
+          baseUrl: llm.baseUrl,
+          model: llm.model,
+          apiKeyRef: '',
+          apiKey: llm.apiKey,
+        },
+        vaultPath: vault.getVaultPath(),
+      } as AppConfig;
+      const result = await analyzeVaultForCleanup(vault, config);
+      return void reply.send(result);
+    } catch (err) {
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // 批量去重：把重复组非代表文档合并进代表文档（管理员门控，破坏性）
+  app.post('/api/data-clean/batch-dedup', { preHandler: guards.requireAdmin }, async (req, reply) => {
+    try {
+      const body = req.body as any;
+      if (!Array.isArray(body?.groups) || body.groups.length === 0) {
+        return void reply.code(400).send({ error: 'groups 数组必填（每项 { keep, merge[] }）' });
+      }
+      const groups = body.groups
+        .map((g: any) => ({
+          keep: String(g?.keep ?? ''),
+          merge: Array.isArray(g?.merge) ? g.merge.map(String) : [],
+        }))
+        .filter((g: { keep: string; merge: string[] }) => g.keep && g.merge.length > 0);
+      const dryRun = body.dry_run ?? false;
+      const result = await batchDedupPages(vault, groups, dryRun);
+      return void reply.send(result);
+    } catch (err) {
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // 批量重命名：按 { from, to } 原地规范化文件名（管理员门控，破坏性）
+  app.post('/api/data-clean/batch-rename', { preHandler: guards.requireAdmin }, async (req, reply) => {
+    try {
+      const body = req.body as any;
+      if (!Array.isArray(body?.renames) || body.renames.length === 0) {
+        return void reply.code(400).send({ error: 'renames 数组必填（每项 { from, to }）' });
+      }
+      const items = body.renames
+        .map((r: any) => ({ from: String(r?.from ?? ''), to: String(r?.to ?? '') }))
+        .filter((r: { from: string; to: string }) => r.from && r.to);
+      const dryRun = body.dry_run ?? false;
+      const result = await batchRename(vault, items, dryRun);
       return void reply.send(result);
     } catch (err) {
       return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });

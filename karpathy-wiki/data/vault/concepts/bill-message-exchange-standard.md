@@ -1,10 +1,16 @@
 ---
 title: 票据报文交换标准
 type: concept
-created: 2025-03-30
-updated: 2025-03-30
+created: 2025-03-30T00:00:00.000Z
+updated: '2026-08-22'
 source: raw/1.____________________-2.md
-tags: [票据, 报文, XML, 接口标准]
+tags:
+  - 票据
+  - 报文
+  - XML
+  - 接口标准
+related:
+  - '[[中国票据业务系统]]'
 ---
 
 # 票据报文交换标准

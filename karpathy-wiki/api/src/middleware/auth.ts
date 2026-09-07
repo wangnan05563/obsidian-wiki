@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { SessionRecord, AuthPermission, AuditAction } from '../auth/types.js';
 import { validateSession } from '../auth/session.js';
 import { checkPermission } from '../auth/permission-cache.js';
@@ -115,9 +115,11 @@ export function extractToken(request: FastifyRequest): string | null {
 // 路由级权限守卫：要求用户已登录
 // 用法：app.get('/api/xxx', { preHandler: requireAuth }, handler)
 // 为什么用 async 而非回调风格：Fastify 4.x 推荐 async 风格，TypeScript 类型推导更友好
-export async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+export async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<unknown> {
   if (!request.currentUser) {
-    reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
+    // 必须 return reply.send()：Fastify 据此判定响应已发送并终止后续管线。
+    // 若仅 send 后 return undefined，handler 仍会对已发送响应二次 send → FST_ERR_REP_ALREADY_SENT → 进程崩溃
+    return reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
   }
 }
 
@@ -125,7 +127,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
 // 返回 preHandler 函数，可携带 permission 参数（闭包）
 // 为什么用高阶函数：避免在路由内手写 if 判断，声明式标注更清晰
 export function requirePermission(permission: AuthPermission, permissionCacheTtlMs: number) {
-  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  return async (request: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     // 1. 必须先登录
     if (!request.currentUser) {
       // 记录审计日志：未登录访问受保护资源
@@ -140,8 +142,7 @@ export function requirePermission(permission: AuthPermission, permissionCacheTtl
           message: '未登录访问受保护资源',
         }),
       );
-      reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
-      return;
+      return reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
     }
 
     // 2. 检查权限（带缓存）
@@ -159,8 +160,9 @@ export function requirePermission(permission: AuthPermission, permissionCacheTtl
           message: `角色 ${request.currentUser.role} 无权限访问 ${permission}`,
         }),
       );
-      reply.code(403).send({ error: '权限不足', code: 'FORBIDDEN', required: permission });
+      return reply.code(403).send({ error: '权限不足', code: 'FORBIDDEN', required: permission });
     }
+    return undefined;
   };
 }
 
@@ -212,9 +214,9 @@ export interface IsolationGuards {
   /** auth 是否启用；路由层可据此决定是否做 owner 归属校验。 */
   enabled: boolean;
   /** 要求已登录（auth 启用时），未登录返回 401。auth 关闭时放行。 */
-  requireAuth: (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => void;
+  requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | void;
   /** 要求管理员角色（auth 启用时），否则 401/403。auth 关闭时放行。 */
-  requireAdmin: (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => void;
+  requireAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | void;
 }
 
 export function createIsolationGuards(auth?: IsolationGuardInput): IsolationGuards {
@@ -222,18 +224,20 @@ export function createIsolationGuards(auth?: IsolationGuardInput): IsolationGuar
   // AuthConfig.permissionCacheTtlSec 单位为秒，requireAdmin 内部需要毫秒
   const ttlMs = (auth?.permissionCacheTtlSec ?? 300) * 1000;
 
-  const authGuard = (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void => {
-    if (!enabled) { done(); return; } // 单租户：放行
+  // 采用 async 风格而非回调（done）。理由：回调风格中 send(401) 后再调 done()，
+  // Fastify 仍会继续执行 handler，对已发送响应二次 send → FST_ERR_REP_ALREADY_SENT → 崩溃。
+  // async 失败分支必须 return reply.send()，Fastify 据此判定响应已发送并终止管线。
+  const authGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
+    if (!enabled) { return undefined; } // 单租户：放行
     if (!request.currentUser) {
-      reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
-      done(); return;
+      return reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
     }
-    done();
+    return undefined;
   };
 
-  const adminGuard = (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void => {
-    if (!enabled) { done(); return; } // 单租户：放行
-    requireAdmin(ttlMs)(request, reply).then(() => done(), (err) => done(err as Error));
+  const adminGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
+    if (!enabled) { return undefined; } // 单租户：放行
+    return requireAdmin(ttlMs)(request, reply);
   };
 
   return { enabled, requireAuth: authGuard, requireAdmin: adminGuard };

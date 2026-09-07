@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   loadConfig,
   reloadConfig,
@@ -7,6 +7,8 @@ import {
   saveBatchConfig,
   saveLoggingConfig,
   saveSubAgentConfig,
+  saveMcpConfig,
+  maskApiKey,
 } from '../config.js';
 import type { AppConfig } from '../types.js';
 import type { HarnessAdapter } from '../engine/harness-adapter.js';
@@ -255,6 +257,69 @@ export function registerConfigRoute(
       return void reply.send({
         ok: true,
         enabled: merged.enableSubAgents,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      return void reply.code(500).send({ error: msg });
+    }
+  });
+
+  // GET /api/config/mcp：读取对外 MCP 端点配置，token 脱敏返回（仅返回状态与掩码）。
+  // 为什么需要：让管理员在配置页查看/管理 MCP 入口，而不必手改 config.json；
+  // token 永不回显明文（避免 Authorization 头泄漏），只给「是否已设置 + 末4位」。
+  app.get('/api/config/mcp', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
+    const config = await loadConfig();
+    const mcp = config.mcp ?? { enabled: false, endpointPath: '/mcp', name: 'karpathy-wiki', version: '1.0.0' };
+    return void reply.send({
+      enabled: mcp.enabled,
+      endpointPath: mcp.endpointPath,
+      name: mcp.name,
+      version: mcp.version,
+      authenticated: mcp.authenticated ?? false,
+      userTokenMasked: maskApiKey(mcp.userToken ?? ''),
+      userTokenSet: !!mcp.userToken,
+      adminTokenMasked: maskApiKey(mcp.adminToken ?? ''),
+      adminTokenSet: !!mcp.adminToken,
+    });
+  });
+
+  // PUT /api/config/mcp：保存对外 MCP 端点配置（enabled/name/version/endpointPath/authenticated/token）。
+  // 鉴权：requireAdmin——这是对全局暴露的写入能力（token 即权限），仅管理员可配。
+  // token 语义：**** 开头视为未修改；空串清除；其他为新值（与 AI/联网搜索 key 约定一致）。
+  app.put('/api/config/mcp', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as {
+      enabled?: boolean;
+      endpointPath?: string;
+      name?: string;
+      version?: string;
+      authenticated?: boolean;
+      userToken?: string;
+      adminToken?: string;
+    };
+    try {
+      const merged = await saveMcpConfig({
+        enabled: body.enabled,
+        endpointPath: body.endpointPath,
+        name: body.name,
+        version: body.version,
+        authenticated: body.authenticated,
+        userToken: body.userToken,
+        adminToken: body.adminToken,
+      });
+      const mcp = merged.mcp!;
+      return void reply.send({
+        ok: true,
+        config: {
+          enabled: mcp.enabled,
+          endpointPath: mcp.endpointPath,
+          name: mcp.name,
+          version: mcp.version,
+          authenticated: mcp.authenticated ?? false,
+          userTokenMasked: maskApiKey(mcp.userToken ?? ''),
+          userTokenSet: !!mcp.userToken,
+          adminTokenMasked: maskApiKey(mcp.adminToken ?? ''),
+          adminTokenSet: !!mcp.adminToken,
+        },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
