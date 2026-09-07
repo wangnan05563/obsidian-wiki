@@ -1,8 +1,19 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import { readFileSync } from 'node:fs';
+
+// 构建时从 frontend/package.json 读取版本号，注入到前端代码。
+// 为什么这么做：About 页版本号要跟随"打包构建"更新，改 package.json 的 version 即可，
+// 无需改后端 /about 或前端硬编码，保证每次打包产物携带正确版本号。
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
 export default defineConfig({
   plugins: [vue()],
+  // 注入构建版本与构建日期，供 About 等视图展示
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
+  },
   // 让 .ts/.vue 优先于可能残留的 .js 产物（clean-js.ps1 清理对象），避免陈旧编译产物遮蔽 .ts 源码
   resolve: {
     extensions: ['.mjs', '.ts', '.tsx', '.js', '.mjs', '.jsx', '.vue', '.json'],

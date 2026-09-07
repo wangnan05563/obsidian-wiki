@@ -155,7 +155,7 @@ onMounted(() => {
           <h2 class="head-title grad-text">系统清理</h2>
           <p class="head-tip">缓存清理 · 运行状态 · 运行日志 · 原始资料</p>
         </div>
-        <el-button class="neon-btn" :loading="loadingStatus" @click="loadStatus">
+        <el-button class="neon-btn" data-tip="刷新缓存 / 运行状态 / 日志 / 原始资料的占用状态" :loading="loadingStatus" @click="loadStatus">
           <span style="margin-right: 4px">?</span>刷新状态
         </el-button>
       </div>
@@ -227,6 +227,7 @@ onMounted(() => {
           <el-button
             class="cleanup-btn"
             :class="{ danger: !forms[card.key].dry_run }"
+            data-tip="清理{{ card.title }}（是否真实删除取决于「仅预览」开关）"
             :loading="loadings[card.key]"
             @click="handleCleanup(card.key)"
           >

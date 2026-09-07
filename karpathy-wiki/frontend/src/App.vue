@@ -52,12 +52,12 @@ const menuItems: Array<{ key: ViewName; icon: string; label: string; permission:
   { key: 'progress', icon: 'progress', label: '编译进度', permission: 'progress' },
   { key: 'browse', icon: 'browse', label: '知识浏览', permission: 'browse' },
   { key: 'query', icon: 'query', label: '知识问答', permission: 'query' },
-  { key: 'graph', icon: 'graph', label: '图谱', permission: 'graph' },
-  { key: 'health', icon: 'health', label: '体检', permission: 'health' },
+  { key: 'graph', icon: 'graph', label: '知识图谱', permission: 'graph' },
+  { key: 'health', icon: 'health', label: '体检中心', permission: 'health' },
   // 配置菜单向所有登录用户开放：其中的「朗读设置」「界面主题」为个人偏好（按用户隔离、本地存储），
   // 所有用户都可查看/修改；SCHEMA/系统配置/AI 服务/工具/MCP/Prompt 等敏感配置在 Config.vue 内
   // 通过 isAdmin 二次拦截，仅管理员可见可改。菜单可见性用全员都有的 'dashboard' 权限承载。
-  { key: 'config', icon: 'config', label: '配置', permission: 'dashboard' },
+  { key: 'config', icon: 'config', label: '配置中心', permission: 'dashboard' },
   { key: 'tunnel', icon: 'tunnel', label: '内网穿透', permission: 'tunnel' },
   { key: 'cleanup', icon: 'cleanup', label: '系统清理', permission: 'cleanup' },
   { key: 'users', icon: 'about', label: '用户管理', permission: 'users' },
@@ -205,7 +205,7 @@ onBeforeUnmount(() => {
     <!-- 左侧导航栏：可折叠侧边栏，垂直排列 Logo/菜单/用户区 -->
     <!-- 折叠模式：侧栏窄至 64px 仅显图标 + CSS tooltip，展开 220px 显示完整菜单 -->
     <Transition name="nav-collapse" mode="out-in">
-      <aside v-if="!navCollapsed" key="expanded" class="nav glass-card">
+      <aside v-if="!navCollapsed" key="expanded" class="nav glass-card" aria-label="主导航侧边栏">
         <div class="nav-deco"></div>
         <!-- 顶部 Logo 区：点击回首页 -->
         <div class="nav-left" @click="go('dashboard')">
@@ -253,7 +253,7 @@ onBeforeUnmount(() => {
         </div>
       </aside>
       <!-- 折叠态：窄侧栏仅显图标，hover 显示 tooltip 菜单名 -->
-      <aside v-else key="collapsed" class="nav-collapsed glass-card">
+      <aside v-else key="collapsed" class="nav-collapsed glass-card" aria-label="折叠导航侧边栏">
         <div class="nav-collapsed-left" @click="go('dashboard')" title="返回首页">
           <RobotAvatar :size="32" />
         </div>

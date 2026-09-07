@@ -1,4 +1,4 @@
-import { watch, onBeforeUnmount, type Ref } from 'vue';
+﻿import { watch, onBeforeUnmount, type Ref } from 'vue';
 
 /**
  * 聊天区自动贴底滚动（流式输出场景）
@@ -57,7 +57,7 @@ export function useChatAutoScroll(
   // 图片异步加载（含 lazy）撑高容器后补滚一次
   function onMediaLoad(e: Event): void {
     const t = e.target as HTMLElement | null;
-    if (t && t.tagName === 'IMG') {
+    if (t?.tagName === 'IMG') {
       scrollToBottom();
     }
   }

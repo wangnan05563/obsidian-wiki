@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 // 移动端「投递采集」页（SRS FR-ING）。
 // 复用 useCompileStore 的状态机（prepareCompile + handleEvent）维护进度/时间线/生成页面，
 // 自行消费 /api/compile 的 SSE 流（经 apiFetch 注入 Bearer token，避免 useSSEStream 裸 fetch 无鉴权）。
@@ -28,6 +28,46 @@ function onFileChange(e: Event) {
   formErr.value = '';
 }
 
+/** 解析单行 SSE 并转发给 store */
+function processSseLine(line: string, ev: string): string {
+  if (line.startsWith('event: ')) {
+    return line.slice(7).trim();
+  }
+  if (line.startsWith('data: ')) {
+    try {
+      store.handleEvent(ev, JSON.parse(line.slice(6)));
+    } catch {
+      // 跳过无法解析的行
+    }
+    return '';
+  }
+  return ev;
+}
+
+/** 从 SSE 流中逐块读取并转发事件 */
+async function readSseStream(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? '';
+    let ev = '';
+    for (const line of lines) {
+      ev = processSseLine(line, ev);
+    }
+  }
+}
+
+/** 处理非 AbortError 的异常 */
+function handleCompileError(err: unknown) {
+  if ((err as Error).name !== 'AbortError') {
+    store.handleEvent('error', { message: (err as Error).message });
+  }
+}
+
 // 消费 /api/compile 的 SSE 流，逐事件转发给 store.handleEvent（单文件模式：progress/page/done/error）
 async function runCompile(payload: IngestPayload) {
   store.prepareCompile(payload);
@@ -51,34 +91,9 @@ async function runCompile(payload: IngestPayload) {
       return;
     }
 
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      let ev = '';
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          ev = line.slice(7).trim();
-        } else if (line.startsWith('data: ')) {
-          try {
-            store.handleEvent(ev, JSON.parse(line.slice(6)));
-          } catch {
-            // 跳过无法解析的行
-          }
-          ev = '';
-        }
-      }
-    }
+    await readSseStream(reader);
   } catch (err) {
-    if ((err as Error).name === 'AbortError') {
-      // 用户主动取消，store.cancelCompile 已在 cancel() 调用
-    } else {
-      store.handleEvent('error', { message: (err as Error).message });
-    }
+    handleCompileError(err);
   } finally {
     abortCtl = null;
   }

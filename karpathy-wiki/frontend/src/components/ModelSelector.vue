@@ -355,21 +355,25 @@ async function onKeydown(e: KeyboardEvent) {
   gap: 6px;
   padding: 4px 10px;
   border-radius: 8px;
-  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
-  background: rgba(255, 255, 255, 0.05);
+  /* T00263：去掉按钮边框、透明背景，简洁样式；hover/展开再显现反馈 */
+  border: none;
+  background: transparent;
   color: var(--text-main, #ccc);
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.2s ease, opacity 0.2s ease;
+  transition: background 0.2s ease, opacity 0.2s ease;
   max-width: 220px;
 }
+.model-selector-trigger:hover {
+  background: var(--accent-cyan-a10, rgba(0, 245, 255, 0.1));
+}
 .model-selector-trigger.open {
-  border-color: var(--neon-cyan, #00f5ff);
+  background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
 }
 .model-selector-trigger:focus-visible {
-  border-color: var(--neon-cyan, #00f5ff);
+  box-shadow: 0 0 0 2px var(--neon-cyan, #00f5ff);
 }
 .model-selector-trigger.disabled {
   opacity: 0.5;

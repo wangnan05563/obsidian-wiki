@@ -1,4 +1,4 @@
-import { API_BASE, apiFetch } from '../utils/apiBase';
+﻿import { API_BASE, apiFetch } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type {
@@ -341,14 +341,7 @@ export const useCompileStore = defineStore('compile', () => {
     }
   }
 
-  // 清除草稿发布持久化状态
-  function clearDraftPublishPersistedState(): void {
-    try {
-      localStorage.removeItem(DRAFT_PUBLISH_STATE_STORAGE_KEY);
-    } catch {
-      // 静默失败
-    }
-  }
+
 
   // §优化方案2：开始新阶段——记录开始时间，累计上一阶段耗时
   // 为什么在 step 变化时调用：检测到 step 切换意味着上一阶段已结束
@@ -450,15 +443,7 @@ export const useCompileStore = defineStore('compile', () => {
     }
   }
 
-  // §优化方案3：清除 localStorage 中的持久化状态
-  // 为什么需要：编译完成后清除避免下次进入时误恢复
-  function clearPersistedState(): void {
-    try {
-      localStorage.removeItem(COMPILE_STATE_STORAGE_KEY);
-    } catch {
-      // 静默失败
-    }
-  }
+
 
   // §优化方案3：设置当前 runId（从 runs 列表查询后填充）
   function setCurrentRunId(runId: string): void {
@@ -512,23 +497,10 @@ export const useCompileStore = defineStore('compile', () => {
       handleBatchEvent(eventType, data);
       return;
     }
-    if (eventType === 'progress') {
+    if (eventType === 'progress' || eventType === 'page') {
       const p = data as ProgressData;
       // §优化方案2：检测 step 变化时累计上一阶段耗时
       // 为什么用 currentStep.value !== p.step 判断：同一 step 多次推送事件时不累计
-      if (currentStep.value !== p.step) {
-        startStage(p.step);
-      }
-      timeline.value.push({
-        step: p.step,
-        status: p.status,
-        message: p.message,
-        page: extractPage(p.data),
-        timestamp: Date.now()
-      });
-    } else if (eventType === 'page') {
-      // page 事件是 generate_page 的子类，需同步计入 stage 计时
-      const p = data as ProgressData;
       if (currentStep.value !== p.step) {
         startStage(p.step);
       }
@@ -622,6 +594,47 @@ export const useCompileStore = defineStore('compile', () => {
     }
   }
 
+  // 处理 batch_done 事件
+  function handleBatchDoneEvent(d: BatchEventData): void {
+    isCompiling.value = false;
+    if (d.status === 'error') {
+      // 部分文件失败：整体显示错误，并保留 doneMessage 作为补充说明
+      isDone.value = false;
+      errorMessage.value = d.message || '批量编译部分文件失败';
+    } else {
+      isDone.value = true;
+    }
+    doneMessage.value = d.message ?? '';
+    currentStep.value = null;
+  }
+
+  // 处理 progress 事件
+  function handleProgressEvent(group: BatchFileGroup, d: BatchEventData): void {
+    const page = extractPage(d.data);
+    group.timeline.push({
+      step: d.step,
+      status: d.status,
+      message: d.message,
+      page,
+      timestamp: Date.now(),
+    });
+    // generate_page 事件（后端以 progress 发送）同步累加到分组 pages 列表，用于「生成页面：」展示。
+    if (d.step === 'generate_page' && page && !group.pages.some((p) => p.path === page.path)) {
+      group.pages.push(page);
+    }
+  }
+
+  // 处理 file_done 事件
+  function handleFileDoneEvent(group: BatchFileGroup, data: unknown): void {
+    // 单文件完成：后端正常应只发 file_done 表示成功；若 status='error' 则降级为错误态兜底
+    if ((data as BatchEventData).status === 'error') {
+      group.status = 'error';
+      group.errorMessage = (data as BatchEventData).message || '编译失败';
+    } else {
+      group.status = 'done';
+    }
+  }
+
   // 批量模式事件分发：先处理整体事件，再按 fileIndex 路由到分组
   function handleBatchEvent(eventType: string, data: unknown) {
     const d = data as BatchEventData;
@@ -633,16 +646,7 @@ export const useCompileStore = defineStore('compile', () => {
     }
 
     if (eventType === 'batch_done') {
-      isCompiling.value = false;
-      if (d.status === 'error') {
-        // 部分文件失败：整体显示错误，并保留 doneMessage 作为补充说明
-        isDone.value = false;
-        errorMessage.value = d.message || '批量编译部分文件失败';
-      } else {
-        isDone.value = true;
-      }
-      doneMessage.value = d.message ?? '';
-      currentStep.value = null;
+      handleBatchDoneEvent(d);
       return;
     }
 
@@ -667,18 +671,7 @@ export const useCompileStore = defineStore('compile', () => {
     }
 
     if (eventType === 'progress') {
-      const page = extractPage(d.data);
-      group.timeline.push({
-        step: d.step,
-        status: d.status,
-        message: d.message,
-        page,
-        timestamp: Date.now(),
-      });
-      // generate_page 事件（后端以 progress 发送）同步累加到分组 pages 列表，用于「生成页面：」展示。
-      if (d.step === 'generate_page' && page && !group.pages.some((p) => p.path === page.path)) {
-        group.pages.push(page);
-      }
+      handleProgressEvent(group, d);
       return;
     }
 
@@ -689,13 +682,7 @@ export const useCompileStore = defineStore('compile', () => {
     }
 
     if (eventType === 'file_done') {
-      // 单文件完成：后端正常应只发 file_done 表示成功；若 status='error' 则降级为错误态兜底
-      if ((data as BatchEventData).status === 'error') {
-        group.status = 'error';
-        group.errorMessage = (data as BatchEventData).message || '编译失败';
-      } else {
-        group.status = 'done';
-      }
+      handleFileDoneEvent(group, data);
       return;
     }
 
@@ -803,3 +790,21 @@ export const useCompileStore = defineStore('compile', () => {
     clearDraftPublishPersistedState,
   };
 });
+// 清除草稿发布持久化状态（S7721: 移到模块级避免嵌套声明）
+function clearDraftPublishPersistedState(): void {
+  try {
+    localStorage.removeItem(DRAFT_PUBLISH_STATE_STORAGE_KEY);
+  } catch {
+    // 静默失败
+  }
+}
+
+// 清除编译持久化状态（S7721: 移到模块级避免嵌套声明）
+function clearPersistedState(): void {
+  try {
+    localStorage.removeItem(COMPILE_STATE_STORAGE_KEY);
+  } catch {
+    // 静默失败
+  }
+}
+

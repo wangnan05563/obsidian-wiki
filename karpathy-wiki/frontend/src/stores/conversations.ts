@@ -1,4 +1,4 @@
-import { defineStore } from 'pinia';
+﻿import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { ChatMessage, ConversationRecord } from '../types';
 import { dbDelete, dbGet, dbGetAll, dbPut, dbHasSealed } from '../services/chatDb';
@@ -200,7 +200,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     // unwrap 返回 undefined（无法判属），此时由 resetSession 在 auth 变化时作废
     // currentConversationId 作为主防御，二者互补。
     const persisted = await dbGet<ConversationRecord>(STORE_CONVERSATIONS, id);
-    if (persisted && persisted.ownerId !== undefined && persisted.ownerId !== owner) {
+    if (persisted?.ownerId !== undefined && persisted?.ownerId !== owner) {
       id = crypto.randomUUID();
     }
 
@@ -338,9 +338,9 @@ export const useConversationsStore = defineStore('conversations', () => {
     //      不能默认归当前用户所有（否则切换账户后可见上一用户遗留的无主会话）
     //   ③ 当前用户未登录（owner 为 undefined）→ 不应加载任何有主记录
     const owner = currentOwnerId();
-    const isOwnedByOther = record && record.ownerId !== undefined && record.ownerId !== owner;
+    const isOwnedByOther = record?.ownerId !== undefined && record?.ownerId !== owner;
     const isOwnerlessWhileLoggedIn = record && record.ownerId === undefined && owner !== undefined;
-    const isOwnedWhileLoggedOut = record && record.ownerId !== undefined && owner === undefined;
+    const isOwnedWhileLoggedOut = record?.ownerId !== undefined && owner === undefined;
     if (isOwnedByOther || isOwnerlessWhileLoggedIn || isOwnedWhileLoggedOut) {
       useQueryStore().setThreadId(null);
       useQueryStore().loadMessages([]);

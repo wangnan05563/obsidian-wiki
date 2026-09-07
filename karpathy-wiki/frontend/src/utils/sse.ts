@@ -3,7 +3,7 @@
 // 为什么独立成模块：消除三处重复实现，并通过对象映射降低认知复杂度（S3776）
 
 import { ElMessage } from 'element-plus';
-import type { ThinkingStep, MultimodalOutput, ChatMessage, Reference } from '../types';
+import type { ThinkingStep, MultimodalOutput, ChatMessage, Reference, Clarification } from '../types';
 
 // §按会话隔离（v4）：SSE 写入目标抽象为 SSEWriter，由调用方决定路由到哪个会话缓冲。
 // 桌面端传入 store.getSessionWriter()（默认 active 缓冲）；移动端传入
@@ -20,6 +20,8 @@ export interface SSEWriter {
   setThreadId(id: string | null): void;
   // §X-1 步骤级追踪：done 事件携带的 harness runId 透传到缓冲
   setRunId(id?: string): void;
+  // T00265：done 事件携带的上下文占用统计（governor.inputTokens + maxTokens），徽章据此展示百分比
+  setContextUsage(governor: { inputTokens?: number } | null | undefined, maxTokens?: number): void;
   // X-2 可恢复流式：open 事件携带的 manager runId 透传到缓冲
   setManagerRunId(id?: string): void;
   finalizeAnswer(sessionId?: string, messageIndex?: number, threadId?: string, followups?: string[]): void;
@@ -34,6 +36,11 @@ export interface SSEWriter {
   readonly didDone: boolean;
   // 断线重连前清空已收部分内容，等待后端回放完整响应（避免重复追加）
   resetForResume(): void;
+  // 意图澄清：SSE clarify 事件写入澄清卡片（中断提问，等待用户选择后重发）
+  setClarification(payload: Clarification): void;
+  // 用户放弃澄清（换个问法）：清卡片并解除 isLoading
+  clearClarification(): void;
+  readonly clarification: Clarification | null;
 }
 
 // Query SSE 事件处理器签名：接收已 JSON.parse 的数据，调用 writer 对应方法
@@ -90,11 +97,30 @@ const QUERY_EVENT_HANDLERS: Record<string, QueryEventHandler> = {
     if (parsed.threadId) writer.setThreadId(parsed.threadId);
     // §X-1 步骤级追踪：携带 harness runId，供前端拉取每步耗时分解
     if (parsed.runId) writer.setRunId(parsed.runId);
+    // T00265：记录上下文占用（governor.inputTokens + maxTokens），徽章据此展示百分比
+    writer.setContextUsage(parsed.governor, parsed.maxTokens);
     writer.finalizeAnswer(parsed.sessionId, parsed.messageIndex, parsed.threadId);
   },
   // X-2 可恢复流式：首帧 open 事件携带 manager runId，前端凭此在断线时重连继续接收同一响应
   open: (parsed, writer) => {
     if (parsed.runId) writer.setManagerRunId(parsed.runId);
+  },
+  // 意图澄清：后端检测到问题歧义时中断提问，下发解读选项卡片。携带后本轮即终点（无 done）。
+  clarify: (parsed, writer) => {
+    writer.setClarification({
+      id: parsed.id,
+      round: parsed.round,
+      maxRounds: parsed.maxRounds,
+      question: parsed.question,
+      prompt: parsed.prompt,
+      interpretations: Array.isArray(parsed.interpretations) ? parsed.interpretations : [],
+      recommendedIndex: parsed.recommendedIndex ?? 0,
+      // 归属线程 id：续答重发时需带回，后端据此找回同一澄清会话
+      threadId: parsed.threadId || undefined,
+    });
+    // 澄清中断 = 本轮流正常结束（无 done）。清掉 managerRunId，防止可恢复流式包装层
+    // 误判"流异常断开"而凭 runId 重连——后端 run 已结束，重连只会得到 RESUME_NOT_FOUND。
+    writer.setManagerRunId(undefined);
   },
   error: (parsed, writer) => {
     writer.handleError(parsed.message || '问答出错');
@@ -184,6 +210,60 @@ export async function consumeQuerySSE(
   }
 }
 
+// 兜底 finalize 部分答案（当流异常结束或请求失败时）
+function finalizeWriter(writer: SSEWriter): void {
+  if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
+}
+
+// 执行首连/重连请求，若失败则兜底 finalize 后抛出
+async function tryFetchResponse(fetchNext: () => Promise<Response>, writer: SSEWriter): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetchNext();
+  } catch (err) {
+    finalizeWriter(writer);
+    throw err;
+  }
+  if (!response.ok) {
+    finalizeWriter(writer);
+    // 透出后端在响应体内给出的具体说明（error/detail），否则 apiError 只能按状态码
+    // 兜底成通用文案；例如「未配置 API Key」的 BYOK 校验 400，后端本就写明该去何处配置，
+    // 丢弃它会误导用户以为真的是"请求参数有误"。
+    let detail = '';
+    try {
+      // 非 JSON 时静默降级，保持原有"仅状态码"行为
+      const data = (await response.json()) as { error?: unknown; detail?: unknown };
+      detail = typeof data?.error === 'string' ? data.error : typeof data?.detail === 'string' ? data.detail : '';
+    } catch {
+      /* body 非 JSON */
+    }
+    throw new Error(detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`);
+  }
+  return response;
+}
+
+// 消费 SSE 流，捕获读取异常。返回 null 表示正常完成，返回非 null 表示需要重连的异常
+async function tryConsumeStream(
+  response: Response,
+  writer: SSEWriter,
+  signal: AbortSignal | undefined,
+  onActivity: (() => void) | undefined,
+  resumeCount: number,
+  maxResume: number,
+): Promise<unknown> {
+  try {
+    await consumeQuerySSE(response, writer, signal, onActivity);
+    return null;
+  } catch (err) {
+    // 主动停止（AbortError）不重连；仅在仍持有 managerRunId 且未达重连上限时尝试重连续接
+    if ((err as Error)?.name !== 'AbortError' && writer.managerRunId && resumeCount < maxResume) {
+      return err;
+    }
+    finalizeWriter(writer);
+    throw err;
+  }
+}
+
 // X-2 可恢复流式：带断线重连的 SSE 消费包装。
 // 在 consumeQuerySSE 之上增加一层：当流异常结束（未收到 done）且 writer 持有 managerRunId 时，
 // 凭 managerRunId 调 resumeFetch 重新订阅同一 run，先 resetForResume 清空已收部分内容，再回放完整响应。
@@ -202,33 +282,10 @@ export async function consumeQuerySSEResumable(
   let resumeCount = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    let response: Response;
-    try {
-      response = await fetchNext();
-    } catch (err) {
-      // 首连或重连请求本身失败：兜底 finalize 部分答案后退出
-      if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
-      throw err;
-    }
-    if (!response.ok || !response.body) {
-      if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
-      throw new Error(`HTTP ${response.status}`);
-    }
-
     // F6: 读取阶段异常（网络骤断 / RST / 超时）也应触发重连，而非直接当错误抛出。
     // consumeQuerySSE 仅在用户主动停止（AbortError）时静默返回，其余读取错误会透传至此。
-    let streamError: unknown = null;
-    try {
-      await consumeQuerySSE(response, writer, signal, onActivity);
-    } catch (err) {
-      // 主动停止（AbortError）不重连；仅在仍持有 managerRunId 且未达重连上限时尝试重连续接
-      if ((err as Error)?.name !== 'AbortError' && writer.managerRunId && resumeCount < maxResume) {
-        streamError = err;
-      } else {
-        if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
-        throw err;
-      }
-    }
+    const response = await tryFetchResponse(fetchNext, writer);
+    const streamError = await tryConsumeStream(response, writer, signal, onActivity, resumeCount, maxResume);
 
     // 正常完成（收到 done）→ 退出
     if (writer.didDone) return;
@@ -245,7 +302,7 @@ export async function consumeQuerySSEResumable(
     }
 
     // 不可恢复：兜底 finalize 部分答案后退出；若因读取异常退出则原样抛出
-    if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
+    finalizeWriter(writer);
     if (streamError) throw streamError;
     return;
   }

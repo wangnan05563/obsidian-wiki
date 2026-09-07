@@ -30,7 +30,11 @@ export function apiErrorMessage(action: string, error: unknown): string {
   }
   const status = extractHttpStatus(message);
   if (status && HTTP_STATUS_MESSAGES[status]) {
-    return `${action}：${HTTP_STATUS_MESSAGES[status]}`;
+    // 若消息在状态码后附带后端原文（形如 "HTTP 400: xxx"），优先透出服务器说明而非通用映射，
+    // 避免掩蔽「未配置 API Key」这类明确指引，用户只看到"请求参数有误"而不知如何解决。
+    const sep = message.indexOf(':');
+    const custom = sep >= 0 ? message.slice(sep + 1).trim() : '';
+    return custom ? `${action}：${custom}` : `${action}：${HTTP_STATUS_MESSAGES[status]}`;
   }
   return `${action}：${message}`;
 }

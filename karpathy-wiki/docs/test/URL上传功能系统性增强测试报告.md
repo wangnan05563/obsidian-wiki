@@ -39,7 +39,7 @@
 
 ### 3.1 UI 专项测试（test-url-ui.mjs）
 
-**脚本**: [scripts/test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-url-ui.mjs)
+**脚本**: [scripts/tests/test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-url-ui.mjs)
 **结果**: ✅ **52/52 通过**
 
 覆盖 8 个维度：
@@ -57,7 +57,7 @@
 
 ### 3.2 真实 URL 爬取测试（test-url-crawl.mjs）
 
-**脚本**: [scripts/test-url-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-url-crawl.mjs)
+**脚本**: [scripts/tests/test-url-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-url-crawl.mjs)
 **入口**: `http://www.shcpe.com.cn/content/shcpe/index.html`
 **预期目标**: `http://www.shcpe.com.cn/content/shcpe/vip/xyd/xgzdgz.html?articleType=vip-xyd-xgzdgz&articleId=WZ202306161669544876103282688`
 **结果**: ✅ **测试通过：成功爬取到目标页面**
@@ -200,8 +200,8 @@ URL 爬取相关关键测试项：
 
 | 文件 | 用途 |
 |------|------|
-| [scripts/test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-url-ui.mjs) | UI 专项测试脚本（52 项断言） |
-| [scripts/test-url-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-url-crawl.mjs) | 真实 URL 爬取测试脚本 |
+| [scripts/tests/test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-url-ui.mjs) | UI 专项测试脚本（52 项断言） |
+| [scripts/tests/test-url-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-url-crawl.mjs) | 真实 URL 爬取测试脚本 |
 | [logs/test-url-crawl-result.log](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/logs/test-url-crawl-result.log) | 真实 URL 爬取测试日志 |
 | [.trae/test_result.json](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/.trae/test_result.json) | E2E 测试结果（59 项） |
 | [.trae/skills/wiki-auto-testing/config.yaml](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/.trae/skills/wiki-auto-testing/config.yaml) | E2E 测试配置（已追加 URL 爬取端点与元素） |
@@ -257,8 +257,8 @@ URL 上传功能系统性增强已全面完成并通过测试验证：
 |----------|------|----------|
 | TypeScript 类型检查（后端） | ✅ 通过 | 仅余 3 个预先存在错误（office-convert/test-conv，与本次无关） |
 | TypeScript 类型检查（前端 vue-tsc） | ✅ 通过 | exit code 0 |
-| UI 专项测试 [test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-url-ui.mjs) | ✅ 50/50 通过 | 配置端点返回全部 19 个字段（含 followRobotsTxt/concurrency/...） |
-| 真实 URL 爬取测试 [test-url-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-url-crawl.mjs) | ✅ 通过 | 50 页面、耗时 5.07s、目标页面 `xgzdgz.html` 命中 |
+| UI 专项测试 [test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-url-ui.mjs) | ✅ 50/50 通过 | 配置端点返回全部 19 个字段（含 followRobotsTxt/concurrency/...） |
+| 真实 URL 爬取测试 [test-url-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-url-crawl.mjs) | ✅ 通过 | 50 页面、耗时 5.07s、目标页面 `xgzdgz.html` 命中 |
 
 ### 9.4 未实施项说明
 
@@ -315,14 +315,14 @@ URL 上传功能系统性增强已全面完成并通过测试验证：
 | [frontend/src/types.ts](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/frontend/src/types.ts) | `UrlCrawlConfigData` 与后端完全对齐 |
 | [frontend/src/views/Ingest.vue](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/frontend/src/views/Ingest.vue) | `selectedPageUrls` Set + 勾选/全选函数 + 勾选式编译逻辑；模板新增 `.url-pages-card` 列表与 `el-checkbox` 勾选框 |
 | [.gitignore](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/.gitignore) | 排除 `data/url-crawl-state.json` 状态文件与 `data/url-crawl.log` 日志文件 |
-| [scripts/test-resume-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-resume-crawl.mjs) | 新增断点续爬验证脚本：第二次爬取应见 `resume` 进度事件与 `page_skipped` 事件，实际爬取 `pagesCrawled=0` |
+| [scripts/tests/test-resume-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-resume-crawl.mjs) | 新增断点续爬验证脚本：第二次爬取应见 `resume` 进度事件与 `page_skipped` 事件，实际爬取 `pagesCrawled=0` |
 
 ### 10.4 第二轮测试结果
 
 | 测试类型 | 结果 | 关键指标 |
 |----------|------|----------|
-| UI 专项测试 [test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-url-ui.mjs) | ✅ **52/52 通过** | 前端 5174 端口可访问、Ingest.vue 含 `url-pages-card` 勾选 UI、前后端类型同步 12 接口、路由注册完整 |
-| 断点续爬验证 [test-resume-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/test-resume-crawl.mjs) | ✅ 通过 | 第二次爬取产出 `resume` 进度事件 + `page_skipped(resume)` 事件，`pagesCrawled=0` 验证 dedupeKey 匹配修复生效 |
+| UI 专项测试 [test-url-ui.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-url-ui.mjs) | ✅ **52/52 通过** | 前端 5174 端口可访问、Ingest.vue 含 `url-pages-card` 勾选 UI、前后端类型同步 12 接口、路由注册完整 |
+| 断点续爬验证 [test-resume-crawl.mjs](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/karpathy-wiki/scripts/tests/test-resume-crawl.mjs) | ✅ 通过 | 第二次爬取产出 `resume` 进度事件 + `page_skipped(resume)` 事件，`pagesCrawled=0` 验证 dedupeKey 匹配修复生效 |
 | E2E 全量测试 [wiki-auto-testing](file:///d:/code/otherProjects/19_Karpathy-AI+Obsidian知识库/.trae/skills/wiki-auto-testing/templates/test_suite_full.py) | ✅ **60/60 通过**（58 PASS + 2 SKIP） | Phase 3 Basic：登录(API 注入)/导航(12 页)/元素/API 健康 全部通过；Phase 4：主题切换/表单/Tab 全部通过；Phase 5：响应式/11 个 API 端点/控制台错误 全部通过 |
 
 ### 10.5 E2E 测试环境修复

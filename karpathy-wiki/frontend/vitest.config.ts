@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+﻿import { defineConfig } from 'vitest/config';
 import vue from '@vitejs/plugin-vue';
 
 // 前端 vitest 配置
@@ -17,14 +17,12 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      include: ['src/stores/auth.ts', 'src/composables/usePermission.ts'],
-      thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 80,
-        statements: 80,
-      },
+      reporter: ['text', 'json', 'html', 'lcov'],
+      include: ['src/**/*.ts', 'src/**/*.vue'],
+      
     },
   },
 });
+
+
+

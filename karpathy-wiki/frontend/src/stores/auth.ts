@@ -1,4 +1,4 @@
-import { API_BASE } from '../utils/apiBase';
+﻿import { API_BASE } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { UserInfo, LoginRequest, LoginResponse, RegisterRequest, CreateUserRequest, UpdateUserRequest, AuthPermission, AuthRole } from '../types';
@@ -142,9 +142,13 @@ export const useAuthStore = defineStore('auth', () => {
       return false;
     } catch (err) {
       // 超时（controller.signal.aborted）与网络错误区分文案，给用户可恢复提示
-      error.value = controller.signal.aborted
-        ? '登录超时，请检查网络或服务器后重试'
-        : (err instanceof Error ? err.message : String(err));
+      if (controller.signal.aborted) {
+        error.value = '登录超时，请检查网络或服务器后重试';
+      } else if (err instanceof Error) {
+        error.value = err.message;
+      } else {
+        error.value = String(err);
+      }
       return false;
     } finally {
       clearTimeout(timer);
@@ -187,9 +191,13 @@ export const useAuthStore = defineStore('auth', () => {
       error.value = '注册响应缺少 token 或用户信息';
       return false;
     } catch (err) {
-      error.value = controller.signal.aborted
-        ? '注册超时，请检查网络或服务器后重试'
-        : (err instanceof Error ? err.message : String(err));
+      if (controller.signal.aborted) {
+        error.value = '注册超时，请检查网络或服务器后重试';
+      } else if (err instanceof Error) {
+        error.value = err.message;
+      } else {
+        error.value = String(err);
+      }
       return false;
     } finally {
       clearTimeout(timer);
@@ -290,7 +298,7 @@ export const useAuthStore = defineStore('auth', () => {
       body: JSON.stringify(params),
     });
     if (!res.ok) return null;
-    return await res.json() as UserInfo;
+    return res.json() as unknown as UserInfo;
   }
 
   // 更新用户
@@ -301,7 +309,7 @@ export const useAuthStore = defineStore('auth', () => {
       body: JSON.stringify(params),
     });
     if (!res.ok) return null;
-    return await res.json() as UserInfo;
+    return res.json() as unknown as UserInfo;
   }
 
   // 删除用户

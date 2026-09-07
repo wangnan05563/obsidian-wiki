@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { Reading, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
-import type { Reference } from '../types';
+import { Reading, ArrowDown, ArrowRight, StarFilled, CircleCheck, Finished, Warning, QuestionFilled } from '@element-plus/icons-vue';
+import type { Reference, RefAuthority, RefSignals } from '../types';
 
 // F-3.8 参考文章列表（仿豆包「搜索 N 个关键词，参考 N 篇资料」）
 // 设计要点（SRS F-3.8）：
@@ -52,6 +52,30 @@ function handleRefClick(ref: Reference) {
     globalThis.open(ref.url, '_blank', 'noopener,noreferrer');
   }
 }
+
+// ===== FR-19 三信号 hover 文案（权威度 / 完整度 / 复核 / 时效）=====
+// authority 文案来自 SRS FR-19：source 类别经 authorityMap 映射
+const AUTHORITY_LABEL: Record<RefAuthority, string> = {
+  high: '权威来源（如官方文档）',
+  medium: '中可信来源（如人工整理）',
+  low: '低可信来源（如社群聊天）',
+  unknown: '来源未知，谨慎参考',
+};
+// 为什么独立函数而非内联模板三元：保持模板可读性 + vue-tsc 严格类型
+function sigAuthorityTip(a: RefAuthority): string {
+  return `${AUTHORITY_LABEL[a] ?? '未知'}`;
+}
+function sigConfidenceTip(on: boolean): string {
+  return on ? '内容完整' : '内容不完整';
+}
+function sigReviewTip(on: boolean): string {
+  return on ? '已人工复核' : '未人工复核';
+}
+function sigStaleTip(status: RefSignals['knowledgeStatus'] | undefined): string {
+  if (status === 'stale') return '内容可能已过期，建议复核';
+  if (status === 'ok') return '内容在有效期内';
+  return '时效未知';
+}
 </script>
 
 <template>
@@ -80,6 +104,32 @@ function handleRefClick(ref: Reference) {
             <span class="ref-title">{{ ref.title }}</span>
             <span class="source-badge" :class="ref.source">
               {{ ref.source === 'vault' ? 'VAULT' : 'WEB' }}
+            </span>
+            <!-- FR-19 三信号图标组（仅 vault 引用带信号）：权威盾 / 完整圆环 / 复核对勾 / stale 警告 -->
+            <span v-if="ref.source === 'vault' && ref.signals" class="ref-signals">
+              <el-tooltip :content="sigAuthorityTip(ref.signals.authority)" placement="top" :show-after="300">
+                <span class="sig sig-auth" :class="'auth-' + ref.signals.authority">
+                  <el-icon>
+                    <component :is="ref.signals.authority === 'unknown' ? QuestionFilled : StarFilled" />
+                  </el-icon>
+                </span>
+              </el-tooltip>
+              <el-tooltip :content="sigConfidenceTip(ref.signals.confidence)" placement="top" :show-after="300">
+                <span class="sig" :class="ref.signals.confidence ? 'on' : 'off'">
+                  <el-icon><CircleCheck /></el-icon>
+                </span>
+              </el-tooltip>
+              <el-tooltip :content="sigReviewTip(ref.signals.review)" placement="top" :show-after="300">
+                <span class="sig" :class="ref.signals.review ? 'on' : 'off'">
+                  <el-icon><Finished /></el-icon>
+                </span>
+              </el-tooltip>
+              <el-tooltip v-if="ref.signals.knowledgeStatus === 'stale'"
+                :content="sigStaleTip(ref.signals.knowledgeStatus)" placement="top" :show-after="300">
+                <span class="sig sig-stale">
+                  <el-icon><Warning /></el-icon>
+                </span>
+              </el-tooltip>
             </span>
           </div>
           <div class="ref-snippet" v-if="ref.snippet">{{ ref.snippet }}</div>
@@ -211,6 +261,45 @@ function handleRefClick(ref: Reference) {
   background: var(--accent-purple-a18, rgba(99, 102, 241, 0.18));
   color: var(--accent-purple-base, #6366f1);
   border: 1px solid var(--accent-purple-a30, rgba(99, 102, 241, 0.3));
+}
+/* FR-19 三信号图标组：default 无 pointer（避免误触发跳转），hover 由 el-tooltip 提供说明 */
+.ref-signals {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.sig {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-dim, #666);
+  line-height: 1;
+}
+.sig.on {
+  color: var(--neon-cyan, #00f5ff);
+}
+.sig.off {
+  color: var(--text-dim, #666);
+  opacity: 0.45;
+}
+/* 权威度色阶：high 高亮 / medium 中 / low 弱 / unknown 置灰 */
+.sig-auth.auth-high {
+  color: var(--accent-pink-base, #ec4899);
+}
+.sig-auth.auth-medium {
+  color: var(--accent-purple-base, #6366f1);
+}
+.sig-auth.auth-low {
+  color: var(--text-soft, #888);
+}
+.sig-auth.auth-unknown {
+  color: var(--text-dim, #666);
+  opacity: 0.5;
+}
+/* stale 警告：橙色强调，区别于普通信号 */
+.sig-stale {
+  color: #f59e0b;
 }
 .ref-snippet {
   font-size: 11px;

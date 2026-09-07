@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE } from '../utils/apiBase';
+import { API_BASE, resolveMediaUrl } from '../utils/apiBase';
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Promotion, VideoPause, Menu, Loading } from '@element-plus/icons-vue';
@@ -7,6 +7,8 @@ import ConversationSidebar from '../components/ConversationSidebar.vue';
 import AttachmentUploader from '../components/AttachmentUploader.vue';
 import InputToolbar from '../components/InputToolbar.vue';
 import ThinkingBlock from '../components/ThinkingBlock.vue';
+// 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续
+import ClarifyCard from '../components/ClarifyCard.vue';
 // §X-1 步骤级追踪面板：渲染每步耗时分解，定位长耗时瓶颈
 import QueryTracePanel from '../components/QueryTracePanel.vue';
 import ModelSelector from '../components/ModelSelector.vue';
@@ -14,6 +16,8 @@ import RefsList from '../components/RefsList.vue';
 import MessageToolbar from '../components/MessageToolbar.vue';
 // FR-09-2 多模态输出卡片：渲染 mindmap/faq/timeline 结构化输出
 import MultimodalOutputCard from '../components/MultimodalOutputCard.vue';
+// T00265：消息气泡右下角上下文占用徽章（圆环进度 + 悬浮详情 + 压缩）
+import ContextUsageBadge from '../components/ContextUsageBadge.vue';
 import { useQueryStore, ALL_OUTPUT_MODES, OUTPUT_MODE_LABELS, type OutputMode, ALL_MIDDLEWARES, MIDDLEWARE_LABELS, type Middleware } from '../stores/query';
 import { useAuthStore } from '../stores/auth';
 import { useConversationsStore, getLastActiveConversationId, setLastActiveConversationId } from '../stores/conversations';
@@ -30,12 +34,14 @@ import {
   loadToolsUserConfig,
   type AiUserConfig,
 } from '../services/userConfig';
+// 媒体生成（生图/视频）用户 BYOK 配置：生图/视频生成时随请求透传用户自己的配置
+import { loadMediaUserConfig } from '../services/mediaConfig';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
 import { consumeQuerySSEResumable } from '../utils/sse';
 import { useChatAutoScroll } from '../composables/useChatAutoScroll';
-import type { Attachment, Reference } from '../types';
+import type { Attachment, Reference, LlmPreset } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
 
 // F-3.2 图片点击放大预览：v-html 内容不经过 Vue 编译，无法绑定 Vue 事件，需事件委托
@@ -225,6 +231,29 @@ const editInputRef = ref<{ focus?: () => void } | null>(null);
 //   导致 AI 实际有回复但前端已超时中断，用户感知"AI 未回复信息"。
 const QUESTION_TIMEOUT_MS = 120_000;
 let questionTimeoutId: ReturnType<typeof setTimeout> | null = null;
+// 意图澄清：用户选择解读后正在重发确认后的问答（ClarifyCard 显示加载态，禁重复点击）
+const clarifyResending = ref(false);
+// 澄清选择处理：携澄清上下文重发同一问题（不重复 push user 消息）。
+// 后端会基于确认的意图继续；若仍歧义且轮次未耗尽会再次下发新卡片覆盖，否则正常产出答案。
+function handleClarifySelect(choiceIndex: number) {
+  const clarification = store.currentClarification;
+  if (!clarification || clarifyResending.value) return;
+  clarifyResending.value = true;
+  // 立刻重发。失败/中止时 store 侧会清卡片（handleError/stopLoading），此处复位 resending
+  const question = clarification.question;
+  sendQuestion(question, {
+    clarifyId: clarification.id,
+    choiceIndex,
+    threadId: clarification.threadId ?? null,
+  }).catch(() => {
+    clarifyResending.value = false;
+  });
+}
+// 放弃澄清（换个问法）：清卡片并解除 loading，用户可重新输入
+function handleClarifyDismiss() {
+  clarifyResending.value = false;
+  store.clearClarification();
+}
 // 以"最近一次收到 SSE 数据"为基准的滑动窗口超时：
 // 每次重置都清空旧定时器并重启一个 120s 定时器；只要连续 120s 无任何数据才触发超时中断。
 // 调用点：请求发起时（resetQuestionTimeout）+ SSE 每收到一个数据块（经由 consumeQuerySSE 的 onActivity）。
@@ -374,6 +403,13 @@ const videoError = ref('');
 let videoPollTimer: ReturnType<typeof setInterval> | null = null;
 
 // 提交视频生成任务：POST /api/media/video 创建任务，成功后启动轮询
+// 会话级一次性友好提示 flag：仅当用户未配置个人视频服务时提示一次，避免每次生成都打扰
+let mediaVideoHintShown = false;
+// 生图一次性提示 flag：仅当用户未配置个人生图服务时提示一次，避免每次生图都打扰
+let mediaImageHintShown = false;
+// LLM「共享AI」一次性提示 flag（T00315）：用户未配置个人 AI、且服务端共享AI已配置时，
+// 本次问答会降级使用管理员共享配置；仅提示一次避免每次问答都打扰
+let sharedAiHintShown = false;
 async function submitVideoTask() {
   const prompt = videoPrompt.value.trim();
   if (!prompt) {
@@ -386,11 +422,21 @@ async function submitVideoTask() {
   videoUrl.value = '';
   videoTaskId.value = '';
 
+  // 视频 BYOK：用户已配置个人视频服务则透传（model/key/尺寸/时长），否则后端回退服务端共享配置。
+  // 为什么每次读取不缓存：取最新配置，用户改完「配置 → 生图视频服务」后下次生成即生效。
+  const uid = authStore.user?.id || 'guest';
+  const mediaCfg = await loadMediaUserConfig(uid);
+  const videoConfig = mediaCfg.video.apiKey ? mediaCfg.video : undefined;
+  if (!videoConfig && !mediaVideoHintShown) {
+    mediaVideoHintShown = true;
+    ElMessage.warning('当前未配置个人视频服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置 → 生图视频服务」配置你自己的视频服务以获得更稳定的体验。');
+  }
+
   try {
     const resp = await authStore.authFetch(`${API_BASE}/media/video`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, ...(videoConfig ? { mediaConfig: { video: videoConfig } } : {}) }),
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) {
@@ -528,57 +574,61 @@ function normalizeRefs(refs: string[] | Reference[] | undefined): Reference[] {
   return refs as Reference[];
 }
 
-async function sendQuestion(question: string) {
-  abortController = new AbortController();
-  // 捕获本请求专属的 AbortController 实例，供下方 initialFetch/resumeFetch 闭包使用，
-  // 避免「流断开重连窗口内用户点击停止，abortController 被 finally 置 null」时，
-  // 闭包内 abortController!.signal 在运行时解引用为 undefined 而抛 TypeError（续连分支崩溃）。
-  const ac = abortController;
-  abortReason = null;
-  // F-3.13 修复：立即标记 loading，让流式气泡（loading dots / 实时思考 / 流式答案）即时出现。
-  // 关键：重新生成路径（handleRegenerate）不走 submitQuestion，此前 isLoading 始终为 false，
-  // 导致流式块 v-if="streamingAnswer || isLoading" 不渲染、原回答已删除，用户要等 done 事件才看到结果。
-  store.beginStreaming();
-  // 线程隔离 + 本地记忆：已有 threadId 时，后端优先从本地记忆（data/threads/{id}/memory.json）
-  // 注入历史上下文（保证跨重启连贯），前端无需再重复发送 history；
-  // 无线程（新会话首问）时回退为前端透传完整 history（向后兼容，后端记忆为空时亦会回退）。
-  const activeThreadId = store.currentThreadId;
-  // 历史记录偏好（按用户隔离）：rely=依赖服务端线程记忆，绝不发送本地 history；
-  // send=每轮携带本地 history（默认）。persist=false（默认部署）下服务端不维护线程记忆，
-  // 必须由前端每轮透传完整 history 才能保证多轮上下文连贯，故只要非 rely 即发送，
-  // 不再因 activeThreadId 存在而抑制 history（否则 follow-up 会丢失上下文）。
-  const relyOnServerMemory = inputBoxStore.settings.historyPreference === 'rely';
-  const history = !relyOnServerMemory
-    ? store.messages.map((m) => ({ role: m.role, content: m.content }))
-    : undefined;
 
-  // 启动超时定时器：以"最近一次收到 SSE 数据"为基准的滑动窗口，
-  // 连续 QUESTION_TIMEOUT_MS 无任何数据才判定超时中断（见 resetQuestionTimeout）。
-  // 为什么用滑动窗口而非固定墙钟：原实现从请求发起算固定 120s，
-  // 会误杀"慢但正常流式输出"的问答（与下方注释"长时间无响应才中断"的意图相悖），
-  // 例如 agent loop 多次流式 LLM 调用经代理累加延迟后总耗时容易超过 120s。
-  resetQuestionTimeout();
+/** 加载用户配置（AI 模型、搜索、工具） */
+async function loadQueryUserConfigs(
+  uid: string,
+  modelStore: any,
+): Promise<{ aiCfg: AiUserConfig | null; searchCfg: any; toolsCfg: any }> {
+  let aiCfg: AiUserConfig | null = null;
+  if (modelStore.selectedPresetKey === AUTO_MODEL) {
+    const resolved = await resolveAutoPresetForUser(uid, modelStore.presets);
+    aiCfg = resolved.config;
+  } else {
+    const activePreset = modelStore.presets.find((p: { key: string }) => p.key === modelStore.selectedPresetKey);
+    aiCfg = await loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset);
+  }
+  const [searchCfg, toolsCfg] = await Promise.all([
+    loadSearchUserConfig(uid),
+    loadToolsUserConfig(uid),
+  ]);
+  return { aiCfg, searchCfg, toolsCfg };
+}
 
-  // 先收集附件 base64，再 flush（清空 pendingIds）
-  const attachments = await collectAttachments();
-  attachmentsStore.flush();
-  pendingAttachmentIds.value = [];
-
-  // 构造请求体：F-3.4 工具栏 mode 字段统一传递到 SSE
-  // 模型切换由 PUT /api/ai/config 统一处理，不在此处传 model
+async function buildQueryBody(
+  opts: {
+    question: string;
+    history: any;
+    attachments: any;
+    activeThreadId: string | null;
+    activeMode: { value: string | null };
+    outputMode: { value: string };
+    store: any;
+    authStore: any;
+    modelStore: any;
+    // 意图澄清续答：用户选择解读后重发同一问题，携带 clarifyId + choiceIndex
+    // threadId：澄清中断时后端随 clarify 事件附带，续答必须带回同一线程（后端归属校验）
+    clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null;
+  },
+): Promise<Record<string, unknown>> {
+  const { question, history, attachments, activeThreadId, activeMode, outputMode, store, authStore, modelStore, clarify } = opts;
   const body: Record<string, unknown> = { question };
-  // 每轮携带前端 history 作为上下文（persist=false 下服务端不维护记忆，必靠此兜底多轮连贯）；
-  // 服务端在自身记忆非空时优先用记忆、否则回退本 history，故发送 history 对 persist=true 部署无副作用。
   if (history && history.length > 0) {
     body.history = history;
   }
-  // 携带 threadId 供后端定位本地记忆与归档（后端在记忆非空时优先用记忆，否则回退 history）
-  if (activeThreadId) {
-    body.threadId = activeThreadId;
+  // 澄清续答优先使用 clarify 附带的 threadId（首轮中断时 activeThreadId 可能为 null，
+  // 若续答时仍传 null 后端会新建线程，导致 clarifyId 归属校验失败、轮次计数失效）
+  const threadIdForBody = clarify?.threadId ?? activeThreadId;
+  if (threadIdForBody) {
+    body.threadId = threadIdForBody;
+  }
+  // 意图澄清续答透传：后端据此解析用户确认的意图并注入 prompt（非法/过期时按新提问处理）
+  if (clarify) {
+    body.clarifyId = clarify.clarifyId;
+    body.choiceIndex = clarify.choiceIndex;
   }
   if (activeMode.value) {
     body.mode = activeMode.value;
-    // 联网搜索需要同时打开 webSearch 标志（向后端 query-workflow 传递）
     if (activeMode.value === 'web') {
       body.webSearch = true;
     }
@@ -586,55 +636,34 @@ async function sendQuestion(question: string) {
   if (attachments.length > 0) {
     body.attachments = attachments;
   }
-  // FR-09-2 多模态输出：仅当非 normal 时透传，避免后端无意义调用
   if (outputMode.value !== 'normal') {
     body.outputMode = outputMode.value;
   }
-  // v2: 多输出模式多选透传到后端。后端按 outputModes 决定哪些 SSE 事件下发，
-  // 前端关闭的模式不会被发送，减少不必要的网络/渲染开销
   if (store.outputModes.length > 0 && store.outputModes.length < ALL_OUTPUT_MODES.length) {
     body.outputModes = [...store.outputModes];
   }
-  // §真流式开关透传：前端偏好覆盖后端 config.llm.stream 默认值
-  // 为什么显式发送而非依赖后端默认：用户可在 Query 页面即时切换，无需改后端配置
   body.stream = store.streamMode;
-  // 中间件多选透传：始终携带当前选择，使后端以 UI 选择为权威（覆盖各功能默认行为）。
-  // 修复：此前"全开"时省略 middlewares，后端 resolveMiddleware 将其视为 null，
-  // 使 web_search/deep_thinking/stream 回退到已废弃的 input.webSearch/input.mode/input.stream
-  // （默认 OFF），而 extended_tools/followups 仍默认 ON —— 逻辑不一致，导致默认勾选的
-  // "联网搜索"实际从未生效。始终发送后，UI 多选与后端开关完全一致。
   body.middlewares = [...store.middlewares];
 
-  // ── BYOK per-user 配置注入 ──
-  // 每个用户携带自己配置的 AI 服务 / 搜索引擎 / 工具配置（含 API Key），
-  // 后端以这些覆盖项替换服务端共享配置，实现"各用户独立额度、互不抢占限流"。
-  // 密钥仅经此请求体一次性发给后端代理，后端不持久化到磁盘（参见 services/userConfig.ts）。
   const uid = authStore.user?.id || 'guest';
-  // auto（自动）模式：从「用户已配置 apiKey」的预设中按能力优先级择优（见 autoModel.resolveAutoPresetForUser），
-  // 保证 auto 选中的模型必然已配置，杜绝「解析到用户未配置的预设 → 前端判定无 apiKey 不发
-  // llmConfig → 后端 BYOK 校验 400（请求参数有误）」。选中具体预设时沿用其 key，走既有 BYOK 加载逻辑。
-  let aiCfg: AiUserConfig | null = null;
-  if (modelStore.selectedPresetKey === AUTO_MODEL) {
-    const resolved = await resolveAutoPresetForUser(uid, modelStore.presets);
-    aiCfg = resolved.config;
-  } else {
-    const activePreset = modelStore.presets.find((p) => p.key === modelStore.selectedPresetKey);
-    aiCfg = await loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset);
-  }
-  const [searchCfg, toolsCfg] = await Promise.all([
-    loadSearchUserConfig(uid),
-    loadToolsUserConfig(uid),
-  ]);
-  // 仅当该用户已填 API Key 才下发 llmConfig（空密钥视为未配置，交由后端 400 拦截）
-  if (aiCfg && aiCfg.apiKey) {
+  const { aiCfg, searchCfg, toolsCfg } = await loadQueryUserConfigs(uid, modelStore);
+  if (aiCfg?.apiKey) {
     body.llmConfig = aiCfg;
   }
-  if (searchCfg && searchCfg.apiKey) {
+  // LLM「共享AI」降级提示（T00315）：用户未配置个人 AI（无 aiCfg.apiKey），且服务端共享AI
+  // 已配置 key（modelStore.apiKeySet）时，本次实际会降级使用管理员共享配置。
+  // 与生图共享提示同款一次性策略，温和引导用户配置个人 AI，避免每个人辑发前都弹。
+  const sharedAiSet = Boolean(modelStore.apiKeySet);
+  if (!aiCfg?.apiKey && sharedAiSet && !sharedAiHintShown) {
+    sharedAiHintShown = true;
+    ElMessage.warning(
+      '当前将使用管理员「共享AI」配置（共享用户较多，可能排队或调用异常）。' +
+        '建议在「配置 → AI 服务配置」配置你自己的专属 AI 服务，以获得更稳定、低延迟的体验。',
+    );
+  }
+  if (searchCfg?.apiKey) {
     body.searchConfig = searchCfg;
   }
-  // 工具配置：仅当用户实际配置了工具（非默认空配置）才下发。
-  // 否则空对象会整体替换服务端共享 MCP/CLI，导致未配置工具的用户工具能力回退。
-  // 已配置工具的用户仍始终下发自身隔离配置（落实"各用户调用自己配置"）。
   const hasOwnTools =
     (toolsCfg.mcpServers?.length ?? 0) > 0 ||
     (toolsCfg.cliTools?.length ?? 0) > 0 ||
@@ -642,82 +671,106 @@ async function sendQuestion(question: string) {
   if (hasOwnTools) {
     body.toolsConfig = toolsCfg;
   }
+  // 生图 BYOK：outputMode='image' 时透传用户自己的生图配置（baseUrl/key/model/size 等）。
+  // 未配置时后端回退服务端 media.agnes；此处对未配置用户给一次性引导提示。
+  if (outputMode.value === 'image') {
+    const mediaCfg = await loadMediaUserConfig(uid);
+    if (mediaCfg.image.apiKey) {
+      body.imageConfig = mediaCfg.image;
+    } else if (!mediaImageHintShown) {
+      mediaImageHintShown = true;
+      ElMessage.warning('当前未配置个人生图服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置 → 生图视频服务」配置你自己的生图服务。');
+    }
+  }
+  return body;
+}
+
+async function handleQueryFinally(
+  abortReason: string | null,
+  store: any,
+  conversationsStore: any,
+  pendingResendQuestion: string | null,
+  pendingResendIdx: number | null,
+  triggerResend: (idx: number, q: string) => void,
+) {
+  if (abortReason && store.isLoading) {
+    store.stopLoading(abortReason);
+    if (abortReason === 'user') {
+      ElMessage.info('已停止回答');
+    } else if (abortReason === 'timeout') {
+      ElMessage.warning('问答超时（' + (QUESTION_TIMEOUT_MS / 1000) + '秒无响应），请检查网络或模型配置');
+    }
+    if (abortReason !== 'edit') {
+      await conversationsStore.persistConversation(store.messages);
+    }
+  }
+  if (pendingResendQuestion !== null && pendingResendIdx !== null) {
+    const q = pendingResendQuestion;
+    const i = pendingResendIdx;
+    pendingResendQuestion = null;
+    pendingResendIdx = null;
+    triggerResend(i, q);
+  }
+}
+
+async function sendQuestion(question: string, clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null) {
+  abortController = new AbortController();
+  const ac = abortController;
+  abortReason = null;
+  store.beginStreaming();
+  const activeThreadId = store.currentThreadId;
+  const relyOnServerMemory = inputBoxStore.settings.historyPreference === 'rely';
+  const history = relyOnServerMemory
+    ? undefined
+    : store.messages.map((m) => ({ role: m.role, content: m.content }));
+
+  resetQuestionTimeout();
+
+  const attachments = await collectAttachments();
+  attachmentsStore.flush();
+  pendingAttachmentIds.value = [];
+
+  const body = await buildQueryBody({ question, history, attachments, activeThreadId, activeMode, outputMode, store, authStore, modelStore, clarify });
 
   try {
-    // X-2 可恢复流式：用带重连的 SSE 消费包装。
-    // 首连请求工厂 initialFetch 发送完整 body；若流异常断开且后端已下发 managerRunId，
-    // 包装层自动以 resumeFetch 凭 runId 重连回放完整响应（resetForResume 避免重复追加）。
     const writer = store.getSessionWriter();
     const initialFetch = () =>
-      authStore.authFetch(`${API_BASE}/query`, {
+      authStore.authFetch(API_BASE + '/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: ac.signal,
       });
     const resumeFetch = (runId: string, threadId: string | null) =>
-      authStore.authFetch(`${API_BASE}/query`, {
+      authStore.authFetch(API_BASE + '/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // 重连仅需 runId（订阅进行中的 run）；threadId 一并带上是为兼容后端未来做归属校验
         body: JSON.stringify({ resume: runId, threadId: threadId ?? undefined }),
         signal: ac.signal,
       });
-    // onActivity=resetQuestionTimeout：每收到一个网络数据块即重置超时滑动窗口，
-    // 保证"慢但正常流式输出"的问答不会被固定墙钟误杀（仍保留对真·挂死的保护）。
     await consumeQuerySSEResumable(initialFetch, resumeFetch, writer, ac.signal, resetQuestionTimeout);
-    // 持久化对话到 IndexedDB（支持侧栏历史列表）
-    // S4：统一以 messagesWithStreaming 取源（与编辑重发 triggerResend 一致），安全覆盖进行中流式态
     await conversationsStore.persistConversation(store.messagesWithStreaming());
   } catch (err: unknown) {
-    // 对称守护（与 FloatingChat 一致）：AbortError 由超时/用户停止触发，交由 finally 按
-    // abortReason 提交部分答案并打 timedOut 标记，此处不再推送 error 消息，也不污染
-    // errorMessage。显式判断 name==='AbortError' 可消除对 consumeQuerySSE 内部"吞掉
-    // AbortError"契约的隐式依赖——authFetch 在信号中止时同样会抛 AbortError，若无此守护
-    // 会被误判为真实错误并额外推送一条 error 消息，与 finally 的 interrupted 消息叠加。
-    if ((err as Error).name === 'AbortError') {
-      // 中断路径：finally 会按 abortReason 处理（user→[已停止] / timeout→[已超时]+timedOut）
-    } else {
+    if ((err as Error).name !== 'AbortError') {
       const msg = (err as Error).message;
       store.handleError(msg);
       ElMessage.warning(apiErrorMessage('问答失败', err));
     }
   } finally {
-    // 清理超时定时器（无论正常完成、用户停止、超时、错误都要清）
     if (questionTimeoutId) {
       clearTimeout(questionTimeoutId);
       questionTimeoutId = null;
     }
-    // 处理主动停止/超时/编辑重发：store 此时仍为 isLoading=true 且未收到 done 事件
-    // 调用 stopLoading 保留已收到的部分答案，追加 [已停止]/[已超时] 标记（edit 不追加、不提示）
-    if (abortReason && store.isLoading) {
-      store.stopLoading(abortReason);
-      if (abortReason === 'user') {
-        ElMessage.info('已停止回答');
-      } else if (abortReason === 'timeout') {
-        ElMessage.warning(`问答超时（${QUESTION_TIMEOUT_MS / 1000}秒无响应），请检查网络或模型配置`);
-      }
-      // 持久化停止后的部分答案到 IndexedDB（edit 场景不在此持久化，稍后重发时统一持久化）
-      if (abortReason !== 'edit') {
-        await conversationsStore.persistConversation(store.messages);
-      }
-    }
+    // 澄清重发流程结束（无论成功产出答案 / 再次中断 / 失败），复位重发加载态
+    clarifyResending.value = false;
+    await handleQueryFinally(
+      abortReason, store, conversationsStore,
+      pendingResendQuestion, pendingResendIdx, triggerResend,
+    );
     abortReason = null;
     abortController = null;
-    // 编辑重发：当前回复已终止，丢弃被编辑的 user 消息及其后续，重新触发思考
-    if (pendingResendQuestion !== null && pendingResendIdx !== null) {
-      const q = pendingResendQuestion;
-      const i = pendingResendIdx;
-      pendingResendQuestion = null;
-      pendingResendIdx = null;
-      triggerResend(i, q);
-    }
   }
 }
-
-// 手动停止：用户点击停止按钮时调用
-// 为什么独立于 sendQuestion 的 finally：用户停止是异步触发的事件，
-// 通过 abortController.abort() 中断 fetch/SSE，让 sendQuestion 的 finally 接管状态清理
 function handleStop() {
   if (!abortController || !store.isLoading) return;
   abortReason = 'user';
@@ -735,7 +788,7 @@ function schedulePersistInProgress() {
     persistDebounceTimer = null;
     // 仅当仍处于生成中才落盘（避免完成后重复写）
     if (store.isLoading) {
-      void conversationsStore.persistConversation(store.messagesWithStreaming());
+      conversationsStore.persistConversation(store.messagesWithStreaming());
     }
   }, 1500);
 }
@@ -743,7 +796,7 @@ function schedulePersistInProgress() {
 // 切页/卸载前最佳努力落盘一次中间态（刷新或关闭标签页时触发 pagehide）
 function flushPersistOnHide() {
   if (store.isLoading) {
-    void conversationsStore.persistConversation(store.messagesWithStreaming());
+    conversationsStore.persistConversation(store.messagesWithStreaming());
   }
 }
 
@@ -767,7 +820,7 @@ function resumeLastAnswer() {
     }
   }
   if (!question) return;
-  void sendQuestion(question);
+  sendQuestion(question);
 }
 
 // FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
@@ -800,9 +853,9 @@ function handleSubmit() {
   if (!q || store.isLoading) return;
   store.submitQuestion(q);
   // FR-RM-09：立即落盘用户问题，确保新会话在首个 token 到达前也能在刷新后恢复
-  void conversationsStore.persistConversation(store.messagesWithStreaming());
+  conversationsStore.persistConversation(store.messagesWithStreaming());
   inputQuestion.value = '';
-  void sendQuestion(q);
+  sendQuestion(q);
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -814,11 +867,9 @@ function handleKeydown(e: KeyboardEvent) {
       e.preventDefault();
       handleSubmit();
     }
-  } else {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      handleSubmit();
-    }
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    handleSubmit();
   }
 }
 
@@ -979,7 +1030,7 @@ function resendFromUserQuestion(idx: number): boolean {
   // 丢弃从 idx 开始的所有消息（assistant 回答 + 可能的后续追问）
   // 保留 user 问题，让用户看到"重新生成/重发"的上下文
   store.removeMessagesFrom(idx);
-  void sendQuestion(question);
+  sendQuestion(question);
   return true;
 }
 
@@ -1016,7 +1067,7 @@ function handleRemoveMessage(idx: number) {
   store.removeMessage(idx);
   ElMessage.success('已删除消息');
   // 异步持久化：不阻塞 UI 反馈
-  void conversationsStore.persistConversation(store.messages);
+  conversationsStore.persistConversation(store.messages);
 }
 
 // 编辑重发统一入口：丢弃 idx 起的尾部（含被编辑的 user 消息），重插编辑后的 user 消息并重新流式回答。
@@ -1035,8 +1086,8 @@ function triggerResend(i: number, q: string) {
   // 编辑重发：被编辑的 user 消息已被 removeMessagesFrom 丢弃，必须 submitQuestion 重新插入，否则对话里只剩悬空答案
   store.submitQuestion(q);
   // FR-RM-09：立即落盘编辑后的用户问题，确保刷新/切页后可恢复（与 Case A 对称，消除 S2 路径不落盘缺口）
-  void conversationsStore.persistConversation(store.messagesWithStreaming());
-  void sendQuestion(q);
+  conversationsStore.persistConversation(store.messagesWithStreaming());
+  sendQuestion(q);
 }
 
 // 编辑 user 消息：将气泡切换为可编辑态，预填当前内容
@@ -1064,7 +1115,6 @@ function handleCancelEdit() {
 function handleConfirmEdit() {
   const idx = editingIdx.value;
   if (idx === null) return;
-  const original = store.messages[idx]?.content ?? '';
   const newText = editingText.value.trim();
   editingIdx.value = null;
   editingText.value = '';
@@ -1072,7 +1122,10 @@ function handleConfirmEdit() {
     ElMessage.warning('内容不能为空');
     return;
   }
-  if (newText === original) return; // 未修改，直接退出编辑态，不重发
+  // 注意：不再因「内容未变」而跳过重发。按钮语义为「编辑并重新发送」——用户点击「确认发送」
+  // 即表达重发意图，无论是否修改内容都应触发新一轮思考（用户可能仅想让 AI 重新作答）。
+  // 此前 `if (newText === original) return` 会在「未改内容就确认」时直接 return，导致 sendQuestion
+  // 不被调用、连请求都不发、AI 毫无反应且无任何错误提示，表现为「编辑重发不生效」。
   // 能否安全 abort 当前在途流：必须同时满足「正在生成」且存在活跃 abortController。
   // 注意：若上一次回答以错误结束（sendQuestion 的 catch 分支仅 handleError、未 stopLoading），
   // 会残留 isLoading=true 但 abortController=null 的卡死态。此时若走「abort 后等 finally 重发」
@@ -1244,6 +1297,7 @@ onBeforeUnmount(() => {
       @toggle="toggleSidebar"
       @new-session="handleNewSession"
       @select="handleSelectConversation"
+      @collapse="setSidebarState('hidden')"
     />
     <div class="glass-card query-card fade-up">
       <div class="card-deco"></div>
@@ -1283,8 +1337,8 @@ onBeforeUnmount(() => {
                   @keydown.esc="handleCancelEdit"
                 />
                 <div class="msg-edit-actions">
-                  <button class="edit-btn confirm" data-testid="confirm-edit" @click="handleConfirmEdit">确认发送</button>
-                  <button class="edit-btn cancel" data-testid="cancel-edit" @click="handleCancelEdit">取消</button>
+                  <button class="edit-btn confirm" data-testid="confirm-edit" title="确认发送（Ctrl+Enter）" @click="handleConfirmEdit">确认发送</button>
+                  <button class="edit-btn cancel" data-testid="cancel-edit" title="取消编辑（Esc）" @click="handleCancelEdit">取消</button>
                 </div>
               </div>
               <template v-else>
@@ -1299,7 +1353,7 @@ onBeforeUnmount(() => {
               <!-- v3 PPT 生成卡片：通过 SSE ppt 事件推送，Marp Markdown 渲染为幻灯片 -->
               <MultimodalOutputCard
                 v-if="msg.ppt"
-                :output="{ type: 'ppt', content: msg.ppt.title, pptMarkdown: msg.ppt.markdown }"
+                :output="{ type: 'ppt', content: msg.ppt.title, pptMarkdown: msg.ppt.markdown, pptxUrl: msg.ppt.pptxUrl }"
               />
               <!-- F-3.12 联想提问位置迁移：从 refs 下方移到 refs 上方，紧贴答案末尾，符合阅读流 -->
               <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
@@ -1321,6 +1375,14 @@ onBeforeUnmount(() => {
               <!-- §X-1 步骤级追踪面板：答案完成后展示每步耗时分解（定位长耗时瓶颈） -->
               <QueryTracePanel v-if="msg.runId" :run-id="msg.runId" />
               </template>
+              <!-- T00265：AI 气泡右下角上下文占用徽章（圆环进度 + 动态数字 + 悬浮详情 + 压缩）
+                   数据来自 query store 的 SSE done 事件（governor.inputTokens + maxTokens） -->
+              <ContextUsageBadge
+                v-if="msg.role === 'assistant' && store.contextMaxTokens > 0"
+                :thread-id="(msg.threadId ?? msg.sessionId ?? null) as string | null"
+                :input-tokens="store.contextInputTokens"
+                :max-tokens="store.contextMaxTokens"
+              />
             </div>
               <!-- F-3.7 / F-3.13 工具栏：气泡外部下方显示，hover 气泡时淡入，避免挡住气泡内文字
                    §归档按钮迁移：原气泡内 msg-actions 文字按钮已移除，统一收纳到下方悬停工具栏
@@ -1351,6 +1413,7 @@ onBeforeUnmount(() => {
                 <button
                   class="resend-btn"
                   data-testid="confirm-resend"
+                  title="重新发起问答并生成完整回答"
                   @click="handleResend(idx)"
                 >确认重发</button>
               </div>
@@ -1361,22 +1424,32 @@ onBeforeUnmount(() => {
         <!-- 流式输出中的 assistant 答案 -->
         <div v-if="store.streamingAnswer || store.isLoading" class="msg-row assistant">
           <div class="msg-bubble assistant" :class="{ streaming: !!store.streamingAnswer, loading: store.isLoading && !store.streamingAnswer }">
-            <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" :live="store.isLoading" />
-            <div v-if="store.searchProgress" class="search-progress">
-              {{ searchProgressLabel }}
-              <span v-if="store.searchProgress.count">（{{ store.searchProgress.count }} 条）</span>
-            </div>
-            <!-- F-3.1 加载态：首字节前显示 3 圆点脉动 + "正在思考…" 文案；首字节后切换为流式答案 -->
-            <div v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0" class="loading-dots">
-              <span class="dot"></span>
-              <span class="dot"></span>
-              <span class="dot"></span>
-              <span class="loading-text">正在思考…</span>
-            </div>
-            <div v-else class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '')"></div>
-            <!-- FR-09-2 流式阶段预览 multimodal：done 之前到达的结构化输出 -->
-            <MultimodalOutputCard v-if="store.currentMultimodal" :output="store.currentMultimodal" />
-            <RefsList v-if="store.currentRefs.length > 0" :refs="store.currentRefs" />
+            <!-- 意图澄清：问题存在歧义时后端中断回答，渲染解读选项卡片等待用户确认（替代加载态） -->
+            <ClarifyCard
+              v-if="store.currentClarification"
+              :clarification="store.currentClarification"
+              :loading="clarifyResending"
+              @select="handleClarifySelect"
+              @dismiss="handleClarifyDismiss"
+            />
+            <template v-else>
+              <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" :live="store.isLoading" />
+              <div v-if="store.searchProgress" class="search-progress">
+                {{ searchProgressLabel }}
+                <span v-if="store.searchProgress.count">（{{ store.searchProgress.count }} 条）</span>
+              </div>
+              <!-- F-3.1 加载态：首字节前显示 3 圆点脉动 + "正在思考…" 文案；首字节后切换为流式答案 -->
+              <div v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0" class="loading-dots">
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="loading-text">正在思考…</span>
+              </div>
+              <div v-else class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '')"></div>
+              <!-- FR-09-2 流式阶段预览 multimodal：done 之前到达的结构化输出 -->
+              <MultimodalOutputCard v-if="store.currentMultimodal" :output="store.currentMultimodal" />
+              <RefsList v-if="store.currentRefs.length > 0" :refs="store.currentRefs" />
+            </template>
           </div>
         </div>
       </div>
@@ -1463,20 +1536,15 @@ onBeforeUnmount(() => {
               </svg>
             </button>
           </div>
-          <!-- 模型选择下拉条：紧贴发送按钮左侧，与工具栏同行，避免占据独立行放大输入区视野
-               v3.1：移除此处的 AI 伙伴选择器，挪到高级设置面板（避免输入栏视觉过载） -->
           <div class="right-buttons">
             <ModelSelector />
-            <!-- 加载态按钮复用发送按钮位置：避免新增独立按钮造成布局抖动
-                 默认：发送（蓝色 Promotion）；加载中：停止（红色 VideoPause）
-                 为什么不用独立停止按钮：会破坏 .right-buttons 的 flex 节奏并导致视觉跳动
-                 v3.1 缩小尺寸：size="default" + 自定义 send-btn 类，替代原 large 让按钮更克制 -->
             <el-button
               v-if="!store.isLoading"
               type="primary"
               class="send-btn"
               :disabled="!inputQuestion.trim()"
               title="发送"
+              data-tip="发送问题，基于 vault 知识库检索并生成回答"
               @click="handleSubmit"
             >
               <el-icon><Promotion /></el-icon>
@@ -1492,16 +1560,8 @@ onBeforeUnmount(() => {
             </el-button>
           </div>
         </div>
-        <!-- 高级设置面板：可折叠下方面板，集中展示输出相关非高频设置
-             v3.2 移除联网搜索/深度思考独立按钮：与中间件多选 web_search/deep_thinking 重复
-             v3.1 扩充：AI 伙伴 + 输出模式 + 中间件 + 流式开关，集中收纳避免输入栏视觉过载
-             为什么用 Vue Transition：内建高度过渡，零额外依赖，平滑展开收起
-             为什么绑定 mousedown.stop：避免点击面板内控件时冒泡触发外层 click outside 关闭 -->
         <Transition name="advanced-panel">
           <div v-if="advancedOpen" ref="advancedPanelRef" class="advanced-panel" @mousedown.stop>
-            <!-- FR-12 AI 伙伴选择器：从 .right-buttons 移入
-                 v3.1 用 el-select + el-option 渲染 skills 列表（与原 right-buttons 实现一致），
-                 保留默认（无预设）选项 + 全部 enabled 技能 -->
             <el-select
               v-model="activeSkillId"
               size="small"
@@ -1518,10 +1578,6 @@ onBeforeUnmount(() => {
                 :value="s.id"
               />
             </el-select>
-            <!-- 联网搜索/深度思考按钮已移除：功能与中间件多选中的 web_search/deep_thinking 重复
-                 后端 query-workflow.ts 中 middlewareSet 优先级高于 input.webSearch/input.mode，
-                 中间件配置完全覆盖独立按钮，保留两套入口会造成用户认知负担与状态不一致 -->
-            <!-- FR-09-2 多模态输出模式选择器：思维导图/FAQ/时间线/图像/PPT -->
             <el-select
               v-model="outputMode"
               size="small"
@@ -1535,10 +1591,6 @@ onBeforeUnmount(() => {
                 :value="opt.value"
               />
             </el-select>
-            <!-- v2: 多输出模式多选：复选框组，用户可独立开关 思考过程/工具调用/主答案/多模态 -->
-            <!-- 为什么用 el-popover + trigger="manual"：el-dropdown 的 outside-click 检测
-                 在 teleport 到 body 后仍会误判 checkbox 点击为外部点击关闭菜单；
-                 el-popover manual 模式把可见性完全交给 v-model:visible，从机制上根除此问题 -->
             <el-popover
               :visible="outputModesOpen"
               placement="bottom"
@@ -1678,14 +1730,14 @@ onBeforeUnmount(() => {
                 placeholder="输入快捷回复内容，回车添加"
                 @keyup.enter="addQuickReply"
               />
-              <el-button size="small" type="primary" @click="addQuickReply">添加</el-button>
+              <el-button size="small" type="primary" data-tip="将上方输入的文本添加为一条快捷回复" @click="addQuickReply">添加</el-button>
             </div>
           </div>
         </div>
         <template #footer>
-          <el-button @click="resetIbSettings">恢复默认</el-button>
-          <el-button @click="ibSettingsVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveIbSettings">保存</el-button>
+          <el-button data-tip="将隔离浏览器设置恢复为系统默认值" @click="resetIbSettings">恢复默认</el-button>
+          <el-button data-tip="放弃本次修改并关闭设置" @click="ibSettingsVisible = false">取消</el-button>
+          <el-button type="primary" data-tip="保存隔离浏览器设置更改" @click="saveIbSettings">保存</el-button>
         </template>
       </el-dialog>
     </div>
@@ -1718,6 +1770,7 @@ onBeforeUnmount(() => {
           <el-button
             type="primary"
             class="video-submit-btn"
+            data-tip="根据提示词调用模型生成一段视频（通常需 1-5 分钟）"
             @click="submitVideoTask"
           >
             生成视频
@@ -1737,20 +1790,20 @@ onBeforeUnmount(() => {
         <div v-else-if="videoStatus === 'completed'" class="video-result-section">
           <video
             v-if="videoUrl"
-            :src="videoUrl"
+            :src="resolveMediaUrl(videoUrl)"
             controls
             class="video-player"
           />
           <div class="video-actions">
-            <a v-if="videoUrl" :href="videoUrl" target="_blank" rel="noopener" class="video-download-link">
+            <a v-if="videoUrl" :href="resolveMediaUrl(videoUrl)" target="_blank" rel="noopener" class="video-download-link">
               下载视频
             </a>
-            <el-button size="small" @click="resetVideoDialog">重新生成</el-button>
+            <el-button size="small" data-tip="重置视频对话框，重新填写提示词生成新视频" @click="resetVideoDialog">重新生成</el-button>
           </div>
         </div>
       </div>
       <template #footer>
-        <el-button @click="closeVideoDialog">关闭</el-button>
+        <el-button data-tip="关闭视频生成对话框" @click="closeVideoDialog">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -2016,6 +2069,20 @@ onBeforeUnmount(() => {
   border: 1px solid var(--accent-cyan-a25, rgba(0, 245, 255, 0.25));
   border-top-left-radius: 4px;
   backdrop-filter: var(--blur);
+}
+
+/* T00261：AI 回复气泡内 FAQ 问答对（常被模型包进代码块）背景跟随主题，
+   避免全局 style.css 的近黑 pre 背景 rgba(5,0,16,0.6) 在气泡内形成突兀黑色块；
+   用 --bg-card（浅色主题为浅色、深色主题为深色）实现「与主题背景一致」，
+   而非 --bg-elevated（仅 light-business 定义，其他浅色主题会回退成暗色） */
+.msg-bubble.assistant :deep(.markdown-body pre) {
+  background: var(--bg-card, rgba(247, 248, 250, 0.9));
+  border-color: var(--border-color, rgba(128, 128, 128, 0.25));
+}
+
+.msg-bubble.assistant :deep(.markdown-body pre code) {
+  color: var(--text-base);
+  background: transparent;
 }
 
 .msg-bubble.assistant::before {
@@ -2533,7 +2600,8 @@ onBeforeUnmount(() => {
 }
 
 /* 高级设置齿轮按钮：与工具栏按钮视觉对齐，点击时旋转 90° 反馈展开/收起状态
-   为什么用胶囊背景：与 output-modes-trigger / stream-mode-toggle 风格统一 */
+   为什么用胶囊背景：与 output-modes-trigger / stream-mode-toggle 风格统一
+   T00263：去掉边框、透明背景，简洁图标样式 */
 .advanced-toggle {
   display: flex;
   align-items: center;
@@ -2541,8 +2609,8 @@ onBeforeUnmount(() => {
   width: 32px;
   height: 32px;
   border-radius: 16px;
-  background: var(--accent-purple-a05, rgba(176, 38, 255, 0.05));
-  border: 1px solid var(--accent-purple-a20, rgba(176, 38, 255, 0.2));
+  border: none;
+  background: transparent;
   color: var(--text-soft, #888);
   cursor: pointer;
   transition: all 0.25s ease;
@@ -2550,12 +2618,10 @@ onBeforeUnmount(() => {
   padding: 0;
 }
 .advanced-toggle:hover {
-  border-color: var(--neon-purple, #b226ff);
   color: var(--neon-purple, #b226ff);
   background: var(--accent-purple-a12, rgba(176, 38, 255, 0.12));
 }
 .advanced-toggle.active {
-  border-color: var(--neon-purple, #b226ff);
   color: var(--neon-purple, #b226ff);
   background: var(--accent-purple-a18, rgba(176, 38, 255, 0.18));
 }
@@ -2887,3 +2953,5 @@ onBeforeUnmount(() => {
   text-decoration: underline;
 }
 </style>
+
+

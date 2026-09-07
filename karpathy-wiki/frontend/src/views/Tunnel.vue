@@ -374,20 +374,22 @@ onBeforeUnmount(() => {
         <div class="url-box">
           <code class="url-text">{{ status.publicUrl }}</code>
           <div class="url-actions">
-            <el-button size="small" @click="copyUrl">复制</el-button>
-            <el-button size="small" type="primary" @click="openUrl">打开</el-button>
+            <el-button size="small" data-tip="复制公网地址到剪贴板" @click="copyUrl">复制</el-button>
+            <el-button size="small" type="primary" data-tip="在新标签页打开公网地址" @click="openUrl">打开</el-button>
           </div>
         </div>
       </div>
       <div class="actions">
         <el-button
           type="primary"
+          data-tip="启动内网穿透隧道，将本地知识库服务暴露到公网"
           :loading="starting"
           :disabled="status?.status === 'running'"
           @click="startTunnel"
         >启动隧道</el-button>
         <el-button
           type="danger"
+          data-tip="停止当前穿透隧道，断开公网访问"
           :loading="stopping"
           :disabled="status?.status !== 'running'"
           @click="stopTunnel"
@@ -421,9 +423,9 @@ onBeforeUnmount(() => {
         <template #title>Tailscale Funnel 需要授权</template>
         <div class="auth-detail">{{ authError.detail }}</div>
         <div class="auth-actions">
-          <el-button type="primary" size="small" @click="openAuthUrl">打开授权链接</el-button>
-          <el-button size="small" @click="startTunnel">我已授权，重新启动</el-button>
-          <el-button size="small" @click="dismissAuthError">取消</el-button>
+          <el-button type="primary" size="small" data-tip="在浏览器中打开 Tailscale Funnel 授权页面" @click="openAuthUrl">打开授权链接</el-button>
+          <el-button size="small" data-tip="完成授权后重新启动隧道" @click="startTunnel">我已授权，重新启动</el-button>
+          <el-button size="small" data-tip="关闭此授权错误提示" @click="dismissAuthError">取消</el-button>
         </div>
       </el-alert>
     </div>
@@ -475,10 +477,10 @@ onBeforeUnmount(() => {
                 <span class="info-label">固定域名：</span>
                 <code>{{ config.hostname }}</code>
               </div>
-              <el-button size="small" type="primary" @click="openWizard">重新配置</el-button>
+              <el-button size="small" type="primary" data-tip="重新运行 Cloudflare Named 隧道配置向导" @click="openWizard">重新配置</el-button>
             </div>
             <div v-else class="named-config-empty">
-              <el-button size="small" type="primary" @click="openWizard">开始配置向导</el-button>
+              <el-button size="small" type="primary" data-tip="打开 Cloudflare Named 隧道三步配置向导（授权→创建→绑定域名）" @click="openWizard">开始配置向导</el-button>
               <span class="hint">三步配置：授权登录 → 创建隧道 → 绑定域名</span>
             </div>
           </div>
@@ -538,7 +540,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="actions">
-        <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
+        <el-button type="primary" data-tip="保存穿透配置（Provider / 隧道模式 / Authtoken / 开机自启）" :loading="saving" @click="saveConfig">保存配置</el-button>
       </div>
     </div>
 
@@ -562,7 +564,7 @@ onBeforeUnmount(() => {
           点击"开始授权"后，cloudflared 会启动 OAuth 流程。在浏览器中完成 Cloudflare 账号授权后，系统会自动检测 cert.pem 生成并进入下一步。
         </div>
         <div class="wizard-actions">
-          <el-button type="primary" :loading="loginPolling" @click="startLogin">
+          <el-button type="primary" data-tip="打开 Cloudflare OAuth 授权登录流程" :loading="loginPolling" @click="startLogin">
             {{ loginResult ? '重新授权' : '开始授权' }}
           </el-button>
         </div>
@@ -600,7 +602,7 @@ onBeforeUnmount(() => {
           :disabled="creatingTunnel"
         />
         <div class="wizard-actions">
-          <el-button type="primary" :loading="creatingTunnel" @click="createTunnel">创建隧道</el-button>
+          <el-button type="primary" data-tip="创建命名隧道并生成 credentials 文件" :loading="creatingTunnel" @click="createTunnel">创建隧道</el-button>
         </div>
       </div>
 
@@ -615,7 +617,7 @@ onBeforeUnmount(() => {
           :disabled="routingDns"
         />
         <div class="wizard-actions">
-          <el-button type="primary" :loading="routingDns" @click="routeDns">配置 DNS</el-button>
+          <el-button type="primary" data-tip="为固定域名配置 Cloudflare DNS 解析并切换到 Named 模式" :loading="routingDns" @click="routeDns">配置 DNS</el-button>
         </div>
       </div>
     </el-dialog>

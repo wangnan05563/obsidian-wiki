@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { useAuthStore } from '../../stores/auth';
 import { useModelStore } from '../../stores/model';
@@ -185,12 +185,12 @@ async function logout() {
         <input v-model="cfg.apiKey" class="mme-input" type="password" placeholder="输入你的密钥" autocomplete="off" />
       </div>
 
-      <button class="mme-save" :disabled="saving" @click="save">
+      <button class="mme-save" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : (saved ? '已保存 ✓' : '保存配置') }}
       </button>
     </section>
 
-    <button class="mme-logout" @click="logout">退出登录</button>
+    <button class="mme-logout" type="button" @click="logout">退出登录</button>
   </div>
 </template>
 

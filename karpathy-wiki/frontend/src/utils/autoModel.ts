@@ -1,4 +1,4 @@
-// auto（自动）模型模式：与 workbuddy 的 auto 机制一致——
+﻿// auto（自动）模型模式：与 workbuddy 的 auto 机制一致——
 // 用户无需手动指定具体模型，系统从「已配置好的模型列表」中自动选择最合适的模型进行问答。
 //
 // 为什么放前端解析：本应用的模型密钥为 BYOK（每用户各自配置、存于客户端 IndexedDB），
@@ -80,7 +80,7 @@ export async function resolveAutoPresetForUser(
   const ordered = orderPresetsByAutoPriority(presets);
   for (const p of ordered) {
     const cfg = await loadAiUserConfigForPreset(userId, p.key, p);
-    if (cfg && cfg.apiKey && cfg.apiKey.trim() !== '') {
+    if (cfg?.apiKey && cfg.apiKey.trim() !== '') {
       return { preset: p, config: cfg };
     }
   }

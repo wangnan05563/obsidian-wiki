@@ -1,4 +1,4 @@
-// 本地加密工具（FR-RM-07）：基于 Web Crypto（浏览器 / Node 22 均内置）。
+﻿// 本地加密工具（FR-RM-07）：基于 Web Crypto（浏览器 / Node 22 均内置）。
 // 用途：PBKDF2(密码, 设备盐) 派生 AES-GCM 密钥，对本地 IndexedDB 会话做静态加密，
 // 降低同设备其他进程 / 用户在浏览器关闭态读取明文 IndexedDB 的风险（风险 R-3）。
 // 密钥不离开本地；加密密钥由登录密码派生，明文密码不落盘。
@@ -7,7 +7,7 @@ const PBKDF2_ITERATIONS = 200_000;
 
 export function getCrypto(): Crypto {
   const c = (globalThis as { crypto?: Crypto }).crypto;
-  if (!c || !c.subtle || !c.getRandomValues) {
+  if (!c?.subtle || !c.getRandomValues) {
     throw new Error('当前环境不支持 Web Crypto');
   }
   return c;

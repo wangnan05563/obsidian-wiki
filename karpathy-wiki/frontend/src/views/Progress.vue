@@ -406,7 +406,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           </div>
         </div>
       <div class="restart-bar">
-          <el-button type="primary" size="large" @click="handleRestart">
+          <el-button type="primary" size="large" data-tip="返回投递页，开始编译下一篇文章" @click="handleRestart">
             再投一篇
           </el-button>
         </div>
@@ -415,7 +415,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       <div v-else-if="store.isBatchMode && store.isDone" class="done-section">
         <div v-if="store.doneMessage" class="done-message">{{ store.doneMessage }}</div>
         <div class="restart-bar">
-          <el-button type="primary" size="large" @click="handleRestart">
+          <el-button type="primary" size="large" data-tip="返回投递页，开始编译下一批内容" @click="handleRestart">
             再投一批
           </el-button>
         </div>
@@ -423,15 +423,15 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       <!-- 批量编译取消态：提供"再投一批"按钮让用户重新开始 -->
       <div v-else-if="store.isBatchMode && store.isCancelled" class="done-section">
         <div class="restart-bar">
-          <el-button type="primary" size="large" @click="handleRestart">
+          <el-button type="primary" size="large" data-tip="重新开始批量编译任务" @click="handleRestart">
             再投一批
           </el-button>
         </div>
       </div>
       <div v-else-if="store.errorMessage" class="restart-bar">
-        <el-button type="primary" size="large" @click="handleRestart">
-          重新投递
-        </el-button>
+          <el-button type="primary" size="large" data-tip="重新开始投递失败的内容" @click="handleRestart">
+            重新投递
+          </el-button>
         <!-- LLM Provider 快捷切换：编译失败（特别是 5xx/超时）时无需跳转 Config 页面 -->
         <div v-if="llmPresets.length > 0" class="quick-switch-provider">
           <span class="quick-switch-label">快捷切换 LLM：</span>
@@ -439,6 +439,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             v-for="preset in llmPresets"
             :key="preset.key"
             size="small"
+            data-tip="切换 LLM Provider 后重试（无需跳转配置页）"
             :loading="switchingProvider"
             @click="quickSwitchProvider(preset)"
           >
@@ -453,7 +454,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           <h3 class="runs-title">
             <span class="title-bracket">[</span> 历史编译任务 <span class="title-bracket">]</span>
           </h3>
-          <el-button size="small" :loading="store.loadingRuns" @click="store.loadRuns()">刷新</el-button>
+          <el-button size="small" data-tip="刷新历史编译任务列表" :loading="store.loadingRuns" @click="store.loadRuns()">刷新</el-button>
         </div>
       <div v-if="store.loadingRuns" class="section-loading">LOADING...</div>
       <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务</div>
@@ -470,6 +471,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
                 v-if="run.status === 'failed'"
                 size="small"
                 type="primary"
+                data-tip="从失败步骤继续执行该编译任务"
                 @click.stop="startResume(run.runId)"
               >
                 恢复

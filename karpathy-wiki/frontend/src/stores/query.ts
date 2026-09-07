@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed, watch } from 'vue';
-import type { ChatMessage, Reference, ThinkingStep, MultimodalOutput } from '../types';
+import type { ChatMessage, Reference, ThinkingStep, MultimodalOutput, Clarification, RefAuthority, KnowledgeStatus } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
 
 // v2: 多输出模式多选类型，与后端 outputModes 对齐
@@ -24,14 +24,16 @@ export const OUTPUT_MODE_LABELS: Record<OutputMode, string> = {
 // - 'extended_tools' 启用 MCP/CLI 扩展工具
 // - 'followups' 启用追问建议生成
 // - 'stream' 启用真流式（覆盖 stream=false）
-export type Middleware = 'web_search' | 'deep_thinking' | 'extended_tools' | 'followups' | 'stream';
-export const ALL_MIDDLEWARES: Middleware[] = ['web_search', 'deep_thinking', 'extended_tools', 'followups', 'stream'];
+// - 'clarify' 启用意图澄清（问题有歧义时主动中断提问，列出解读选项供确认）
+export type Middleware = 'web_search' | 'deep_thinking' | 'extended_tools' | 'followups' | 'stream' | 'clarify';
+export const ALL_MIDDLEWARES: Middleware[] = ['web_search', 'deep_thinking', 'extended_tools', 'followups', 'stream', 'clarify'];
 export const MIDDLEWARE_LABELS: Record<Middleware, string> = {
   web_search: '联网搜索',
   deep_thinking: '深度思考',
   extended_tools: '扩展工具',
   followups: '追问建议',
   stream: '真流式输出',
+  clarify: '歧义澄清',
 };
 
 // §按会话隔离缓冲（v4）：每个会话拥有独立的消息/流式/线程状态，
@@ -66,6 +68,13 @@ export interface SessionBuffer {
   currentManagerRunId: string | null;
   // X-2 流式生命周期：本轮 SSE 是否已收到 done 事件。用于重连逻辑判定"流异常结束 vs 正常完成"。
   currentDidDone: boolean;
+  // 意图澄清：后端检测到歧义时下发的澄清卡片（中断提问）。非空且 isLoading=true 表示
+  // 等待用户选择；用户选择后由消费方用 clarifyId+choiceIndex 重发同一问题。
+  currentClarification: Clarification | null;
+  // T00265：上下文占用统计 —— done 事件携带的 governor 治理前 token 总量与上下文预算上限。
+  // 消息气泡右下角徽章据此展示当前上下文使用百分比；随每次问答刷新。
+  contextInputTokens: number;
+  contextMaxTokens: number;
 }
 
 function createEmptyBuffer(): SessionBuffer {
@@ -85,6 +94,9 @@ function createEmptyBuffer(): SessionBuffer {
     currentRunId: null,
     currentManagerRunId: null,
     currentDidDone: false,
+    currentClarification: null,
+    contextInputTokens: 0,
+    contextMaxTokens: 0,
   };
 }
 
@@ -124,6 +136,10 @@ function loadStreamMode(): boolean {
 // 中间件多选偏好：从 localStorage 加载，未设置时默认全开（向后兼容旧行为）
 // 为什么默认全开：middlewares 是"功能开关集合"，老用户未配置时应保持所有功能可用，
 // 避免升级后用户感知不到原已启用的功能（与 outputModes 一致的回退策略）
+// 新增中间件在升级时的默认迁移名单：老用户 localStorage 存的数组不含这些新中间件，
+// 若不做补充，升级后新功能会被旧数组静默关闭。这些中间件为增量能力，默认开启（与全开回退一致）。
+const MIDDLEWARE_MIGRATION_ADD: Middleware[] = ['clarify'];
+
 function loadMiddlewares(): Middleware[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.MIDDLEWARES);
@@ -135,7 +151,12 @@ function loadMiddlewares(): Middleware[] {
         (m): m is Middleware => typeof m === 'string' && (ALL_MIDDLEWARES as string[]).includes(m),
       );
       // 全部过滤掉时回退到全开，避免空数组导致所有功能被禁用
-      return valid.length > 0 ? valid : [...ALL_MIDDLEWARES];
+      const base = valid.length > 0 ? valid : [...ALL_MIDDLEWARES];
+      // 升级迁移：补齐新增中间件（默认开启）
+      for (const m of MIDDLEWARE_MIGRATION_ADD) {
+        if (!base.includes(m)) base.push(m);
+      }
+      return base;
     }
   } catch {
     // 解析失败视为未设置
@@ -214,6 +235,8 @@ function bufFinalizeAnswer(
       managerRunId: b.currentManagerRunId ?? undefined,
     });
   }
+  // 答案完成（done）：澄清流程结束，清掉遗留的澄清卡片（若有）
+  b.currentClarification = null;
   bufClearCurrentRound(b);
   b.isLoading = false;
 }
@@ -231,6 +254,8 @@ function bufHandleError(b: SessionBuffer, message: string) {
       status: 'error',
     });
   }
+  // 出错时澄清卡片一并失效（流已断，选择已无意义），解除等待态
+  b.currentClarification = null;
   bufClearCurrentRound(b);
   b.isLoading = false;
 }
@@ -241,6 +266,8 @@ function bufHandleError(b: SessionBuffer, message: string) {
 // 'edit'：编辑重发场景下终止当前回复——仅清空本轮 + 解除 loading，不追加 [已停止]、
 // 不弹提示，因为调用方（handleConfirmEdit）随后会丢弃该 user 消息及其后续并重发
 function bufStopLoading(b: SessionBuffer, reason: 'user' | 'timeout' | 'edit') {
+  // 停止即放弃当前流程：澄清等待态一并解除（卡片失效，用户可重新提问）
+  b.currentClarification = null;
   if (reason === 'edit') {
     bufClearCurrentRound(b);
     b.isLoading = false;
@@ -318,14 +345,30 @@ function bufSetRefs(
   // §5.2 合并本地引用 + 联网搜索引用为统一 Reference[]。
   // 本地引用 citeIndex 1..N，联网引用 N+1..M，两类在 RefsList 中差异化渲染
   const localRefs: Reference[] = refs.map((ref, index) => {
-    if (typeof ref !== 'string') return ref;
-    return {
-      path: ref,
-      title: ref.split('/').pop() || ref,
-      snippet: '',
-      source: 'vault' as const,
-      citeIndex: index + 1,
-    };
+    // 兼容三形态（DRY 统一入口）：
+    //   v1 string（旧路径）→ 组装无信号 Reference
+    //   v2 Reference（旧对象，可能无 signals）→ 透传
+    //   V4.0 RefSignal（path + authority/confidence/review/knowledgeStatus）→ 组装 signals
+    if (typeof ref === 'string') {
+      return {
+        path: ref,
+        title: ref.split('/').pop() || ref,
+        snippet: '',
+        source: 'vault' as const,
+        citeIndex: index + 1,
+      };
+    }
+    if (!ref.signals) {
+      // 后端 RefSignal 顶层字段组装 signals；若已带 signals 则以此为准
+      const sig = ref as { authority?: RefAuthority; confidence?: boolean; review?: boolean; knowledgeStatus?: KnowledgeStatus };
+      ref.signals = {
+        authority: sig.authority ?? 'unknown',
+        confidence: sig.confidence ?? false,
+        review: sig.review ?? false,
+        knowledgeStatus: sig.knowledgeStatus ?? 'unknown',
+      };
+    }
+    return ref;
   });
   const webRefList: Reference[] = (webRefs ?? []).map((r, i) => ({
     url: r.url,
@@ -349,12 +392,31 @@ function bufSetProgress(b: SessionBuffer, step: string, count?: number) {
   b.searchProgress = { step, count };
 }
 
+// 意图澄清：后端 SSE clarify 事件写入澄清卡片（覆盖旧卡）。
+// 为什么不动 isLoading：收到 clarify 即中断本轮，isLoading 保持 true 让 UI 停留在
+// 「等待用户选择」态（卡片处于可交互状态），同时阻止新提问/重新生成（与流式中一致）。
+function bufSetClarification(b: SessionBuffer, payload: Clarification) {
+  b.currentClarification = payload;
+}
+
+// 用户放弃澄清（换个问法）：清卡片并解除 isLoading，允许重新输入/提问。
+function bufClearClarification(b: SessionBuffer) {
+  b.currentClarification = null;
+  b.isLoading = false;
+}
+
 function bufSetThreadId(b: SessionBuffer, id: string | null) {
   b.currentThreadId = id;
 }
 
 function bufSetRunId(b: SessionBuffer, id: string | null) {
   b.currentRunId = id;
+}
+
+// T00265：记录本轮问答的上下文占用统计（governor 治理前 token 总量 + 预算上限）
+function bufSetContextUsage(b: SessionBuffer, governor: { inputTokens?: number } | null | undefined, maxTokens?: number) {
+  b.contextInputTokens = governor?.inputTokens ?? b.contextInputTokens;
+  b.contextMaxTokens = maxTokens ?? b.contextMaxTokens;
 }
 
 function bufSetErrorMessage(b: SessionBuffer, message: string) {
@@ -469,6 +531,12 @@ export const useQueryStore = defineStore('query', () => {
   const currentImage = computed(() => sessions.value.get(activeId.value)?.currentImage ?? null);
   const currentPpt = computed(() => sessions.value.get(activeId.value)?.currentPpt ?? null);
   const currentThreadId = computed(() => sessions.value.get(activeId.value)?.currentThreadId ?? null);
+  const currentClarification = computed(() => sessions.value.get(activeId.value)?.currentClarification ?? null);
+
+  // T00265：上下文占用统计（读 active buffer）——必须用 computed 而非对象 getter，
+  // 否则 Pinia setup store 会把普通 getter 快照为初始值，导致徽章读不到动态数据
+  const contextInputTokens = computed(() => activeBuffer().contextInputTokens);
+  const contextMaxTokens = computed(() => activeBuffer().contextMaxTokens);
 
   // ===== 多会话路由 / 查询 =====
   // 读取指定会话缓冲（不创建）。移动端用于判断后台会话是否仍在流式、持久化离开的会话。
@@ -542,6 +610,9 @@ export const useQueryStore = defineStore('query', () => {
       setThreadId: (id: string | null) => bufSetThreadId(b(), id),
       // §X-1 步骤级追踪：done 事件携带的 harness runId 暂存到缓冲，finalizeAnswer 时附加到消息
       setRunId: (id?: string) => bufSetRunId(b(), id ?? null),
+      // T00265：done 事件携带的上下文占用统计暂存到缓冲，徽章据此展示
+      setContextUsage: (governor: { inputTokens?: number } | null | undefined, maxTokens?: number) =>
+        bufSetContextUsage(b(), governor, maxTokens),
       // X-2 可恢复流式：open 事件携带的 manager runId 暂存到缓冲，断线重连时凭此 resume
       setManagerRunId: (id?: string) => {
         b().currentManagerRunId = id ?? null;
@@ -557,6 +628,13 @@ export const useQueryStore = defineStore('query', () => {
       },
       // X-2 断线重连：清掉已收到但未 finalize 的部分内容，等待后端回放完整响应（避免重复追加）
       resetForResume: () => bufResetForResume(b()),
+      // 意图澄清：SSE clarify 事件写入澄清卡片（不改变 isLoading，保持等待用户选择态）
+      setClarification: (payload: Clarification) => bufSetClarification(b(), payload),
+      // 用户放弃澄清（换个问法）：清卡片并解除 isLoading
+      clearClarification: () => bufClearClarification(b()),
+      get clarification() {
+        return b().currentClarification;
+      },
       finalizeAnswer: (
         sessionId?: string,
         messageIndex?: number,
@@ -667,6 +745,7 @@ export const useQueryStore = defineStore('query', () => {
     currentImage,
     currentPpt,
     currentThreadId,
+    currentClarification,
     // 多会话路由
     activeId,
     getSessionBuffer,
@@ -712,5 +791,11 @@ export const useQueryStore = defineStore('query', () => {
     toggleOutputMode,
     toggleStreamMode,
     toggleMiddleware,
+    // 意图澄清：对外方法（默认 active 缓冲）
+    setClarification: (payload: Clarification) => bufSetClarification(activeBuffer(), payload),
+    clearClarification: () => bufClearClarification(activeBuffer()),
+    // T00265：上下文占用统计（computed，响应式），消息气泡徽章据此展示
+    contextInputTokens,
+    contextMaxTokens,
   };
 });

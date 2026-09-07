@@ -1,4 +1,4 @@
-// 语音输入 composable：封装 Web Speech API（SpeechRecognition / webkitSpeechRecognition）。
+﻿// 语音输入 composable：封装 Web Speech API（SpeechRecognition / webkitSpeechRecognition）。
 // 移动端问答输入栏的"语音"按钮复用此能力；不支持时优雅降级（listening 恒为 false，组件禁用按钮）。
 //
 // 为什么独立成 composable：语音识别的 lifecycle（创建识别器、绑定 onresult/onerror/onend、
@@ -48,7 +48,6 @@ export function useSpeechRecognition(options: SpeechRecognitionOptions = {}) {
   const error = ref<string>('');
 
   let recognition: SpeechRecognitionLike | null = null;
-  let interimBuffer = '';
 
   function buildRecognition(): SpeechRecognitionLike | null {
     const Ctor = getRecognitionCtor();
@@ -63,7 +62,6 @@ export function useSpeechRecognition(options: SpeechRecognitionOptions = {}) {
     r.onstart = () => {
       listening.value = true;
       error.value = '';
-      interimBuffer = '';
     };
     r.onresult = (event: any) => {
       let interim = '';
@@ -75,11 +73,9 @@ export function useSpeechRecognition(options: SpeechRecognitionOptions = {}) {
         if (res.isFinal) finalText += txt;
         else interim += txt;
       }
-      interimBuffer = interim;
       if (interim) options.onInterim?.(interim);
       if (finalText) {
         options.onFinal?.(finalText);
-        interimBuffer = '';
       }
     };
     r.onerror = (event: any) => {

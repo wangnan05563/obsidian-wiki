@@ -1,10 +1,12 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, nextTick, watch, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Promotion, Close, Minus, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import RobotAvatar from './RobotAvatar.vue';
 import ThinkingBlock from './ThinkingBlock.vue';
+// 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续
+import ClarifyCard from './ClarifyCard.vue';
 // §X-1 步骤级追踪面板：渲染每步耗时分解，定位长耗时瓶颈
 import QueryTracePanel from './QueryTracePanel.vue';
 import MessageToolbar from './MessageToolbar.vue';
@@ -45,6 +47,22 @@ let abortController: AbortController | null = null;
 const QUESTION_TIMEOUT_MS = 120_000;
 let questionTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let abortReason: 'user' | 'timeout' | null = null;
+// 意图澄清：用户选择解读后正在重发确认后的问答（ClarifyCard 显示加载态，禁重复点击）
+const clarifyResending = ref(false);
+function handleClarifySelect(choiceIndex: number) {
+  const clarification = store.currentClarification;
+  if (!clarification || clarifyResending.value) return;
+  clarifyResending.value = true;
+  sendQuestion(clarification.question, {
+    clarifyId: clarification.id,
+    choiceIndex,
+    threadId: clarification.threadId ?? null,
+  });
+}
+function handleClarifyDismiss() {
+  clarifyResending.value = false;
+  store.clearClarification();
+}
 function resetQuestionTimeout() {
   if (questionTimeoutId) clearTimeout(questionTimeoutId);
   questionTimeoutId = setTimeout(() => {
@@ -102,35 +120,28 @@ watch(
   },
 );
 
-async function sendQuestion(question: string) {
-  abortController = new AbortController();
-  // 捕获本请求专属的 AbortController 实例，供下方 initialFetch/resumeFetch 闭包使用，
-  // 避免「流断开重连窗口内用户点击停止，abortController 被 finally 置 null」时，
-  // 闭包内 abortController!.signal 在运行时解引用崩溃（续连分支）。与 MobileQuery.vue 写法一致。
-  const ac = abortController;
-  abortReason = null;
-  // 线程隔离：已有线程时把 threadId 交给后端；persist=false（默认部署）下服务端不维护
-  // 线程记忆，必须每轮透传完整 history 才能保证多轮上下文连贯，故不再因 activeThreadId
-  // 存在而抑制 history（否则 follow-up 会丢失上下文）。
-  const activeThreadId = store.currentThreadId;
-  const history = store.messages.map((m) => ({ role: m.role, content: m.content }));
-
+// ── BYOK per-user 配置注入（与 Query.vue 口径一致）──
+async function buildQuestionBody(
+  question: string,
+  history: Array<{ role: string; content: string }>,
+  activeThreadId: string | null,
+  // 意图澄清续答：用户选择解读后重发同一问题，携带 clarifyId + choiceIndex + 归属线程
+  clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null,
+): Promise<Record<string, unknown>> {
   const body: Record<string, unknown> = { question, stream: store.streamMode };
   if (history && history.length > 0) {
     body.history = history;
   }
-  if (activeThreadId) {
-    body.threadId = activeThreadId;
+  // 澄清续答优先使用 clarify 附带的 threadId（后端 clarifyId 归属校验依赖同一线程）
+  const threadIdForBody = clarify?.threadId ?? activeThreadId;
+  if (threadIdForBody) {
+    body.threadId = threadIdForBody;
   }
-
-  // ── BYOK per-user 配置注入（与 Query.vue 口径一致）──
-  // 修复：FloatingChat 此前完全不下发 llmConfig，在 auth + BYOK 强制校验下对任意用户都会 400。
-  // 每个用户携带自己配置的 AI 服务 / 搜索引擎 / 工具配置（含 API Key），后端以这些覆盖项
-  // 替换服务端共享配置，实现「各用户独立额度、互不抢占限流」。密钥仅经请求体一次性发给后端代理。
+  if (clarify) {
+    body.clarifyId = clarify.clarifyId;
+    body.choiceIndex = clarify.choiceIndex;
+  }
   const uid = authStore.user?.id || 'guest';
-  // auto（自动）模式：从「用户已配置 apiKey」的预设中按能力优先级择优（见 autoModel.resolveAutoPresetForUser），
-  // 保证 auto 选中的模型必然已配置，杜绝「解析到用户未配置的预设 → 前端判定无 apiKey 不发
-  // llmConfig → 后端 BYOK 校验 400（请求参数有误）」。选中具体预设时沿用其 key，走既有 BYOK 加载逻辑。
   let aiCfg: AiUserConfig | null = null;
   if (modelStore.selectedPresetKey === AUTO_MODEL) {
     const resolved = await resolveAutoPresetForUser(uid, modelStore.presets);
@@ -143,14 +154,12 @@ async function sendQuestion(question: string) {
     loadSearchUserConfig(uid),
     loadToolsUserConfig(uid),
   ]);
-  // 仅当该用户已填 API Key 才下发 llmConfig（空密钥视为未配置，交由后端 400 拦截）
   if (aiCfg && aiCfg.apiKey) {
     body.llmConfig = aiCfg;
   }
   if (searchCfg && searchCfg.apiKey) {
     body.searchConfig = searchCfg;
   }
-  // 工具配置：仅当用户实际配置了工具（非默认空配置）才下发，避免空对象整体替换服务端共享 MCP/CLI。
   const hasOwnTools =
     (toolsCfg.mcpServers?.length ?? 0) > 0 ||
     (toolsCfg.cliTools?.length ?? 0) > 0 ||
@@ -158,6 +167,51 @@ async function sendQuestion(question: string) {
   if (hasOwnTools) {
     body.toolsConfig = toolsCfg;
   }
+  return body;
+}
+
+function handleSendError(err: unknown): void {
+  if ((err as Error).name === 'AbortError') {
+    // 超时/用户停止：finally 会按 abortReason 提交部分答案（超时打 timedOut 标记）
+  } else {
+    const msg = (err as Error).message;
+    store.handleError(msg);
+    ElMessage.warning(apiErrorMessage('问答失败', err));
+  }
+}
+
+async function cleanupAfterSend(): Promise<void> {
+  if (questionTimeoutId) {
+    clearTimeout(questionTimeoutId);
+    questionTimeoutId = null;
+  }
+  // 澄清重发流程结束（成功产出答案 / 再次中断 / 失败），复位重发加载态
+  clarifyResending.value = false;
+  if (abortReason && store.isLoading) {
+    store.stopLoading(abortReason);
+    if (abortReason === 'timeout') {
+      ElMessage.warning("问答超时（" + (QUESTION_TIMEOUT_MS / 1000) + "秒无响应），请检查网络或模型配置");
+    }
+    await conversationsStore.persistConversation(store.messages);
+  }
+  abortReason = null;
+  abortController = null;
+}
+
+async function sendQuestion(question: string, clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null) {
+  abortController = new AbortController();
+  // 捕获本请求专属的 AbortController 实例，供下方 initialFetch/resumeFetch 闭包使用，
+  // 避免「流断开重连窗口内用户点击停止，abortController 被 finally 置 null」时，
+  // 闭包内 abortController!.signal 在运行时解引用崩溃（续连分支）。与 MobileQuery.vue 写法一致。
+  const ac = abortController;
+  abortReason = null;
+  // 线程隔离：已有线程时把 threadId 交给后端；persist=false（默认部署）下服务端不维护
+  // 线程记忆，必须每轮透传完整 history 才能保证多轮上下文连贯，故不再因 activeThreadId
+  // 存在而抑制 history（否则 follow-up 会丢失上下文）。
+  const activeThreadId = store.currentThreadId;
+  const history = store.messages.map((m) => ({ role: m.role, content: m.content }));
+
+  const body = await buildQuestionBody(question, history, activeThreadId, clarify);
 
   try {
     // X-2 可恢复流式：用带重连的 SSE 消费包装（首连发完整 body，异常断开时凭 managerRunId 重连续接）
@@ -182,30 +236,9 @@ async function sendQuestion(question: string) {
     // 持久化完整对话到 IndexedDB（支持断点续答）
     await conversationsStore.persistConversation(store.messages);
   } catch (err: unknown) {
-    // AbortError 由超时/用户停止触发，不视为错误；具体清理交由 finally 按 abortReason 处理
-    if ((err as Error).name === 'AbortError') {
-      // 超时/用户停止：finally 会按 abortReason 提交部分答案（超时打 timedOut 标记）
-    } else {
-      const msg = (err as Error).message;
-      store.handleError(msg);
-      ElMessage.warning(apiErrorMessage('问答失败', err));
-    }
+    handleSendError(err);
   } finally {
-    // 清理超时定时器（无论正常完成、用户停止、超时、错误都要清）
-    if (questionTimeoutId) {
-      clearTimeout(questionTimeoutId);
-      questionTimeoutId = null;
-    }
-    // 超时/用户停止：提交中断时的部分答案，超时额外打 timedOut 标记（供模板渲染"确认重发"）
-    if (abortReason && store.isLoading) {
-      store.stopLoading(abortReason);
-      if (abortReason === 'timeout') {
-        ElMessage.warning(`问答超时（${QUESTION_TIMEOUT_MS / 1000}秒无响应），请检查网络或模型配置`);
-      }
-      await conversationsStore.persistConversation(store.messages);
-    }
-    abortReason = null;
-    abortController = null;
+    await cleanupAfterSend();
   }
 }
 
@@ -214,9 +247,9 @@ function handleSubmit() {
   if (!q || store.isLoading) return;
   store.submitQuestion(q);
   // FR-RM-09：立即落盘用户问题，确保新会话在首个 token 到达前也能在刷新后恢复
-  void conversationsStore.persistConversation(store.messagesWithStreaming());
+  conversationsStore.persistConversation(store.messagesWithStreaming());
   inputQuestion.value = '';
-  void sendQuestion(q);
+  sendQuestion(q);
 }
 
 // 删除单条消息：用户点击工具栏删除按钮时调用
@@ -250,7 +283,7 @@ function resendFromUserQuestion(idx: number): boolean {
   if (userIdx < 0) return false;
   const question = store.messages[userIdx].content;
   store.removeMessagesFrom(idx);
-  void sendQuestion(question);
+  sendQuestion(question);
   return true;
 }
 
@@ -303,7 +336,7 @@ function schedulePersistInProgress() {
     persistDebounceTimer = null;
     // 仅当仍处于生成中才落盘（避免完成后重复写）
     if (store.isLoading) {
-      void conversationsStore.persistConversation(store.messagesWithStreaming());
+      conversationsStore.persistConversation(store.messagesWithStreaming());
     }
   }, 1500);
 }
@@ -311,7 +344,7 @@ function schedulePersistInProgress() {
 // 切页/卸载前最佳努力落盘一次中间态（刷新或关闭标签页时触发 pagehide）
 function flushPersistOnHide() {
   if (store.isLoading) {
-    void conversationsStore.persistConversation(store.messagesWithStreaming());
+    conversationsStore.persistConversation(store.messagesWithStreaming());
   }
 }
 
@@ -335,7 +368,7 @@ function resumeLastAnswer() {
     }
   }
   if (!question) return;
-  void sendQuestion(question);
+  sendQuestion(question);
 }
 
 // FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
@@ -547,27 +580,37 @@ onBeforeUnmount(() => {
               <RobotAvatar :size="32" :floating="true" />
             </div>
             <div class="msg-bubble assistant" :class="{ streaming: !!store.streamingAnswer }">
-              <!-- 思考过程实时展示 -->
-              <ThinkingBlock
-                v-if="store.currentThinking.length > 0"
-                :steps="store.currentThinking"
-                :live="store.isLoading"
+              <!-- 意图澄清：问题存在歧义时后端中断回答，渲染解读选项卡片等待用户确认（替代加载态） -->
+              <ClarifyCard
+                v-if="store.currentClarification"
+                :clarification="store.currentClarification"
+                :loading="clarifyResending"
+                @select="handleClarifySelect"
+                @dismiss="handleClarifyDismiss"
               />
-              <!-- 首字节前 loading dots：让用户感知"正在思考" -->
-              <div
-                v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0"
-                class="loading-dots"
-              >
-                <span class="dot"></span>
-                <span class="dot"></span>
-                <span class="dot"></span>
-                <span class="loading-text">正在思考…</span>
-              </div>
-              <div
-                v-else
-                class="msg-content markdown-body streaming-content"
-                v-html="renderMarkdown(store.streamingAnswer || '')"
-              ></div>
+              <template v-else>
+                <!-- 思考过程实时展示 -->
+                <ThinkingBlock
+                  v-if="store.currentThinking.length > 0"
+                  :steps="store.currentThinking"
+                  :live="store.isLoading"
+                />
+                <!-- 首字节前 loading dots：让用户感知"正在思考" -->
+                <div
+                  v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0"
+                  class="loading-dots"
+                >
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                  <span class="loading-text">正在思考…</span>
+                </div>
+                <div
+                  v-else
+                  class="msg-content markdown-body streaming-content"
+                  v-html="renderMarkdown(store.streamingAnswer || '')"
+                ></div>
+              </template>
             </div>
           </div>
         </div>
@@ -903,9 +946,6 @@ onBeforeUnmount(() => {
   line-height: 1.1;
   font-size: 13px;
 }
-
-/* §修复：用户气泡内的 .msg-content.markdown-body 会被全局 style.css 中
-   .markdown-body { color: var(--text-base) } 覆盖，必须用 :deep 强制白色 */
 .msg-bubble.user :deep(.msg-content),
 .msg-bubble.user :deep(.markdown-body),
 .msg-bubble.user :deep(.markdown-body p),

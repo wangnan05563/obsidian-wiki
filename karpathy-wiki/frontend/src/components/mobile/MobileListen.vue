@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 // 移动端「聆听」播放器（SRS FR-LIS，TTS 播客模式）。
 // 独立于桌面端 useTtsStore（单条消息朗读模型），自实现「播放列表 + 顺序播放 + 后台播放」。
 // 复用：apiFetch+API_BASE（注入 token）、loadTtsConfig（per-user voice/rate）、/api/files/pages 内容源、/api/tts/synthesize 合成。
@@ -395,7 +395,7 @@ function registerMediaSession() {
   ms.setActionHandler('pause', () => togglePlay());
   ms.setActionHandler('previoustrack', () => prev());
   ms.setActionHandler('nexttrack', () => next());
-  void noop;
+  noop // NOSONAR;
 }
 
 function fmt(s: number): string {

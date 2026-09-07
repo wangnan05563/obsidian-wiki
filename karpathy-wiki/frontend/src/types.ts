@@ -142,7 +142,8 @@ export interface ChatMessage {
   // v3 图像生成结果：独立于 multimodal，通过 SSE image 事件推送
   image?: { url: string; alt: string; archivePath?: string };
   // v3 PPT 生成结果：Marp Markdown 源码，通过 SSE ppt 事件推送
-  ppt?: { markdown: string; title: string; archivePath: string };
+  // pptxUrl: 原生 .pptx 下载地址（可选，生成失败时为 undefined，前端据此隐藏下载按钮）
+  ppt?: { markdown: string; title: string; archivePath: string; pptxUrl?: string };
   // §X-1 步骤级追踪：本条 assistant 消息对应的 harness runId。前端凭此调
   //   GET /api/query/runs/:runId 拉取每步耗时分解（llmMs/toolMs/tokens/toolNames），
   //   定位 143s/282s 级长耗时瓶颈。降级链兜底路径（search fallback）无此字段。
@@ -153,6 +154,22 @@ export interface ChatMessage {
   managerRunId?: string;
 }
 
+// ===== FR-19 引用信号（与后端 types.ts RefSignal 对齐，type-sync-rule）=====
+// 后端 query 降级链把 string[] refs 升级为携带三信号（权威/完整/复核）+ 时效的对象，
+// 前端经 bufSetRefs 组装进 Reference.signals，RefsList 据此渲染图标与 stale 标记。
+export type RefAuthority = 'high' | 'medium' | 'low' | 'unknown';
+export type KnowledgeStatus = 'ok' | 'stale' | 'unknown';
+export interface RefSignals {
+  // source 类别经 config.json refs.authorityMap 映射的权威度
+  authority: RefAuthority;
+  // 页面完整度（正文非空）
+  confidence: boolean;
+  // 是否已人工复核（存在 reviewed_at）
+  review: boolean;
+  // 时效状态（FR-18）
+  knowledgeStatus: KnowledgeStatus;
+}
+
 export interface Reference {
   path?: string;
   url?: string;
@@ -160,6 +177,31 @@ export interface Reference {
   snippet: string;
   source: 'vault' | 'web';
   citeIndex: number;
+  // FR-19 引用信号（仅 vault 引用带；web 引用无信号）
+  signals?: RefSignals;
+}
+
+// ===== 意图澄清类型（与后端 ClarificationPayload 对齐，type-sync-rule）=====
+// 后端检测到用户问题存在歧义时，通过 SSE clarify 事件下发本结构；
+// 前端据此渲染澄清卡片，用户选择某个解读（或按推荐直接回答）后携带
+// clarifyId + choiceIndex 重发同一问题，后端再基于确认的意图继续检索回答。
+export interface ClarificationOption {
+  index: number;
+  label: string;
+  description: string;
+}
+
+export interface Clarification {
+  id: string;
+  round: number;
+  maxRounds: number;
+  question: string;
+  prompt: string;
+  interpretations: ClarificationOption[];
+  recommendedIndex: number;
+  // 归属线程 id：选择解读后重发时必须携带同一 threadId（后端做 clarifyId 线程归属校验，
+  // 否则视为新提问重新检测、轮次计数失效）。clarify 事件由后端附带。
+  threadId?: string;
 }
 
 export interface ThinkingStep {
@@ -262,6 +304,8 @@ export interface PageItem {
   name: string;
   dir: string;
   frontmatter: Record<string, unknown>;
+  // FR-18 知识时效派生状态（'ok' | 'stale' | 'unknown'）：后端 /files/pages 注入，Browse 角标据此渲染
+  knowledge_status?: string;
 }
 
 // FR-10-1 待审核 AI 标签页面（GET /api/tags/pending）
@@ -303,6 +347,8 @@ export interface HealthReport {
   orphans: string[];
   brokenLinks: Array<{ from: string; to: string }>;
   stale: string[];
+  // FR-18：知识时效过期页面（knowledge_status=stale 的 dated 页面，区别于 stale 的 lastModified 语义）
+  knowledgeStale: string[];
 }
 
 // 仪表盘统计（GET /api/stats）
@@ -950,8 +996,9 @@ export interface UrlCrawlEventData {
   contentLength?: number;
   attachmentCount?: number;
   error?: string;
-  // page_error 事件：错误分类（timeout/http/network/ssrf/unknown），前端按类型展示明确原因
-  errorType?: 'timeout' | 'http' | 'network' | 'ssrf' | 'unknown';
+  // page_error 事件：错误分类，前端按类型展示明确原因
+  // 取值与后端 url-crawl.ts 一致：timeout/http/network/ssrf/auth/blocked/unknown
+  errorType?: 'timeout' | 'http' | 'network' | 'ssrf' | 'auth' | 'blocked' | 'unknown';
   // attachment 事件：附件元信息
   attachment?: UrlCrawlAttachment;
   // done 阶段：汇总统计与合并 Markdown
@@ -1078,6 +1125,47 @@ export interface PrecheckResult {
   blocked: boolean;
 }
 
+// AI 智能清洗分析结果（/api/data-clean/ai-analyze 返回，与后端 AiCleanAnalysis* 对齐）
+export interface AiAnalysisRedundantItem {
+  path: string;
+  title: string;
+  reason: string;
+  score?: number;
+  wordCount?: number;
+  fileSizeBytes?: number;
+}
+
+export interface AiAnalysisDuplicateGroup {
+  representativePath: string;
+  paths: string[];
+  reason: string;
+  totalWordsInGroup?: number;
+}
+
+export interface AiAnalysisRenameItem {
+  path: string;
+  title: string;
+  currentName: string;
+  suggestedName: string;
+  suggestedPath: string;
+  reason: string;
+}
+
+export interface AiCleanAnalysisResult {
+  analyzedAt: string;
+  summary: {
+    totalPages: number;
+    scannedCandidatePages: number;
+    redundantCount: number;
+    duplicateGroupsCount: number;
+    renameCount: number;
+  };
+  redundant: AiAnalysisRedundantItem[];
+  duplicates: AiAnalysisDuplicateGroup[];
+  renames: AiAnalysisRenameItem[];
+  rawLlm?: string;
+}
+
 // ===== 多模态输出类型（FR-09-2，与后端 MultimodalOutput 对齐）=====
 // type: 'mindmap' Mermaid 思维导图 | 'faq' Q&A 问答对 | 'timeline' 按 created 排序的事件
 //       'image' 图像生成 | 'ppt' Marp 幻灯片
@@ -1089,6 +1177,8 @@ export interface MultimodalOutput {
   content: string;
   imageUrl?: string;
   pptMarkdown?: string;
+  // pptxUrl: 后端生成的 .pptx 下载地址（公开媒体路由 /api/media/file/...，可 a[download] 直接下载）
+  pptxUrl?: string;
 }
 
 // ===== v3 视频生成异步任务结果（与后端 VideoTaskResult 对齐，type-sync-rule）=====

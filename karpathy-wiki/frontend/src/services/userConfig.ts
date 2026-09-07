@@ -19,7 +19,7 @@
 import { dbGet, dbPut, CHAT_STORES } from './chatDb';
 import type { ToolsConfig, LlmPreset } from '../types';
 
-export type UserConfigKind = 'ai' | 'search' | 'tools' | 'inputbox';
+export type UserConfigKind = 'ai' | 'search' | 'tools' | 'inputbox' | 'media';
 
 // ── 各配置域的字段形状（与后端 AppConfig.llm / WebSearchConfig / ToolsConfig 对齐）──
 
@@ -75,8 +75,7 @@ export async function loadAiUserConfigMap(userId: string): Promise<AiUserConfigM
       userConfigKey('ai', userId),
     );
     if (!rec) return {};
-    const { key: _key, ...rest } = rec;
-    void _key;
+    const { key: _, ...rest } = rec;
     // 旧版扁平配置：迁移为映射表，落到兼容槽，并写回磁盘（saveUserConfig 内部已深拷贝 + 静默降级）
     if (isLegacyFlatAiConfig(rest)) {
       const legacy = rest as unknown as AiUserConfig;
@@ -151,8 +150,8 @@ export async function saveAiUserConfigForPreset(
 ): Promise<void> {
   if (!userId) return;
   const map = await loadAiUserConfigMap(userId);
-  const key = presetKey && presetKey.trim() ? presetKey : LEGACY_AI_CONFIG_KEY;
-  map[key] = { ...cfg };
+  const key = presetKey?.trim() ? presetKey : LEGACY_AI_CONFIG_KEY;
+  map[key] = cfg;
   await saveUserConfig(userId, 'ai', map);
 }
 
@@ -219,8 +218,7 @@ export async function loadUserConfig<T>(
     );
     if (!rec) return clone(defaults);
     // 剥离索引主键 key，其余字段覆盖默认值（嵌套对象/数组整体替换）。
-    const { key: _key, ...rest } = rec;
-    void _key;
+    const { key: _, ...rest } = rec;
     return { ...clone(defaults), ...(rest as Partial<T>) };
   } catch {
     // IndexedDB 不可用时静默降级为默认配置，不阻断功能

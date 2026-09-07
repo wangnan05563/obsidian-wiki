@@ -1,4 +1,4 @@
-// 会话状态推导（PC 与移动端历史列表共用）
+﻿// 会话状态推导（PC 与移动端历史列表共用）
 // 优先级：运行中(running) > 异常中断(error) > 已完成未读(unread) > 已完成已读(read) > 闲置(idle)
 import type { ConversationRecord } from '../types';
 import { useQueryStore } from '../stores/query';
@@ -25,7 +25,7 @@ export function getSessionStatus(conv: ConversationRecord): SessionStatus {
 
   // 2) 异常中断：优先取实时缓冲最新消息状态，否则回退已落盘消息
   const buf = store.getSessionBuffer(conv.id);
-  const liveMsgs = buf && buf.messages.length ? buf.messages : conv.messages;
+  const liveMsgs = buf?.messages?.length ? buf.messages : conv.messages;
   const last = liveMsgs[liveMsgs.length - 1];
   if (last && (last.status === 'error' || last.status === 'interrupted')) return 'error';
 

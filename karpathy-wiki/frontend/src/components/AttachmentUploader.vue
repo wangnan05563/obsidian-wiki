@@ -160,7 +160,7 @@ function handleRemove(id: string) {
       <div v-for="id in props.attachments" :key="id" class="attachment-item">
         <img v-if="thumbUrls.get(id)" :src="thumbUrls.get(id)" class="thumb-img" alt="附件缩略图" />
         <div v-else class="thumb-placeholder">...</div>
-        <button class="remove-btn" @click="handleRemove(id)">×</button>
+        <button class="remove-btn" title="移除附件" @click="handleRemove(id)">×</button>
       </div>
     </div>
   </div>
@@ -195,8 +195,9 @@ function handleRemove(id: string) {
   align-items: center;
   justify-content: center;
   padding: 6px;
-  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
-  background: var(--accent-cyan-a05, rgba(0, 245, 255, 0.05));
+  /* T00263：去掉按钮边框、透明背景，简洁图标样式；hover 再显现淡背景反馈 */
+  border: none;
+  background: transparent;
   border-radius: 8px;
   cursor: pointer;
   color: var(--text-soft, #888);
@@ -209,22 +210,16 @@ function handleRemove(id: string) {
 }
 .upload-btn:hover {
   background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
-  border-color: var(--neon-cyan, #00f5ff);
   color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 0 8px var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
 }
-/* F-3.5 vision 能力缺失时灰显：dashed border + opacity + cursor not-allowed */
+/* F-3.5 vision 能力缺失时灰显：opacity + cursor not-allowed */
 .upload-btn.disabled {
   opacity: 0.4;
   cursor: not-allowed;
-  border-style: dashed;
 }
 .upload-btn.disabled:hover {
-  background: var(--accent-cyan-a05, rgba(0, 245, 255, 0.05));
-  border-color: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
-  /* 禁用态 hover 使用更深的 text-dim 以满足 WCAG 对比度（css:S7924） */
+  background: transparent;
   color: var(--text-dim, #5a5a5a);
-  box-shadow: none;
 }
 .attachment-list {
   display: flex;

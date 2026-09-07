@@ -1,4 +1,4 @@
-import type { ConversationRecord } from '../types';
+﻿import type { ConversationRecord } from '../types';
 
 // 会话导出工具（F-3.3 增强：会话导出）
 // 将会话内容导出为可读的 Markdown 文本，并触发浏览器端文件下载。
@@ -6,6 +6,21 @@ import type { ConversationRecord } from '../types';
 
 // 将会话记录渲染为 Markdown 纯文本。
 // 为什么用 Markdown：知识库问答场景下人类可读、易分享、可被再次编译入库。
+/** 将引用列表渲染为 Markdown 行，兼容 string[] 老格式与 Reference[] 新格式 */
+function renderRefs(refs: unknown[]): string[] {
+  const out: string[] = [];
+  for (const r of refs) {
+    if (typeof r === 'string') {
+      out.push(`- ${r}`);
+    } else {
+      const ref = r as { title?: string; url?: string };
+      const urlPart = ref.url ? ` (${ref.url})` : '';
+      out.push(`- ${ref.title ?? ''}${urlPart}`);
+    }
+  }
+  return out;
+}
+
 export function buildConversationMarkdown(record: ConversationRecord): string {
   const lines: string[] = [];
   lines.push(`# ${record.title}`);
@@ -29,14 +44,7 @@ export function buildConversationMarkdown(record: ConversationRecord): string {
     if (Array.isArray(refs) && refs.length > 0) {
       lines.push('');
       lines.push('*参考：*');
-      for (const r of refs) {
-        if (typeof r === 'string') {
-          lines.push(`- ${r}`);
-        } else {
-          const urlPart = r.url ? ` (${r.url})` : '';
-          lines.push(`- ${r.title}${urlPart}`);
-        }
-      }
+      lines.push(...renderRefs(refs));
     }
     lines.push('');
     lines.push('---');
@@ -67,7 +75,7 @@ export function downloadTextFile(
   a.download = filename;
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  a.remove();
   // 延迟释放，确保下载已开始
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

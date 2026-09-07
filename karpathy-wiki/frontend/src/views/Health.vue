@@ -35,6 +35,8 @@ const loading = ref(false);
 const orphanCount = computed(() => report.value?.orphans.length ?? 0);
 const brokenCount = computed(() => report.value?.brokenLinks.length ?? 0);
 const staleCount = computed(() => report.value?.stale.length ?? 0);
+// FR-18：知识时效过期（dated 且过 knowledge.staleDays 阈值）页面计数，区别于 stale（lastModified 语义）
+const knowledgeStaleCount = computed(() => report.value?.knowledgeStale.length ?? 0);
 const totalIssues = computed(() => orphanCount.value + brokenCount.value + staleCount.value);
 
 // 体检结果状态：无问题为健康，有问题为需关注
@@ -55,6 +57,31 @@ async function runCheck() {
     ElMessage.error(apiErrorMessage('体检失败', err));
   } finally {
     loading.value = false;
+  }
+}
+
+// FR-18 AC-18-4：一键复核全部知识时效过期页面。
+// 后端 /api/health-check/review 为确定性 frontmatter 写（追加 reviewed_at），不走 LLM/SSE，
+// 速度快、消耗小。无需二次确认（非 LLM 调用、秒级完成）。完成后重新体检刷新状态（ok）。
+const reviewing = ref(false);
+async function reviewKnowledgeStale() {
+  const items = report.value?.knowledgeStale ?? [];
+  if (items.length === 0 || reviewing.value) return;
+  reviewing.value = true;
+  try {
+    const res = await apiFetch(`${API_BASE}/health-check/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: items }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = await res.json();
+    ElMessage.success((result as { message?: string })?.message || `已复核 ${items.length} 个页面`);
+    await runCheck();
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('复核失败', err));
+  } finally {
+    reviewing.value = false;
   }
 }
 
@@ -296,12 +323,13 @@ onMounted(() => {
             size="small"
             class="neon-btn batch-btn"
             :icon="MagicStick"
+            data-tip="一键修复所有孤立页面与断链"
             :disabled="anyFixing"
             @click="batchFix('all')"
           >
             批量修复全部
           </el-button>
-          <el-button size="small" class="neon-btn" :loading="loading" :disabled="anyFixing" @click="runCheck">重新体检</el-button>
+          <el-button size="small" class="neon-btn" data-tip="重新扫描孤立页面、断链与过期内容" :loading="loading" :disabled="anyFixing" @click="runCheck">重新体检</el-button>
         </div>
       </div>
 
@@ -380,6 +408,7 @@ onMounted(() => {
               size="small"
               class="neon-btn batch-section-btn"
               :icon="MagicStick"
+              data-tip="批量修复本类孤立页面"
               :disabled="anyFixing"
               @click="batchFix('orphan')"
             >
@@ -398,6 +427,7 @@ onMounted(() => {
               <el-button
                 size="small"
                 class="neon-btn"
+                data-tip="自动为该孤立页面补充回链"
                 :loading="fixingKey === `orphan:${p}`"
                 :disabled="anyFixing"
                 :icon="Tools"
@@ -424,6 +454,7 @@ onMounted(() => {
               size="small"
               class="neon-btn batch-section-btn"
               :icon="MagicStick"
+              data-tip="批量修复本类断链"
               :disabled="anyFixing"
               @click="batchFix('broken')"
             >
@@ -444,6 +475,7 @@ onMounted(() => {
               <el-button
                 size="small"
                 class="neon-btn"
+                data-tip="修复此断链（创建缺失目标页面或修正链接文本）"
                 :loading="fixingKey === `broken:${idx}`"
                 :disabled="anyFixing"
                 :icon="Tools"
@@ -474,12 +506,43 @@ onMounted(() => {
       <div v-else class="no-issue">▸ 无过期页面</div>
         </div>
 
+        <!-- FR-18 知识时效复核：dated 且过知识时效阈值的页面，可一键追加 reviewed_at 使其恢复 ok -->
+        <div class="issue-section hover-glow knowledge-review-section">
+          <div class="section-head">
+            <span class="section-icon icon-review">◉</span>
+            <span class="section-title">知识时效复核</span>
+            <span class="section-count" :class="{ 'has-issue': knowledgeStaleCount > 0 }">
+              {{ knowledgeStaleCount }}
+            </span>
+            <el-button
+              v-if="knowledgeStaleCount > 0"
+              size="small"
+              class="neon-btn batch-section-btn"
+              :icon="Check"
+              data-tip="为下列 dated 页面追加 reviewed_at，标记为已复核"
+              :loading="reviewing"
+              :disabled="anyFixing || reviewing"
+              @click="reviewKnowledgeStale"
+            >
+              一键复核
+            </el-button>
+          </div>
+      <div class="section-desc">knowledge_class=dated 且超过知识时效阈值的页面，复核后追加 reviewed_at 恢复为时效正常</div>
+      <div v-if="knowledgeStaleCount > 0" class="issue-list">
+            <div v-for="p in report.knowledgeStale" :key="p" class="issue-item">
+              <span class="status-dot stale"></span>
+              <code>{{ p }}</code>
+            </div>
+          </div>
+      <div v-else class="no-issue">▸ 无知识时效过期页面</div>
+        </div>
+
         <!-- 修复进度日志 -->
         <div v-if="fixLogs.length > 0" class="fix-log-section">
           <div class="section-head">
             <el-icon class="section-icon icon-fix"><Lightning /></el-icon>
             <span class="section-title">修复进度</span>
-            <el-button size="small" text class="clear-logs-btn" @click="clearLogs">清除日志</el-button>
+            <el-button size="small" text class="clear-logs-btn" data-tip="清空修复进度日志" @click="clearLogs">清除日志</el-button>
           </div>
       <div class="fix-log-list">
             <div
@@ -728,6 +791,20 @@ onMounted(() => {
 .icon-broken { color: var(--neon-purple); text-shadow: 0 0 8px var(--neon-purple); }
 .icon-stale { color: var(--neon-cyan); text-shadow: 0 0 8px var(--neon-cyan); }
 .icon-fix { color: var(--neon-lime); text-shadow: 0 0 8px var(--neon-lime); }
+.icon-review { color: var(--neon-magenta); text-shadow: 0 0 8px var(--neon-magenta); }
+
+/* FR-18 知识时效状态点：review 清单中的过期项展示为橙点（与 Browse 保持一致语义） */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.stale {
+  background: var(--graph-qa, #ff9500);
+  box-shadow: 0 0 6px rgba(255, 149, 0, 0.55);
+}
 
 .section-title {
   font-family: var(--font-display);
