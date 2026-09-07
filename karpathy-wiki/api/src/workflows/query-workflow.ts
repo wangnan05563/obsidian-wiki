@@ -2,15 +2,23 @@ import type { ToolDefinition, HarnessConfig, StepEvent } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import fs from 'node:fs/promises';
 import type { VaultService } from '../vault/vault-service.js';
-import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef, WebSearchConfig, ToolsConfig, MediaConfig, AppConfig } from '../types.js';
+import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef, WebSearchConfig, ToolsConfig, MediaConfig, MediaImageUserConfig, AppConfig } from '../types.js';
 import { searchPages } from '../search-util.js';
 import { createWebSearchTool } from '../tools/web-search.js';
 import { loadExtendedTools } from '../tools/registry.js';
+// FR-19 引用置信：把 harness/fallback 产出的 string[] refs 升级为携带三信号（权威/完整/复核）+ 时效的对象数组。
+// 为什么在顶层做统一升级：refs 最终只有 harness/fallback 两处产出，顶层包装一次即可覆盖全部降级链，
+// 避免在每个 yield refs 点各插一遍转换逻辑（DRY + 降低遗忘风险）。
+import { buildRefSignals } from '../utils/ref-signal.js';
 // FR-09-2 多模态输出：主问答完成后追加生成 mindmap/faq/timeline
 // 为什么放在主问答之后：避免结构化输出污染主答案的流式体验；失败不阻塞主问答
 import { generateMultimodalOutput, getModeLabel, type MultimodalMode } from './multimodal-output-workflow.js';
 // v3 媒体生成：图像/PPT 在 done 前推送 image/ppt 事件
 import { generateImage, generatePpt } from './media-generation-workflow.js';
+// 意图澄清：先澄清后执行的可复用门禁（检测歧义 → 中断列出解读选项 → 用户确认后继续）
+import { runClarifyGate } from './clarify/gate.js';
+import type { ClarifyConfig, ClarificationPayload } from './clarify/clarify-types.js';
+import type { ClarifySessionStore } from './clarify/clarify-store.js';
 
 // 加载 query prompt 单点存储。与 compile 共用 prompts/ 目录，保证两阶段等价（M-3）。
 // 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
@@ -138,6 +146,10 @@ async function buildQueryTask(
   const attachmentHint = buildAttachmentHint(input.attachments);
   const deepHint = buildDeepModeHint(input.mode);
   const skillHint = options.systemPrompt ? `\n## AI 伙伴指令\n${options.systemPrompt}\n` : '';
+  // 意图澄清：用户已确认的意图注入为最高优先级指令，消除歧义并防再次追问
+  const intentHint = input.confirmedIntent
+    ? `\n## 已确认的意图\n用户已确认其意图为：${input.confirmedIntent}\n请严格基于该意图回答，不要再就理解分歧追问或列举其他解读。\n`
+    : '';
 
   return `${promptTemplate}
 
@@ -147,6 +159,7 @@ ${input.question}
 ${historySection}
 ${attachmentHint}
 ${deepHint}
+${intentHint}
 ${skillHint}
 `;
 }
@@ -573,17 +586,23 @@ function processStreamEvent(
 
 // 提取：推流进度、思考过程、引用和后续问题
 // 为什么提取为独立函数：将 stream 消费后的收尾逻辑与主循环分离，降低 S3776 认知复杂度
-async function* emitPostStreamChunks(
-  collectedProgress: QueryProgress[],
-  collectedThinking: ThinkingChunk[],
-  collectedWebRefs: WebRef[],
-  outputModes: Set<OutputMode> | null,
-  finalAnswer: string,
-  vault: VaultService,
-  input: QueryInput,
+// 参数对象模式：参数超过 7 个时用接口封装，避免 S107
+interface EmitPostStreamParams {
+  collectedProgress: QueryProgress[];
+  collectedThinking: ThinkingChunk[];
+  collectedWebRefs: WebRef[];
+  outputModes: Set<OutputMode> | null;
+  finalAnswer: string;
+  vault: VaultService;
+  input: QueryInput;
   // §X-1 步骤级追踪：流式路径的 harness runId，随 done 事件带回前端拉取耗时分解
-  runId?: string,
+  runId?: string;
+}
+
+async function* emitPostStreamChunks(
+  params: EmitPostStreamParams,
 ): AsyncGenerator<AnswerChunk, void, unknown> {
+  const { collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, runId } = params;
   // progress 在流式分支也需推送（harness 阶段已收集）
   for (const p of collectedProgress) {
     yield { progress: p };
@@ -701,7 +720,7 @@ async function* queryWithHarnessStream( // NOSONAR - S107 - 函数签名需要�
   }
 
   // §收尾推流：通过 emitPostStreamChunks 处理 progress/thinking/refs/followups
-  yield* emitPostStreamChunks(collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, queryRunId);
+  yield* emitPostStreamChunks({ collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, runId: queryRunId });
 }
 
 // 降级链第 2 级：queryWithSearchFallback
@@ -743,13 +762,17 @@ async function* queryWithSearchFallback(
     throw new Error('search fallback: all page reads failed');
   }
 
-  // 3. 构造单轮 prompt：检索结果 + 用户问题
+  // 3. 构造单轮 prompt：检索结果 + 用户问题（+ 用户已确认的意图）
+  const intentHint = input.confirmedIntent
+    ? `\n用户已确认其意图为：${input.confirmedIntent}，请严格基于该意图回答。\n`
+    : '';
   const fallbackPrompt = `你是知识库助手。以下是检索到的相关页面：
 
 ${pageContents.join('\n\n---\n\n')}
 
 ## 用户问题
 ${input.question}
+${intentHint}
 
 请基于上述页面内容回答，并在合适位置使用 [[页面名]] 引用对应页面。`;
 
@@ -805,6 +828,7 @@ async function* yieldMultimodalByMode(
   refs: string[] | undefined,
   mediaConfig?: MediaConfig,
   appConfig?: AppConfig,
+  imageOverride?: MediaImageUserConfig,
 ): AsyncGenerator<AnswerChunk, void, unknown> {
   if (mode === 'image') {
     yield {
@@ -814,7 +838,7 @@ async function* yieldMultimodalByMode(
         ts: new Date().toISOString(),
       },
     };
-    const imageResult = await generateImage(harnessConfig, vault, question, refs, mediaConfig, appConfig);
+    const imageResult = await generateImage(harnessConfig, vault, question, refs, mediaConfig, appConfig, imageOverride);
     yield {
       image: {
         url: imageResult.url,
@@ -836,6 +860,7 @@ async function* yieldMultimodalByMode(
         markdown: pptResult.markdown,
         title: pptResult.title,
         archivePath: pptResult.archivePath,
+        pptxUrl: pptResult.pptxUrl,
       },
     };
   } else {
@@ -869,6 +894,7 @@ async function* wrapWithMultimodal(
   // v3 媒体生成：image 模式需要 mediaConfig 调用 Agnes API，appConfig 解析 API key
   mediaConfig?: MediaConfig,
   appConfig?: AppConfig,
+  imageOverride?: MediaImageUserConfig,
 ): AsyncGenerator<AnswerChunk, void, unknown> { // NOSONAR - 函数签名需要多个参数
   // 用户在多输出模式中关闭 multimodal 时跳过整个 multimodal 生成（节省 LLM token）
   // 单独的 'composing' thinking 提示（"正在生成思维导图"）也跟着被前置 filter 处理
@@ -878,7 +904,7 @@ async function* wrapWithMultimodal(
       // 委托 yieldMultimodalByMode 分发各模式生成逻辑，降低本函数认知复杂度（S3776）
       try {
         for await (const multimodalChunk of yieldMultimodalByMode(
-          mode, harnessConfig, vault, input.question, chunk.refs, mediaConfig, appConfig,
+          mode, harnessConfig, vault, input.question, (chunk.refs ?? []).map((r) => (typeof r === "string" ? r : r.path)), mediaConfig, appConfig, imageOverride,
         )) {
           yield multimodalChunk;
         }
@@ -913,6 +939,7 @@ function createHarnessWithMultimodal( // NOSONAR - S107 - 参数过多是函数�
     systemPrompt?: string;
     mediaConfig?: MediaConfig;
     appConfig?: AppConfig;
+    mediaImageConfig?: MediaImageUserConfig;
   },
   collectedThinking: ThinkingChunk[],
   collectedWebRefs: WebRef[],
@@ -922,7 +949,7 @@ function createHarnessWithMultimodal( // NOSONAR - S107 - 参数过多是函数�
   const harnessFlow = useStream
     ? queryWithHarnessStream(harnessConfig, vault, effectiveInput, options, collectedThinking, collectedWebRefs, collectedProgress, outputModes)
     : queryWithHarness(harnessConfig, vault, effectiveInput, options, collectedThinking, collectedWebRefs, collectedProgress, outputModes);
-  return wrapWithMultimodal(harnessFlow, harnessConfig, vault, effectiveInput, outputModes, options.mediaConfig, options.appConfig);
+  return wrapWithMultimodal(harnessFlow, harnessConfig, vault, effectiveInput, outputModes, options.mediaConfig, options.appConfig, options.mediaImageConfig);
 }
 
 // 创建带 multimodal 包装的 fallback generator。
@@ -931,12 +958,12 @@ function createFallbackWithMultimodal(
   harnessConfig: HarnessConfig,
   vault: VaultService,
   input: QueryInput,
-  options: { mediaConfig?: MediaConfig; appConfig?: AppConfig },
+  options: { mediaConfig?: MediaConfig; appConfig?: AppConfig; mediaImageConfig?: MediaImageUserConfig },
   outputModes: Set<OutputMode> | null,
 ): AsyncIterable<AnswerChunk> {
   return wrapWithMultimodal(
     queryWithSearchFallback(harnessConfig, vault, input),
-    harnessConfig, vault, input, outputModes, options.mediaConfig, options.appConfig,
+    harnessConfig, vault, input, outputModes, options.mediaConfig, options.appConfig, options.mediaImageConfig,
   );
 }
 
@@ -975,6 +1002,27 @@ function buildMiddlewareContext(input: QueryInput): {
   return { middlewareSet, useWebSearch, useDeepThinking, useStream, effectiveInput };
 }
 
+// FR-19 refs 对象化升级包装器：done chunk 携带的 string[] refs 升级为 RefSignal 对象数组。
+// 为什么只在 done 时升级：refs 只在 done 事件附带，中间文本块无 refs，避免对每块无谓转换。
+// 单页读失败由 buildRefSignals 内部兜底（信号置 unknown/false 但不丢弃引用），保证 AC-19-6 全部引用可见。
+// 为什么导出：供测试单独验证 refs 对象化传输链路（T3-3 传输单测）
+export async function* upgradeRefs(
+  source: AsyncIterable<AnswerChunk>,
+  vault: VaultService,
+  appConfig?: AppConfig,
+): AsyncGenerator<AnswerChunk, void, unknown> {
+  for await (const chunk of source) {
+    if (chunk.done && Array.isArray(chunk.refs) && chunk.refs.length > 0) {
+      // 双形态兼容：既有对象则取其 path，纯字符串直接作为路径
+      const paths = chunk.refs.map((r) => (typeof r === 'string' ? r : r.path));
+      const signals = await buildRefSignals(paths, vault, appConfig);
+      yield { ...chunk, refs: signals };
+    } else {
+      yield chunk;
+    }
+  }
+}
+
 export async function* queryWorkflow(
   harnessConfig: HarnessConfig,
   vault: VaultService,
@@ -988,6 +1036,12 @@ export async function* queryWorkflow(
     // v3 媒体生成：image 模式需要 mediaConfig 调用 Agnes API，appConfig 解析 API key
     mediaConfig?: MediaConfig;
     appConfig?: AppConfig;
+    // 生图 BYOK：前端透传的用户生图配置（baseUrl/key/model/size 等），优先生效并追加预留扩展字段
+    mediaImageConfig?: MediaImageUserConfig;
+    // 意图澄清：配置（AppConfig.clarify 合并默认值）+ 跨请求共享的会话 store。
+    // 未传或配置关闭时整条澄清链路跳过（零破坏向后兼容）。
+    clarify?: ClarifyConfig;
+    clarifyStore?: ClarifySessionStore;
   } = {},
 ): AsyncIterable<AnswerChunk> {
   // thinking 收集器：harness 阶段收集，fallback 阶段不再追加
@@ -1036,15 +1090,59 @@ export async function* queryWorkflow(
     yield { thinking: { phase: 'thinking', message: '正在思考...', ts: new Date().toISOString() } };
   }
 
+  // ── 意图澄清门禁：先澄清、后执行 ──
+  // 检测到歧义（置信度达标 + 轮次未耗尽）→ 中断并下发澄清卡片，本轮不发 done（前端凭 clarify 事件识别中断）；
+  // 用户确认意图后续答（携带 clarifyId + choiceIndex）→ 注入 confirmedIntent 到 prompt，再走正常检索回答。
+  // 触发条件全配置化（options.clarify）+ 中间件 'clarify' 开关；任何异常 fail-open 不阻断主问答。
+  let clarifyInput = effectiveInput;
+  if (options.clarify && options.clarifyStore && shouldRunMiddleware(effectiveInput.middlewares, 'clarify')) {
+    stage('clarify-start');
+    try {
+      const gate = await runClarifyGate({
+        harnessConfig,
+        config: options.clarify,
+        store: options.clarifyStore,
+        question: effectiveInput.question,
+        clarifyId: effectiveInput.clarifyId,
+        choiceIndex: effectiveInput.choiceIndex,
+        threadId: effectiveInput.threadId ?? null,
+        outputMode: effectiveInput.outputMode,
+        hasAttachments: (effectiveInput.attachments?.length ?? 0) > 0,
+        history: effectiveInput.history,
+      });
+      if (gate.type === 'interrupt') {
+        stage('clarify-interrupt', { round: gate.payload.round });
+        // 附加归属线程 id：澄清续答需携带同一 threadId，后端才能找回同一会话并递增轮次
+        yield { clarify: { ...gate.payload, threadId: clarifyInput.threadId ?? undefined } };
+        return;
+      }
+      if (gate.confirmedIntent) {
+        // 用户已确认意图：注入 prompt 继续；清除澄清透传字段，避免下一轮任务重复解析歧义
+        clarifyInput = {
+          ...effectiveInput,
+          confirmedIntent: gate.confirmedIntent,
+          clarifyId: undefined,
+          choiceIndex: undefined,
+        };
+      }
+      stage('clarify-continue', { skip: gate.skipReason, confirmed: !!gate.confirmedIntent });
+    } catch (err) {
+      // fail-open：澄清链路异常绝不阻断主问答（降级为直接回答）
+      stage('clarify-error');
+      console.log('[clarify] gate error, skip clarification:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   // 降级链第 1 级：queryWithHarness（默认）或 queryWithHarnessStream（真流式）
   // 委托 createHarnessWithMultimodal 处理流式切换与 multimodal 包装，降低认知复杂度（S3776）
   let harnessSucceeded = false;
   stage('harness-start');
   try {
-    for await (const chunk of createHarnessWithMultimodal(
-      useStream, harnessConfig, vault, effectiveInput, options,
+    for await (const chunk of upgradeRefs(
+      createHarnessWithMultimodal(
+      useStream, harnessConfig, vault, clarifyInput, options,
       collectedThinking, collectedWebRefs, collectedProgress, outputModes,
-    )) {
+    ), vault, options.appConfig)) {
       yield chunk;
     }
     harnessSucceeded = true;
@@ -1063,9 +1161,10 @@ export async function* queryWorkflow(
   let fallbackSucceeded = false;
   stage('fallback-start');
   try {
-    for await (const chunk of createFallbackWithMultimodal(
-      harnessConfig, vault, input, options, outputModes,
-    )) {
+    for await (const chunk of upgradeRefs(
+      createFallbackWithMultimodal(
+      harnessConfig, vault, clarifyInput, options, outputModes,
+    ), vault, options.appConfig)) {
       yield chunk;
     }
     fallbackSucceeded = true;

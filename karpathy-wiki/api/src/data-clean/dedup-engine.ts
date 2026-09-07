@@ -155,7 +155,7 @@ let cachedResult: DeduplicateResult | null = null;
 // 根据「path + 内容哈希」构造全局内容签名（排序后拼接，与顺序无关）
 function buildSignature(fps: PageFingerprint[]): string {
   const parts: string[] = fps.map((f) => `${f.page.path}\u0000${f.contentHash}`);
-  parts.sort();
+  parts.sort((a, b) => a.localeCompare(b));
   return parts.join('\n');
 }
 
@@ -167,10 +167,10 @@ export async function deduplicatePages(vault: VaultService): Promise<Deduplicate
 
   // 步骤 1：为每个页面计算指纹（哈希 + token 集合），并剔除过短页面
   const fingerprints: PageFingerprint[] = [];
-  for (let i = 0; i < scanned.length; i++) {
-    const content = scanned[i].content;
+  for (const item of scanned) {
+    const content = item.content;
     fingerprints.push({
-      page: scanned[i].page,
+      page: item.page,
       contentHash: computeContentHash(content),
       tokens: tokenize(content),
     });

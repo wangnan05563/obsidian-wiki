@@ -1,4 +1,4 @@
-﻿import fs from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
 import type { VaultService } from "../vault/vault-service.js";
@@ -35,6 +35,74 @@ async function vaultRetry<T>(
 
 //  Scoring engine 
 /**
+ * 处理单个文件的扫描：读取内容、解析 frontmatter、计算质量评分。
+ * 提取为独立函数降低 scanVaultRaw 的认知复杂度（S3776）。
+ */
+async function processScanFile(
+  vault: VaultService,
+  dir: string,
+  file: string,
+): Promise<{ page: PageQualityScore; content: string } | null> {
+  if (!file.endsWith(".md") || isTestFile(file)) return null;
+  const relPath = `${dir}/${file}`;
+  try {
+    const content = await vaultRetry(
+      () => vault.readFile(relPath),
+      `scan:${relPath}`
+    );
+    const parsed = matter(content);
+    return {
+      page: {
+        path: relPath,
+        title: (parsed.data.title as string) || file.replace(".md", ""),
+        qualityScore: Math.min(100, Math.max(0,
+          countWords(parsed.content || "") / 10 +
+            countLinks(content) * 25 +
+            (hasValidFrontmatter(parsed) ? 50 : 0)
+        )),
+        category: {
+          length: 20, links: 25, frontmatter: 25, citations: 20, duplicate: 0, freshness: 10,
+        },
+        metadata: {
+          wordCount: countWords(parsed.content || ""),
+          lineCount: (parsed.content || "").split("\n").length,
+          internalLinks: countLinks(content),
+          inboundLinks: 0,
+          lastModified: new Date().toISOString(),
+          hasFrontmatter: hasValidFrontmatter(parsed),
+          isDraft: false,
+          fileSizeBytes: Buffer.byteLength(content),
+          hasBom: false,
+          encoding: "utf-8" as const,
+          directory: dir,
+        },
+        issues: [],
+        suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
+      },
+      content,
+    };
+  } catch (err) {
+    console.warn(`Failed to process ${dir}/${file}:`, err);
+    return {
+      page: {
+        path: `${dir}/${file}`,
+        title: file.replace(".md", ""),
+        qualityScore: 0,
+        category: { length: 0, links: 0, frontmatter: 0, citations: 0, duplicate: 0, freshness: 0 },
+        metadata: {
+          wordCount: 0, lineCount: 0, internalLinks: 0, inboundLinks: 0,
+          lastModified: new Date().toISOString(), hasFrontmatter: false,
+          isDraft: true, fileSizeBytes: 0, hasBom: false, encoding: "unknown" as any, directory: dir,
+        },
+        issues: [{ code: "SCAN_ERROR", severity: "error", detail: `Failed to read: ${err instanceof Error ? err.message : String(err)}` }],
+        suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
+      },
+      content: "",
+    };
+  }
+}
+
+/**
  * 单次扫描 vault：读原文一次，返回「质量评分 + 原文」成对结果。
  * 这是去重引擎的唯一读取入口 —— deduplicatePages 复用此处读到的 content，
  * 避免历史实现中「scanVault 读一遍、dedup 再逐文件 readFile 一遍」导致的 2× 磁盘 I/O。
@@ -50,63 +118,8 @@ export async function scanVaultRaw(
       const fullPath = path.join(vault.getVaultPath(), dir);
       const files = await fs.readdir(fullPath);
       for (const file of files) {
-        if (!file.endsWith(".md") || isTestFile(file)) continue;
-        const relPath = `${dir}/${file}`;
-        try {
-          const content = await vaultRetry(
-            () => vault.readFile(relPath),
-            `scan:${relPath}`
-          );
-          const parsed = matter(content);
-          out.push({
-            page: {
-              path: relPath,
-              title: (parsed.data.title as string) || file.replace(".md", ""),
-              qualityScore: Math.min(100, Math.max(0,
-                countWords(parsed.content || "") / 10 +
-                  countLinks(content) * 25 +
-                  (hasValidFrontmatter(parsed) ? 50 : 0)
-              )),
-              category: {
-                length: 20, links: 25, frontmatter: 25, citations: 20, duplicate: 0, freshness: 10,
-              },
-              metadata: {
-                wordCount: countWords(parsed.content || ""),
-                lineCount: (parsed.content || "").split("\n").length,
-                internalLinks: countLinks(content),
-                inboundLinks: 0,
-                lastModified: new Date().toISOString(),
-                hasFrontmatter: hasValidFrontmatter(parsed),
-                isDraft: false,
-                fileSizeBytes: Buffer.byteLength(content),
-                hasBom: false,
-                encoding: "utf-8" as const,
-                directory: dir,
-              },
-              issues: [],
-              suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
-            },
-            content,
-          });
-        } catch (err) {
-          console.warn(`Failed to process ${dir}/${file}:`, err);
-          out.push({
-            page: {
-              path: `${dir}/${file}`,
-              title: file.replace(".md", ""),
-              qualityScore: 0,
-              category: { length: 0, links: 0, frontmatter: 0, citations: 0, duplicate: 0, freshness: 0 },
-              metadata: {
-                wordCount: 0, lineCount: 0, internalLinks: 0, inboundLinks: 0,
-                lastModified: new Date().toISOString(), hasFrontmatter: false,
-                isDraft: true, fileSizeBytes: 0, hasBom: false, encoding: "unknown" as any, directory: dir,
-              },
-              issues: [{ code: "SCAN_ERROR", severity: "error", detail: `Failed to read: ${err instanceof Error ? err.message : String(err)}` }],
-              suggestions: [{ type: "link_suggestion", detail: "Verify file permissions or encoding", actionable: true }],
-            },
-            content: "",
-          });
-        }
+        const result = await processScanFile(vault, dir, file);
+        if (result) out.push(result);
       }
     } catch (err) {
       console.warn(`Failed to scan directory ${dir}:`, err);
@@ -255,6 +268,118 @@ export async function fixFrontmatter( // NOSONAR - 认知复杂度由业务逻�
     }
   }
   return { fixed, errors };
+}
+
+//  Batch rename (used by AI 分析「批量重命名」)
+/**
+ * 单文件重命名（同目录内移动）。
+ * - 目标必须是 .md
+ * - 不允许跨目录（避免打破 [[标题]] 链接结构；wikilink 按标题解析，文件名移动本身安全）
+ * - 目标已存在则报错，不覆盖
+ */
+async function fileExists(abs: string): Promise<boolean> {
+  try {
+    await fs.access(abs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function renameFile(
+  vault: VaultService,
+  fromRel: string,
+  toRel: string,
+  dryRun: boolean = true,
+): Promise<{ renamed: string[]; errors: string[] }> {
+  const renamed: string[] = [];
+  const errors: string[] = [];
+  try {
+    const fromAbs = resolveVaultPath(vault, fromRel);
+    const toAbs = resolveVaultPath(vault, toRel);
+    if (!toRel.endsWith('.md')) throw new Error('目标文件名必须以 .md 结尾');
+    // 同目录校验：跨目录移动会改变链接可达性，批量重命名限定原地规范化
+    if (path.dirname(toAbs) !== path.dirname(fromAbs)) {
+      throw new Error('不允许跨目录重命名（批量重命名仅做原地命名规范化）');
+    }
+    if (await fileExists(toAbs)) throw new Error(`目标已存在：${toRel}`);
+    if (!dryRun) {
+      await vaultRetry(() => fs.rename(fromAbs, toAbs), `rename:${fromRel}->${toRel}`);
+    }
+    renamed.push(toRel);
+  } catch (err) {
+    errors.push(`重命名失败 ${fromRel} -> ${toRel}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return { renamed, errors };
+}
+
+/**
+ * 批量重命名（AI 分析结论直接执行）。
+ * 逐条调用 renameFile，单条失败不影响其余，错误汇总返回。
+ */
+export async function batchRename(
+  vault: VaultService,
+  items: Array<{ from: string; to: string }>,
+  dryRun: boolean = true,
+): Promise<{ renamed: string[]; errors: string[] }> {
+  const renamed: string[] = [];
+  const errors: string[] = [];
+  for (const { from, to } of items) {
+    const res = await renameFile(vault, from, to, dryRun);
+    renamed.push(...res.renamed);
+    errors.push(...res.errors);
+  }
+  return { renamed, errors };
+}
+
+//  Batch dedup (used by AI 分析「批量去重」)
+/** 构造最小 PageQualityScore（mergeDuplicatePages 仅需 path/title，其余字段给零值） */
+function minimalPage(relPath: string): PageQualityScore {
+  const title = relPath.split('/').pop()?.replace(/\.md$/i, '') ?? relPath;
+  const directory = relPath.includes('/') ? relPath.slice(0, relPath.indexOf('/')) : '';
+  return {
+    path: relPath,
+    title,
+    qualityScore: 0,
+    category: { length: 0, links: 0, frontmatter: 0, citations: 0, duplicate: 0, freshness: 0 },
+    metadata: {
+      wordCount: 0, lineCount: 0, internalLinks: 0, inboundLinks: 0, lastModified: '',
+      hasFrontmatter: false, isDraft: false, fileSizeBytes: 0, hasBom: false, encoding: 'utf-8', directory,
+    },
+    issues: [],
+    suggestions: [],
+  };
+}
+
+/**
+ * 批量去重：把每组非代表文档合并进代表文档（复用 mergeDuplicatePages，archiveKept=true）。
+ * 逐条执行，单条失败不阻断其余。
+ */
+export async function batchDedupPages(
+  vault: VaultService,
+  groups: Array<{ keep: string; merge: string[] }>,
+  dryRun: boolean = true,
+): Promise<{ merged: number; errors: string[]; details: MergeResult[] }> {
+  const errors: string[] = [];
+  const details: MergeResult[] = [];
+  let merged = 0;
+  for (const g of groups) {
+    for (const member of g.merge) {
+      if (member === g.keep) continue;
+      const pair: DuplicatePair = {
+        pageA: minimalPage(g.keep),
+        pageB: minimalPage(member),
+        similarity: 1,
+        matchType: 'exact',
+        reason: '批量去重合并',
+      };
+      const res = await mergeDuplicatePages(vault, pair, true, dryRun);
+      details.push(res);
+      if (res.errors.length > 0) errors.push(...res.errors);
+      else merged++;
+    }
+  }
+  return { merged, errors, details };
 }
 
 //  Merge duplicates 

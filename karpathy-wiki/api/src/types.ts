@@ -6,6 +6,11 @@
 import type { ContextGovernorConfig } from './engine/context-governor.js';
 export type { ContextGovernorConfig } from './engine/context-governor.js';
 
+// 意图澄清模块类型 re-export：AppConfig.clarify / QueryInput / AnswerChunk 引用。
+// 具体实现位于 workflows/clarify/（自包含模块，先澄清后执行的可复用门禁）。
+import type { ClarifyConfig, ClarificationPayload } from './workflows/clarify/clarify-types.js';
+export type { ClarifyConfig, ClarificationPayload } from './workflows/clarify/clarify-types.js';
+
 // RBAC 权限模块类型 re-export 便于外部统一从 types.ts 导入
 // AuthConfig 本文件内 AppConfig 引用需 import type，其余类型仅 re-export 不在文件内使用
 import type { AuthConfig } from './auth/types.js';
@@ -39,6 +44,8 @@ export interface EngineAdapter {
   healthCheck(): Promise<HealthReport>;
   // §4.6 一键修复：走 LLM 引擎，SSE 流式返回修复进度
   healthCheckFix(input: FixInput): AsyncIterable<FixProgressEvent>;
+  // FR-18 AC-18-4 知识时效复核：为指定 dated 页面追加 reviewed_at（确定性操作，不走 LLM）
+  markKnowledgeReviewed(paths: string[]): Promise<{ ok: boolean; paths: string[]; message: string }>;
   // §5.2 模型即时切换：前端 ModelSelector 切换时调用，无需重启
   // provider/baseUrl/apiKey 变更需同步 LLM 实例，支持预设切换时完整更新
   // §5.2 webSearchConfig 变更需同步内存实例，避免重启服务才生效
@@ -50,9 +57,11 @@ export interface EngineAdapter {
   podcast(topic: string, appConfig: AppConfig | undefined, scopeFilter?: { tags?: string[]; folder?: string }): Promise<PodcastResult>;
   // v3 视频生成：创建 Agnes Video 异步任务，返回 taskId/videoId（不阻塞，前端轮询）
   // 为什么独立于 query SSE 流：视频生成需数分钟，超出 SSE 60 秒超时，走独立 JSON 端点
-  generateVideo(prompt: string, appConfig?: AppConfig): Promise<VideoTaskResult>;
+  // overrides：前端 BYOK 透传的用户视频配置（model/size/seconds/apiKey），优先级高于服务端 media.agnes
+  generateVideo(prompt: string, appConfig?: AppConfig, overrides?: MediaVideoUserConfig): Promise<VideoTaskResult>;
   // v3 视频任务轮询：查询任务状态，完成时下载视频并归档到 vault
-  pollVideoTask(taskId: string, appConfig?: AppConfig): Promise<VideoTaskResult>;
+  // overrides 与 create 时关联的 task 配置一致（routes/media.ts 用 taskMap 回传），用于找用户 API key 下载
+  pollVideoTask(taskId: string, appConfig?: AppConfig, overrides?: MediaVideoUserConfig): Promise<VideoTaskResult>;
 }
 
 export interface CompileInput {
@@ -136,6 +145,19 @@ export interface QueryInput {
   // toolsConfig：用户维度工具集（MCP/CLI/场景路由）。始终下发，整体替换服务端共享工具配置，
   //   避免某用户沿用服务端共享 MCP/CLI（即"各用户调用自己配置"的隔离要求）。
   toolsConfig?: ToolsConfig;
+  // ── 生图 BYOK：随请求体透传的用户生图配置（outputMode='image' 时生效）──
+  // 与 llmConfig 同层：用户存 IndexedDB 的生图 key/baseUrl/model/size 等，一次性下发，
+  // 后端优先生效于服务端 media.agnes（generateImage 应用 applyImageOverride）。
+  mediaImageConfig?: MediaImageUserConfig;
+  // ── 意图澄清（Clarify）续答字段 ──
+  // 首轮提问不携带；收到 clarify 中断事件后，前端带同一 clarifyId + choiceIndex 重发，
+  // 后端据此解析用户确认的意图并注入 prompt，避免重复澄清。
+  // choiceIndex：用户选择的解读选项下标；-1 或缺失表示「按推荐理解直接回答」。
+  clarifyId?: string;
+  choiceIndex?: number;
+  // 内部传递字段（后端注入，前端不传）：用户已确认的意图文本（"标题：说明"），
+  // 由澄清门禁解析后写入 buildQueryTask 的「已确认的意图」段落。
+  confirmedIntent?: string;
 }
 
 // 思考步骤：与前端 ThinkingStep 类型对齐
@@ -156,11 +178,71 @@ export interface WebRef {
   snippet: string;
 }
 
+// ============================================================================
+// V4.0 引用信号类型（FR-18/19）
+// ============================================================================
+
+// 知识时效分类（FR-18）：single page 的时效类别
+// - timeless：长期有效的事实/原理
+// - dated：有明确时效的信息（如版本、政策、时效性知识）
+// - pointer：指向外部源的中转页，本身不存时效内容
+// 为什么独立枚举：与 quality-scanner 的 freshness 数值评分维度区分，避免同名异义
+export type KnowledgeClass = 'timeless' | 'dated' | 'pointer';
+
+// 知识时效状态（FR-18）：由确定性规则从 knowledge_class + updated + reviewed_at 推导
+// - ok：有效（timeless/pointer，或 dated 未过期，或 dated 已复核且复核未过期）
+// - stale：过期待复核（dated 超阈值且未复核，或复核本身超期）
+// - unknown：无 knowledge_class 字段（存量页面兜底，不阻断）
+export type KnowledgeStatus = 'ok' | 'stale' | 'unknown';
+
+// 引用权威度等级（FR-19）：从 source 类别经 authorityMap 映射
+// 未覆盖类别归 unknown，宁保守不误判
+export type RefAuthority = 'high' | 'medium' | 'low' | 'unknown';
+
+// 引用信号对象（FR-19）：查询引用某页面时的可信度信号
+// 为什么对象化：refs 从纯字符串升级为可携带权威度/完整度/复核/时效的多信号结构
+export interface RefSignal {
+  path: string;
+  // source 类别经 authorityMap 映射的权威度
+  authority: RefAuthority;
+  // 页面完整度信号（frontmatter 字段完整度）
+  confidence: boolean;
+  // 是否已人工复核（存在 reviewed_at 字段）
+  review: boolean;
+  // 时效状态（继承 FR-18 的 knowledge_status）
+  knowledgeStatus: KnowledgeStatus;
+}
+
+// 引用统一形态：兼容旧的纯字符串路径，与新的信号对象
+// 为什么联合类型：存量前端/会话按 string 渲染，新前端按对象渲染，向后兼容
+export type Ref = string | RefSignal;
+
+// 将 refs 归一化为信号对象数组（旧 string → 全 unknown 信号）
+// 为什么独立工具：query-workflow 与 conversations 读取共用，避免重复实现
+export function normalizeRefs(refs: unknown[] | undefined): RefSignal[] {
+  if (!Array.isArray(refs)) return [];
+  return refs.map((r): RefSignal => {
+    if (typeof r === 'string') {
+      // 旧形态：无任何信号信息，全置 unknown/false
+      return { path: r, authority: 'unknown', confidence: false, review: false, knowledgeStatus: 'unknown' };
+    }
+    // 已对象化：透传并补齐缺省字段
+    const o = r as Partial<RefSignal>;
+    return {
+      path: o.path ?? '',
+      authority: (o.authority as RefAuthority) ?? 'unknown',
+      confidence: o.confidence ?? false,
+      review: o.review ?? false,
+      knowledgeStatus: (o.knowledgeStatus as KnowledgeStatus) ?? 'unknown',
+    };
+  });
+}
+
 export interface AnswerChunk {
   // 流式答案片段
   text?: string;
-  // [[页面名]] 引用（本地 vault 页面）
-  refs?: string[];
+  // [[页面名]] 引用（本地 vault 页面）。V4.0 起为双形态：string（旧）| RefSignal（含权威/完整度/复核/时效）
+  refs?: Ref[];
   // §5.2 联网搜索外部链接引用（与 refs 并行）
   webRefs?: WebRef[];
   done?: boolean;
@@ -171,8 +253,9 @@ export interface AnswerChunk {
   // §5.2 图片推送（多模态场景）
   // archivePath: 下载归档到 vault queries/ 后的相对路径，前端用它构造 /api/files 访问
   image?: { url: string; alt: string; width?: number; height?: number; archivePath?: string };
-  // v3 PPT 推送：LLM 生成的 Marp Markdown，前端用 @marp-team/marp-core 渲染为幻灯片
-  ppt?: { markdown: string; title: string; archivePath: string };
+  // v3 PPT 推送：LLM 生成的 Marp Markdown，前端用 @marp-team/marpit 渲染为幻灯片
+  // pptxUrl: 由后端解析 Marp 内容后用 pptxgenjs 生成的原生 .pptx 下载地址（公开媒体路由，可选）
+  ppt?: { markdown: string; title: string; archivePath: string; pptxUrl?: string };
   // §5.2 追问建议
   followups?: string[];
   // §5.1 done 事件附带的会话信息（供归档用）
@@ -184,6 +267,9 @@ export interface AnswerChunk {
   //   拉取每步耗时分解（llmMs/toolMs/tokens/toolNames），定位 143s/282s 级长耗时瓶颈。
   //   缺省不携带：仅 harness 路径（非流式/流式）在 done 事件附上，降级链兜底不携带。
   runId?: string;
+  // 意图澄清中断事件：检测到歧义时由澄清门禁产出，前端据此渲染澄清卡片并暂停流。
+  //   携带后本 chunk 是「中断」而非「完成」——工作流随之结束，不发 done 事件。
+  clarify?: ClarificationPayload;
 }
 
 export interface HealthReport {
@@ -192,6 +278,8 @@ export interface HealthReport {
   brokenLinks: Array<{ from: string; to: string }>;
   // 过期页面路径
   stale: string[];
+  // FR-18 知识时效过期页面（knowledge_status = stale 的 dated 页面），与 stale（lastModified）概念区分
+  knowledgeStale: string[];
 }
 
 // §4.6 一键修复输入。issueType 区分修复策略，target 是具体问题目标。
@@ -346,6 +434,66 @@ export interface AppConfig {
   // 默认关闭（零破坏）：关闭时路由走原有内联 SSE，完全不启用 StreamRunManager。
   // 为什么可选：保留向后兼容，老配置文件无此字段时由 defaultConfig 提供默认值（false）。
   enableResumableStream?: boolean;
+  // 意图澄清配置：问题存在歧义时主动中断提问、列出多义解读选项供用户确认，
+  // 再基于确认的意图继续检索回答（降低幻觉/答非所问概率）。参考 Trae/WorkBuddy 中断提问机制。
+  // 为什么可选：保留向后兼容，老配置文件无此字段时由 defaultConfig 提供默认值（开启）。
+  // 关闭方式：config.json 中 clarify.enabled = false，或请求 middlewares 不含 'clarify'。
+  clarify?: ClarifyConfig;
+  // MCP 服务端配置：对外暴露知识库能力给外部 AI Agent（MCP Server，Streamable HTTP）
+  // 为什么可选：保留向后兼容，老配置文件无此字段时默认关闭（零破坏）。
+  mcp?: McpConfig;
+  // V4.0 知识校验配置（FR-17/18/19）：均可选，缺失时由 defaultConfig 提供默认值
+  knowledge?: KnowledgeConfig;
+  graph?: GraphGapsConfig;
+  refs?: RefsConfig;
+}
+
+// MCP 服务端配置（对外给外部 AI Agent 调用知识库的 MCP Server）
+// 为什么 token 双轨：外部 Agent 无法走 Web 登录流程，用配置式 Bearer Token 鉴权。
+//  - userToken：可访问查询/检索类工具
+//  - adminToken：可访问全部工具（含写/维护类）；未设置时写工具回退用 userToken
+//  - 均未设置且 authenticated=false 时 `/mcp` 对内网开放（本地部署便捷），否则 503 关闭
+export interface McpConfig {
+  // 是否启用 MCP Server 端点
+  enabled: boolean;
+  // 端点路径，默认 '/mcp'
+  endpointPath?: string;
+  // 提供能力时声明的 server 信息
+  name?: string;
+  version?: string;
+  // 读/查询工具的 Bearer Token（可空）
+  userToken?: string;
+  // 写/维护工具的 Bearer Token（可空，未设置时回退到 userToken）
+  adminToken?: string;
+  // 是否强制鉴权（false 时未配置 token 也可访问；true 时必须配置 token 才可访问）
+  authenticated?: boolean;
+}
+
+// ============================================================================
+// V4.0 知识校验配置（FR-17/18/19 共享基础设施）
+// ============================================================================
+
+// 知识时效配置（FR-18）
+// staleDays 是过期阈值：knowledge_class=dated 且 updated 距今超过该值即判 stale。
+// reviewedAt 保质期思路：人工复核本身也有时效，复核超过同样阈值后页面重新进入 stale，
+//   避免一次复核永久免检（对齐竞品 OKM 的事实时效语义）。
+// 未覆盖的类别默认 unknown（宁保守不误判）。
+export interface KnowledgeConfig {
+  staleDays: number;
+}
+
+// 知识缺口检测配置（FR-17）
+// minPages 是采样下限：页面总数低于该值返回 insufficient-data 而非误报，
+//   避免在极小知识库上产生大量孤立/低密度误报。
+export interface GraphGapsConfig {
+  minPages: number;
+}
+
+// 引用权威度映射（FR-19）：source 类别值 → 权威度等级
+// 为什么基于类别而非域名：现有 frontmatter.source 是类别枚举（web/manual/qq-chat），无 URL 信息，
+//   域名分类需新增 source_url 字段且收益有限，类别粒度在单用户本地库场景已够用。
+export interface RefsConfig {
+  authorityMap: Record<string, string>;
 }
 
 
@@ -429,6 +577,86 @@ export interface MediaConfig {
     // 默认视频时长（秒）
     defaultVideoSeconds: number;
   };
+}
+
+// ===== 媒体生成 BYOK 用户配置 + 预设（生图/视频可配置化）=====
+// 为什么独立于服务端 MediaConfig.agnes：与 LLM 问答的 BYOK 一致，每用户生图/视频配置
+// 由前端存 IndexedDB（services/mediaConfig.ts），随生成请求体透传给后端，后端不持久化。
+// 为什么字段仍是"当前 Agnes 生效字段 + 预留扩展"：Agnes 实际只识别 model/size/ratio（图）与
+//   model/size/seconds（视频），故核心配置这些；steps/cfgScale/sampler/seed/negativePrompt/fps/motion
+//   为通用扩展，仅在用户显式填写时才追加到请求体（API 不识别则忽略），避免破坏现有请求导致 400。
+
+// 生图用户的 BYOK 配置（图像生成）
+export interface MediaImageUserConfig {
+  // API base URL（OpenAI 兼容接口）
+  baseUrl: string;
+  // 用户个人 API key（BYOK，仅存本地，随请求透传，后端不落盘）
+  apiKey: string;
+  // 图像生成模型名
+  model: string;
+  // 分辨率，如 1024x768
+  size: string;
+  // 比例，如 16:9；可选，缺省走服务端默认
+  ratio?: string;
+  // 预留扩展：步数/CFG/Sampler/Seed/负面词（Agnes 或忽略；显式设置才发送）
+  steps?: number;
+  cfgScale?: number;
+  sampler?: string;
+  seed?: number;
+  negativePrompt?: string;
+}
+
+// 视频生成用户的 BYOK 配置
+export interface MediaVideoUserConfig {
+  baseUrl: string;
+  apiKey: string;
+  videoModel: string;
+  size: string;
+  seconds: number;
+  // 预留扩展：帧率/运动强度/Seed/负面词
+  fps?: number;
+  motion?: number;
+  seed?: number;
+  negativePrompt?: string;
+}
+
+// 前端随请求体透传的整包媒体生成配置（生图 + 视频两组，可只带其一）
+export interface MediaGenerationConfig {
+  image?: MediaImageUserConfig;
+  video?: MediaVideoUserConfig;
+}
+
+// 生图预设模板（media-presets.json 一项）；供前端下拉一键应用，可手动微调后存为用户配置
+export interface MediaImagePreset {
+  key: string;
+  label: string;       // 展示用场景名，如"高清写实"
+  model: string;
+  size: string;
+  ratio?: string;
+  steps?: number;
+  cfgScale?: number;
+  sampler?: string;
+  seed?: number;
+  negativePrompt?: string;
+}
+
+// 视频预设模板（media-presets.json 一项）
+export interface MediaVideoPreset {
+  key: string;
+  label: string;       // 展示用场景名
+  model: string;
+  size: string;
+  seconds: number;
+  fps?: number;
+  motion?: number;
+  seed?: number;
+  negativePrompt?: string;
+}
+
+// media-presets.json 整体结构（生图 + 视频两组预设）
+export interface MediaPresetsFile {
+  imagePresets: MediaImagePreset[];
+  videoPresets: MediaVideoPreset[];
 }
 
 // v3 视频生成异步任务结果

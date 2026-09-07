@@ -1,4 +1,6 @@
 import path from 'node:path';
+import zlib from 'node:zlib';
+import { extractOle2Text } from './ole2-extract.js';
 
 // ZIP Parser - Central Directory scan
 interface ZipEntry { name: string; data: Buffer; }
@@ -23,7 +25,24 @@ export async function parseZip(buffer: Buffer): Promise<Map<string, Buffer>> {
     const compressedSize = buffer.readUInt32LE(pos + 20);
     const name = buffer.toString('utf-8', pos + 46, pos + 46 + fileNameLen);
     const dataStart = relativeOffset + 30 + fileNameLen + extraFieldLen;
-    const data = buffer.subarray(dataStart, dataStart + compressedSize);
+    const raw = buffer.subarray(dataStart, dataStart + compressedSize);
+    // Local file header at relativeOffset holds the compression method (offset 8).
+    const method = buffer.readUInt16LE(relativeOffset + 8);
+    let data: Buffer;
+    if (method === 8) {
+      try {
+        data = zlib.inflateRawSync(raw);
+      } catch {
+        // Some writers wrap the stream with a zlib header instead of raw deflate.
+        try {
+          data = zlib.inflateSync(raw);
+        } catch {
+          data = raw;
+        }
+      }
+    } else {
+      data = raw;
+    }
     entries.set(name, data);
     pos += 46 + fileNameLen + extraFieldLen + commentLen;
   }
@@ -122,16 +141,22 @@ function parseSheetCells(
   return rows;
 }
 
-// 提取行数据渲染为 markdown 表格的逻辑，降低 convertXlsxToMarkdown 的认知复杂度
+// 把解析出的行渲染为 Markdown 表格：第一行作为表头，其余作为数据。
+// 为什么用首行作表头而非 Col 占位符：占位符丢失"列名"这一真实语义，且与下游 LLM 阅读习惯不符。
 function renderSheetTable(rows: Map<number, Array<{ col: number; value: string }>>): string {
-  let markdown = '';
-  const sortedRows = [...rows.entries()].sort((a, b) => a[0] - b[0]);
-  for (const [, cells] of sortedRows) {
-    const rowStrs = new Array(maxColInRow(cells) + 1).fill('');
+  if (rows.size === 0) return '_(空表)_\n\n';
+  const sorted = [...rows.entries()].sort((a, b) => a[0] - b[0]);
+  const maxCol = Math.max(...[...rows.values()].map(maxColInRow));
+  const head = new Array(maxCol + 1).fill('');
+  for (const c of sorted[0][1]) head[c.col] = c.value;
+  let markdown = '| ' + head.join(' | ') + ' |\n';
+  markdown += '|' + new Array(maxCol + 1).fill('------').join('|') + '|\n';
+  for (const [, cells] of sorted.slice(1)) {
+    const rowStrs = new Array(maxCol + 1).fill('');
     for (const c of cells) rowStrs[c.col] = c.value;
     markdown += '| ' + rowStrs.join(' | ') + ' |\n';
   }
-  return markdown;
+  return markdown + '\n';
 }
 
 export async function convertXlsxToMarkdown(buffer: Buffer): Promise<string> {
@@ -142,21 +167,36 @@ export async function convertXlsxToMarkdown(buffer: Buffer): Promise<string> {
   const wbBuffer = entries.get('xl/workbook.xml');
   if (!wbBuffer) return '[Error: workbook.xml not found]';
   const wbXml = wbBuffer.toString('utf-8');
-  const sheetRegex = /<sheet [^>]*name="([^"]*)"[^>]*r:id="rId(\d+)"/g;
+
+  // r:id → target worksheet file (order-independent attribute matching).
+  const relsBuffer = entries.get('xl/_rels/workbook.xml.rels');
+  const ridToTarget = new Map<string, string>();
+  if (relsBuffer) {
+    const relsXml = relsBuffer.toString('utf-8');
+    const relRe = /<Relationship\s+Id="([^"]+)"[^>]*Target="([^"]+)"/g;
+    let m;
+    while ((m = relRe.exec(relsXml)) !== null) ridToTarget.set(m[1], m[2]);
+  }
+
+  const sheetRe = /<sheet\b([^>]*)\/>/g;
   let sheetMatch;
-  while ((sheetMatch = sheetRegex.exec(wbXml)) !== null) {
-    const sheetName = sheetMatch[1];
-    const ridNum = sheetMatch[2];
-    const sheetIdx = parseInt(ridNum, 10);
-    const sheetFile = 'xl/worksheets/sheet' + sheetIdx + '.xml';
+  while ((sheetMatch = sheetRe.exec(wbXml)) !== null) {
+    const attrs = sheetMatch[1];
+    const nameM = attrs.match(/name="([^"]*)"/);
+    const ridM = attrs.match(/r:id="([^"]*)"/);
+    if (!nameM || !ridM) continue;
+    const sheetName = nameM[1];
+    // 优先用 rels 映射定位实际文件名；缺失（无 rels 或 rels 为空）时回退到
+    // rId 序号路径（xl/worksheets/sheet{N}.xml），否则会因取不到文件而整表跳过。
+    const target = ridToTarget.get(ridM[1]) || '';
+    const sheetFile = target
+      ? (target.startsWith('/') ? target.slice(1) : 'xl/' + target)
+      : 'xl/worksheets/sheet' + ((ridM[1].match(/\d+/) || ['0'])[0]) + '.xml';
     const sheetBuf = entries.get(sheetFile);
     if (!sheetBuf) continue;
     const sheetXml = sheetBuf.toString('utf-8');
     markdown += '## Sheet: ' + sheetName + '\n\n';
-    markdown += '| Cell | Value |\n|------|-------|\n';
-    const rows = parseSheetCells(sheetXml, stringCache);
-    markdown += renderSheetTable(rows);
-    markdown += '\n';
+    markdown += renderSheetTable(parseSheetCells(sheetXml, stringCache));
   }
   return markdown;
 }
@@ -211,23 +251,58 @@ export interface ConversionResult {
   markdown: string;
 }
 
+// Legacy Office (OLE2) files store text as raw bytes; the extractor pulls runs of
+// printable characters, which includes Word field-code artifacts (TOC / PAGEREF /
+// HYPERLINK / _Toc anchors) and document-property junk from the FIB/style region
+// (app names, author, base64 blobs, Excel built-in style names). Strip those so
+// the downstream LLM sees clean prose.
+function cleanOle2Text(text: string): string {
+  const META_DENY =
+    /^(Normal|Administrator|Default|WPS Office|微软中国|KSOProductBuildVer|KSOTemplateDocerSaveRecord|等线|标题|链接单元格|Calibri|宋体|黑体|仿宋|楷体|Times New Roman|Arial)/i;
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) {
+      out.push('');
+      continue;
+    }
+    if (META_DENY.test(t)) continue;
+    if (/^(TOC|PAGEREF|HYPERLINK|REF|NOTEREF|SEQ|STYLEREF|FORMULA|SYMBOL|INDEX|TC|RD)\b/i.test(t)) continue;
+    if (/^\s*_Toc\d+\s*$/.test(t)) continue;
+    if (/\\(o|h|z|u|t|f|p)\b/i.test(t)) continue;
+    if (/^[A-Za-z0-9+/=]{40,}$/.test(t)) continue; // base64 blob (e.g. embedded JWT)
+    if (/^[0-9A-Fa-f]{16,}(_\d+)?$/.test(t)) continue; // hex GUID + suffix e.g. 6C712A53…_13
+    if (/^\d{3,4}-[\d.]+$/.test(t)) continue; // version/lang code e.g. 2052-12.1.0.26895
+    out.push(line);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export async function convertOfficeFile(fileName: string, buffer: Buffer): Promise<ConversionResult> {
   const ext = path.extname(fileName).toLowerCase().slice(1);
+
+  // Legacy binary Office (OLE2 / CFB): .doc / .xls / .ppt — extracted via the
+  // zero-dependency CFB text extractor in ole2-extract.ts.
   if (['doc', 'xls', 'ppt'].includes(ext)) {
+    const text = extractOle2Text(buffer);
+    if (text && text.trim().length > 0) {
+      const contentType =
+        ext === 'doc' ? 'document' : ext === 'xls' ? 'spreadsheet' : 'presentation';
+      return { contentType, markdown: cleanOle2Text(text) };
+    }
+    // 提示用户另存为新格式，便于自行转换后重试
     return {
       contentType: 'unsupported',
-      markdown: `[Unsupported format: .${ext}]\n\nThis is an old binary Office format (OLE Compound Document).\nPlease save the file as .docx / .xlsx / .pptx and re-upload.`
+      markdown: `[Unsupported format: .${ext}]\n\nThis is an old binary Office format (OLE Compound Document) and no text could be extracted. Please re-save as .docx / .xlsx / .pptx and try again.`
     };
   }
+
   switch (ext) {
     case 'docx':
-    case 'doc':
       return { contentType: 'document', markdown: await convertDocxToMarkdown(buffer) };
     case 'xlsx':
-    case 'xls':
       return { contentType: 'spreadsheet', markdown: await convertXlsxToMarkdown(buffer) };
     case 'pptx':
-    case 'ppt':
       return { contentType: 'presentation', markdown: await convertPptxToMarkdown(buffer) };
     default:
       return { contentType: 'unsupported', markdown: '' };

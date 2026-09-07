@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { AppConfig, ToolsConfig, QqConfig, UrlCrawlConfig, SkillPreset } from './types.js';
 import { DEFAULT_CRAWL_CONFIG } from './utils/url-crawl.js';
 import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
+import { DEFAULT_CLARIFY_CONFIG } from './workflows/clarify/clarify-types.js';
 // 路径解析统一走 runtime.ts，兼容开发模式（api/config.json）与 SEA 模式（exe/config.json）
 // 为什么移除 fileURLToPath + import.meta.url：SEA 模式下 __filename 指向构建时 bundle.cjs，
 // 用户机器不存在，派生的 API_SRC_DIR 不可用，导致 config.json 加载失败
@@ -228,6 +229,19 @@ function defaultConfig(): AppConfig {
     enableSubAgents: false,
     // X-2 可恢复流式开关：默认关闭，零破坏；开启后问答运行与请求解耦支持断线重连。
     enableResumableStream: false,
+    // 意图澄清默认配置：开启 + 默认参数（阈值 0.6 / 最多 2 轮 / 最多 3 选项 / 10 分钟 TTL /
+    // 多模态输出模式跳过）。config.json 可整体覆盖，前端请求 middlewares 不含 'clarify' 时跳过。
+    clarify: { ...DEFAULT_CLARIFY_CONFIG },
+    // MCP 服务端默认关闭（零破坏）。启用后对外暴露知识库能力给外部 AI Agent。
+    // authenticated 默认 true：未配置 token 时端点不可用（安全默认）。
+    mcp: { enabled: false, endpointPath: '/mcp', name: 'karpathy-wiki', version: '1.0.0' },
+    // V4.0 知识校验默认配置（FR-17/18/19）
+    // knowledge.staleDays 默认 365：单用户本地库更新频率低，一年未更新的 dated 知识才判过期
+    // graph.minPages 默认 20：低于该页数的知识库样本不足，缺口检测返回 insufficient-data 而非误报
+    // refs.authorityMap 默认按现有 source 类别枚举映射：web 官方网页高 / manual 手工录入中 / qq-chat 聊天记录低
+    knowledge: { staleDays: 365 },
+    graph: { minPages: 20 },
+    refs: { authorityMap: { web: 'high', manual: 'medium', 'qq-chat': 'low' } },
   };
 }
 
@@ -331,6 +345,24 @@ function mergeConfigObjects(defaults: AppConfig, parsed: Partial<AppConfig>): Ap
     contextGovernor: parsed.contextGovernor && defaults.contextGovernor
       ? { ...defaults.contextGovernor, ...parsed.contextGovernor }
       : defaults.contextGovernor,
+    // 意图澄清配置合并：parsed.clarify 可选，未配置时用默认值（开启）；浅合并支持单字段覆盖
+    clarify: parsed.clarify && defaults.clarify
+      ? { ...defaults.clarify, ...parsed.clarify }
+      : defaults.clarify,
+    // MCP 服务端配置合并：parsed.mcp 可选，未配置时用默认值（关闭）；浅合并支持单字段覆盖
+    mcp: parsed.mcp && defaults.mcp
+      ? { ...defaults.mcp, ...parsed.mcp }
+      : defaults.mcp,
+    // V4.0 配置合并：三个区间均可选，浅合并支持单字段覆盖，未配置时用默认值
+    knowledge: parsed.knowledge && defaults.knowledge
+      ? { ...defaults.knowledge, ...parsed.knowledge }
+      : defaults.knowledge,
+    graph: parsed.graph && defaults.graph
+      ? { ...defaults.graph, ...parsed.graph }
+      : defaults.graph,
+    refs: parsed.refs && defaults.refs
+      ? { ...defaults.refs, authorityMap: { ...defaults.refs.authorityMap, ...parsed.refs.authorityMap } }
+      : defaults.refs,
   };
 }
 
@@ -565,11 +597,23 @@ export function getProviderKeyStatus(config: AppConfig): Record<string, boolean>
   return status;
 }
 
-// 读取生效的 API Key：优先 config.json 中的 apiKey，其次环境变量 apiKeyRef。
-// 为什么需要：支持前端配置 API Key 的同时保持环境变量向后兼容。
+// 读取生效的 API Key：优先 config.json 中的 apiKey，其次按 provider 的多 key 持久化表
+// apiKeys[provider]，最后环境变量 apiKeyRef。
+// 为什么需要：
+//   1. 支持前端配置 API Key 的同时保持环境变量向后兼容（既有能力）。
+//   2. apiKeys 表是 provider 切换时多 key 迁移的落点（见 saveAiConfig：旧 key 迁入表、
+//      新 provider 的 key 从表恢复）。当 llm.apiKey 字段缺失（如手动编辑 config.json、
+//      resetAiConfig 恢复出厂、或切换流程中断）但 apiKeys[provider] 有值时，必须能取回，
+//      否则 GET /api/ai/config 返回空 apiKeyMasked，前端表现为「后台有值但 API Key 未返显」，
+//      而测试连接仍可能用其它路径（粘贴 key / 内存态）通过，造成体验断层。
+//      语义对齐：media 链路（media-generation-workflow）已按 llm.apiKeys.agnes 取 key，本处补平。
 export function getEffectiveApiKey(config: AppConfig): string {
   if (config.llm.apiKey) {
     return config.llm.apiKey;
+  }
+  const fromTable = config.llm.apiKeys?.[config.llm.provider];
+  if (fromTable) {
+    return fromTable;
   }
   return process.env[config.llm.apiKeyRef] ?? '';
 }
@@ -637,6 +681,55 @@ export async function saveWebSearchConfig(updates: {
   if (configPath) {
     const json = JSON.stringify(merged, null, 2);
     await fs.writeFile(configPath, json, 'utf8');
+  }
+
+  refreshConfigCache(merged);
+  return merged;
+}
+
+// 保存 MCP 服务端配置（对外 /mcp 端点）到 config.json（部分更新，仅合并 mcp 字段）。
+// 为什么独立函数：MCP 默认关闭；管理员开启并配置 userToken/adminToken 后外部 Agent 才能接入。
+// 为什么 token 走脱敏判定：与 saveWebSearchConfig 同一约定——**** 开头视为未修改回传；
+//   空串表示清除；其他为新值。undefined 表示字段未被改动、保留原值。
+export async function saveMcpConfig(updates: {
+  enabled?: boolean;
+  endpointPath?: string;
+  name?: string;
+  version?: string;
+  userToken?: string;
+  adminToken?: string;
+  authenticated?: boolean;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const base = current.mcp ?? {
+    enabled: false,
+    endpointPath: '/mcp',
+    name: 'karpathy-wiki',
+    version: '1.0.0',
+  };
+
+  const merged: AppConfig = {
+    ...current,
+    mcp: {
+      ...base,
+      ...(updates.enabled === undefined ? {} : { enabled: updates.enabled }),
+      ...(updates.endpointPath === undefined ? {} : { endpointPath: updates.endpointPath }),
+      ...(updates.name === undefined ? {} : { name: updates.name }),
+      ...(updates.version === undefined ? {} : { version: updates.version }),
+      ...(updates.authenticated === undefined ? {} : { authenticated: updates.authenticated }),
+      // token：脱敏串视为未修改；undefined 视为未提供；其余（含空串）覆盖写入
+      ...(updates.userToken !== undefined && !updates.userToken.startsWith('****'))
+        ? { userToken: updates.userToken }
+        : {},
+      ...(updates.adminToken !== undefined && !updates.adminToken.startsWith('****'))
+        ? { adminToken: updates.adminToken }
+        : {},
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
   }
 
   refreshConfigCache(merged);

@@ -6,7 +6,12 @@
 1. 读取 SCHEMA.md 了解页面规范
 2. 读取原始资料
 3. 判定页面类型（entity/concept/comparison/query/qa/solution 之一，详见 SCHEMA.md）
-4. 生成页面，包含 frontmatter（title, type, created, updated, source, tags）
+4. 生成页面，包含 frontmatter（title, type, created, updated, source, tags, knowledge_class）
+5. 判定并写入 knowledge_class 字段（三值之一）：
+   - 	imeless：长期有效的事实/原理/概念（不会因时间过时）
+   - dated：有明确时效的信息（版本号、政策、时效性数据、当前事件）
+   - pointer：仅指向外部源的中转页，本身不承载时效内容
+   若难以判断，写 	imeless（宁保守不误判过期）
 5. 建立双向链接 [[页面名]]
 6. **抽取实体关系**：识别本页与其它实体的关系，写入 frontmatter `entities` 字段
 7. 追加 index.md 摘要行

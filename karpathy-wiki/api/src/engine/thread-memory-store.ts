@@ -123,6 +123,12 @@ export class ThreadMemoryStore {
   // 默认值 true 仅为兼容直接 new 出本类、未显式传 persist 的调用方（如测试/未来场景）。
   private readonly persist: boolean;
 
+  // T00265：暴露持久化开关——persist=false（会话不落盘）时线程不存在属正常，
+  // 供 routes 层对 context/compact 接口放行存在性校验（否则默认部署下这些接口恒 404）
+  get isPersistent(): boolean {
+    return this.persist;
+  }
+
   // 每线程写入串行化：避免并发请求对同一线程文件产生写竞争（竞态导致内容丢失）
   private readonly writeLocks = new Map<string, Promise<unknown>>();
 
@@ -396,6 +402,12 @@ export class ThreadMemoryStore {
 
   /** 读取记忆（含条目列表）。不存在返回 null。 */
   async getMemory(threadId: string): Promise<MemoryData | null> {
+    // T00265：persist=false（会话不落盘）时返回空记忆占位而非 null，
+    // 使 context/compact 接口可用（空上下文治理统计 + 空压缩），前端流程闭环；
+    // 空记忆 = 无历史，而非「线程不存在」
+    if (!this.persist) {
+      return { threadId, entries: [], updatedAt: new Date().toISOString(), summary: '' };
+    }
     return this.safeReadJSON<MemoryData | null>(this.memoryFile(threadId), null);
   }
 

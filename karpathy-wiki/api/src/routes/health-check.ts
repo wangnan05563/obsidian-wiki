@@ -1,7 +1,9 @@
-﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { EngineAdapter, FixInput, BatchFixRequest, BatchFixProgressEvent } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 import { createSSESender } from '../utils/sse.js';
+import matter from 'gray-matter';
+import path from 'node:path';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // 注册健康检查路由。
@@ -196,6 +198,27 @@ export function registerHealthCheckRoute(app: FastifyInstance, adapter: EngineAd
       });
     } finally {
       safeEnd();
+    }
+  });
+
+  // FR-18 AC-18-4：知识时效复核端点。确定性 JSON 操作，不走 LLM/SSE。
+  // 为什么独立端点而非复用 fix：追加 reviewed_at 是纯 frontmatter 写，走 LLM fix 浪费 token 且可能改正文。
+  // 写操作串行队列保护：与 compile 共享 vault 写入，避免并发写冲突（与 fix 同源理由）。
+  app.post('/api/health-check/review', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { paths?: unknown };
+    if (!body || !Array.isArray(body.paths) || body.paths.length === 0) {
+      return void reply.code(400).send({ error: '请求体须有非空 paths 字符串数组' });
+    }
+    const paths = body.paths.filter((p): p is string => typeof p === 'string');
+    if (paths.length === 0) {
+      return void reply.code(400).send({ error: 'paths 须为字符串数组' });
+    }
+    try {
+      const result = await withCompileLock(() => adapter.markKnowledgeReviewed(paths));
+      void reply.send(result);
+    } catch (err: unknown) {
+      request.log.error({ err }, 'health-check review error');
+      void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 }

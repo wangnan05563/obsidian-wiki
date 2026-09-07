@@ -138,6 +138,35 @@ function ensureEntitiesField(content: string): string {
   return matter.stringify(parsed.content, parsed.data);
 }
 
+// FR-18：校验 frontmatter 的 knowledge_class 字段（V4.0 知识时效分类）
+// 设计原则：本字段由 LLM 在 compile 阶段生成；compile 只做"合法性清洗"，不替代 LLM 判定。
+// - 合法（timeless/dated/pointer）：原样返回（fast path，零开销）
+// - 缺失：原样返回（视为 unknown，由读取时的 computeKnowledgeStatus 兜底，不阻塞写入）
+// - 非法值：删除该字段（避免脏分类污染图谱，宁缺毋滥）
+// - frontmatter 解析失败：原样返回（不阻断，交由 health-check 兜底）
+function ensureKnowledgeClassField(content: string): string {
+  let parsed;
+  try {
+    parsed = matter(content);
+  } catch {
+    return content; // frontmatter 格式错误时不阻断写入
+  }
+  const kc = parsed.data.knowledge_class;
+  if (kc === undefined || kc === null) {
+    return content; // 缺失：fast path，不插入默认值
+  }
+  const VALID_KC = ['timeless', 'dated', 'pointer'];
+  if (typeof kc !== 'string' || !VALID_KC.includes(kc.toLowerCase())) {
+    delete parsed.data.knowledge_class; // 非法值：移除，避免脏分类
+    return matter.stringify(parsed.content, parsed.data);
+  }
+  // 合法但大小写不规范：规整为小写
+  if (kc !== kc.toLowerCase()) {
+    parsed.data.knowledge_class = kc.toLowerCase();
+    return matter.stringify(parsed.content, parsed.data);
+  }
+  return content;
+}
 // 加载 compile prompt 单点存储。Skill 与 harness 共引用，保证两阶段等价（M-3）。
 // 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
 import { getPromptPath } from '../utils/runtime.js';
@@ -205,7 +234,8 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
         // FR-15-6 兜底：校验 entities 字段格式与拓扑一致性，清理无效项
         // 为什么放在写入前：避免脏数据落盘后还要回扫修复，与 markPagesAsDraft 同样采用"读→改→写"模式
         const withType = ensurePageTypeField(targetPath, content);
-        const finalContent = ensureEntitiesField(withType);
+        const withKc = ensureKnowledgeClassField(withType);
+        const finalContent = ensureEntitiesField(withKc);
         await vault.writeFile(targetPath, finalContent);
         return { ok: true, path: targetPath, redirected: targetPath === p ? undefined : p };
       },

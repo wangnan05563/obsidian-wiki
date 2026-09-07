@@ -7,13 +7,22 @@
 // 为什么视频走独立端点：视频生成需数分钟，超出 query SSE 60 秒超时
 
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import type { HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
-import type { MediaConfig, VideoTaskResult, AppConfig } from '../types.js';
+import type {
+  MediaConfig,
+  MediaImageUserConfig,
+  MediaVideoUserConfig,
+  VideoTaskResult,
+  AppConfig,
+} from '../types.js';
 // 复用 multimodal-output-workflow 的上下文收集逻辑，避免重复实现
 import { collectContextPages } from './multimodal-output-workflow.js';
 import { getPromptPath } from '../utils/runtime.js';
+// PPT 原生 .pptx 渲染：解析 Marp Markdown → pptxgenjs 生成，供前端下载
+import { generatePptxFile } from './pptx-renderer.js';
 
 // 加载 prompt 单点存储（与 query/multimodal/podcast 共用 prompts/ 目录）
 // 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
@@ -25,11 +34,17 @@ async function loadPptPrompt(): Promise<string> {
   return fs.readFile(getPromptPath('ppt-generation.md'), 'utf8');
 }
 
-// 时间戳格式化：YYYYMMDD-HHmmss（与 podcast-workflow 一致，归档文件名排序友好）
+// 时间戳格式化：YYYYMMDD-HHmmss（仅用于 .md 归档内容展示与排序，不再用于公开媒体文件名）
 function formatTimestamp(): string {
   const now = new Date();
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+// 公开媒体（图像/视频）文件名用的随机 ID：不可猜测，避免 /api/media/file/* 公开路由被枚举遍历泄露他人内容。
+// 文件名 = media-<randomUUID>，randomUUID 仅含 [0-9a-f-]，对文件名与 URL 均安全（无需 encodeURIComponent）。
+function randomMediaId(): string {
+  return randomUUID();
 }
 
 // 解析 Agnes API key：优先级 media.agnes.apiKey > llm.apiKeys.agnes > process.env[apiKeyRef]
@@ -41,6 +56,81 @@ function resolveAgnesApiKey(mediaConfig: MediaConfig | undefined, appConfig?: Ap
   const envKey = process.env[mediaConfig.agnes.apiKeyRef];
   if (envKey) return envKey;
   return null;
+}
+
+// 应用用户 BYOK 生图覆盖到服务端媒体配置：返回新的 MediaConfig（不修改入参）。
+// 优先级：用户显式字段 > 服务端 media.agnes 默认。baseUrl/apiKey/model/size/ratio 为核心可配置项；
+//   预留扩展（steps/cfgScale/sampler/seed/negativePrompt）仅在用户显式设置时覆盖。
+// 为什么 API key 也覆盖：BYOK 下用户用自己的 key 生图，覆盖进 media.agnes.apiKey 后，
+//   resolveAgnesApiKey 会优先取它，实现"用户自己的额度/配置"。
+// export 供 routes/ai.ts 的生图测试连接复用（测试用同一套"用户覆盖优先"规则，保证测试口径与真实生成一致）。
+export function applyImageOverride(base: MediaConfig | undefined, o: MediaImageUserConfig | undefined): MediaConfig {
+  // 为什么 a 给完整默认对象而非 {}：MediaConfig.agnes 均为 required，空对象类型推断为 {}
+  //   访问 a.baseUrl 等会报 TS2339；显式补全默认让 a 具备类型，且 base 缺失时可独立成立。
+  const a: MediaConfig['agnes'] = base?.agnes ?? {
+    baseUrl: '', apiKey: '', apiKeyRef: 'AGNES_API_KEY', imageModel: '', videoModel: '',
+    defaultImageSize: '', defaultImageRatio: '', defaultVideoSize: '', defaultVideoSeconds: 0,
+  };
+  return {
+    agnes: {
+      // 为什么全部字段显式给默认：用户配置可独立于服务端 media.agnes 成立（BYOK），
+      // base 为空时也要产出可直接调用的 agnes 视图，字段均为 required 需补安全默认。
+      baseUrl: o?.baseUrl?.trim() || a.baseUrl || '',
+      apiKey: o?.apiKey?.trim() || a.apiKey || '',
+      apiKeyRef: a.apiKeyRef || 'AGNES_API_KEY',
+      imageModel: o?.model?.trim() || a.imageModel || '',
+      videoModel: a.videoModel || '',
+      defaultImageSize: o?.size?.trim() || a.defaultImageSize || '1024x768',
+      defaultImageRatio: o?.ratio?.trim() || a.defaultImageRatio || '16:9',
+      defaultVideoSize: a.defaultVideoSize || '1280x720',
+      defaultVideoSeconds: a.defaultVideoSeconds ?? 5,
+    },
+  };
+}
+
+// 应用用户 BYOK 视频覆盖到服务端媒体配置（video override 覆盖 video 相关字段）。
+function applyVideoOverride(base: MediaConfig | undefined, o: MediaVideoUserConfig | undefined): MediaConfig {
+  const a: MediaConfig['agnes'] = base?.agnes ?? {
+    baseUrl: '', apiKey: '', apiKeyRef: 'AGNES_API_KEY', imageModel: '', videoModel: '',
+    defaultImageSize: '', defaultImageRatio: '', defaultVideoSize: '', defaultVideoSeconds: 0,
+  };
+  return {
+    agnes: {
+      baseUrl: o?.baseUrl?.trim() || a.baseUrl || '',
+      apiKey: o?.apiKey?.trim() || a.apiKey || '',
+      apiKeyRef: a.apiKeyRef || 'AGNES_API_KEY',
+      imageModel: a.imageModel || '',
+      videoModel: o?.videoModel?.trim() || a.videoModel || '',
+      defaultImageSize: a.defaultImageSize || '1024x768',
+      defaultImageRatio: a.defaultImageRatio || '16:9',
+      defaultVideoSize: o?.size?.trim() || a.defaultVideoSize || '1280x720',
+      defaultVideoSeconds: o?.seconds ?? a.defaultVideoSeconds ?? 5,
+    },
+  };
+}
+
+// 生图请求体追加"预留扩展"参数：仅当用户显式填写才加入，API 不识别则忽略，避免破坏既有请求。
+// 为什么 exporter 独立逻辑抽取：保持 generateImage 请求体构造可读（S3776），并集中管理扩展字段映射。
+function buildImageExtras(o: MediaImageUserConfig | undefined): Record<string, unknown> {
+  if (!o) return {};
+  return {
+    ...(o.steps !== undefined ? { steps: o.steps } : {}),
+    ...(o.cfgScale !== undefined ? { cfgScale: o.cfgScale } : {}),
+    ...(o.sampler ? { sampler: o.sampler } : {}),
+    ...(o.seed !== undefined ? { seed: o.seed } : {}),
+    ...(o.negativePrompt ? { negative_prompt: o.negativePrompt } : {}),
+  };
+}
+
+// 视频请求体追加"预留扩展"参数：帧率/运动强度/Seed/负面词，仅在用户显式设置时加入（尽力透传）。
+function buildVideoExtras(o: MediaVideoUserConfig | undefined): Record<string, unknown> {
+  if (!o) return {};
+  return {
+    ...(o.fps !== undefined ? { fps: o.fps } : {}),
+    ...(o.motion !== undefined ? { motion: o.motion } : {}),
+    ...(o.seed !== undefined ? { seed: o.seed } : {}),
+    ...(o.negativePrompt ? { negative_prompt: o.negativePrompt } : {}),
+  };
 }
 
 // 包装 fetch 调用，把 Node 原生 fetch 的 "fetch failed" 翻译为可读的诊断信息。
@@ -212,8 +302,12 @@ export async function generateImage(
   contextPaths: string[] | undefined,
   mediaConfig: MediaConfig | undefined,
   appConfig?: AppConfig,
+  imageOverride?: MediaImageUserConfig,
 ): Promise<{ url: string; alt: string; archivePath: string }> {
-  if (!mediaConfig) {
+  // 用户 BYOK 万能覆盖：前端透传 imageOverride 优先，服务端 media.agnes 作默认兜底。
+  // applyImageOverride 在 mediaConfig 为空时也能用 imageOverride 独立构造配置。
+  mediaConfig = applyImageOverride(mediaConfig, imageOverride);
+  if (!mediaConfig.agnes.imageModel && !mediaConfig.agnes.apiKey) {
     throw new Error('image generation: media config not configured');
   }
   const apiKey = resolveAgnesApiKey(mediaConfig, appConfig);
@@ -271,6 +365,8 @@ ${pageContext}
       prompt: imagePrompt,
       size: mediaConfig.agnes.defaultImageSize,
       ratio: mediaConfig.agnes.defaultImageRatio,
+      // 预留扩展（步数/CFG/Sampler/Seed/负面词）：仅用户显式设置才追加，API 不识别则忽略
+      ...buildImageExtras(imageOverride),
     }),
     60000,
   );
@@ -287,9 +383,11 @@ ${pageContext}
     throw new Error('Agnes Image API returned no data');
   }
 
-  // 4. 下载图片到 vault queries/ 目录
-  const timestamp = formatTimestamp();
-  const imagePath = `queries/image-${timestamp}.png`;
+  // 4. 下载图片到 vault queries/media/ 子目录（仅该子目录对公开媒体路由可见）
+  const timestamp = formatTimestamp(); // 仅用于 .md 内容展示/排序
+  const mediaId = randomMediaId(); // 文件名用随机 ID，公开路由不可枚举
+  const mediaFilename = `image-${mediaId}.png`; // 仅文件名，公开 URL 直接用
+  const imagePath = `queries/media/${mediaFilename}`;
   let imageBuffer: Buffer;
   if (item.url) {
     // 为什么用原生 https 下载：返回的图片 URL 可能在 CDN 上再次 302，
@@ -302,14 +400,14 @@ ${pageContext}
   }
   await vault.writeFile(imagePath, imageBuffer);
 
-  // 5. 归档 Markdown（frontmatter type: query, output_mode: image）
-  const archivePath = `queries/image-${timestamp}.md`;
+  // 5. 归档 Markdown（frontmatter type: query, output_mode: image）——与 png 同 mediaId 同目录，保持侧车一致
+  const archivePath = `queries/media/image-${mediaId}.md`;
   const archiveContent = buildImageArchiveMarkdown(imagePrompt, question, imagePath, timestamp);
   await vault.writeFile(archivePath, archiveContent);
 
   // url 返回 /api/media/file 路径（公开路由，无需认证），前端 <img>/<video> 标签可直接加载
   return {
-    url: `/api/media/file/${imagePath.replace(/^queries\//, '')}`,
+    url: `/api/media/file/${mediaFilename}`,
     alt: question,
     archivePath,
   };
@@ -370,7 +468,7 @@ export async function generatePpt(
   vault: VaultService,
   question: string,
   contextPaths: string[] | undefined,
-): Promise<{ markdown: string; title: string; archivePath: string }> {
+): Promise<{ markdown: string; title: string; archivePath: string; pptxUrl?: string }> {
   // 1. 收集相关页面作为生成上下文
   const pages = await collectContextPages(vault, question, 5, contextPaths);
   if (pages.length === 0) {
@@ -419,7 +517,17 @@ ${pageContext}
 
   // title 取问题前 30 字符，用于前端展示
   const title = question.slice(0, 30);
-  return { markdown, title, archivePath };
+
+  // 4. 解析 Marp 内容生成原生 .pptx（供前端下载，和浏览器预览互补）。
+  // 失败降级：仅丢弃 pptxUrl 不影响预览，绝不能因 .pptx 渲染失败而让整个 PPT 问答报错。
+  let pptxUrl: string | undefined;
+  try {
+    pptxUrl = (await generatePptxFile(vault, markdown, title)).url;
+  } catch {
+    pptxUrl = undefined;
+  }
+
+  return { markdown, title, archivePath, pptxUrl };
 }
 
 // v3 视频生成：创建 Agnes Video 异步任务（不阻塞，前端轮询）
@@ -429,8 +537,11 @@ export async function generateVideo(
   prompt: string,
   mediaConfig: MediaConfig | undefined,
   appConfig?: AppConfig,
+  videoOverride?: MediaVideoUserConfig,
 ): Promise<VideoTaskResult> {
-  if (!mediaConfig) {
+  // 用户 BYOK 封面覆盖：videoOverride 优先，服务端 media.agnes 作默认兜底。
+  mediaConfig = applyVideoOverride(mediaConfig, videoOverride);
+  if (!mediaConfig.agnes.videoModel && !mediaConfig.agnes.apiKey) {
     throw new Error('video generation: media config not configured');
   }
   const apiKey = resolveAgnesApiKey(mediaConfig, appConfig);
@@ -455,6 +566,8 @@ export async function generateVideo(
       // Agnes Video API 的 Go 后端要求 seconds 为 string 类型，
       // 传 number 会导致 400 "cannot unmarshal number into ...seconds of type string"
       seconds: String(mediaConfig.agnes.defaultVideoSeconds),
+      // 预留扩展（帧率/运动/Seed/负面词）：仅显式设置才发送
+      ...buildVideoExtras(videoOverride),
     }),
     signal: AbortSignal.timeout(30000),
   });
@@ -490,8 +603,11 @@ export async function pollVideoTask(
   vault: VaultService,
   mediaConfig: MediaConfig | undefined,
   appConfig?: AppConfig,
+  videoOverride?: MediaVideoUserConfig,
 ): Promise<VideoTaskResult> {
-  if (!mediaConfig) {
+  // 轮询需用与 create 时相同的用户 key/baseUrl 去 probe/下载，故应用同一 videoOverride（routes 用 taskMap 关联）。
+  mediaConfig = applyVideoOverride(mediaConfig, videoOverride);
+  if (!mediaConfig.agnes.baseUrl && !mediaConfig.agnes.apiKey) {
     throw new Error('video poll: media config not configured');
   }
   const apiKey = resolveAgnesApiKey(mediaConfig, appConfig);
@@ -532,8 +648,10 @@ export async function pollVideoTask(
   // 为什么兼容两种 URL 路径：Agnes API 可能返回顶层 url 或 metadata.url
   const videoUrl = data.url || data.metadata?.url;
   if (status === 'completed' && videoUrl) {
-    const timestamp = formatTimestamp();
-    const videoPath = `queries/video-${timestamp}.mp4`;
+    const timestamp = formatTimestamp(); // 仅用于 .md 内容展示/排序
+    const mediaId = randomMediaId(); // 文件名用随机 ID，公开路由不可枚举
+    const mediaFilename = `video-${mediaId}.mp4`; // 仅文件名，公开 URL 直接用
+    const videoPath = `queries/media/${mediaFilename}`;
     // 为什么 120 秒超时：视频文件较大，下载耗时
     const videoResp = await fetchWithDiagnostics(videoUrl, { signal: AbortSignal.timeout(120000) });
     if (!videoResp.ok) {
@@ -542,8 +660,8 @@ export async function pollVideoTask(
     const videoBuffer = Buffer.from(await videoResp.arrayBuffer());
     await vault.writeFile(videoPath, videoBuffer);
 
-    // 归档 Markdown
-    const archivePath = `queries/video-${timestamp}.md`;
+    // 归档 Markdown——与 mp4 同 mediaId 同目录，保持侧车一致
+    const archivePath = `queries/media/video-${mediaId}.md`;
     const archiveContent = buildVideoArchiveMarkdown(taskId, videoUrl, videoPath, timestamp);
     await vault.writeFile(archivePath, archiveContent);
 
@@ -552,7 +670,7 @@ export async function pollVideoTask(
       videoId: data.video_id ?? taskId,
       status: 'completed',
       progress: 100,
-      url: `/api/media/file/${videoPath.replace(/^queries\//, '')}`,
+      url: `/api/media/file/${mediaFilename}`,
       archivePath,
     };
   }

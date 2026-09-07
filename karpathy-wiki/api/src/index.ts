@@ -4,13 +4,11 @@ import fs from 'node:fs';
 import { Writable } from 'node:stream';
 import { execSync, spawn } from 'node:child_process';
 import multipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { registerCompression } from './compression.js';
 import { loadConfig, getEffectiveApiKey } from './config.js';
-import { resolveSpaRoot, resolveSpaAsset } from './spa-resolver.js';
 import { setupSpaStatic } from './spa-static.js';
 import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 import { VaultService } from './vault/vault-service.js';
@@ -35,14 +33,19 @@ import { registerRawIngestRoute } from './routes/raw-ingest.js';
 import { registerBookmarkIngestRoute } from './routes/bookmark-ingest.js';
 import { registerConversationsRoute } from './routes/conversations.js';
 import { ThreadMemoryStore } from './engine/thread-memory-store.js';
+import { registerThreadsRoute } from './routes/threads.js';
 import { registerTunnelRoute } from './routes/tunnel.js';
 import { registerAboutRoute } from './routes/about.js';
 import { registerToolsRoute } from './routes/tools.js';
+// MCP Server 端点：对外暴露知识库能力给外部 AI Agent（Streamable HTTP /mcp）
+import { registerMcpRoute } from './routes/mcp-route.js';
 import { registerSkillRoute } from './routes/skill.js';
 // FR-10-1 AI 自动打标签路由：列出待审核 / 手动触发建议 / 确认 tag
 import { registerTagsRoute } from './routes/tags.js';
 // FR-16-1 Discover Sources 路由：基于双链拓扑推荐相关笔记 + 一键建立双链
 import { registerDiscoverRoute } from './routes/discover.js';
+// FR-17 知识缺口检测路由：拓扑缺口检测（孤立节点/低密度社区/同标签未双链对）
+import { registerGapsRoute } from './routes/gaps.js';
 // FR-14-2 Prompt IDE 路由：列出/编辑/试运行 prompts/*.md
 import { registerPromptsRoute } from './routes/prompts.js';
 // FR-09-3 Podcast 路由：生成对话式播客脚本 + 可选 TTS 合成 + 归档到 queries/
@@ -313,7 +316,46 @@ export async function buildApp(): Promise<BuiltApp> {
         'request error',
       );
     });
+
+    // setErrorHandler：兜底所有未处理的错误（包括 reply.send 内部抛出的 FST_ERR_REP_*）
+    // 为什么必须：handler 内部 reply.send 抛错（如 FST_ERR_REP_INVALID_PAYLOAD_TYPE）时，
+    //   onError hook 只负责记录不阻止 fastify 重新构造响应，部分 FST_ERR_* 在错误路径上
+    //   仍会同步抛到 node 顶层 → 进程崩溃连带 tsx watch 退出。
+    //   setErrorHandler 是 fastify 官方兜底，处理后必须返回合法响应，不能再次抛错。
+    app.setErrorHandler((error, request, reply) => {
+      request.log.error(
+        { method: request.method, url: request.url, err: error },
+        'unhandled error caught by setErrorHandler',
+      );
+      // reply 已发送（如 SSE 流中途出错）不能再 send，否则触发 FST_ERR_REP_ALREADY_SENT
+      // 为什么不能断开连接：fastify reply 没有显式 abort，只能让 onClose 触发后续清理
+      if (reply.sent) return reply;
+      const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+      // 统一 JSON 错误响应：与现有错误响应格式保持一致（{ error, code }）
+      return reply.code(statusCode).send({
+        error: error.message || 'internal server error',
+        code: error.code || 'INTERNAL_ERROR',
+      });
+    });
   }
+
+  // process 级兜底：捕获真正逃逸到 node 顶层的事件循环异常与未处理 Promise 拒绝
+  // 为什么必须：setErrorHandler 仅覆盖 fastify reply 路径，未捕获的 async 异常 / 不在
+  //   reply 流程中的 throw 仍会触发 uncaughtException 让进程退出。
+  // 为什么只 log 不退出：开发期 tsx watch 下，进程崩溃需要手动重启浪费排障时间；
+  //   让进程继续运行便于保留现场日志；生产期由监控进程负责重启，崩溃退出反而更可控。
+  process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err);
+    if (loggerStream) {
+      try { loggerStream.write(JSON.stringify({ level: 50, msg: 'uncaughtException', err }) + '\n'); } catch { /* 二次失败静默 */ }
+    }
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason);
+    if (loggerStream) {
+      try { loggerStream.write(JSON.stringify({ level: 50, msg: 'unhandledRejection', reason }) + '\n'); } catch { /* 二次失败静默 */ }
+    }
+  });
 
   // 内网穿透：TunnelService 单例提前创建，供 CORS 白名单查询当�?tunnel 公网域名
   // 为什么提前：CORS origin 回调需要同步查�?tunnel.publicUrl 判断是否放行
@@ -403,13 +445,16 @@ export async function buildApp(): Promise<BuiltApp> {
   const governorConfig = config.contextGovernor ?? DEFAULT_GOVERNOR_CONFIG;
   registerQueryRoute(app, adapter, threadStore, governorConfig, isolationGuards, config.enableResumableStream ?? false);
   // v3 媒体生成：视频任务创建与轮询
-  registerMediaRoute(app, adapter, config);
+  registerMediaRoute(app, adapter, config, isolationGuards);
   registerQueryArchiveRoute(app, vault, threadStore, isolationGuards);
   // 线程 / 会话 / 记忆 管理路由（创建/列表/删除线程、读/写/清记忆与会话）
-  // PERF-TEST-FIX: registerThreadsRoute disabled (see import above)
+  // T00265：重新启用 registerThreadsRoute——上下文占用徽章依赖 GET /threads/:id/context
+  //   （拉取当前上下文 token 数与 maxTokens）与 POST /threads/:id/compact（手动压缩）
+  registerThreadsRoute(app, threadStore, governorConfig, isolationGuards);
   registerHealthCheckRoute(app, adapter, isolationGuards);
   // files/graph/stats 路由直接操作 Vault，不经过 adapter（纯确定性操作）
-  registerFilesRoutes(app, vault, isolationGuards, { filesReadAuthRequired: config.auth?.filesReadAuthRequired ?? false });
+  // FR-18：末尾传 knowledge.staleDays 供 /files/pages 注入每页知识时效状态（Browse 角标）
+  registerFilesRoutes(app, vault, isolationGuards, { filesReadAuthRequired: config.auth?.filesReadAuthRequired ?? false }, config.knowledge?.staleDays ?? 365);
   // 公开媒体文件服务：queries/ 下生成的图像/视频无需认证（浏览器 img/video 标签无法带 Authorization header）
   registerPublicMediaServeRoute(app, vault);
   registerGraphRoute(app, vault);
@@ -450,6 +495,9 @@ registerDataCleanRoute(app, vault, isolationGuards);
   registerAboutRoute(app);
   // 工具配置管理：MCP/CLI/场景路由的可配置化调用（需�?4�?
   registerToolsRoute(app, adapter, isolationGuards);
+  // MCP Server 端点：对外暴露知识库能力给外部 AI Agent。
+  // 为什么独立于 isolationGuards：外部 Agent 无 Web 会话，改用 mcp.userToken/adminToken 双轨鉴权。
+  registerMcpRoute(app, vault, adapter, config);
   // 技能导入模块：支持上传 ZIP/.md 技能包，统一存储�?data/skills/
   // 为什么放�?tools 之后：技能与工具配置同属扩展能力管理，但职责独立
   registerSkillRoute(app);
@@ -459,6 +507,8 @@ registerDataCleanRoute(app, vault, isolationGuards);
   // FR-16-1 Discover Sources：基于双链拓扑推荐"邻近但未连接"的相关笔记 + 一键建立双链
   // 为什么不需要 config：纯拓扑计算（同目录/同标签/同作者），不调用 LLM
   registerDiscoverRoute(app, vault);
+  // FR-17 知识缺口检测：纯拓扑计算（孤立节点/低密度社区/同标签未双链对），需要 config.graph.minPages
+  registerGapsRoute(app, vault, config);
   // FR-14-2 Prompt IDE：列出/编辑/试运行 prompts/*.md
   // 为什么需要 adapter 与 config：试运行端点调用 adapter.compile，需要 config 提供 LLM 配置
   registerPromptsRoute(app, adapter, config);
@@ -537,8 +587,13 @@ async function main(): Promise<void> {
 }
 
 if (process.env.WIKI_SMOKE !== '1') {
-  main().catch((err) => {
-    console.error('启动失败:', err);
-    process.exit(1);
-  });
+  // 包进 async IIFE：esbuild 固定 --format=cjs，CJS 不支持顶层 await
+  (async () => {
+    try {
+      await main();
+    } catch (err) {
+      console.error('启动失败:', err);
+      process.exit(1);
+    }
+  })();
 }
