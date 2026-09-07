@@ -1,4 +1,4 @@
-// 消息输入框个人偏好 store（按用户隔离）。
+﻿// 消息输入框个人偏好 store（按用户隔离）。
 //
 // 设计对齐 CODING-SESSION-ISOLATION（前端多账户会话状态隔离）与 CODING-BYOK（每用户配置本地命名空间）：
 //   - 不同用户在同一浏览器登录时，各自的输入框设置（字体大小 / 主题 / 快捷回复 / 历史偏好等）
@@ -38,8 +38,8 @@ export const useInputBoxSettings = defineStore('inputBoxSettings', () => {
   let editedToken = -1;
 
   // 按用户隔离加载：先同步重置为默认（阻断上一账户偏好残留），再异步按 userId 命名空间读取。
-  function applyForUser(id: string | null | undefined): void {
-    const targetId = id ?? null;
+  function applyForUser(id: string | null = null): void {
+    const targetId = id;
     // 同步重置：下一账户实时 UI 立即回到默认，绝不沿用上一账户字体/主题/快捷回复
     userId.value = targetId;
     settings.value = clone(DEFAULT_INPUT_BOX_SETTINGS);

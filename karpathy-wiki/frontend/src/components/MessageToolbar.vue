@@ -274,6 +274,7 @@ function handleArchive() {
 
 // F-3.6 朗读切换：根据当前状态决定 speak / pause / resume / stop
 // 切换到其他消息会自动停止当前（store.speak 内部已处理）
+// 防重：合成/等待阶段（loading=true）忽略点击，避免叠加朗读
 function handleTtsToggle() {
   if (!ttsSupported) {
     ElMessage.warning('当前浏览器不支持语音朗读');
@@ -283,6 +284,7 @@ function handleTtsToggle() {
     ElMessage.warning('消息 ID 缺失，无法朗读');
     return;
   }
+  if (ttsStore.loading) return;
   if (ttsState.value === 'playing') {
     ttsStore.pause();
   } else if (ttsState.value === 'paused') {
@@ -365,116 +367,120 @@ function handleFeedback(type: 'up' | 'down') {
       >
         <el-icon><DocumentCopy /></el-icon>
       </button>
-      <!-- F-3.6 朗读按钮：未朗读 ▶；朗读中 ⏸；已暂停 ▶；不支持时灰显 -->
+      <!-- F-3.6 朗读按钮：未朗读 ▶；朗读中 ⏸；已暂停 ▶；不支持时灰显；合成中禁用防叠加 -->
       <button
         class="toolbar-btn"
-        :class="{ active: ttsState !== 'idle', disabled: !ttsSupported }"
-        :disabled="!ttsSupported"
-        :title="ttsTitle"
+        :class="{ active: ttsState !== 'idle', disabled: !ttsSupported || ttsStore.loading }"
+        :disabled="!ttsSupported || ttsStore.loading"
+        :title="ttsStore.loading ? '正在合成语音…' : ttsTitle"
         @click="handleTtsToggle"
       >
         <el-icon><component :is="ttsIcon" /></el-icon>
       </button>
       <!-- F-3.6 语速调节按钮：点击展开浮窗滑块，仅当本消息正在朗读时显示 -->
+      <div class="tts-pop-wrap">
       <button
         v-if="ttsState !== 'idle'"
         class="toolbar-btn rate-btn"
         :class="{ active: showRatePanel }"
-        title="语速"
+        :title="`语速 ${ttsStore.rate.toFixed(1)}x`"
         @click.stop="showRatePanel = !showRatePanel"
-      >{{ Math.round(ttsStore.rate * 100) / 100 }}x</button>
-      <!-- F-3.6 语速浮窗：0.5-2.0 滑块，步长 0.1，默认 1.0 -->
-      <div v-if="showRatePanel && ttsState !== 'idle'" class="rate-panel" @click.stop>
-        <span class="rate-label">语速 {{ ttsStore.rate.toFixed(1) }}x</span>
-        <input
-          type="range"
-          min="0.5"
-          max="2.0"
-          step="0.1"
-          :value="ttsStore.rate"
-          class="rate-slider"
-          @input="handleRateChange(($event.target as HTMLInputElement).value)"
-        />
-        <button class="rate-reset" title="恢复默认 1.0x" @click="handleRateChange('1')">1.0x</button>
+      >{{ ttsStore.rate.toFixed(1) }}x</button>
+        <!-- F-3.6 语速浮窗：0.5-2.0 滑块，步长 0.1，默认 1.0 -->
+        <div v-if="showRatePanel && ttsState !== 'idle'" class="rate-panel" @click.stop>
+          <span class="rate-label">语速 {{ ttsStore.rate.toFixed(1) }}x</span>
+          <input
+            type="range"
+            min="0.5"
+            max="2.0"
+            step="0.1"
+            :value="ttsStore.rate"
+            class="rate-slider"
+            @input="handleRateChange(($event.target as HTMLInputElement).value)"
+          />
+          <button class="rate-reset" title="恢复默认 1.0x" @click="handleRateChange('1')">1.0x</button>
+        </div>
       </div>
       <!-- 音色/引擎选择按钮：点击展开浮窗选择音色和切换引擎 -->
-      <button
-        v-if="ttsState !== 'idle'"
-        class="toolbar-btn voice-btn"
-        :class="{ active: showVoicePanel }"
-        title="音色设置"
-        @click.stop="showVoicePanel = !showVoicePanel"
-      >
-        <el-icon><Microphone /></el-icon>
-      </button>
-      <!-- 音色/引擎选择浮窗 -->
-      <div v-if="showVoicePanel && ttsState !== 'idle'" class="voice-panel" @click.stop>
-        <div class="voice-section">
-          <span class="voice-section-label">语音引擎</span>
-          <div class="voice-toggle">
-            <button
-              class="voice-toggle-btn"
-              :class="{ active: ttsStore.providerName === 'edge' }"
-              @click="ttsStore.setProvider('edge')"
-            >神经语音</button>
-            <button
-              class="voice-toggle-btn"
-              :class="{ active: ttsStore.providerName === 'browser' }"
-              @click="ttsStore.setProvider('browser')"
-            >浏览器</button>
+      <div class="tts-pop-wrap">
+        <button
+          v-if="ttsState !== 'idle'"
+          class="toolbar-btn voice-btn"
+          :class="{ active: showVoicePanel }"
+          title="音色设置"
+          @click.stop="showVoicePanel = !showVoicePanel"
+        >
+          <el-icon><Microphone /></el-icon>
+        </button>
+        <!-- 音色/引擎选择浮窗 -->
+        <div v-if="showVoicePanel && ttsState !== 'idle'" class="voice-panel" @click.stop>
+          <div class="voice-section">
+            <span class="voice-section-label">语音引擎</span>
+            <div class="voice-toggle">
+              <button
+                class="voice-toggle-btn"
+                :class="{ active: ttsStore.providerName === 'edge' }"
+                @click="ttsStore.setProvider('edge')"
+              >神经语音</button>
+              <button
+                class="voice-toggle-btn"
+                :class="{ active: ttsStore.providerName === 'browser' }"
+                @click="ttsStore.setProvider('browser')"
+              >浏览器</button>
+            </div>
           </div>
-        </div>
-        <!-- 音色列表：仅 edge provider 显示 -->
-        <div v-if="ttsStore.providerName === 'edge'" class="voice-section">
-          <span class="voice-section-label">音色</span>
-          <div class="voice-list">
-            <button
-              v-for="v in edgeVoices"
-              :key="v.shortName"
-              class="voice-item"
-              :class="{ active: ttsStore.currentVoice === v.shortName }"
-              @click="ttsStore.setVoice(v.shortName)"
-            >{{ v.label }}</button>
+          <!-- 音色列表：仅 edge provider 显示 -->
+          <div v-if="ttsStore.providerName === 'edge'" class="voice-section">
+            <span class="voice-section-label">音色</span>
+            <div class="voice-list">
+              <button
+                v-for="v in edgeVoices"
+                :key="v.shortName"
+                class="voice-item"
+                :class="{ active: ttsStore.currentVoice === v.shortName }"
+                @click="ttsStore.setVoice(v.shortName)"
+              >{{ v.label }}</button>
+            </div>
           </div>
-        </div>
-        <!-- 说话风格：仅 edge provider 显示，显著提升拟人度 -->
-        <div v-if="ttsStore.providerName === 'edge'" class="voice-section">
-          <span class="voice-section-label">说话风格</span>
-          <div class="voice-list">
-            <button
-              v-for="s in ttsStyles"
-              :key="s.value"
-              class="voice-item"
-              :class="{ active: ttsStore.currentStyle === s.value }"
-              @click="ttsStore.setStyle(s.value)"
-            >{{ s.label }}</button>
+          <!-- 说话风格：仅 edge provider 显示，显著提升拟人度 -->
+          <div v-if="ttsStore.providerName === 'edge'" class="voice-section">
+            <span class="voice-section-label">说话风格</span>
+            <div class="voice-list">
+              <button
+                v-for="s in ttsStyles"
+                :key="s.value"
+                class="voice-item"
+                :class="{ active: ttsStore.currentStyle === s.value }"
+                @click="ttsStore.setStyle(s.value)"
+              >{{ s.label }}</button>
+            </div>
           </div>
-        </div>
-        <!-- 音量 / 音调：仅 edge provider 显示，实时微调朗读听感 -->
-        <div v-if="ttsStore.providerName === 'edge'" class="voice-section">
-          <div class="voice-slider-row">
-            <span class="voice-section-label">音量 {{ ttsStore.currentVolume >= 0 ? '+' : '' }}{{ ttsStore.currentVolume }}%</span>
-            <input
-              type="range"
-              min="-30"
-              max="30"
-              step="1"
-              :value="ttsStore.currentVolume"
-              class="voice-slider"
-              @input="handleVolumeChange(($event.target as HTMLInputElement).value)"
-            />
-          </div>
-          <div class="voice-slider-row">
-            <span class="voice-section-label">音调 {{ ttsStore.currentPitch >= 0 ? '+' : '' }}{{ ttsStore.currentPitch }}Hz</span>
-            <input
-              type="range"
-              min="-10"
-              max="10"
-              step="1"
-              :value="ttsStore.currentPitch"
-              class="voice-slider"
-              @input="handlePitchChange(($event.target as HTMLInputElement).value)"
-            />
+          <!-- 音量 / 音调：仅 edge provider 显示，实时微调朗读听感 -->
+          <div v-if="ttsStore.providerName === 'edge'" class="voice-section">
+            <div class="voice-slider-row">
+              <span class="voice-section-label">音量 {{ ttsStore.currentVolume >= 0 ? '+' : '' }}{{ ttsStore.currentVolume }}%</span>
+              <input
+                type="range"
+                min="-30"
+                max="30"
+                step="1"
+                :value="ttsStore.currentVolume"
+                class="voice-slider"
+                @input="handleVolumeChange(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <div class="voice-slider-row">
+              <span class="voice-section-label">音调 {{ ttsStore.currentPitch >= 0 ? '+' : '' }}{{ ttsStore.currentPitch }}Hz</span>
+              <input
+                type="range"
+                min="-10"
+                max="10"
+                step="1"
+                :value="ttsStore.currentPitch"
+                class="voice-slider"
+                @input="handlePitchChange(($event.target as HTMLInputElement).value)"
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -609,20 +615,29 @@ function handleFeedback(type: 'up' | 'down') {
   padding: 0 6px;
 }
 
+/* F-3.6 语速浮窗：向上弹出，按钮上方显示，避免贴近页面下边缘被裁切
+   wrap 容器作为定位参照，浮窗宽度收敛以确保在窄工具栏内不溢出右侧 */
+.tts-pop-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
 /* F-3.6 语速浮窗：绝对定位在工具栏下方 */
 .rate-panel {
   position: absolute;
-  top: 100%;
+  /* 改为向上弹出：bottom: 100% + 6px 间距，避开页边裁切 */
+  bottom: calc(100% + 6px);
   right: 0;
-  margin-top: 6px;
-  padding: 8px 12px;
+  margin-top: 0;
+  padding: 8px 10px;
   background: var(--bg-scene, rgba(20, 20, 30, 0.92));
   backdrop-filter: var(--blur);
   border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
   border-radius: 8px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   z-index: 10;
   white-space: nowrap;
   box-shadow: 0 4px 12px var(--accent-purple-a20, rgba(0, 0, 0, 0.4));
@@ -636,7 +651,7 @@ function handleFeedback(type: 'up' | 'down') {
 
 /* F-3.6 语速滑块：原生 input[type=range] 样式适配主题 */
 .rate-slider {
-  width: 120px;
+  width: 100px;
   height: 4px;
   cursor: pointer;
   accent-color: var(--neon-cyan, #00f5ff);
@@ -658,12 +673,13 @@ function handleFeedback(type: 'up' | 'down') {
   border-color: var(--neon-cyan, #00f5ff);
 }
 
-/* 音色/引擎选择浮窗 */
+/* 音色/引擎选择浮窗：向上弹出（与语速浮窗一致），bottom:100% 让浮窗在按钮上方。
+   容器 .tts-pop-wrap 作为定位参照，浮窗随按钮位置整体移动 */
 .voice-panel {
   position: absolute;
-  top: 100%;
+  bottom: calc(100% + 6px);
   right: 0;
-  margin-top: 6px;
+  margin-top: 0;
   padding: 10px 12px;
   background: var(--bg-scene, rgba(20, 20, 30, 0.92));
   backdrop-filter: var(--blur);

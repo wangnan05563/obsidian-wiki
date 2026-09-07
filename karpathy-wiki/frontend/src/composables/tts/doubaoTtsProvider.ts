@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue';
+﻿import { ref, type Ref } from 'vue';
 import { API_BASE, apiFetch } from '../../utils/apiBase';
 import type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 
@@ -29,9 +29,6 @@ export interface DoubaoTTSConfig {
 export function createDoubaoTTSProvider(config: DoubaoTTSConfig = {}): TTSProvider & { state: Ref<TTSState> } {
   const state: Ref<TTSState> = ref('idle');
   let currentAudio: HTMLAudioElement | null = null;
-  // 保存当前播放文本，用于 pause→resume 不丢失内容（resume 仍由 audio.play() 实现）
-  let currentText = '';
-  let currentOptions: TTSSpeakOptions = {};
 
   function clearAudio() {
     if (currentAudio) {
@@ -68,9 +65,6 @@ export function createDoubaoTTSProvider(config: DoubaoTTSConfig = {}): TTSProvid
       }
       // 切换朗读前清理旧 audio
       clearAudio();
-
-      currentText = text;
-      currentOptions = options ?? {};
 
       // 调用后端 TTS 接口获取音频 URL/blob
       // 后端预期返回 { url: string } 或直接音频流（Content-Type: audio/mpeg）
@@ -141,8 +135,6 @@ export function createDoubaoTTSProvider(config: DoubaoTTSConfig = {}): TTSProvid
 
     stop(): void {
       clearAudio();
-      currentText = '';
-      currentOptions = {};
       state.value = 'idle';
     },
 

@@ -39,6 +39,19 @@ if (-not $NodeExe) {
 # 将 node.exe 所在目录加入 PATH 头部，让 pnpm.cmd / esbuild / pkg 自动找到指定版本
 Invoke-WithNodePath -NodeExePath $NodeExe
 
+# ============================================================
+# [0/8] patch 号生成（构建前必做）
+# 为什么放在最前：后续 esbuild / pkg / Inno Setup 均依赖 version，
+# 必须在任何引用 version 的步骤之前完成写回
+# 规则：主.次版本保留，patch = YYYYMMDD + 当天递增序号
+# 持久化：.build/patch-counter.json 记录当天已构建次数，跨日重置
+# ============================================================
+. (Join-Path $PSScriptRoot 'bump-version.ps1')
+$BuildVersion = Invoke-VersionBump -RepoRoot $repoRoot
+if (-not $BuildVersion) {
+    throw "构建版本号生成失败，请检查 package.json 与 .build 目录可写权限"
+}
+
 # 缓存与产物目录（必须在引用 $cacheDir 前定义）
 $cacheDir = "$repoRoot\.cache"
 $buildDir = "$repoRoot\.build"

@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').cpSync('../release/harness','dist',{recursive:true})\"",
+    "build": "node node_modules/typescript/bin/tsc && node scripts/copy-dist.mjs",
     "test": "node --import tsx --test"
   },
   "devDependencies": {

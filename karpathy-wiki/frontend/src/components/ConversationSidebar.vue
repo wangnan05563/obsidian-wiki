@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { Edit, Delete, ArrowLeft, Plus, DocumentCopy, Download, MoreFilled } from '@element-plus/icons-vue';
 import NavIcons from './NavIcons.vue';
@@ -16,7 +16,61 @@ const emit = defineEmits<{
   toggle: [];
   newSession: [];
   select: [id: string];
+  collapse: [];
 }>();
+
+// T00264：可拖拽宽度 —— 默认 280px，拖拽右侧手柄调整；收窄到阈值以下自动折叠
+// 为什么用 document 级 mousemove/mouseup 而非 handle 自身：拖拽需在鼠标移出手柄后仍持续跟踪
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MIN_WIDTH = 60;
+const SIDEBAR_MAX_WIDTH = 420;
+const COLLAPSE_THRESHOLD = 80;
+const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH);
+const dragging = ref(false);
+let dragStartX = 0;
+let dragStartWidth = 0;
+
+// 展开时恢复初始宽度：hidden→expanded 或用户点击展开后回到默认 280
+watch(() => props.state, (s) => {
+  if (s === 'expanded') sidebarWidth.value = SIDEBAR_DEFAULT_WIDTH;
+});
+
+function onResizeStart(e: MouseEvent) {
+  dragging.value = true;
+  dragStartX = e.clientX;
+  dragStartWidth = sidebarWidth.value;
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+  document.addEventListener('mousemove', onResizeMove);
+  document.addEventListener('mouseup', onResizeEnd);
+}
+
+function onResizeMove(e: MouseEvent) {
+  if (!dragging.value) return;
+  sidebarWidth.value = Math.min(
+    SIDEBAR_MAX_WIDTH,
+    Math.max(SIDEBAR_MIN_WIDTH, dragStartWidth + (e.clientX - dragStartX)),
+  );
+  // 收窄到阈值以下 → 请求父组件折叠为 hidden（问答框占满）
+  if (sidebarWidth.value < COLLAPSE_THRESHOLD) {
+    emit('collapse');
+    onResizeEnd();
+  }
+}
+
+function onResizeEnd() {
+  if (!dragging.value) return;
+  dragging.value = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  document.removeEventListener('mousemove', onResizeMove);
+  document.removeEventListener('mouseup', onResizeEnd);
+}
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', onResizeMove);
+  document.removeEventListener('mouseup', onResizeEnd);
+});
 
 const store = useConversationsStore();
 
@@ -184,13 +238,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- F-3.11 二态：expanded 显示完整侧栏 / hidden 完全隐藏（父组件显示浮动按钮） -->
+  <!-- F-3.11 二态：expanded 显示完整侧栏 / hidden 完全隐藏（父组件显示浮动按钮）
+       T00264：expanded 时宽度可拖拽调整（inline style 覆盖 class 默认 280px） -->
   <aside
     class="conversation-sidebar"
     :class="{
       expanded: state === 'expanded',
-      hidden: state === 'hidden'
+      hidden: state === 'hidden',
+      dragging
     }"
+    :style="state === 'expanded' ? { width: sidebarWidth + 'px' } : undefined"
   >
     <!-- 展开态：新对话按钮 + 搜索框 + 历史对话列表 -->
     <div class="sidebar-header" v-if="state === 'expanded'">
@@ -206,7 +263,7 @@ onBeforeUnmount(() => {
         class="conversation-item"
         :class="{ active: conv.id === store.currentConversationId, 'menu-open': openMenuId === conv.id }"
         @click="emit('select', conv.id)">
-        <span class="pin-icon" v-if="conv.isPinned" @click="(e) => handlePin(e, conv.id)">
+        <span class="pin-icon" v-if="conv.isPinned" title="取消置顶" @click="(e) => handlePin(e, conv.id)">
           <span class="pin-rot is-pinned"><NavIcons name="pin" :size="14" /></span>
         </span>
         <div class="conv-info">
@@ -266,6 +323,13 @@ onBeforeUnmount(() => {
     >
       <el-icon><ArrowLeft /></el-icon>
     </button>
+
+    <!-- T00264：拖拽手柄——右侧边缘竖条，拖拽调整侧栏宽度 -->
+    <div
+      class="resize-handle"
+      title="拖拽调整宽度"
+      @mousedown.prevent="onResizeStart"
+    ></div>
   </aside>
 </template>
 
@@ -290,6 +354,28 @@ onBeforeUnmount(() => {
 .conversation-sidebar.hidden {
   width: 0;
   border-right: 0;
+}
+
+/* T00264：拖拽过程中禁用 width 过渡，保证宽度跟随鼠标即时变化不滞后 */
+.conversation-sidebar.dragging {
+  transition: none;
+}
+
+/* T00264：拖拽手柄——右侧内边缘 6px 竖条，hover/拖拽时高亮提示可拖 */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  transition: background 0.2s ease;
+}
+
+.resize-handle:hover,
+.conversation-sidebar.dragging .resize-handle {
+  background: var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
 }
 
 .sidebar-header {

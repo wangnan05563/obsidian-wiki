@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue';
+﻿import { ref, type Ref } from 'vue';
 import type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 
 // BrowserTTSProvider：基于 Web Speech API（speechSynthesis）的 TTS 实现。
@@ -11,15 +11,8 @@ import type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 //
 // 暴露 state 字段：useTTS composable 通过 watch 桥接 provider 内部 state 到业务侧 ref。
 
-export function createBrowserTTSProvider(): TTSProvider & { state: Ref<TTSState> } {
-  // 暴露给外部的 state：只读 ref，禁止外部 .value = 写入
-  const state: Ref<TTSState> = ref('idle');
-  // 当前语速：speak() 时应用到 utterance，setRate 时若朗读中则重启
-  let currentRate = 1;
-  // 保留 utterance 引用避免被 GC
-  let currentUtterance: SpeechSynthesisUtterance | null = null;
-
-  function pickVoice(lang: string): SpeechSynthesisVoice | null {
+// 选择语音（S7721: 移到模块级避免嵌套声明）
+function pickVoice(lang: string): SpeechSynthesisVoice | null {
     if (!('speechSynthesis' in globalThis)) return null;
     const voices = globalThis.speechSynthesis.getVoices();
     return (
@@ -28,6 +21,12 @@ export function createBrowserTTSProvider(): TTSProvider & { state: Ref<TTSState>
       null
     );
   }
+
+export function createBrowserTTSProvider(): TTSProvider & { state: Ref<TTSState> } {
+  // 暴露给外部的 state：只读 ref，禁止外部 .value = 写入
+  const state: Ref<TTSState> = ref('idle');
+  // 当前语速：speak() 时应用到 utterance，setRate 时若朗读中则重启
+  let currentRate = 1;
 
   const provider: TTSProvider & { state: Ref<TTSState> } = {
     name: 'browser',
@@ -65,7 +64,6 @@ export function createBrowserTTSProvider(): TTSProvider & { state: Ref<TTSState>
         state.value = 'idle';
       };
 
-      currentUtterance = u;
       globalThis.speechSynthesis.speak(u);
       state.value = 'playing';
     },
@@ -85,15 +83,14 @@ export function createBrowserTTSProvider(): TTSProvider & { state: Ref<TTSState>
     stop(): void {
       if (!this.isSupported()) return;
       globalThis.speechSynthesis.cancel();
-      currentUtterance = null;
       state.value = 'idle';
     },
 
     dispose(): void {
       this.stop();
-      currentUtterance = null;
     },
   };
 
   return provider;
 }
+

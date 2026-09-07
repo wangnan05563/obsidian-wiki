@@ -203,4 +203,54 @@ describe('Query.vue 编辑重发端到端', () => {
 
     wrapper.unmount();
   });
+
+  it('未修改内容直接确认发送也触发新一轮问答（回归：不应因内容未变而跳过重发）', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const authStore = useAuthStore();
+    const convStore = useConversationsStore();
+    const modelStore = useModelStore();
+    const queryStore = useQueryStore();
+
+    convStore.loadConversations = vi.fn().mockResolvedValue(undefined);
+    (authStore as any).user = { id: 'u1', role: 'admin' };
+    modelStore.$patch({ presets: [{ key: 'p1' } as any], selectedPresetKey: 'p1' });
+
+    const authFetch = vi.fn().mockResolvedValue(fakeResponse());
+    authStore.authFetch = authFetch as any;
+
+    const wrapper = mount(Query, {
+      global: { plugins: [pinia, ElementPlus], stubs },
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    // 种子一条已完成的问答
+    queryStore.submitQuestion('原始问题');
+    queryStore.appendAnswer('旧回答');
+    queryStore.finalizeAnswer('sess', 0);
+    await flushPromises();
+
+    // 进入编辑态，但保持内容不变（不 setValue）
+    const editBtn = wrapper.find('button[title="编辑并重新发送"]');
+    await editBtn.trigger('click');
+    await flushPromises();
+    const textarea = wrapper.find('.msg-edit textarea');
+    expect(textarea.exists(), '编辑态 textarea 应出现').toBe(true);
+
+    // 直接确认发送（内容未变）
+    await wrapper.find('button[data-testid="confirm-edit"]').trigger('click');
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
+
+    // 回归点：内容未变也须触发重发（此前会因 newText===original 直接 return，sendQuestion 不调用）
+    expect(authFetch).toHaveBeenCalled();
+    const calledWithOriginal = authFetch.mock.calls.some(
+      (c: any[]) => typeof c[1]?.body === 'string' && c[1].body.includes('原始问题'),
+    );
+    expect(calledWithOriginal, '未修改内容也应触发携带原文本的重发').toBe(true);
+
+    wrapper.unmount();
+  });
 });

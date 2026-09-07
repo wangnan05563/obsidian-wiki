@@ -10,11 +10,15 @@ export type TTSProviderType = 'edge' | 'browser' | 'doubao';
 /** 桥接接口：provider 实现可选择性暴露 state ref 让 useTTS watch */
 export interface StateAwareProvider extends TTSProvider {
   state: Ref<TTSState>;
+  /** 可选：provider 在合成/等待阶段暴露 loading=true，让 store 与 UI 屏蔽重复点击 */
+  loading?: Ref<boolean>;
 }
 
 /** useTTS composable 暴露给业务层的接口（与 useTTS.ts 保持一致） */
 export interface UseTTSReturn {
   state: Ref<TTSState>;
+  /** 合成/等待阶段为 true，用于 UI 屏蔽重复点击（loading 期间 speak 应被忽略） */
+  loading: Ref<boolean>;
   rate: Ref<number>;
   speak: (text: string, options?: TTSSpeakOptions) => void;
   pause: () => void;
@@ -62,6 +66,8 @@ function createProvider(type: TTSProviderType): StateAwareProvider {
 export function useTTS(): UseTTSReturn {
   // 业务侧 state：保持同一 ref identity，watch 桥接 provider 内部 state
   const state = ref<TTSState>('idle');
+  // 业务侧 loading：复用 provider 暴露的 loading ref；未暴露的 provider 默认 false
+  const loading = ref(false);
   // 语速：useTTS 层单独管理，因为 setRate 需影响当前 provider（可能跨 provider 复用）
   const rate = ref(1);
 
@@ -83,13 +89,28 @@ export function useTTS(): UseTTSReturn {
   function bridgeProviderState(p: StateAwareProvider): () => void {
     // 立即同步初值
     state.value = p.state.value;
-    return watch(
+    if (p.loading) loading.value = p.loading.value;
+    const stopState = watch(
       p.state,
       (v) => {
         state.value = v;
       },
       { flush: 'sync' },
     );
+    let stopLoading: (() => void) | null = null;
+    if (p.loading) {
+      stopLoading = watch(
+        p.loading,
+        (v) => {
+          loading.value = v;
+        },
+        { flush: 'sync' },
+      );
+    }
+    return () => {
+      stopState();
+      stopLoading?.();
+    };
   }
   let stopWatch = bridgeProviderState(currentProvider.value);
 
@@ -109,12 +130,16 @@ export function useTTS(): UseTTSReturn {
 
   return {
     state,
+    loading,
     rate,
     speak(
       text: string,
       options?: { lang?: string; rate?: number; voice?: string; style?: string; volume?: number; pitch?: number },
     ) {
-      currentProvider.value.speak(text, options ?? { lang: 'zh-CN', rate: rate.value });
+      // loading 期间忽略重复 speak：防止快速点击导致的合成任务 / Audio 元素叠加
+      if (loading.value) return;
+      // 朗读前剥离 markdown 排版符号（* # 等），避免语音逐字念出
+      currentProvider.value.speak(stripMarkdownForTTS(text), options ?? { lang: 'zh-CN', rate: rate.value });
     },
     pause() {
       currentProvider.value.pause();
@@ -138,6 +163,42 @@ export function useTTS(): UseTTSReturn {
 }
 
 // 显式 re-export，方便业务侧按需 import
+// 朗读专用 markdown → 纯文本剥离。
+// 为什么单独实现而非复用组件里的 stripMarkdown：
+//   - 组件里那版用于"复制纯文本"，必须保留代码块内容供粘贴阅读；
+//   - 朗读版则相反：代码块无意义地朗读源码，应整块替换为简短的"代码块"占位，
+//     避免语音把 ``` # * 等排版符号和代码逐字念出来。
+// 为什么放在 speak 统一入口而非各 provider：确保 edge/browser/doubao 三个引擎
+// 及 restartCurrent（调速/换音色重启）读到的都是已清洗文本，职责收敛到一处。
+function stripMarkdownForTTS(md: string): string {
+  return md
+    // 代码块：整块替换为占位（朗读源码无意义）
+    .replaceAll(/```[\s\S]*?```/g, '代码块')
+    // 行内代码：去反引号
+    .replaceAll(/`([^`]+)`/g, '$1')
+    // 图片：替换为 alt 文本
+    .replaceAll(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    // 链接：替换为文本
+    .replaceAll(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // 标题井号、引用块、无序/有序列表标记
+    .replaceAll(/^#{1,6}\s+/gm, '')
+    .replaceAll(/^>\s+/gm, '')
+    .replaceAll(/^\s*[-*+]\s+/gm, '')
+    .replaceAll(/^\s*\d+\.\s+/gm, '')
+    // 粗体/斜体/删除线
+    .replaceAll(/\*\*([^*]+)\*\*/g, '$1')
+    .replaceAll(/\*([^*]+)\*/g, '$1')
+    .replaceAll(/__([^_]+)__/g, '$1')
+    .replaceAll(/_([^_]+)_/g, '$1')
+    .replaceAll(/~~([^~]+)~~/g, '$1')
+    // 兜底：清除上述标记后仍可能孤立的 markdown 符号，避免被逐字朗读
+    .replaceAll(/[*#_~`>]/g, '')
+    // 水平分割线与多余空行收敛
+    .replaceAll(/^-{3,}$/gm, '')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export type { TTSProvider, TTSState, TTSSpeakOptions } from './types';
 export { createBrowserTTSProvider } from './browserTtsProvider';
 export { createDoubaoTTSProvider } from './doubaoTtsProvider';

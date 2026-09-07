@@ -4,6 +4,10 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { CopyDocument, Refresh, Check, Top, Warning, Search } from '@element-plus/icons-vue';
 
+// vite define 注入的构建变量（见 vite.config.ts），不联网、跟随打包构建
+declare const __APP_VERSION__: string;
+declare const __BUILD_DATE__: string;
+
 // ===== 类型定义 =====
 interface BuildInfo {
   version: string;
@@ -160,8 +164,11 @@ async function loadInfo() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     info.value = {
-      version: data.version || '--',
-      buildDate: data.build_date || '--',
+      // 版本号优先用构建时注入的版本（跟随打包构建），后端 /about 仅兜底。
+      // 为什么优先前端注入：保证 About 页显示的版本与实际发版产物一致，
+      // 后端 version 可能因 api/package.json 与前端不同步而漂移。
+      version: (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) || data.version || '--',
+      buildDate: (typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__) || data.build_date || '--',
       gitSha: data.git_sha || 'unknown',
       node: data.node || '--',
       platform: data.platform || '--',
@@ -328,6 +335,7 @@ onBeforeUnmount(() => {
           <el-button
             v-else-if="updateState.kind === 'newer'"
             type="primary"
+            data-tip="打开下载页，获取并安装新版本"
             :icon="Top"
             @click="openReleaseUrl(updateState.url)"
           >
@@ -337,6 +345,7 @@ onBeforeUnmount(() => {
           <el-button
             v-else
             type="danger"
+            data-tip="重试检查更新"
             :icon="Warning"
             @click="handleCheck"
           >

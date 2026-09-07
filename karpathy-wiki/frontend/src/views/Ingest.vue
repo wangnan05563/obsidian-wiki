@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -641,78 +641,94 @@ async function startUrlCrawl() {
   }
 }
 
-// SSE 事件分发：progress/page_start/page_done/page_error/page_skipped/attachment/done/error/proxy_probe
-function handleUrlCrawlEvent(eventType: string, data: UrlCrawlEvent) {
-  // B 方案：代理连通性自检结果（proxy_probe 事件）。显示分级状态，不阻断后续爬取事件。
-  if (eventType === 'proxy_probe') {
-    urlProgress.value = data.message ?? '代理探测完成';
-    const pd = (data.data ?? {}) as { level?: 'ok' | 'warn' | 'error'; message?: string };
-    urlProxyProbe.value = { level: pd.level ?? 'warn', message: data.message ?? '' };
-    return;
-  }
-  // progress/page_start/page_done/page_skipped/attachment 都会更新进度文本
-  if (eventType === 'progress' || eventType === 'page_start' || eventType === 'page_done' || eventType === 'page_skipped' || eventType === 'attachment') {
-    urlProgress.value = data.message ?? '';
-    return;
-  }
-  if (eventType === 'page_error') {
-    // 单页失败不阻断整体，但按错误类型给出明确提示，避免"静默失败"
-    const errType = (data.data as { errorType?: string })?.errorType;
-    const typeLabel: Record<string, string> = {
-      timeout: '超时', http: 'HTTP错误', network: '网络错误', ssrf: '安全拦截', unknown: '未知错误',
-      blocked: '防火墙拦截', auth: '需登录',
-    };
-    const label = errType ? (typeLabel[errType] || '错误') : '错误';
-    urlProgress.value = `[${label}] ${data.message ?? '页面抓取失败'}`;
-    return;
-  }
-  if (eventType === 'done') {
-    // done 事件携带汇总数据：pagesCrawled/totalAttachmentCount/combinedMarkdown/pages/attachments/elapsedMs/pagesSkipped
-    //   + 错误诊断字段 errorCount/errors/diagnosis（0 页面时由后端聚合最可能是根因的提示）
-    const d = data.data;
-    if (d?.combinedMarkdown) {
-      urlCombinedMarkdown.value = d.combinedMarkdown;
-      urlCrawlResult.value = {
-        pagesCrawled: d.pagesCrawled ?? 0,
-        totalAttachmentCount: d.totalAttachmentCount ?? 0,
-        pages: d.pages ?? [],
-        attachments: d.attachments ?? [],
-        elapsedMs: d.elapsedMs,
-        // 代理探测结论（后端并入 done.diagnosis，形如「【代理探测】…」）随结果一并展示，便于事后回溯
-        diagnosis: d.diagnosis,
-      };
-      // 5.4.1 爬取预览：初始化勾选集合为全选
-      selectedPageUrls.value = new Set((d.pages ?? []).map((p) => p.url));
-      urlStage.value = 'crawled';
-      // 5.4.4 耗时显示 + 5.1.3 跳过页面数
-      const elapsedStr = formatElapsed(d.elapsedMs);
-      const skippedStr = d.pagesSkipped && d.pagesSkipped > 0 ? `，跳过 ${d.pagesSkipped} 个未变更` : '';
+// 辅助函数：处理代理探测事件
+function handleProxyProbeEvent(data: UrlCrawlEvent) {
+  urlProgress.value = data.message ?? '代理探测完成';
+  const pd = (data.data ?? {}) as { level?: 'ok' | 'warn' | 'error'; message?: string };
+  urlProxyProbe.value = { level: pd.level ?? 'warn', message: data.message ?? '' };
+}
 
-      // 0 页面但有错误 → 明确诊断，不再静默显示 0
-      if ((d.pagesCrawled ?? 0) === 0 && (d.errorCount ?? 0) > 0) {
-        const diag = d.diagnosis || '所有页面抓取失败，请查看后端日志';
-        urlProgress.value = `爬取失败（0 个页面）：${diag}`;
-        ElMessage.error(`爬取失败：${diag}`);
-        urlCrawlResult.value = { ...urlCrawlResult.value, diagnosis: diag, errorCount: d.errorCount };
-        return;
-      }
+// 辅助函数：处理进度更新事件
+function handleUrlProgressEvent(data: UrlCrawlEvent) {
+  urlProgress.value = data.message ?? '';
+}
 
-      urlProgress.value = `爬取完成：${d.pagesCrawled ?? 0} 个页面，${d.totalAttachmentCount ?? 0} 个附件${skippedStr}${elapsedStr ? `，耗时 ${elapsedStr}` : ''}`;
-      const errNote = (d.errorCount ?? 0) > 0 ? `（${d.errorCount} 个页面失败，已跳过）` : '';
-      ElMessage.success(`爬取完成：共 ${d.pagesCrawled ?? 0} 个页面，${d.totalAttachmentCount ?? 0} 个附件${errNote}${skippedStr}${elapsedStr ? `，耗时 ${elapsedStr}` : ''}`);
-    } else {
-      urlStage.value = 'crawled';
-      urlProgress.value = data.message ?? '爬取完成';
-    }
+// 辅助函数：处理页面错误事件
+function handlePageErrorEvent(data: UrlCrawlEvent) {
+  const errType = (data.data as { errorType?: string })?.errorType;
+  const typeLabel: Record<string, string> = {
+    timeout: '超时', http: 'HTTP错误', network: '网络错误', ssrf: '安全拦截', unknown: '未知错误',
+    blocked: '防火墙拦截', auth: '需登录',
+  };
+  const label = errType ? (typeLabel[errType] || '错误') : '错误';
+  urlProgress.value = '[' + label + '] ' + (data.message ?? '页面抓取失败');
+}
+
+// 辅助函数：处理爬取完成且有结果的分支
+function handleUrlDoneEventWithResult(d: NonNullable<UrlCrawlEvent['data']>) {
+  if (d.combinedMarkdown) urlCombinedMarkdown.value = d.combinedMarkdown;
+  urlCrawlResult.value = {
+    pagesCrawled: d.pagesCrawled ?? 0,
+    totalAttachmentCount: d.totalAttachmentCount ?? 0,
+    pages: d.pages ?? [],
+    attachments: d.attachments ?? [],
+    elapsedMs: d.elapsedMs,
+    diagnosis: d.diagnosis,
+  };
+  selectedPageUrls.value = new Set((d.pages ?? []).map((p) => p.url));
+  urlStage.value = 'crawled';
+  const elapsedStr = formatElapsed(d.elapsedMs);
+  const skippedStr = d.pagesSkipped && d.pagesSkipped > 0 ? '，跳过 ' + d.pagesSkipped + ' 个未变更' : '';
+
+  if ((d.pagesCrawled ?? 0) === 0 && (d.errorCount ?? 0) > 0) {
+    const diag = d.diagnosis || '所有页面抓取失败，请查看后端日志';
+    urlProgress.value = '爬取失败（0 个页面）：' + diag;
+    ElMessage.error('爬取失败：' + diag);
+    urlCrawlResult.value = { ...urlCrawlResult.value, diagnosis: diag, errorCount: d.errorCount };
     return;
   }
-  if (eventType === 'error') {
-    urlStage.value = 'error';
-    urlProgress.value = data.message ?? '爬取失败';
-    ElMessage.error(data.message ?? '爬取失败');
+
+  urlProgress.value = '爬取完成：' + (d.pagesCrawled ?? 0) + ' 个页面，' + (d.totalAttachmentCount ?? 0) + ' 个附件' + skippedStr + (elapsedStr ? '，耗时 ' + elapsedStr : '');
+  const errNote = (d.errorCount ?? 0) > 0 ? '（' + d.errorCount + ' 个页面失败，已跳过）' : '';
+  ElMessage.success('爬取完成：共 ' + (d.pagesCrawled ?? 0) + ' 个页面，' + (d.totalAttachmentCount ?? 0) + ' 个附件' + errNote + skippedStr + (elapsedStr ? '，耗时 ' + elapsedStr : ''));
+}
+
+// 辅助函数：处理爬取完成事件
+function handleUrlDoneEvent(data: UrlCrawlEvent) {
+  const d = data.data;
+  // 门控基于「是否存在爬取结果或诊断信息」，而非依赖 combinedMarkdown 是否非空：
+  // ① 极端情况 pages>0 但正文合并为空串时，原 if (d?.combinedMarkdown) 会误判为无结果，
+  //    导致页面列表与「开始编译」按钮不渲染；② 0 页失败（combinedMarkdown 必为空）的诊断横幅也依赖此门控显示。
+  const hasResult = !!d && (
+    (d.pagesCrawled ?? 0) > 0 ||
+    (d.pages?.length ?? 0) > 0 ||
+    (d.totalAttachmentCount ?? 0) > 0 ||
+    (d.errorCount ?? 0) > 0 ||
+    !!d.diagnosis
+  );
+  if (hasResult) {
+    handleUrlDoneEventWithResult(d);
+  } else {
+    urlStage.value = 'crawled';
+    urlProgress.value = data.message ?? '爬取完成';
   }
 }
 
+// 辅助函数：处理爬取错误事件
+function handleUrlErrorEvent(data: UrlCrawlEvent) {
+  urlStage.value = 'error';
+  urlProgress.value = data.message ?? '爬取失败';
+  ElMessage.error(data.message ?? '爬取失败');
+}
+
+// SSE 事件分发：progress/page_start/page_done/page_error/page_skipped/attachment/done/error/proxy_probe
+function handleUrlCrawlEvent(eventType: string, data: UrlCrawlEvent) {
+  if (eventType === 'proxy_probe') { handleProxyProbeEvent(data); return; }
+  if (eventType === 'progress' || eventType === 'page_start' || eventType === 'page_done' || eventType === 'page_skipped' || eventType === 'attachment') { handleUrlProgressEvent(data); return; }
+  if (eventType === 'page_error') { handlePageErrorEvent(data); return; }
+  if (eventType === 'done') { handleUrlDoneEvent(data); return; }
+  if (eventType === 'error') { handleUrlErrorEvent(data); }
+}
 // 阶段 2：用合并后的 Markdown 触发编译
 // 为什么用 type:'text' 而非 type:'url'：爬取阶段已获取页面正文并合并为 Markdown，
 // 编译阶段直接以文本输入走 /api/compile 的 text 模式，避免后端再次抓取 URL
@@ -877,7 +893,7 @@ function handleUrlInputChange() {
               <span class="folder-files-title">
                 已选 {{ folderFiles.length }} 个文件
               </span>
-              <el-button size="small" text @click="clearFolderFiles">清空</el-button>
+              <el-button size="small" text data-tip="清空已选择的本地文件夹文件列表" @click="clearFolderFiles">清空</el-button>
             </div>
             <ul class="folder-files-list">
               <li v-for="(item, idx) in folderFiles" :key="idx" class="folder-file-item">
@@ -886,6 +902,7 @@ function handleUrlInputChange() {
                   size="small"
                   text
                   type="danger"
+                  data-tip="从文件列表中移除该文件"
                   @click="removeFolderFile(idx)"
                 >
                   ×
@@ -973,6 +990,7 @@ function handleUrlInputChange() {
                   type="primary"
                   :disabled="!urlInput.trim() || urlStage === 'crawling'"
                   :loading="urlStage === 'crawling'"
+                  data-tip="从入口 URL 开始自动爬取同路径及子路径下最多三次跳转内的页面"
                   @click="startUrlCrawl"
                 >开始爬取</el-button>
                 <el-button
@@ -980,6 +998,7 @@ function handleUrlInputChange() {
                   size="small"
                   type="danger"
                   text
+                  data-tip="中止当前 URL 爬取任务"
                   @click="abortUrlCrawl"
                 >取消</el-button>
               </div>
@@ -1015,7 +1034,7 @@ function handleUrlInputChange() {
               <div v-if="urlCrawlResult.pages.length > 0" class="url-pages-card">
                 <div class="url-pages-head">
                   <p class="url-pages-title">已爬取页面（{{ selectedPageCount }}/{{ urlCrawlResult.pages.length }}）：</p>
-                  <el-button size="small" text @click="toggleAllPages">
+                  <el-button size="small" text data-tip="勾选或取消勾选全部已爬取页面" @click="toggleAllPages">
                     {{ isAllPagesSelected ? '取消全选' : '全选' }}
                   </el-button>
                 </div>
@@ -1062,9 +1081,10 @@ function handleUrlInputChange() {
                   type="primary"
                   :disabled="!urlCombinedMarkdown || store.isCompiling || submitting || selectedPageCount === 0"
                   :loading="store.isCompiling"
+                  data-tip="将勾选的页面与附件编译为知识库文档"
                   @click="startUrlCompile"
                 >开始编译（{{ selectedPageCount }}/{{ urlCrawlResult.pages.length }}）</el-button>
-                <el-button @click="resetUrlFlow">重新爬取</el-button>
+                <el-button data-tip="清空当前爬取结果与选择，重新输入 URL" @click="resetUrlFlow">重新爬取</el-button>
               </div>
             </div>
 
@@ -1123,6 +1143,7 @@ function handleUrlInputChange() {
               <el-button
                 type="primary"
                 :loading="bookmarkCompiling"
+                data-tip="将解析出的书签与文件夹编译为知识库文档"
                 @click="compileBookmarks"
                 style="margin-top:12px"
               >
@@ -1147,7 +1168,7 @@ function handleUrlInputChange() {
             </ol>
             <div class="bookmarklet-row">
               <a class="bookmarklet" :href="bookmarkletCode" draggable="true">网页捕获</a>
-              <el-button size="small" @click="copyBookmarklet">复制书签代码</el-button>
+              <el-button size="small" data-tip="复制「网页捕获」书签代码，便于拖入浏览器书签栏" @click="copyBookmarklet">复制书签代码</el-button>
             </div>
             <div v-if="captureLoading" class="capture-status">正在解析页面…</div>
             <div v-else-if="captureError" class="capture-status capture-error">{{ captureError }}</div>
@@ -1157,7 +1178,7 @@ function handleUrlInputChange() {
                 来源：{{ captured.url || '（未提供）' }}<br />
                 正文长度：{{ captured.contentLength }} 字符
               </p>
-              <el-button type="primary" :loading="store.isCompiling" @click="compileCaptured">
+              <el-button type="primary" :loading="store.isCompiling" data-tip="将本机浏览器捕获的页面内容编译并投递为知识库文档" @click="compileCaptured">
                 编译投递
               </el-button>
             </div>
@@ -1194,6 +1215,7 @@ function handleUrlInputChange() {
               <div class="qq-action-row">
                 <el-button
                   type="primary"
+                  data-tip="上传 QQ 导出文件并预清洗聊天记录（过滤噪声、脱敏）"
                   :disabled="!qqFile || qqStage === 'uploading' || qqStage === 'extracting'"
                   :loading="qqStage === 'uploading'"
                   @click="uploadQqFile"
@@ -1203,6 +1225,7 @@ function handleUrlInputChange() {
                   size="small"
                   type="danger"
                   text
+                  data-tip="中止当前 QQ 文件上传与预清洗"
                   @click="abortQqFlow"
                 >取消</el-button>
               </div>
@@ -1242,6 +1265,7 @@ function handleUrlInputChange() {
               <div class="qq-action-row">
                 <el-button
                   type="primary"
+                  data-tip="调用 LLM 从预清洗后的聊天记录中抽取结构化草稿（标题与正文）"
                   :disabled="qqStage === 'extracting' || qqStage === 'done'"
                   :loading="qqStage === 'extracting'"
                   @click="extractQqDrafts"
@@ -1251,6 +1275,7 @@ function handleUrlInputChange() {
                   size="small"
                   type="danger"
                   text
+                  data-tip="中止 LLM 抽取任务"
                   @click="abortQqFlow"
                 >取消抽取</el-button>
               </div>
@@ -1271,7 +1296,7 @@ function handleUrlInputChange() {
                   </li>
                 </ul>
                 <p class="drafts-hint">请到「知识浏览 → 草稿审核」页面审核并发布</p>
-                <el-button type="primary" @click="goToDraftReview">前往草稿审核</el-button>
+                <el-button type="primary" data-tip="跳转到「知识浏览 → 草稿审核」页面，审核并发布抽取出的草稿" @click="goToDraftReview">前往草稿审核</el-button>
               </div>
             </div>
 
@@ -1300,13 +1325,14 @@ function handleUrlInputChange() {
         <el-button
           type="primary"
           size="large"
+          data-tip="将当前已配置的来源（文件/文件夹/文本）编译为知识库文档"
           :disabled="!canSubmit || store.isCompiling || submitting"
           :loading="store.isCompiling"
           @click="handleSubmit"
         >
           {{ store.isCompiling ? '编译中...' : '开始编译' }}
         </el-button>
-        <el-button size="large" @click="resetInputs">清空</el-button>
+        <el-button size="large" data-tip="清空当前所有输入来源与配置" @click="resetInputs">清空</el-button>
       </div>
     </div>
   </div>
@@ -2022,7 +2048,7 @@ function handleUrlInputChange() {
 
 .url-att-group-count {
   color: var(--text-dim);
-  font-weight: normal;
+  font-weight: 400;
   margin-left: 4px;
 }
 

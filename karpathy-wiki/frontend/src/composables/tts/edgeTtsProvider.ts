@@ -50,6 +50,16 @@ export function rateToSsml(rate: number): string {
 }
 
 /** 将长文本按句号/换行分段，每段不超过 MAX_TEXT_PER_REQUEST 字 */
+
+/** 将超长句子硬切成不超过 MAX_TEXT_PER_REQUEST 的片段 */
+function splitLongSentence(sentence: string): string[] {
+  const parts: string[] = [];
+  for (let i = 0; i < sentence.length; i += MAX_TEXT_PER_REQUEST) {
+    parts.push(sentence.slice(i, i + MAX_TEXT_PER_REQUEST));
+  }
+  return parts;
+}
+
 export function splitText(text: string): string[] {
   if (text.length <= MAX_TEXT_PER_REQUEST) return [text];
   const segments: string[] = [];
@@ -59,11 +69,8 @@ export function splitText(text: string): string[] {
   for (const sentence of sentences) {
     if ((current + sentence).length > MAX_TEXT_PER_REQUEST) {
       if (current) segments.push(current);
-      // 单句超长时硬切
       if (sentence.length > MAX_TEXT_PER_REQUEST) {
-        for (let i = 0; i < sentence.length; i += MAX_TEXT_PER_REQUEST) {
-          segments.push(sentence.slice(i, i + MAX_TEXT_PER_REQUEST));
-        }
+        segments.push(...splitLongSentence(sentence));
         current = '';
       } else {
         current = sentence;
@@ -76,20 +83,25 @@ export function splitText(text: string): string[] {
   return segments;
 }
 
-export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } {
+export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState>; loading: Ref<boolean> } {
   const state: Ref<TTSState> = ref('idle');
+  // loading：true 表示正在向后端 /api/tts/synthesize 请求合成 / 等待 audio.play()，
+  // 用于 store 与 UI 屏蔽重复点击导致的"叠加"朗读
+  const loading = ref(false);
   let currentAudio: HTMLAudioElement | null = null;
   // 分段播放队列
   let segmentQueue: string[] = [];
   let currentSegmentIndex = 0;
   let currentRate = 1;
   let currentVoice = DEFAULT_VOICE;
-  let currentLang = 'zh-CN';
   let currentStyle = DEFAULT_STYLE;
   let currentVolume = 0;
   let currentPitch = 0;
   // abort flag：stop() 后阻止后续段落继续播放
   let aborted = false;
+  // requestId：每次 speak 自增，await fetch / await play 后校验，防止快速重复点击时
+  // 旧一轮 await 拿到 url 后仍继续创建 Audio 元素，与新一轮叠加播放
+  let requestId = 0;
 
   // 降级到浏览器原生 TTS 时使用（当后端 Edge TTS 不可达，保证朗读功能始终可用）
   let originalText = '';
@@ -126,35 +138,62 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
     }
   }
 
-  /** 播放下一段文本（分段合成场景） */
-  async function playNextSegment() {
-    if (aborted) return;
-    if (currentSegmentIndex >= segmentQueue.length) {
+  /** 处理音频播放结束：播放下⼀段或标记完成 */
+  function onSegmentEnded(audio: HTMLAudioElement) {
+    currentSegmentIndex++;
+    if (currentSegmentIndex < segmentQueue.length && !aborted) {
+      void playNextSegment(requestId);
+    } else {
       state.value = 'idle';
-      return;
+      loading.value = false;
+      if (audio.src.startsWith('blob:')) {
+        URL.revokeObjectURL(audio.src);
+      }
     }
+  }
 
+  /** 从后端获取 TTS 音频并返回 Blob URL */
+  async function fetchTtsAudio(): Promise<string> {
     const text = segmentQueue[currentSegmentIndex];
-    const voice = currentVoice;
     const rateStr = rateToSsml(currentRate);
     const volumeStr = volToSsml(currentVolume);
     const pitchStr = pitchToSsml(currentPitch);
     const styleStr = currentStyle && currentStyle !== 'general' ? currentStyle : '';
 
+    const res = await apiFetch(`${API_BASE}/tts/synthesize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice: currentVoice, rate: rateStr, volume: volumeStr, pitch: pitchStr, style: styleStr }),
+    });
+    if (!res.ok) {
+      throw new Error(`TTS API HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }
+
+  /** 播放下一段文本（分段合成场景） */
+  async function playNextSegment(myReq: number) {
+    // 入参即校检：被新一轮 speak 取代时直接退出
+    if (myReq !== requestId) return;
+    if (aborted) return;
+    if (currentSegmentIndex >= segmentQueue.length) {
+      state.value = 'idle';
+      loading.value = false;
+      return;
+    }
+
     try {
-      const res = await apiFetch(`${API_BASE}/api/tts/synthesize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice, rate: rateStr, volume: volumeStr, pitch: pitchStr, style: styleStr }),
-      });
-      if (!res.ok) {
-        throw new Error(`TTS API HTTP ${res.status}`);
+      const url = await fetchTtsAudio();
+      // await 期间可能被新一轮 speak 取代：丢弃过期结果
+      if (myReq !== requestId) {
+        URL.revokeObjectURL(url);
+        return;
       }
-
-      if (aborted) return;
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+      if (aborted) {
+        URL.revokeObjectURL(url);
+        return;
+      }
 
       // 释放上一段的 object URL 避免内存泄漏
       if (currentAudio?.src.startsWith('blob:')) {
@@ -164,41 +203,40 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
       const audio = new Audio(url);
       currentAudio = audio;
 
-      audio.onended = () => {
-        currentSegmentIndex++;
-        if (currentSegmentIndex < segmentQueue.length && !aborted) {
-          void playNextSegment();
-        } else {
-          state.value = 'idle';
-          // 播放完毕释放最后一段的 object URL
-          if (audio.src.startsWith('blob:')) {
-            URL.revokeObjectURL(audio.src);
-          }
-        }
-      };
+      audio.onended = () => onSegmentEnded(audio);
       audio.onerror = () => {
         console.error('Edge TTS 音频播放失败');
         state.value = 'idle';
+        loading.value = false;
       };
       audio.onplay = () => {
-        if (!aborted) state.value = 'playing';
+        // 播放真正开始：解除 loading（之前是合成/等待阶段）
+        if (myReq === requestId && !aborted) {
+          state.value = 'playing';
+          loading.value = false;
+        }
       };
 
       await audio.play();
     } catch (err) {
       console.error('Edge TTS 合成失败：', err);
+      // 仅在仍为最新请求且未中止时降级
+      if (myReq !== requestId || aborted) return;
       // 首段即失败：整段降级到浏览器原生 TTS，保证朗读功能始终可用
-      if (currentSegmentIndex === 0 && !aborted) {
+      if (currentSegmentIndex === 0) {
         fallbackToBrowser();
+        loading.value = false;
       } else {
         state.value = 'idle';
+        loading.value = false;
       }
     }
   }
 
-  const provider: TTSProvider & { state: Ref<TTSState> } = {
+  const provider: TTSProvider & { state: Ref<TTSState>; loading: Ref<boolean> } = {
     name: 'edge',
     state,
+    loading,
 
     isSupported(): boolean {
       // Edge TTS 通过后端 API 实现，无需浏览器特性检测
@@ -207,6 +245,8 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
     },
 
     speak(text: string, options?: TTSSpeakOptions): void {
+      // requestId 自增：让上一轮 await fetch 后的结果在比较时失效，避免叠加
+      const myReq = ++requestId;
       // 切换朗读前清理旧 audio 和队列
       aborted = true;
       clearAudio();
@@ -218,10 +258,11 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
         stopFallbackWatch = null;
       }
       aborted = false;
+      // 进入加载态：屏蔽 UI 重复点击
+      loading.value = true;
 
       currentRate = options?.rate ?? 1;
       currentVoice = options?.voice ?? DEFAULT_VOICE;
-      currentLang = options?.lang ?? 'zh-CN';
       currentStyle = options?.style ?? DEFAULT_STYLE;
       currentVolume = options?.volume ?? 0;
       currentPitch = options?.pitch ?? 0;
@@ -234,11 +275,12 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
 
       if (segmentQueue.length === 0) {
         state.value = 'idle';
+        loading.value = false;
         return;
       }
 
       state.value = 'playing';
-      void playNextSegment();
+      void playNextSegment(myReq);
     },
 
     pause(): void {
@@ -250,6 +292,7 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
       }
       currentAudio?.pause();
       state.value = 'paused';
+      // 暂停不解除 loading：暂停期间仍可能重复点击，UI 应通过 state 区分
     },
 
     resume(): void {
@@ -262,11 +305,14 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
       currentAudio?.play().catch((err) => {
         console.error('Edge TTS resume 失败：', err);
         state.value = 'idle';
+        loading.value = false;
       });
       state.value = 'playing';
     },
 
     stop(): void {
+      // requestId 自增 + aborted：让所有进行中的 await 在 await 后被丢弃
+      requestId++;
       aborted = true;
       clearAudio();
       if (fallbackProvider) {
@@ -275,6 +321,7 @@ export function createEdgeTTSProvider(): TTSProvider & { state: Ref<TTSState> } 
       segmentQueue = [];
       currentSegmentIndex = 0;
       state.value = 'idle';
+      loading.value = false;
     },
 
     dispose(): void {

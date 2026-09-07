@@ -27,6 +27,8 @@ export const useTtsStore = defineStore('tts', () => {
 
   // 当前 provider 名称（'edge' / 'browser' / 'doubao'）：供 UI 显示与切换
   const providerName = computed(() => tts.providerName.value);
+  // 合成/等待阶段：用于 store 与 UI 短路重复 speak 调用
+  const loading = computed(() => tts.loading.value);
 
   // 当前用户 id（用于 per-user 配置读写）；未登录时为 'guest'
   const currentUserId = ref<string>('guest');
@@ -82,8 +84,8 @@ export const useTtsStore = defineStore('tts', () => {
   // 加载指定用户的配置：覆盖当前所有朗读参数，并切换 provider。
   // 用递增 token 防止快速切换账户时旧异步加载覆盖新加载（竞态保护）。
   let loadToken = 0;
-  async function loadForUser(userId: string): Promise<void> {
-    const uid = userId || 'guest';
+  async function loadForUser(userId: string = 'guest'): Promise<void> {
+    const uid = userId;
     currentUserId.value = uid;
     const token = ++loadToken;
     const cfg = await loadTtsConfig(uid);
@@ -119,6 +121,8 @@ export const useTtsStore = defineStore('tts', () => {
   );
 
   function speak(text: string, msgId: string) {
+    // 防重：合成/等待阶段忽略重复 speak 触发，避免多次合成任务 / 多次 Audio 元素叠加
+    if (tts.loading.value) return;
     // 切换到新消息时停止当前朗读，避免语音队列堆积
     if (currentMsgId.value && currentMsgId.value !== msgId) {
       tts.stop();
@@ -202,5 +206,5 @@ export const useTtsStore = defineStore('tts', () => {
     restartCurrent();
   }
 
-  return { state, currentMsgId, rate, providerName, currentVoice, currentStyle, currentVolume, currentPitch, speak, pause, resume, stop, setRate, setProvider, setVoice, setStyle, setVolume, setPitch };
+  return { state, currentMsgId, rate, loading, providerName, currentVoice, currentStyle, currentVolume, currentPitch, speak, pause, resume, stop, setRate, setProvider, setVoice, setStyle, setVolume, setPitch };
 });

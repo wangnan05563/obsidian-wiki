@@ -29,6 +29,14 @@ function handleSelect(tool: Tool) {
   if (tool.disabled) return;
   emit('select', tool.key);
 }
+
+// 统一悬浮提示文本：disabled 工具提示其禁用原因（或默认文案），否则为工具名。
+// 为什么接入 data-tip 而非仅原生 title：项目统一浮层（tip.ts）优先读 data-tip，
+//   样式/定位与其他按钮一致；原生 title 在部分场景被浏览器吞掉且无法定制（T00313）
+function toolTip(tool: Tool): string {
+  if (tool.disabled) return tool.disabledReason || '暂未实现';
+  return tool.label;
+}
 </script>
 
 <template>
@@ -41,9 +49,8 @@ function handleSelect(tool: Tool) {
         'icon-only': props.iconOnly,
         disabled: tool.disabled,
       }"
-      :title="props.iconOnly
-        ? (tool.disabled ? tool.disabledReason || '暂未实现' : tool.label)
-        : (tool.disabled ? tool.disabledReason || '暂未实现' : undefined)"
+      :title="toolTip(tool)"
+      :data-tip="toolTip(tool)"
       :disabled="tool.disabled"
       @click="handleSelect(tool)">
       <!-- 快速：闪电图标 -->
@@ -113,6 +120,7 @@ function handleSelect(tool: Tool) {
         class="tool-chip secondary"
         :class="{ active: props.activeMode === tool.key }"
         :title="tool.label"
+        :data-tip="tool.label"
         @click="emit('select', tool.key)">
         <svg v-if="tool.key === 'web'" class="tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
@@ -152,8 +160,9 @@ function handleSelect(tool: Tool) {
   gap: 6px;
   padding: 5px 12px;
   border-radius: 16px;
-  border: 1px solid var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
-  background: var(--accent-cyan-a05, rgba(0, 245, 255, 0.05));
+  /* T00263：去掉按钮边框、透明背景，简洁图标样式；hover 再显现淡背景反馈 */
+  border: none;
+  background: transparent;
   color: var(--text-soft, #888);
   font-size: 13px;
   cursor: pointer;
@@ -163,8 +172,7 @@ function handleSelect(tool: Tool) {
 }
 .tool-chip:hover:not(.disabled) {
   background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
-  border-color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 0 8px var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
+  color: var(--neon-cyan, #00f5ff);
   /* F-3.4 验收：hover 有动效（玻璃光泽滑动） */
   transform: translateY(-1px);
 }
@@ -175,14 +183,11 @@ function handleSelect(tool: Tool) {
 }
 .tool-chip.active {
   background: var(--accent-cyan-a18, rgba(0, 245, 255, 0.18));
-  border-color: var(--neon-cyan, #00f5ff);
   color: var(--neon-cyan, #00f5ff);
-  box-shadow: 0 0 12px var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
 }
 .tool-chip.disabled {
   opacity: 0.4;
   cursor: not-allowed;
-  border-style: dashed;
 }
 .tool-chip.icon-only {
   padding: 8px;

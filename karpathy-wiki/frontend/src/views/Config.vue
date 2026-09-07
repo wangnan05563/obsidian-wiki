@@ -27,8 +27,19 @@ import {
   DEFAULT_AI_USER_CONFIG,
   type AiUserConfig,
 } from '../services/userConfig';
+// 媒体生成（生图/视频）用户 BYOK 配置：按 userId 隔离存取 + 预设拉取/应用
+import {
+  loadMediaUserConfig,
+  saveMediaUserConfig,
+  fetchMediaPresets,
+  mergeImagePreset,
+  mergeVideoPreset,
+  DEFAULT_MEDIA_USER_CONFIG,
+  type MediaUserConfig,
+} from '../services/mediaConfig';
+import type { MediaImagePreset, MediaVideoPreset } from '../types/media';
 
-const activeTab = ref<'schema' | 'config' | 'ai' | 'tts' | 'theme' | 'tools' | 'qq' | 'prompts'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai' | 'tts' | 'theme' | 'tools' | 'qq' | 'prompts' | 'mcp'>('schema');
 const config = ref<ConfigData | null>(null);
 
 // ===== 朗读设置（按用户维度隔离）=====
@@ -253,6 +264,64 @@ const aiForm = ref({
   apiKey: '', // 脱敏值或新输入值
 });
 
+// ── T00315「共享AI」：管理员全局共享 LLM 配置，供未配置个人 AI 的用户降级使用 ──
+// 与服务端 /api/ai/config 对应（requireAdmin，普通用户不可写）；与 aiForm（用户 BYOK）相互独立，
+// 各自持久化到不同存储（服务端 config.json 与本地 IndexedDB），互不混用。
+const sharedAiForm = ref({
+  provider: '',
+  baseUrl: '',
+  model: '',
+  apiKey: '',      // 服务端脱敏回显（**** 开头=未修改），或管理员新输入值
+  apiKeySet: false, // 服务端共享是否已配置可用 Key
+});
+const savingSharedAi = ref(false);
+
+// 加载管理员「共享AI」当前值（GET，Key 脱敏）。
+async function loadSharedAi(): Promise<void> {
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/config`);
+    if (!res.ok) return;
+    const cfg = await res.json() as { provider?: string; baseUrl?: string; model?: string; apiKeyMasked?: string; apiKeySet?: boolean };
+    sharedAiForm.value = {
+      provider: cfg.provider ?? '',
+      baseUrl: cfg.baseUrl ?? '',
+      model: cfg.model ?? '',
+      apiKey: cfg.apiKeyMasked ?? '',
+      apiKeySet: Boolean(cfg.apiKeySet),
+    };
+  } catch {
+    // 加载失败不阻断，管理员可手动填写后保存
+  }
+}
+
+// 保存管理员「共享AI」（PUT requireAdmin）。apiKey 以 **** 开头视为未修改（复用后端 sanitizeApiKey），空串清除 Key。
+async function saveSharedAi(): Promise<void> {
+  savingSharedAi.value = true;
+  try {
+    const cfg = sharedAiForm.value;
+    const res = await authStore.authFetch(`${API_BASE}/ai/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: cfg.provider,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        apiKey: cfg.apiKey,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json() as { config?: { apiKeySet?: boolean } | undefined };
+    ElMessage.success('已保存「共享AI」配置');
+    sharedAiForm.value.apiKeySet = Boolean(data.config?.apiKeySet);
+    // 同步 model store 的服务端 Key 状态，保证问答页降级提示口径一致
+    modelStore.apiKeySet = sharedAiForm.value.apiKeySet;
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存「共享AI」失败', err));
+  } finally {
+    savingSharedAi.value = false;
+  }
+}
+
 // 当前选中的预设 key（用于按预设持久化配置）
 const selectedPresetKey = ref('');
 
@@ -282,6 +351,8 @@ function maskLocal(key: string): string {
 
 // 加载 AI 配置（按用户隔离的本地存储，不再读取服务端共享 config.json）
 async function loadAiConfig() {
+  // 管理员进入 AI 配置页时一并加载「共享AI」全局配置（仅 admin 可见/可写）
+  if (isAdmin.value) void loadSharedAi();
   loadingAi.value = true;
   try {
     // 初始编辑目标：优先「当前问答选中的预设」（若该预设存在），否则第一个「已保存」的预设，
@@ -306,7 +377,10 @@ async function loadAiConfig() {
     let cfg = byok;
     const hasSavedByok = savedKeys.includes(initialKey);
     const hasApiKey = Boolean(byok?.apiKey?.trim());
-    if (!hasSavedByok || !hasApiKey) {
+    // 本地 apiKey 若是脱敏残留（**** 开头，如旧 bug 时期保存的掩码串），按"未保存真实密钥"处理，
+    // 也走服务端兜底，避免把无效掩码当真实 key 返显/下发。
+    const isMaskedResidue = Boolean(byok?.apiKey?.trim()?.startsWith('****'));
+    if (!hasSavedByok || !hasApiKey || isMaskedResidue) {
       try {
         const res = await authStore.authFetch(`${API_BASE}/ai/config`);
         if (res.ok) {
@@ -330,8 +404,11 @@ async function loadAiConfig() {
       model: cfg.model,
       apiKey: cfg.apiKey,
     };
-    // 本地派生状态摘要（原 aiConfig 来自服务端，现在由本地配置派生，空时回退服务端）
-    aiConfig.value = deriveAiSummary(cfg);
+    // 判定「是否已配置」必须以「本用户本地是否存了真实 Key」为准，而非服务端脱敏回填值。
+    // 为什么：服务端兜底会把脱敏串（**** 开头，仅服务端基线）回填进 apiKey，若据此置 apiKeySet=true
+    //   会显示"Key 已设置"，但问答按 BYOK 只认本用户真实密钥 → 出现"测试连接能通（走服务端 key）但问答失败"。
+    const localRealKey = hasSavedByok && hasApiKey && !isMaskedResidue;
+    aiConfig.value = { ...deriveAiSummary(cfg), apiKeySet: localRealKey };
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载 AI 配置失败', err));
   } finally {
@@ -473,7 +550,19 @@ async function testConnection() {
     const result: AiTestResult = await res.json();
     aiTestResult.value = result;
     if (result.ok) {
-      ElMessage.success('连接测试成功');
+      // 说明密钥来源：输入框为空/脱敏时测试走服务端配置（环境变量 / config），
+      // 但问答按 BYOK 强制每用户自己的 key，故"测试通过≠问答可用"，
+      // 需明确区分三态，避免"测试能通却问答报缺 API 配置"的误导。
+      if (aiForm.value.apiKey.startsWith('****')) {
+        // 掩码=服务端回显的脱敏串，非真实密钥；保存时会按"未修改"处理存空，直接点保存并不能得到可用 key
+        ElMessage.success('连接测试通过（用服务端密钥测通）。问答按每用户独立密钥（BYOK）运行，请在框内填入你自己的 API Key 并点「保存」，否则问答会提示缺少 API 配置');
+      } else if (aiForm.value.apiKey.trim()) {
+        // 用户已填真实密钥：测试仅验证连通，需点「保存」写入本地，问答才读得到
+        ElMessage.success('连接测试成功（将使用你输入的密钥）。请点「保存」写入本地后问答才可用，仅测试不会保存配置');
+      } else {
+        // 完全没填 key：测试靠服务端共享密钥通过，但服务端 key 不为你提供问答额度
+        ElMessage.success('连接测试成功（仅用服务端密钥测通）。请在框内填入你自己的 API Key 并点「保存」，否则问答会提示缺少 API 配置');
+      }
     } else {
       ElMessage.warning('连接测试失败');
     }
@@ -625,11 +714,69 @@ const webSearchTestText = computed(() => {
   return r.ok ? `连接成功（返回 ${r.count ?? 0} 条结果）` : r.detail;
 });
 
-// ===== 图像生成（生图）连接测试 =====
-// 媒体配置为服务端统一配置（非 BYOK），不区分账户；仅做连通性自检，不持久化。
+// ===== 图像生成（生图）/视频生成 用户配置（媒体服务，BYOK）=====
+// 生图/视频配置不在服务端共享，改为每用户独立（BYOK）：密钥/模型/分辨率/比例/时长等按 userId
+// 存本地 IndexedDB，发起生成时随请求体透传后端。本区提供表单编辑 + 预设一键应用 + 连接测试。
+const mediaForm = ref<MediaUserConfig>(JSON.parse(JSON.stringify(DEFAULT_MEDIA_USER_CONFIG)) as MediaUserConfig);
+const mediaPresets = ref<{ imagePresets: MediaImagePreset[]; videoPresets: MediaVideoPreset[] }>({
+  imagePresets: [],
+  videoPresets: [],
+});
+// 预设下拉的 v-model 值：应用后立即置空，让下拉回到"请选择"占位（避免 El 无 v-model 告警 + 残留选中态）
+const imagePresetSel = ref('');
+const videoPresetSel = ref('');
+const savingMedia = ref(false);
 const testingImageGen = ref(false);
 const imageGenTestResult = ref<{ ok: boolean; detail: string; model?: string } | null>(null);
 
+// 进入配置页加载当前用户媒体配置 + 预设
+async function loadMediaSection() {
+  const uid = authStore.user?.id || 'guest';
+  mediaForm.value = await loadMediaUserConfig(uid);
+  // /api/media/presets 已挂 requireAuth，需用 authStore.authFetch（带凭证）拉取；未登录时回退空预设
+  mediaPresets.value = await fetchMediaPresets(
+    authStore.authFetch as (input: string, init?: RequestInit) => Promise<Response>,
+  );
+}
+
+// 预设一键应用：把预设的生成参数合并进对应组（保留 baseUrl/apiKey），用户可再手动微调
+function applyImagePreset(key: string) {
+  const p = mediaPresets.value.imagePresets.find((x) => x.key === key);
+  if (!p) return;
+  mediaForm.value.image = mergeImagePreset(mediaForm.value.image, p);
+  ElMessage.success(`已套用生图预设「${p.label}」，可手动微调后保存`);
+}
+function applyVideoPreset(key: string) {
+  const p = mediaPresets.value.videoPresets.find((x) => x.key === key);
+  if (!p) return;
+  mediaForm.value.video = mergeVideoPreset(mediaForm.value.video, p);
+  ElMessage.success(`已套用视频预设「${p.label}」，可手动微调后保存`);
+}
+// 预设下拉 change：应用后把 v-model 置空，让下拉回到"请选择"占位
+function onImagePresetChange(key: string) {
+  applyImagePreset(key);
+  imagePresetSel.value = '';
+}
+function onVideoPresetChange(key: string) {
+  applyVideoPreset(key);
+  videoPresetSel.value = '';
+}
+
+// 保存当前用户的生图/视频配置（写 IndexedDB，不落服务端）
+async function saveMediaConfig() {
+  const uid = authStore.user?.id || 'guest';
+  savingMedia.value = true;
+  try {
+    await saveMediaUserConfig(uid, mediaForm.value);
+    ElMessage.success('生图/视频配置已保存（将用于你自己的生成服务）');
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存失败', err));
+  } finally {
+    savingMedia.value = false;
+  }
+}
+
+// 生图连接测试：用当前表单里的用户配置（BYOK）做一次真实校验，与生成口径一致。
 async function testImageGenConnection() {
   testingImageGen.value = true;
   imageGenTestResult.value = null;
@@ -637,7 +784,7 @@ async function testImageGenConnection() {
     const res = await authStore.authFetch(`${API_BASE}/ai/image/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ imageConfig: mediaForm.value.image || {} }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result = (await res.json()) as { ok: boolean; detail: string; model?: string };
@@ -659,7 +806,8 @@ async function testImageGenConnection() {
 const imageGenTestText = computed(() => {
   const r = imageGenTestResult.value;
   if (!r) return '';
-  return r.ok ? `连接成功${r.model ? `（模型 ${r.model}）` : ''}` : r.detail;
+  if (!r.ok) return r.detail;
+  return r.model ? `连接成功（模型 ${r.model}）` : '连接成功';
 });
 
 // ===== 高级配置：运行参数 / 健康检查 / 批量编译 / 日志 =====
@@ -1519,6 +1667,8 @@ onMounted(async () => {
   loadAiConfig();
   loadWebSearchConfig();
   loadToolsConfig();
+  // 媒体生成（生图/视频）用户配置同样按用户隔离，所有登录用户可编辑，故置于管理员提前 return 之前
+  loadMediaSection();
   if (!isAdmin.value) {
     // 非管理员：跳过敏感 admin 接口（SCHEMA/系统配置/历史/QQ/Prompt），默认落到「朗读设置」tab
     activeTab.value = 'tts';
@@ -1553,6 +1703,80 @@ watch(activeTab, (tab) => {
     void applyPreset(aiPresets.value.find(p => p.key === fallback)!);
   }
 });
+
+// ===== MCP 对外接口配置（仅管理员） =====
+// 为什么独立于「工具配置」帮助：工具配置管理本应用作为 MCP 客户端去连外部服务器（mcpServers）；
+// 这里管理的是本应用对外的 /mcp 端点（供外部 AI Agent 接入），userToken/adminToken 即权限，须管理员配置。
+const mcpForm = ref({
+  enabled: false,
+  endpointPath: '/mcp',
+  name: 'karpathy-wiki',
+  version: '1.0.0',
+  authenticated: false,
+  // 输入框初始回显后端脱敏掩码（****末4位）；保存时原样回传，后端按「未修改」处理
+  userToken: '',
+  adminToken: '',
+});
+const mcpSaving = ref(false);
+const mcpLoading = ref(false);
+
+async function loadMcpConfig() {
+  mcpLoading.value = true;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/config/mcp`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    mcpForm.value = {
+      enabled: d.enabled ?? false,
+      endpointPath: d.endpointPath ?? '/mcp',
+      name: d.name ?? 'karpathy-wiki',
+      version: d.version ?? '1.0.0',
+      authenticated: d.authenticated ?? false,
+      userToken: d.userTokenMasked || '',
+      adminToken: d.adminTokenMasked || '',
+    };
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('加载 MCP 接口配置失败', err));
+  } finally {
+    mcpLoading.value = false;
+  }
+}
+
+async function saveMcpConfig() {
+  mcpSaving.value = true;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/config/mcp`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: mcpForm.value.enabled,
+        endpointPath: mcpForm.value.endpointPath,
+        name: mcpForm.value.name,
+        version: mcpForm.value.version,
+        authenticated: mcpForm.value.authenticated,
+        // 掩码(****)原样回传 → 后端视为未修改；清空 → 后端写入空串清除
+        userToken: mcpForm.value.userToken,
+        adminToken: mcpForm.value.adminToken,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    const cfg = d.config;
+    // 用后端返回的最新掩码回显，避免展示用户刚输入的明文 token
+    mcpForm.value.userToken = cfg.userTokenMasked || '';
+    mcpForm.value.adminToken = cfg.adminTokenMasked || '';
+    ElMessage.success('MCP 接口配置已保存（外部 Agent 立即按新配置连接）');
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存 MCP 接口配置失败', err));
+  } finally {
+    mcpSaving.value = false;
+  }
+}
+
+// 切入「MCP 接口」tab 时加载最新配置
+watch(activeTab, (tab) => {
+  if (tab === 'mcp' && isAdmin.value) void loadMcpConfig();
+});
 </script>
 
 <template>
@@ -1575,14 +1799,14 @@ watch(activeTab, (tab) => {
             <div class="action-bar">
               <span class="section-desc">页面规范文件，控制 AI 编译时的页面结构与约束</span>
               <div class="actions">
-                <el-button v-if="!editingSchema" size="small" class="neon-btn" @click="editingSchema = true">
+                <el-button v-if="!editingSchema" size="small" class="neon-btn" data-tip="进入 SCHEMA 规范编辑模式" @click="editingSchema = true">
                   编辑
                 </el-button>
                 <template v-else>
-                  <el-button size="small" class="neon-btn-primary" :loading="savingSchema" @click="saveSchema">
+                  <el-button size="small" class="neon-btn-primary" data-tip="保存 SCHEMA 规范文件" :loading="savingSchema" @click="saveSchema">
                     保存
                   </el-button>
-                  <el-button size="small" class="neon-btn" @click="cancelEdit">取消</el-button>
+                  <el-button size="small" class="neon-btn" data-tip="退出 SCHEMA 编辑模式并放弃修改" @click="cancelEdit">取消</el-button>
                 </template>
               </div>
             </div>
@@ -1603,7 +1827,7 @@ watch(activeTab, (tab) => {
             <div class="history-section">
               <div class="history-head">
                 <span class="section-desc">// 版本历史（Git）</span>
-                <el-button size="small" class="neon-btn" text :loading="loadingHistory" @click="loadHistory">刷新</el-button>
+                <el-button size="small" class="neon-btn" text data-tip="刷新 SCHEMA 版本历史（Git 提交记录）" :loading="loadingHistory" @click="loadHistory">刷新</el-button>
               </div>
       <div v-if="!gitEnabled" class="history-disabled">
                 Vault 未启用 Git，无法查看版本历史。在 Vault 目录执行 <code>git init</code> 即可启用。
@@ -1634,6 +1858,7 @@ watch(activeTab, (tab) => {
                   <el-button
                     size="small"
                     class="neon-btn-primary"
+                    data-tip="对比所选基线版本与当前 HEAD 的差异"
                     :disabled="!selectedFrom"
                     :loading="loadingDiff"
                     @click="loadDiff"
@@ -1668,7 +1893,7 @@ watch(activeTab, (tab) => {
             <!-- §12.3-7 热加载操作栏 -->
             <div class="reload-bar">
               <span class="section-desc">修改 config.json 后点击热加载，无需重启服务即可应用运行时参数</span>
-              <el-button size="small" class="neon-btn-primary" :loading="reloading" @click="reloadConfig">
+              <el-button size="small" class="neon-btn-primary" data-tip="热加载 config.json，无需重启服务即可应用运行时参数" :loading="reloading" @click="reloadConfig">
                 热加载配置
               </el-button>
             </div>
@@ -1697,7 +1922,10 @@ watch(activeTab, (tab) => {
                 </div>
       <div class="config-row">
                   <span class="config-label">模型</span>
-                  <span class="config-value">{{ config.llm.model }}</span>
+                  <!-- 展示 AI 服务实际配置的模型名，与「AI 服务」页签保持一致；
+                        userConfig 中的 BYOK 模型为权威值，config.llm.model 仅为加载空窗期兜底，
+                        避免系统配置信息栏停留在 config.json 的陈旧模型版本。 -->
+                  <span class="config-value">{{ aiForm.model || config.llm.model }}</span>
                 </div>
       <div class="config-row">
                   <span class="config-label">API 地址</span>
@@ -1798,7 +2026,7 @@ watch(activeTab, (tab) => {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" :loading="savingBudget" @click="saveBudget">
+                  <el-button class="neon-btn-primary" data-tip="保存 Token 预算配置" :loading="savingBudget" @click="saveBudget">
                     保存
                   </el-button>
                 </div>
@@ -1819,7 +2047,7 @@ watch(activeTab, (tab) => {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" :loading="savingHealthCheck" @click="saveHealthCheck">
+                  <el-button class="neon-btn-primary" data-tip="保存健康检查（过期阈值）配置" :loading="savingHealthCheck" @click="saveHealthCheck">
                     保存
                   </el-button>
                 </div>
@@ -1880,7 +2108,7 @@ watch(activeTab, (tab) => {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" :loading="savingBatch" @click="saveBatch">
+                  <el-button class="neon-btn-primary" data-tip="保存批量编译配置（扩展名 / 批量上限 / 单文件上限）" :loading="savingBatch" @click="saveBatch">
                     保存
                   </el-button>
                 </div>
@@ -1912,7 +2140,7 @@ watch(activeTab, (tab) => {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" :loading="savingLogging" @click="saveLogging">
+                  <el-button class="neon-btn-primary" data-tip="保存日志配置（级别 / 请求日志开关）" :loading="savingLogging" @click="saveLogging">
                     保存
                   </el-button>
                 </div>
@@ -1921,8 +2149,116 @@ watch(activeTab, (tab) => {
           </div>
         </el-tab-pane>
 
+        <!-- MCP 对外接口（仅管理员）：对外的 /mcp 端点，供外部 AI Agent 接入。
+             与「工具配置」区别：工具配置是本应用作为 MCP 客户端连外部服务器；这里是暴露本库给外部 Agent。 -->
+        <el-tab-pane v-if="isAdmin" label="MCP 接口" name="mcp">
+          <div class="config-section">
+            <div class="advanced-config">
+              <div class="section-header">
+                <span class="section-desc">// MCP 对外接口（Bearer Token 双轨鉴权：userToken 读 / adminToken 写，供 Claude Code / Cursor / Cline 等外部 Agent 接入）</span>
+                <el-button size="small" class="neon-btn-primary" :loading="mcpSaving" data-tip="保存 MCP 对外接口配置（保存后外部 Agent 立即生效）" @click="saveMcpConfig">
+                  保存
+                </el-button>
+              </div>
+              <div v-if="mcpLoading" class="section-loading">// 加载中…</div>
+              <template v-else>
+                <div class="config-block hover-glow">
+                  <h3 class="block-title"><span class="block-bracket">[</span> 开关 <span class="block-bracket">]</span></h3>
+                  <div class="form-row form-row-inline">
+                    <label class="form-label" for="mcp-enabled">启用 /mcp 端点</label>
+                    <el-switch id="mcp-enabled" v-model="mcpForm.enabled" active-text="启用" inactive-text="关闭" />
+                  </div>
+                  <div class="form-row form-row-inline">
+                    <label class="form-label" for="mcp-auth">强制鉴权</label>
+                    <el-switch id="mcp-auth" v-model="mcpForm.authenticated" active-text="开启（需 Bearer Token）" inactive-text="关闭（未配 token 时内网开放）" />
+                  </div>
+                  <p class="block-hint">开启强制鉴权且未配置任何 token 时，端点将拒绝无凭据请求（返回 401）；关闭时若未配置 token 则对内网开放全部工具。</p>
+                </div>
+
+                <div class="config-block hover-glow">
+                  <h3 class="block-title"><span class="block-bracket">[</span> 端点信息 <span class="block-bracket">]</span></h3>
+                  <div class="form-row">
+                    <label class="form-label" for="mcp-name">名称</label>
+                    <el-input id="mcp-name" v-model="mcpForm.name" class="form-input" placeholder="karpathy-wiki" />
+                  </div>
+                  <div class="form-row">
+                    <label class="form-label" for="mcp-version">版本</label>
+                    <el-input id="mcp-version" v-model="mcpForm.version" class="form-input" placeholder="1.0.0" />
+                  </div>
+                  <div class="form-row">
+                    <label class="form-label" for="mcp-path">端点路径</label>
+                    <el-input id="mcp-path" v-model="mcpForm.endpointPath" class="form-input" placeholder="/mcp" />
+                  </div>
+                  <p class="block-hint">端点路径修改需<b>重启服务</b>生效。外部 Agent 连接地址：<code>http://&lt;host&gt;:{后端端口}{{ mcpForm.endpointPath }}</code>。</p>
+                </div>
+
+                <div class="config-block hover-glow">
+                  <h3 class="block-title"><span class="block-bracket">[</span> Token <span class="block-bracket">]</span></h3>
+                  <div class="form-row">
+                    <label class="form-label" for="mcp-user-token">读 Token（userToken）</label>
+                    <el-input id="mcp-user-token" v-model="mcpForm.userToken" type="password" show-password class="form-input" placeholder="输入新值以覆盖；留空则清除" />
+                  </div>
+                  <p class="block-hint">查询/检索类工具（列页/读页/全文检索/问答等）需携带此 token：<code>Authorization: Bearer &lt;token&gt;</code>。</p>
+                  <div class="form-row">
+                    <label class="form-label" for="mcp-admin-token">写 Token（adminToken）</label>
+                    <el-input id="mcp-admin-token" v-model="mcpForm.adminToken" type="password" show-password class="form-input" placeholder="输入新值以覆盖；留空则清除" />
+                  </div>
+                  <p class="block-hint">写/维护类工具（写页/建页/删页/编译/打标签等）需 adminToken；未设置时写工具回退 userToken。Token 即权限，请务必保密。</p>
+                </div>
+              </template>
+            </div>
+          </div>
+        </el-tab-pane>
+
         <!-- AI 服务配置：按用户维度隔离，仅当前账户可见 -->
         <el-tab-pane label="AI 服务" name="ai">
+          <!-- T00315 共享AI：管理员全局共享配置，供未配置个人 AI 的用户降级使用
+               与服务端 /api/ai/config 对应；仅 admin 可见/可写，普通用户不可改 -->
+          <div v-if="isAdmin" class="ai-section shared-ai-section">
+            <div class="section-header">
+              <span class="section-desc">// 共享AI（管理员全局）</span>
+              <span class="user-badge" :class="{ ok: sharedAiForm.apiKeySet }">
+                {{ sharedAiForm.apiKeySet ? '已配置 Key' : '未配置 Key' }}
+              </span>
+            </div>
+            <div class="tts-note">
+              这是供全部「未配置个人 AI」的用户降级使用的「共享AI」。共享用户较多时可能出现排队或调用异常，
+              建议普通用户在下方「AI 服务」中配置各自的专属配置。此处的改动对所有用户生效，请谨慎填写。
+            </div>
+            <div class="ai-form">
+              <div class="config-block hover-glow">
+                <h3 class="block-title"><span class="block-bracket">[</span> 共享模型配置 <span class="block-bracket">]</span></h3>
+                <div class="form-row">
+                  <label class="form-label" for="shared-ai-provider">Provider</label>
+                  <el-input id="shared-ai-provider" v-model="sharedAiForm.provider" class="form-input" />
+                </div>
+                <div class="form-row">
+                  <label class="form-label" for="shared-ai-base-url">API Base URL</label>
+                  <el-input id="shared-ai-base-url" v-model="sharedAiForm.baseUrl" class="form-input" />
+                </div>
+                <div class="form-row">
+                  <label class="form-label" for="shared-ai-model">模型名称</label>
+                  <el-input id="shared-ai-model" v-model="sharedAiForm.model" class="form-input" />
+                </div>
+                <div class="form-row">
+                  <label class="form-label" for="shared-ai-api-key">API Key</label>
+                  <el-input
+                    id="shared-ai-api-key"
+                    v-model="sharedAiForm.apiKey"
+                    type="password"
+                    show-password
+                    class="form-input"
+                    placeholder="显示 **** 表示已配置；留空保存可清除 Key"
+                  />
+                </div>
+                <div class="form-row">
+                  <el-button class="neon-btn-primary" :loading="savingSharedAi" data-tip="保存管理员共享AI配置（对所有用户生效）" @click="saveSharedAi">
+                    保存「共享AI」
+                  </el-button>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="ai-section">
             <div class="section-header">
               <span class="section-desc">// AI 服务（LLM）</span>
@@ -1983,6 +2319,7 @@ watch(activeTab, (tab) => {
                     />
                     <el-button
                       class="neon-btn model-fetch-btn"
+                      data-tip="从 API Base URL 拉取服务商可用模型列表"
                       :loading="modelStore.modelsLoading"
                       @click="fetchModelList"
                     >
@@ -2010,14 +2347,15 @@ watch(activeTab, (tab) => {
 
               <!-- 操作按钮 -->
               <div class="ai-actions">
-                <el-button class="neon-btn" :loading="testingAi" @click="testConnection">
+                <el-button class="neon-btn" data-tip="用当前配置向 LLM 服务商发起连通性测试" :loading="testingAi" @click="testConnection">
                   测试连接
                 </el-button>
-                <el-button class="neon-btn-primary" :loading="savingAi" @click="saveAiConfig">
+                <el-button class="neon-btn-primary" data-tip="保存当前账户的 LLM 配置（Base URL / Key / 模型）" :loading="savingAi" @click="saveAiConfig">
                   保存配置
                 </el-button>
                 <el-button
                   class="neon-btn"
+                  data-tip="将当前账户 LLM 配置恢复为默认值"
                   :loading="resettingAi"
                   @click="resetAiConfig"
                   style="margin-left: auto;"
@@ -2098,10 +2436,10 @@ watch(activeTab, (tab) => {
                   </div>
                 </div>
       <div class="ai-actions">
-                  <el-button class="neon-btn" :loading="testingWebSearch" @click="testWebSearchConnection">
+                  <el-button class="neon-btn" data-tip="向搜索引擎服务发起连通性测试" :loading="testingWebSearch" @click="testWebSearchConnection">
                     测试连接
                   </el-button>
-                  <el-button class="neon-btn-primary" :loading="savingWebSearch" @click="saveWebSearchConfig">
+                  <el-button class="neon-btn-primary" data-tip="保存联网搜索配置（Base URL / Key / 模型）" :loading="savingWebSearch" @click="saveWebSearchConfig">
                     保存配置
                   </el-button>
                 </div>
@@ -2120,24 +2458,94 @@ watch(activeTab, (tab) => {
             <!-- 图像生成（生图）连接测试：媒体配置为服务端统一配置，非 BYOK，仅做连通性自检 -->
             <div class="web-search-section">
               <div class="section-header">
-                <span class="section-desc">// 图像生成（生图）</span>
-                <span class="key-status set">服务端统一配置</span>
+                <span class="section-desc">// 生图 / 视频 服务（BYOK · 按用户隔离）</span>
+                <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
               </div>
               <div class="config-block hover-glow">
                 <h3 class="block-title"><span class="block-bracket">[</span> 生图服务 <span class="block-bracket">]</span></h3>
                 <p class="key-hint">
                   <span class="hint-icon">i</span>
-                  <span>生图模型与密钥由服务端统一配置（agnes-image-2.1-flash），不区分账户。点击下方「测试连接」可验证服务端生图 API 是否可用、网络是否通畅。</span>
+                  <span>在此配置你自己专用的生图服务（API 地址 / Key / 模型 / 分辨率 / 比例）。密钥按账户隔离仅存本机，生成时优先使用你的配置，避免共享额度排队。</span>
                 </p>
+                <div class="form-row">
+                  <span class="form-label">场景预设</span>
+                  <el-select v-model="imagePresetSel" placeholder="一键套用生图场景预设" size="small" class="flex-1" @change="onImagePresetChange">
+                    <el-option v-for="p in mediaPresets.imagePresets" :key="p.key" :label="p.label" :value="p.key" />
+                  </el-select>
+                </div>
+                <div class="form-row">
+                  <span class="form-label">API 地址</span>
+                  <el-input v-model="mediaForm.image.baseUrl" size="small" placeholder="https://apihub.agnes-ai.com/v1" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">API Key</span>
+                  <el-input v-model="mediaForm.image.apiKey" type="password" show-password size="small" placeholder="你的生图 API Key（仅存本地）" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">模型</span>
+                  <el-input v-model="mediaForm.image.model" size="small" placeholder="如 agnes-image-2.1-flash" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">分辨率</span>
+                  <el-input v-model="mediaForm.image.size" size="small" placeholder="如 1024x768" class="flex-1" />
+                  <span class="form-label form-label--sep">比例</span>
+                  <el-input v-model="mediaForm.image.ratio" size="small" placeholder="如 16:9" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">负面词</span>
+                  <el-input v-model="mediaForm.image.negativePrompt" size="small" placeholder="避免出现的内容（可选）" class="flex-1" />
+                </div>
+                <div class="ai-actions">
+                  <el-button class="neon-btn" data-tip="用当前配置校验你的生图 API 是否可用、网络是否通畅" :loading="testingImageGen" @click="testImageGenConnection">
+                    测试生图连接
+                  </el-button>
+                </div>
+                <div v-if="imageGenTestResult" class="test-result" :class="{ ok: imageGenTestResult.ok, fail: !imageGenTestResult.ok }">
+                  <el-icon class="result-icon"><component :is="imageGenTestResult.ok ? Check : Close" /></el-icon>
+                  <span class="result-text">{{ imageGenTestText }}</span>
+                </div>
               </div>
-              <div class="ai-actions">
-                <el-button class="neon-btn" :loading="testingImageGen" @click="testImageGenConnection">
-                  测试连接
+
+              <div class="config-block hover-glow" style="margin-top: 12px;">
+                <h3 class="block-title"><span class="block-bracket">[</span> 视频服务 <span class="block-bracket">]</span></h3>
+                <p class="key-hint">
+                  <span class="hint-icon">i</span>
+                  <span>在此配置你自己专用的视频生成服务（API 地址 / Key / 模型 / 尺寸 / 时长）。配置按账户隔离仅存本机，生成视频时优先使用。</span>
+                </p>
+                <div class="form-row">
+                  <span class="form-label">场景预设</span>
+                  <el-select v-model="videoPresetSel" placeholder="一键套用视频场景预设" size="small" class="flex-1" @change="onVideoPresetChange">
+                    <el-option v-for="p in mediaPresets.videoPresets" :key="p.key" :label="p.label" :value="p.key" />
+                  </el-select>
+                </div>
+                <div class="form-row">
+                  <span class="form-label">API 地址</span>
+                  <el-input v-model="mediaForm.video.baseUrl" size="small" placeholder="https://apihub.agnes-ai.com/v1" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">API Key</span>
+                  <el-input v-model="mediaForm.video.apiKey" type="password" show-password size="small" placeholder="你的视频 API Key（仅存本地）" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">模型</span>
+                  <el-input v-model="mediaForm.video.videoModel" size="small" placeholder="如 agnes-video-v2.0" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">尺寸</span>
+                  <el-input v-model="mediaForm.video.size" size="small" placeholder="如 1280x720" class="flex-1" />
+                  <span class="form-label form-label--sep">时长(s)</span>
+                  <el-input-number v-model="mediaForm.video.seconds" :min="1" :max="60" size="small" style="flex: 1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">负面词</span>
+                  <el-input v-model="mediaForm.video.negativePrompt" size="small" placeholder="避免出现的内容（可选）" class="flex-1" />
+                </div>
+              </div>
+
+              <div class="ai-actions" style="margin-top: 12px;">
+                <el-button class="neon-btn" data-tip="将生图/视频配置保存到你的本地账户" :loading="savingMedia" @click="saveMediaConfig">
+                  保存媒体配置
                 </el-button>
-              </div>
-              <div v-if="imageGenTestResult" class="test-result" :class="{ ok: imageGenTestResult.ok, fail: !imageGenTestResult.ok }">
-                <el-icon class="result-icon"><component :is="imageGenTestResult.ok ? Check : Close" /></el-icon>
-                <span class="result-text">{{ imageGenTestText }}</span>
               </div>
             </div>
           </div>
@@ -2244,7 +2652,7 @@ watch(activeTab, (tab) => {
             </div>
 
             <div class="ai-actions">
-              <el-button class="neon-btn" @click="resetTtsConfig">恢复默认</el-button>
+              <el-button class="neon-btn" data-tip="将朗读偏好（引擎 / 音色 / 语速 / 音量 / 音调）恢复为默认值" @click="resetTtsConfig">恢复默认</el-button>
             </div>
           </div>
         </el-tab-pane>
@@ -2304,7 +2712,7 @@ watch(activeTab, (tab) => {
                 <!-- 表单模式：逐条编辑 MCP 服务器 -->
                 <template v-if="mcpEditMode === 'form'">
                   <div class="block-header sub-header">
-                    <el-button size="small" class="neon-btn" @click="addMcpServer">+ 新增</el-button>
+                    <el-button size="small" class="neon-btn" data-tip="新增一条 MCP 服务器配置" @click="addMcpServer">+ 新增</el-button>
                   </div>
                   <div v-if="toolsForm.mcpServers.length === 0" class="empty-hint">
                     暂无 MCP 服务器配置。点击 "新增" 添加，或切换到 JSON 模式批量导入。
@@ -2326,7 +2734,7 @@ watch(activeTab, (tab) => {
                           />
                         </el-select>
                         <el-switch v-model="server.enabled" />
-                        <el-button size="small" class="neon-btn-danger" @click="removeMcpServer(idx)">删除</el-button>
+                        <el-button size="small" class="neon-btn-danger" data-tip="删除此 MCP 服务器配置" @click="removeMcpServer(idx)">删除</el-button>
                       </div>
                       <div v-if="server.transport === 'stdio'" class="entry-row">
                         <el-input
@@ -2379,8 +2787,8 @@ watch(activeTab, (tab) => {
                     <span>{{ mcpJsonError }}</span>
                   </div>
                   <div class="mcp-json-actions">
-                    <el-button size="small" class="neon-btn-primary" @click="applyMcpJson">应用 JSON</el-button>
-                    <el-button size="small" class="neon-btn" @click="switchToMcpFormMode">切换到表单模式</el-button>
+                    <el-button size="small" class="neon-btn-primary" data-tip="校验并应用 JSON 模式的 MCP 服务器配置" @click="applyMcpJson">应用 JSON</el-button>
+                    <el-button size="small" class="neon-btn" data-tip="切换到 MCP 表单逐条编辑模式" @click="switchToMcpFormMode">切换到表单模式</el-button>
                   </div>
                 </template>
               </div>
@@ -2389,7 +2797,7 @@ watch(activeTab, (tab) => {
               <div class="config-block hover-glow">
                 <div class="block-header">
                   <h3 class="block-title"><span class="block-bracket">[</span> CLI 工具 <span class="block-bracket">]</span></h3>
-                  <el-button size="small" class="neon-btn" @click="addCliTool">+ 新增</el-button>
+                  <el-button size="small" class="neon-btn" data-tip="新增一条 CLI 工具配置" @click="addCliTool">+ 新增</el-button>
                 </div>
                 <div v-if="toolsForm.cliTools.length === 0" class="empty-hint">
                   暂无 CLI 工具配置。仅白名单命令可执行（如 ping/nslookup/whoami 等）。
@@ -2408,7 +2816,7 @@ watch(activeTab, (tab) => {
                         class="form-input"
                       />
                       <el-switch v-model="tool.enabled" />
-                      <el-button size="small" class="neon-btn-danger" @click="removeCliTool(idx)">删除</el-button>
+                      <el-button size="small" class="neon-btn-danger" data-tip="删除此 CLI 工具配置" @click="removeCliTool(idx)">删除</el-button>
                     </div>
                     <div class="entry-row">
                       <el-input
@@ -2435,6 +2843,7 @@ watch(activeTab, (tab) => {
                         size="small"
                         class="neon-btn"
                         :loading="testingCli"
+                        data-tip="执行该 CLI 工具白名单命令做连通性测试"
                         @click="testCliTool(idx)"
                       >测试</el-button>
                     </div>
@@ -2450,7 +2859,7 @@ watch(activeTab, (tab) => {
               <div class="config-block hover-glow" :class="{ disabled: toolsForm.routerMode !== 'keyword' }">
                 <div class="block-header">
                   <h3 class="block-title"><span class="block-bracket">[</span> 场景规则 <span class="block-bracket">]</span></h3>
-                  <el-button size="small" class="neon-btn" :disabled="toolsForm.routerMode !== 'keyword'" @click="addScene">+ 新增</el-button>
+                  <el-button size="small" class="neon-btn" data-tip="新增一条场景路由规则" :disabled="toolsForm.routerMode !== 'keyword'" @click="addScene">+ 新增</el-button>
                 </div>
                 <div v-if="toolsForm.routerMode !== 'keyword'" class="empty-hint">
                   场景规则仅在「关键词」路由模式下生效。切换到关键词模式后可配置规则。
@@ -2467,7 +2876,7 @@ watch(activeTab, (tab) => {
                         class="form-input entry-name"
                       />
                       <el-switch v-model="scene.enabled" />
-                      <el-button size="small" class="neon-btn-danger" @click="removeScene(idx)">删除</el-button>
+                      <el-button size="small" class="neon-btn-danger" data-tip="删除此场景路由规则" @click="removeScene(idx)">删除</el-button>
                     </div>
                     <div class="entry-row">
                       <el-input
@@ -2491,7 +2900,7 @@ watch(activeTab, (tab) => {
 
               <!-- 保存按钮 -->
               <div class="ai-actions">
-                <el-button class="neon-btn-primary" :loading="savingTools" @click="saveToolsConfig">
+                <el-button class="neon-btn-primary" data-tip="保存 MCP / CLI / 场景路由等工具配置" :loading="savingTools" @click="saveToolsConfig">
                   保存工具配置
                 </el-button>
               </div>
@@ -2518,7 +2927,7 @@ watch(activeTab, (tab) => {
                 <h3>QQ 聊天记录导入配置</h3>
                 <p>配置噪声过滤规则、PII 脱敏正则与抽取模型参数。</p>
               </div>
-              <el-button size="small" @click="resetQqConfig">重置默认</el-button>
+              <el-button size="small" data-tip="将 QQ 导入配置（噪声过滤 / 脱敏 / 抽取参数）恢复为默认值" @click="resetQqConfig">重置默认</el-button>
             </div>
 
             <!-- 噪声过滤规则：NR-1~NR-6 开关 -->
@@ -2635,6 +3044,7 @@ watch(activeTab, (tab) => {
               <span v-if="qqConfigDirty" class="dirty-indicator">CHANGED</span>
               <el-button
                 type="primary"
+                data-tip="保存 QQ 导入配置（噪声过滤 / 脱敏 / 抽取参数）"
                 :loading="savingQqConfig"
                 :disabled="!qqConfigDirty"
                 @click="saveQqConfigForm"
@@ -2683,6 +3093,7 @@ watch(activeTab, (tab) => {
                   <el-button
                     size="small"
                     class="neon-btn"
+                    data-tip="保存当前 prompt 文件内容"
                     :loading="savingPrompt"
                     @click="savePrompt"
                     :disabled="!currentPromptName || !promptDirty"
@@ -2722,12 +3133,14 @@ watch(activeTab, (tab) => {
                   <el-button
                     size="small"
                     class="neon-btn"
+                    data-tip="清空试运行的输出事件与生成页面"
                     @click="clearTestResult"
                     :disabled="testEvents.length === 0 && testPages.length === 0 && !testError"
                   >清空结果</el-button>
                   <el-button
                     size="small"
                     class="neon-btn-primary"
+                    data-tip="用测试资料运行一次 compile 预览结果（运行中可点击停止）"
                     :loading="testRunning"
                     @click="testRunning ? stopTest() : runTest()"
                     :disabled="!currentPromptName || currentPromptName !== 'compile.md'"
@@ -2898,9 +3311,6 @@ watch(activeTab, (tab) => {
 }
 
 @media (max-width: 760px) {
-  .theme-section {
-    grid-template-columns: 1fr;
-  }
 }
 
 .schema-section,
@@ -3870,13 +4280,6 @@ watch(activeTab, (tab) => {
   border-radius: var(--radius-card);
 }
 
-.block-title {
-  margin: 0 0 14px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-bright);
-  font-family: var(--font-display);
-}
 
 .block-hint {
   font-size: 11px;
@@ -3953,11 +4356,6 @@ watch(activeTab, (tab) => {
   gap: 14px;
 }
 
-.form-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
 
 .form-row label {
   width: 110px;
@@ -4066,14 +4464,6 @@ watch(activeTab, (tab) => {
   backdrop-filter: var(--blur);
 }
 
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px dashed var(--border-glass);
-}
 
 .section-loading,
 .section-empty {
@@ -4151,12 +4541,6 @@ watch(activeTab, (tab) => {
   line-height: 1.4;
 }
 
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
 
 .editor-placeholder {
   padding: 48px 16px;

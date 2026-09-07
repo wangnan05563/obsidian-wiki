@@ -161,7 +161,7 @@ onMounted(() => {
             v-for="(sc, idx) in [
               { icon: 'browse', label: '知识浏览', view: 'browse' },
               { icon: 'query', label: '知识问答', view: 'query' },
-              { icon: 'graph', label: '图谱', view: 'graph' },
+              { icon: 'graph', label: '知识图谱', view: 'graph' },
               { icon: 'help', label: '帮助文档', view: 'help' },
             ]"
             :key="idx"
@@ -207,7 +207,7 @@ onMounted(() => {
         </div>
       </div>
       <div v-if="compileStore.runs.length > 8" class="run-more">
-        <el-button text size="small" @click="emit('navigate', 'progress')">
+        <el-button text size="small" data-tip="查看全部编译历史记录" @click="emit('navigate', 'progress')">
           查看全部 {{ compileStore.runs.length }} 条记录
         </el-button>
       </div>
@@ -225,8 +225,8 @@ onMounted(() => {
     <div v-if="!hasContent && !loading" class="glass-card empty-guide fade-up">
       <p class="guide-text">知识库还是空的，先初始化目录结构，再投递第一份资料</p>
       <div class="guide-actions">
-        <el-button type="primary" :loading="initializing" @click="initVault">初始化知识库</el-button>
-        <el-button @click="emit('navigate', 'ingest')">立即投递</el-button>
+        <el-button type="primary" data-tip="初始化 vault 目录结构与基础配置" :loading="initializing" @click="initVault">初始化知识库</el-button>
+        <el-button data-tip="前往投递页，开始投递第一份资料" @click="emit('navigate', 'ingest')">立即投递</el-button>
       </div>
     </div>
   </div>

@@ -851,3 +851,36 @@ body {
   box-shadow: var(--mg-highlight), var(--mg-shadow-strong);
 }
 
+/* ============================================================
+ * 全局按钮悬浮提示（统一 tooltip）—— src/directives/tip.ts
+ * 固定深色玻璃浮层 + neon-cyan 描边，主题无关、可读性强；
+ * pointer-events:none 确保绝不拦截点击；CSS 过渡做淡入，不阻塞主线程。
+ * 关键：color/background/border/box-shadow 全部硬编码、不依赖任何主题 CSS 变量
+ * （--text-bright 在 ecommerce/enterprise/light-business/macaron/portfolio 等
+ * 亮色主题下是深色值，曾导致"深紫黑底 + 深色文字"黑底黑字不可见）。
+ * 定位由 JS（tipPosition.ts）负责：正下方居中、边缘自适应、transform 祖先换算。
+ * ============================================================ */
+.app-global-tip {
+  position: fixed;
+  z-index: 9999;
+  max-width: 280px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: rgba(18, 12, 32, 0.96);
+  color: #f3e9ff;
+  border: 1px solid rgba(0, 245, 255, 0.35);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 245, 255, 0.08);
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-family: 'Rajdhani', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+  white-space: normal;
+  word-break: break-word;
+}
+.app-global-tip.is-visible {
+  opacity: 1;
+}
+

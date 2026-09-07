@@ -1,0 +1,88 @@
+{
+  "imagePresets": [
+    {
+      "key": "photo-real",
+      "label": "高清写实",
+      "model": "agnes-image-2.1-flash",
+      "size": "1024x768",
+      "ratio": "16:9",
+      "steps": 30,
+      "cfgScale": 7,
+      "sampler": "DPM++ 2M Karras",
+      "negativePrompt": "blurry, low quality, deformed, watermark"
+    },
+    {
+      "key": "product-photo",
+      "label": "产品摄影",
+      "model": "agnes-image-2.1-flash",
+      "size": "1024x1024",
+      "ratio": "1:1",
+      "steps": 32,
+      "cfgScale": 6.5,
+      "sampler": "DPM++ 2M Karras",
+      "negativePrompt": "blurry, low quality, deformed, text"
+    },
+    {
+      "key": "anime",
+      "label": "动漫插画",
+      "model": "agnes-image-2.1-flash",
+      "size": "1024x1024",
+      "ratio": "1:1",
+      "steps": 28,
+      "cfgScale": 5.5,
+      "negativePrompt": "blurry, low quality, photorealistic, extra limbs"
+    },
+    {
+      "key": "flat-design",
+      "label": "扁平插画",
+      "model": "agnes-image-2.1-flash",
+      "size": "1024x1024",
+      "ratio": "1:1",
+      "steps": 24,
+      "cfgScale": 6,
+      "negativePrompt": "photorealistic, blurry, low quality, 3d render"
+    },
+    {
+      "key": "cyberpunk",
+      "label": "赛博朋克",
+      "model": "agnes-image-2.1-flash",
+      "size": "1024x768",
+      "ratio": "16:9",
+      "steps": 30,
+      "cfgScale": 7,
+      "negativePrompt": "blurry, low quality, deformed, watermark"
+    }
+  ],
+  "videoPresets": [
+    {
+      "key": "documentary",
+      "label": "自然写实",
+      "model": "agnes-video-v2.0",
+      "size": "1280x720",
+      "seconds": 5,
+      "fps": 24,
+      "motion": 3,
+      "negativePrompt": "blurry, low quality, distorted motion"
+    },
+    {
+      "key": "anime-storyboard",
+      "label": "动漫分镜",
+      "model": "agnes-video-v2.0",
+      "size": "1280x720",
+      "seconds": 5,
+      "fps": 24,
+      "motion": 5,
+      "negativePrompt": "photorealistic, blurry, low quality"
+    },
+    {
+      "key": "cinematic",
+      "label": "电影感运镜",
+      "model": "agnes-video-v2.0",
+      "size": "1280x720",
+      "seconds": 8,
+      "fps": 30,
+      "motion": 8,
+      "negativePrompt": "shaky, blurry, low quality, cut jump"
+    }
+  ]
+}

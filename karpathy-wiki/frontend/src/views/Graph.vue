@@ -2,10 +2,11 @@
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Lightning, Iphone, Link, Close, StarFilled, Document } from '@element-plus/icons-vue';
+import { Lightning, Iphone, Link, Close, StarFilled, Document, Warning, Aim, MagicStick, Refresh, List, Share, Connection } from '@element-plus/icons-vue';
 import { Network, type Options } from 'vis-network';
 import { DataSet } from 'vis-data';
 import type { GraphData, RecommendedPage } from '../types';
+import { computeRadialLayout, computeStretch } from '../composables/graphLayout';
 
 const containerRef = ref<HTMLDivElement | null>(null);
 const loading = ref(false);
@@ -29,6 +30,27 @@ const recommendLoading = ref(false);
 // 链接建立中的目标 path，用于按钮 loading 状态
 const linkingPath = ref<string>('');
 
+// FR-17 缺口洞察：三种结构缺口（孤立节点/低密度社区/同标签缺双链）。
+// gapOpen 默认 false（折叠），展开时才拉取拓扑缺口；LLM 建议按需流式请求。
+const gapOpen = ref(false);
+const gapLoading = ref(false);
+const gapAnalyzing = ref(false);
+const gapSuggestion = ref('');
+const gapFallback = ref(false);
+const gapInsufficient = ref<{ status: 'insufficient-data'; pageCount: number } | null>(null);
+const gapData = ref<GapData | null>(null);
+
+// GET /api/graph/gaps 的「ok」分支形状，与后端 GapResult 对齐
+interface GapCommunity { paths: string[]; edgeCount: number }
+interface GapPair { a: string; b: string; pathA: string; pathB: string; sharedTags: string[] }
+interface GapData {
+  status: 'ok';
+  pageCount: number;
+  isolated: string[];
+  lowDensity: GapCommunity[];
+  unlinkedPairs: GapPair[];
+}
+
 // §12.3-2 大节点降级：节点数超过阈值时切换为高性能模式
 // 200 节点以下：完整渲染（平滑曲线 + 阴影 + 悬停）
 // 200-500 节点：关闭平滑曲线与阴影，保留物理引擎
@@ -38,6 +60,19 @@ const HUGE_THRESHOLD = 500;
 const isLarge = computed(() => nodeCount.value >= LARGE_THRESHOLD && nodeCount.value < HUGE_THRESHOLD);
 const isHuge = computed(() => nodeCount.value >= HUGE_THRESHOLD);
 const degraded = computed(() => isLarge.value || isHuge.value);
+
+// T00276：实体子图按钮的悬浮提示——大图（≥200 节点）时把原固定提示条内容并入，
+//   仅在节点数超过阈值时展示性能优化说明，未超阈值仅展示功能说明
+const entityTip = computed(() => {
+  const base = entityOnly.value ? '退出实体子图：恢复显示全部节点' : '实体子图：只显示实体及其关联节点';
+  if (!entityOnly.value && degraded.value) {
+    const perf = isHuge.value
+      ? '节点数超过 500，已启用超大图模式（简化样式 + 快速布局）'
+      : '节点数超过 200，已启用性能优化模式';
+    return `${base}。${perf}`;
+  }
+  return base;
+});
 
 // §12.3-3 响应式小屏降级：窄屏切换为列表视图
 const isNarrowScreen = ref(false);
@@ -240,13 +275,12 @@ function buildEdges(data: GraphData, huge: boolean, large: boolean) {
   }));
 }
 
-// vis-network 配置：根据节点数自适应降级
+// vis-network 配置：物理引擎常开，提供持续流动的"活"布局动画。
+// 以 computeRadialLayout 预置坐标为起始 + stabilization.enabled:false，物理从径向骨架
+// 起步而非从中心重排（规避 llm-wiki#13 的中心成团问题）。
+// 参数权衡：较大的 springLength 与适度的 centralGravity 让节点围绕骨架持续流动而不塌缩成团；
+// 拖拽由 vis 原生 dragNodes 处理（被拖节点临时脱离力模拟、零抖动跟随），松手即回弹并持续流动。
 function buildGraphOptions(huge: boolean, large: boolean): Options {
-  // 提前计算迭代次数，避免嵌套三元运算符
-  let stabilizationIterations = 100;
-  if (large) stabilizationIterations = 80;
-  if (huge) stabilizationIterations = 50;
-
   return {
     nodes: {
       borderWidth: huge ? 1 : 2,
@@ -257,18 +291,24 @@ function buildGraphOptions(huge: boolean, large: boolean): Options {
     },
     physics: {
       enabled: true,
-      // 超大图减少稳定迭代次数，快速进入静态布局
-      stabilization: { iterations: stabilizationIterations },
-      barnesHut: {
-        gravitationalConstant: huge ? -5000 : -3000,
-        springLength: huge ? 80 : 120,
-        springConstant: 0.04,
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: {
+        gravitationalConstant: -80,
+        centralGravity: 0.01,
+        springConstant: 0.08,
+        springLength: 220,
+        damping: 0.45,
+        avoidOverlap: 0,
       },
+      stabilization: { enabled: false },
+      maxVelocity: 60,
+      minVelocity: 0.1,
     },
     interaction: {
       hover: !huge,
       tooltipDelay: 200,
       zoomView: true,
+      dragNodes: true,
     },
   };
 }
@@ -280,7 +320,19 @@ function renderGraph(data: GraphData) {
   const huge = isHuge.value;
   const large = isLarge.value;
 
-  const nodes = buildNodes(data, huge, large);
+  // 按容器宽高比椭圆化后计算预置坐标（物理关闭，此坐标即最终布局）。
+  // 扁画布下圆形布局 fit 后 scale 被高度压小、节点挤成小圆盘；椭圆化使包围盒贴合画布。
+  // 边界防御：容器未布局时尺寸为 0，computeStretch 内部回退到默认并夹取区间。
+  const cw = containerRef.value.clientWidth;
+  const ch = containerRef.value.clientHeight;
+  const { fx, fy } = computeStretch(cw, ch);
+  const positions = computeRadialLayout(data, fx, fy);
+
+  const nodes = buildNodes(data, huge, large).map((n) => {
+    const p = positions.get(n.id as string);
+    // physics:false 时 vis 使用预置 x/y；必须所有节点都有坐标，否则画整图空白
+    return p ? { ...n, x: p.x, y: p.y } : n;
+  });
   const edges = buildEdges(data, huge, large);
   const nodesDS = new DataSet(nodes);
   const edgesDS = new DataSet(edges);
@@ -290,6 +342,29 @@ function renderGraph(data: GraphData) {
     network.destroy();
   }
   network = new Network(containerRef.value, { nodes: nodesDS, edges: edgesDS }, options);
+
+  // 物理关闭时不会自动 fit 到内容（vis 仅在物理/稳定流程里 fit）。
+  // 挂载后把视口适配到布局包围盒，让预置径向图完整入画。
+  network.once('afterDrawing', () => {
+    network?.fit({ animation: false });
+  });
+
+  // ---- 常开物理下的原生拖拽交互 ----
+  // 物理常开提供持续流动；拖拽由 vis 原生处理：被拖节点临时脱离力模拟、纯粹跟随指针（零抖动），
+  // 其余节点仍在力场中动态响应。故这里不手动开关物理，只记录被拖节点并在松手时续跑物理。
+  let draggedNodeId: string | undefined;
+
+  network.on('dragStart', (params: any) => {
+    draggedNodeId = (params?.nodes?.[0] as string) ?? undefined;
+  });
+
+  network.on('dragEnd', (params: any) => {
+    draggedNodeId = (params?.nodes?.[0] as string) ?? draggedNodeId;
+    if (!draggedNodeId) return;
+    // 松手瞬间把节点交还力模拟：其与邻居的边弹簧使其从放手位置回弹；
+    // 物理为常开，回弹自然衰减后网格仍持续流动，不再冻结静止。
+    network?.startSimulation();
+  });
 
   // FR-16-1 右键节点弹出上下文菜单
   // 为什么用 oncontext 而非 oncontext({node})：vis-network 的 oncontext 回调签名无 node 参数，
@@ -392,6 +467,127 @@ function closeContextMenu() {
   contextMenu.value.visible = false;
 }
 
+// ── FR-17 缺口洞察：面板开关 / 拓扑拉取 / LLM 建议 / 节点定位 ──
+
+// 面板展开时懒加载缺口；已加载过则直接复用，避免每次展开都请求
+function toggleGapPanel() {
+  gapOpen.value = !gapOpen.value;
+  if (gapOpen.value && !gapData.value && !gapInsufficient.value) {
+    loadGaps();
+  }
+}
+
+// GET 拓扑缺口：样本过少时后端返回 insufficient-data，前端单独提示
+async function loadGaps() {
+  gapLoading.value = true;
+  gapInsufficient.value = null;
+  try {
+    const res = await apiFetch(`${API_BASE}/graph/gaps`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.status === 'insufficient-data') {
+      gapData.value = null;
+      gapInsufficient.value = data;
+    } else {
+      gapData.value = data;
+      gapSuggestion.value = '';
+      gapFallback.value = false;
+    }
+  } catch (err) {
+    ElMessage.error('加载缺口失败：' + (err as Error).message);
+  } finally {
+    gapLoading.value = false;
+  }
+}
+
+// POST LLM 建议：SSE 流式累积文本。
+// 后端在 LLM 失败时已降级推送拓扑摘要 + done.fallback，前端据此标记来源；
+// 仅当连接层直接报错（网络中断）时走本地兜底文案，因为拓扑列表本身已展示三类缺口。
+async function analyzeGaps() {
+  if (!gapData.value) return;
+  gapAnalyzing.value = true;
+  gapSuggestion.value = '';
+  gapFallback.value = false;
+  try {
+    const res = await fetch(`${API_BASE}/graph/gaps/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const ctype = res.headers.get('Content-Type') || '';
+    // 样本不足时后端直接返回 JSON（非 SSE），提示即可，不进入流式解析
+    if (!ctype.includes('text/event-stream')) {
+      const data = await res.json();
+      if (data.status === 'insufficient-data') {
+        ElMessage.info('页面样本不足，暂无法提供补全建议');
+        return;
+      }
+      throw new Error('unexpected response');
+    }
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    // 逐块读取 SSE：按 \n\n 分隔事件，累加 text 文本，识别 done.fallback
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const chunk = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let event = '';
+        let dataStr = '';
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('event: ')) event = line.slice(7);
+          else if (line.startsWith('data: ')) dataStr = line.slice(6);
+        }
+        if (event === 'text' && dataStr) {
+          try {
+            const parsed = JSON.parse(dataStr);
+            if (parsed.text) gapSuggestion.value += parsed.text;
+          } catch {
+            // 忽略单条畸形块，继续后续事件
+          }
+        } else if (event === 'done' && dataStr) {
+          try {
+            const parsed = JSON.parse(dataStr);
+            if (parsed.fallback) gapFallback.value = true;
+          } catch {
+            // 忽略
+          }
+        }
+      }
+    }
+  } catch (err) {
+    // 连接层失败：无任何流式输出，本地兜底为拓扑摘要
+    ElMessage.error('缺口分析失败：' + (err as Error).message);
+    gapFallback.value = true;
+  } finally {
+    gapAnalyzing.value = false;
+  }
+}
+
+// 取路径末段作展示名（剔除 .md），与图谱节点 label 规则一致
+function shortName(path: string): string {
+  const parts = path.split('/');
+  return (parts[parts.length - 1] ?? path).replace(/\.md$/, '');
+}
+
+// 高亮并定位到指定 nodeId 集合：selectNodes 发光圈选 + fit 缩放到这组节点，
+// 满足「点击缺口 → 在图中定位高亮」需求。
+function focusGap(paths: string[]) {
+  if (!network || paths.length === 0) return;
+  const ids = paths.map((p) => String(p));
+  network.selectNodes(ids);
+  try {
+    network.fit({ nodes: ids });
+  } catch {
+    // 过滤/子图模式下个别 id 可能不在当前图中，忽略布局异常
+  }
+}
+
 // FR-15-5（AC-15-7）：打开笔记到 Browse 视图
 // 复用 RefsList.vue 的 karpathy:jump-vault 事件机制，App.vue 监听后切换到 browse 视图，
 // Browse.vue onMounted 读取 sessionStorage.karpathy:jumpPath 自动定位到对应文件
@@ -459,16 +655,9 @@ watch(loading, () => {
             <span class="chip-label">链接</span>
           </span>
         </div>
-        <el-button size="small" class="neon-btn" @click="toggleView">
-          {{ listView ? '图谱视图' : '列表视图' }}
-        </el-button>
-        <el-button size="small" class="neon-btn" :loading="loading" @click="loadGraph">刷新</el-button>
-      </div>
-
-      <!-- FR-15-5：类型过滤 + 实体子图模式（AC-15-5, AC-15-7） -->
-      <!-- 为什么仅图谱视图显示：列表视图本身按目录分组，无需额外过滤 -->
-      <div v-if="!listView" class="graph-filter-bar">
+        <!-- T00276：类型筛选收窄并移至刷新按钮前（仅图谱视图显示） -->
         <el-select
+          v-if="!listView"
           v-model="typeFilter"
           placeholder="类型筛选"
           size="small"
@@ -483,21 +672,45 @@ watch(loading, () => {
             :value="opt.value"
           />
         </el-select>
+        <!-- T00276：操作按钮全部图标化 + 悬浮提示；顺序：刷新 → 缺口洞察 → 列表/图谱视图 → 实体子图 -->
         <el-button
           size="small"
-          :class="['neon-btn', { 'entity-active': entityOnly }]"
+          class="neon-btn icon-btn"
+          data-tip="刷新图谱数据"
+          :loading="loading"
+          @click="loadGraph"
+        >
+          <el-icon><Refresh /></el-icon>
+        </el-button>
+        <!-- FR-17 缺口洞察：默认折叠，点击展开右侧面板 -->
+        <el-button
+          size="small"
+          class="neon-btn icon-btn"
+          :class="{ 'gap-active': gapOpen }"
+          data-tip="缺口洞察：检测断链、孤立节点与低密度社区"
+          @click="toggleGapPanel"
+        >
+          <el-icon><Warning /></el-icon>
+        </el-button>
+        <!-- 列表视图 / 图谱视图 切换：同一 toggle 按钮，按当前态切换图标与提示 -->
+        <el-button
+          size="small"
+          class="neon-btn icon-btn"
+          :data-tip="listView ? '图谱视图：切换为图形可视化' : '列表视图：按目录分组展示'"
+          @click="toggleView"
+        >
+          <el-icon><component :is="listView ? Share : List" /></el-icon>
+        </el-button>
+        <!-- 实体子图：图标化 + 悬浮提示；节点数≥200 时在提示中附带性能优化说明 -->
+        <el-button
+          size="small"
+          class="neon-btn icon-btn"
+          :class="{ 'entity-active': entityOnly }"
+          :data-tip="entityTip"
           @click="toggleEntityOnly"
         >
-          {{ entityOnly ? '退出实体子图' : '实体子图' }}
+          <el-icon><Connection /></el-icon>
         </el-button>
-      </div>
-
-      <!-- 降级提示 -->
-      <div v-if="degraded && !listView" class="degrade-bar">
-        <el-icon class="degrade-icon"><Lightning /></el-icon>
-        <span class="degrade-text">
-          {{ isHuge ? '节点数超过 500，已启用超大图模式（简化样式 + 快速布局）' : '节点数超过 200，已启用性能优化模式' }}
-        </span>
       </div>
 
       <!-- 小屏提示 -->
@@ -630,6 +843,89 @@ watch(loading, () => {
             >
               {{ linkingPath === rec.path ? '建立中…' : '建立双链' }}
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- FR-17 缺口洞察面板：右侧浮层，默认折叠，仅图谱视图显示 -->
+      <div v-if="gapOpen && !listView" class="gap-panel">
+        <div class="gap-head">
+          <div class="gap-title">
+            <el-icon class="gap-title-icon"><Warning /></el-icon>
+            <span>缺口洞察</span>
+          </div>
+          <button class="gap-close" @click="gapOpen = false" aria-label="关闭">
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
+
+        <div v-if="gapLoading" class="gap-status"><p>// 分析拓扑中…</p></div>
+        <div v-else-if="gapInsufficient" class="gap-status">
+          <p>页面样本不足（{{ gapInsufficient.pageCount }} 页），暂不足以挖掘结构缺口。</p>
+        </div>
+        <div v-else-if="gapData" class="gap-body">
+          <!-- AI 补全建议：SSE 流式，失败由后端降级为拓扑摘要 -->
+          <button
+            class="neon-btn gap-ai-btn"
+            :disabled="gapAnalyzing"
+            @click="analyzeGaps"
+          >
+            <el-icon class="gap-btn-icon"><MagicStick /></el-icon>
+            {{ gapAnalyzing ? 'AI 分析中…' : 'AI 补全建议' }}
+          </button>
+          <div v-if="gapFallback" class="gap-fallback-tip">LLM 暂不可用，以下为基于拓扑规律的摘要</div>
+          <pre v-if="gapSuggestion" class="gap-suggestion">{{ gapSuggestion }}</pre>
+
+          <!-- 孤立节点：点击任意一条定位高亮该节点 -->
+          <div v-if="gapData.isolated.length" class="gap-section">
+            <div class="gap-section-title">
+              孤立节点
+              <span class="gap-count">{{ gapData.isolated.length }}</span>
+            </div>
+            <div class="gap-chips">
+              <button
+                v-for="p in gapData.isolated"
+                :key="p"
+                class="gap-chip"
+                title="点击定位"
+                @click="focusGap([p])"
+              >
+                <el-icon class="gap-chip-icon"><Aim /></el-icon>{{ shortName(p) }}
+              </button>
+            </div>
+          </div>
+
+          <!-- 低密度社区：点击「定位社区」圈选整个分量 -->
+          <div v-if="gapData.lowDensity.length" class="gap-section">
+            <div class="gap-section-title">
+              低密度社区
+              <span class="gap-count">{{ gapData.lowDensity.length }}</span>
+            </div>
+            <div v-for="(c, i) in gapData.lowDensity" :key="i" class="gap-card">
+              <div class="gap-card-meta">{{ c.paths.length }} 页 / {{ c.edgeCount }} 边</div>
+              <div class="gap-chips">
+                <span
+                  v-for="p in c.paths"
+                  :key="p"
+                  class="gap-tag"
+                  @click="focusGap([p])"
+                >{{ shortName(p) }}</span>
+              </div>
+              <button class="neon-btn gap-locate" @click="focusGap(c.paths)">定位社区</button>
+            </div>
+          </div>
+
+          <!-- 同标签缺双链对：点击「定位」同时高亮两端 -->
+          <div v-if="gapData.unlinkedPairs.length" class="gap-section">
+            <div class="gap-section-title">
+              同标签缺双链
+              <span class="gap-count">{{ gapData.unlinkedPairs.length }}</span>
+            </div>
+            <div v-for="(pair, i) in gapData.unlinkedPairs" :key="i" class="gap-pair">
+              <div class="gap-pair-names">{{ shortName(pair.pathA) }} ↔ {{ shortName(pair.pathB) }}</div>
+              <div class="gap-pair-tags">{{ pair.sharedTags.join('、') }}</div>
+              <button class="neon-btn gap-locate" @click="focusGap([pair.pathA, pair.pathB])">定位</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1204,9 +1500,308 @@ watch(loading, () => {
   cursor: not-allowed;
 }
 
-/* 窄屏适配：侧边栏占满宽度 */
+/* ── FR-17 缺口洞察面板 ── */
+
+/* 顶部按钮激活态：蓝色描边，提示面板已打开 */
+.gap-active {
+  border-color: var(--neon-cyan) !important;
+  color: var(--neon-cyan) !important;
+  box-shadow: var(--glow-cyan) !important;
+}
+
+.gap-btn-icon {
+  margin-right: 4px;
+}
+
+/* T00276：操作按钮图标化——固定方形、去文字内边距，图标居中，交互反馈统一 */
+.graph-head .icon-btn {
+  width: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.graph-head .icon-btn .el-icon {
+  font-size: 15px;
+}
+
+/* T00276：类型筛选条收窄——固定窄宽减少冗余空间，选项仍完整可点 */
+.graph-head .graph-type-select {
+  width: 118px;
+  flex-shrink: 0;
+}
+
+/* T00276：实体子图激活态——与缺口洞察 gap-active 同风格，主题高亮反馈 */
+.entity-active {
+  border-color: var(--neon-magenta) !important;
+  color: var(--neon-magenta) !important;
+  box-shadow: var(--glow-magenta, 0 0 12px rgba(255, 64, 129, 0.35)) !important;
+}
+
+/* 面板：右侧浮层，与推荐面板同风格的毛玻璃卡片 */
+.gap-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 340px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-glass);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--accent-magenta-a30);
+  border-radius: var(--radius-card);
+  box-shadow: var(--glow-cyan);
+  overflow: hidden;
+}
+
+.gap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--accent-purple-a20);
+  flex-shrink: 0;
+}
+
+.gap-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: 0.05em;
+}
+
+.gap-title-icon {
+  font-size: 15px;
+  color: var(--neon-magenta, var(--accent-magenta-a70));
+}
+
+.gap-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-purple-a30);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gap-close:hover {
+  border-color: var(--neon-pink, var(--accent-pink-a70));
+  color: var(--neon-pink, var(--accent-pink-a70));
+  transform: rotate(90deg);
+}
+
+/* 加载 / 数据不足占位 */
+.gap-status {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-soft);
+  text-align: center;
+}
+
+.gap-status p {
+  margin: 0;
+  line-height: 1.7;
+}
+
+/* 主体滚动区 */
+.gap-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* AI 建议按钮 */
+.gap-ai-btn {
+  width: 100%;
+  padding: 8px 12px !important;
+  font-size: 12px !important;
+}
+
+.gap-ai-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.gap-fallback-tip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-magenta-a70);
+  padding: 6px 10px;
+  background: var(--accent-magenta-a12);
+  border: 1px dashed var(--accent-magenta-a35);
+  border-radius: var(--radius-input);
+}
+
+/* 建议文本：等宽、可换行、保留换行 */
+.gap-suggestion {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-base);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-input);
+  padding: 10px 12px;
+}
+
+/* 缺口分区 */
+.gap-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gap-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: 0.04em;
+}
+
+.gap-count {
+  font-size: 11px;
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a30);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.gap-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 孤立节点 chip：可点击定位 */
+.gap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-base);
+  background: var(--accent-pink-a12);
+  border: 1px solid var(--accent-pink-a30);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.gap-chip:hover {
+  border-color: var(--neon-pink, var(--accent-pink-a70));
+  color: var(--neon-pink, var(--accent-pink-a70));
+  box-shadow: var(--glow-pink, 0 0 12px var(--accent-pink-a40));
+}
+
+.gap-chip-icon {
+  font-size: 11px;
+}
+
+/* 低密度社区卡片 */
+.gap-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-input);
+  padding: 10px 12px;
+}
+
+.gap-card-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+}
+
+.gap-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-soft);
+  background: var(--accent-purple-a10);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.gap-tag:hover {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+}
+
+/* 定位按钮 */
+.gap-locate {
+  align-self: flex-start;
+  padding: 3px 10px !important;
+  font-size: 11px !important;
+}
+
+/* 同标签缺双链对 */
+.gap-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  border-radius: var(--radius-input);
+  padding: 8px 12px;
+}
+
+.gap-pair-names {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-bright);
+  word-break: break-all;
+}
+
+.gap-pair-tags {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a10);
+  border: 1px solid var(--accent-cyan-a30);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+/* 窄屏适配：面板占满宽度 */
 @media (max-width: 768px) {
-  .recommend-panel {
+  .gap-panel {
     left: 8px;
     right: 8px;
     top: 8px;

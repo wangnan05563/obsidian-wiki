@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useSkillStore } from '../stores/skill';
@@ -168,7 +168,7 @@ async function refreshList(): Promise<void> {
 onMounted(() => {
   // 首次进入页面加载列表
   if (store.skills.length === 0) {
-    void store.fetchSkills();
+    store.fetchSkills();
   }
 });
 </script>

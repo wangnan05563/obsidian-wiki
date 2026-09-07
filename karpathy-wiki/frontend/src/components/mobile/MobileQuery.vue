@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 // 移动端知识问答页（SRS FR-QRY，v2 多会话优化）：
 // - 双模式：列表模式（历史会话，首屏有历史时进入）/ 聊天模式（首屏无历史直接进入，展示招呼语）
 // - 历史会话：置顶排序、长按弹出操作菜单（置顶/取消置顶 · 重命名 · 删除）、右下 FAB 新建会话
@@ -38,6 +38,8 @@ import ThinkingBlock from '../ThinkingBlock.vue';
 import RefsList from '../RefsList.vue';
 import FollowupsChips from '../FollowupsChips.vue';
 import SessionStatusIcon from '../SessionStatusIcon.vue';
+// 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续（复用桌面组件）
+import ClarifyCard from '../ClarifyCard.vue';
 import type { ChatMessage, Reference, ConversationRecord } from '../../types';
 
 const emit = defineEmits<{ (e: 'open-me'): void }>();
@@ -71,9 +73,11 @@ const hasHistory = computed(() => conversationsStore.conversations.length > 0);
 // 列表筛选：【全部任务】下拉
 type FilterKey = 'all' | 'pinned' | 'streaming';
 const filter = ref<FilterKey>('all');
-const filterLabel = computed(() =>
-  filter.value === 'pinned' ? '置顶任务' : filter.value === 'streaming' ? '进行中' : '全部任务',
-);
+const filterLabel = computed(() => {
+  if (filter.value === 'pinned') return '置顶任务';
+  if (filter.value === 'streaming') return '进行中';
+  return '全部任务';
+});
 const filterOpen = ref(false);
 const filterOptions: { key: FilterKey; label: string }[] = [
   { key: 'all', label: '全部任务' },
@@ -234,7 +238,7 @@ function persistActiveIfAny() {
   const buf = store.getSessionBuffer(id);
   if (buf && buf.messages.length > 0) {
     conversationsStore.currentConversationId = id;
-    void conversationsStore.persistConversation(
+    conversationsStore.persistConversation(
       store.messagesWithStreamingFor(id),
       buf.currentThreadId ?? undefined,
     );
@@ -398,7 +402,7 @@ async function doDelete() {
 
 // ===== 模型切换 =====
 function pickModel(key: string) {
-  void modelStore.switchModel(key);
+  modelStore.switchModel(key);
   modelSheet.value = false;
 }
 
@@ -409,12 +413,12 @@ function handleSubmit() {
   const convId = ensureSessionId();
   store.submitQuestion(q);
   conversationsStore.currentConversationId = convId;
-  void conversationsStore.persistConversation(
+  conversationsStore.persistConversation(
     store.messagesWithStreamingFor(convId),
     store.getSessionBuffer(convId)?.currentThreadId ?? undefined,
   );
   inputQuestion.value = '';
-  void sendQuestion(q, convId);
+  sendQuestion(q, convId);
 }
 
 function onFollowup(question: string) {
@@ -423,7 +427,26 @@ function onFollowup(question: string) {
   handleSubmit();
 }
 
-async function sendQuestion(question: string, convId: string) {
+// 意图澄清：用户选择解读后正在重发确认后的问答（ClarifyCard 显示加载态，禁重复点击）
+const clarifyResending = ref(false);
+function handleClarifySelect(choiceIndex: number) {
+  const clarification = store.currentClarification;
+  if (!clarification || clarifyResending.value) return;
+  clarifyResending.value = true;
+  const convId = store.activeId;
+  // 重发同一问题（用户消息已 push 过，不重复）；携带 clarifyId + 归属线程
+  sendQuestion(clarification.question, convId === DEFAULT_ACTIVE ? ensureSessionId() : convId, {
+    clarifyId: clarification.id,
+    choiceIndex,
+    threadId: clarification.threadId ?? null,
+  });
+}
+function handleClarifyDismiss() {
+  clarifyResending.value = false;
+  store.clearClarification();
+}
+
+async function sendQuestion(question: string, convId: string, clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null) {
   activeAbort = new AbortController();
   // 会话已失效（auth/me 返回 401 触发自动登出）时，直接提示重新登录/配置，
   // 避免继续打 /api/query 拿到 401/404 等晦涩错误（移动端「会话失效 → 点击发送」的典型崩溃路径）。
@@ -442,8 +465,15 @@ async function sendQuestion(question: string, convId: string) {
   if (history && history.length > 0) {
     body.history = history;
   }
-  if (activeThreadId) {
-    body.threadId = activeThreadId;
+  // 澄清续答优先使用 clarify 附带的 threadId（后端 clarifyId 归属校验依赖同一线程）
+  const threadIdForBody = clarify?.threadId ?? activeThreadId;
+  if (threadIdForBody) {
+    body.threadId = threadIdForBody;
+  }
+  // 意图澄清续答透传：后端据此解析用户确认的意图并注入 prompt（非法/过期时按新提问处理）
+  if (clarify) {
+    body.clarifyId = clarify.clarifyId;
+    body.choiceIndex = clarify.choiceIndex;
   }
 
   // ── BYOK per-user 配置注入（对齐桌面 Query.vue）──
@@ -497,9 +527,11 @@ async function sendQuestion(question: string, convId: string) {
     store.getSessionWriter(convId).handleError((err as Error).message);
     ElMessage.warning((err as Error).message);
   } finally {
+    // 澄清重发流程结束（成功产出答案 / 再次中断 / 失败），复位重发加载态
+    clarifyResending.value = false;
     if (!activeAbort?.signal.aborted) {
       conversationsStore.currentConversationId = convId;
-      void conversationsStore.persistConversation(
+      conversationsStore.persistConversation(
         store.messagesWithStreamingFor(convId),
         store.getSessionBuffer(convId)?.currentThreadId ?? undefined,
       );
@@ -537,7 +569,7 @@ function resumeLastAnswer(convId: string) {
     }
   }
   if (!question) return;
-  void sendQuestion(question, convId);
+  sendQuestion(question, convId);
 }
 
 async function maybeResumeOnLoad() {
@@ -740,20 +772,30 @@ onBeforeUnmount(() => {
           <!-- 流式输出中的 assistant 消息 -->
           <div v-if="store.isLoading || store.streamingAnswer" class="mq-row assistant">
             <div class="mq-bubble assistant" :class="{ streaming: !!store.streamingAnswer }">
-              <ThinkingBlock
-                v-if="store.currentThinking.length > 0"
-                :steps="store.currentThinking"
-                :live="store.isLoading"
+              <!-- 意图澄清：问题存在歧义时后端中断回答，渲染解读选项卡片等待用户确认（替代加载态） -->
+              <ClarifyCard
+                v-if="store.currentClarification"
+                :clarification="store.currentClarification"
+                :loading="clarifyResending"
+                @select="handleClarifySelect"
+                @dismiss="handleClarifyDismiss"
               />
-              <div v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0" class="mq-dots">
-                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                <span class="mq-dots-text">正在思考…</span>
-              </div>
-              <div
-                v-else
-                class="markdown-body mq-md streaming-content"
-                v-html="renderMarkdown(store.streamingAnswer || '')"
-              ></div>
+              <template v-else>
+                <ThinkingBlock
+                  v-if="store.currentThinking.length > 0"
+                  :steps="store.currentThinking"
+                  :live="store.isLoading"
+                />
+                <div v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0" class="mq-dots">
+                  <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                  <span class="mq-dots-text">正在思考…</span>
+                </div>
+                <div
+                  v-else
+                  class="markdown-body mq-md streaming-content"
+                  v-html="renderMarkdown(store.streamingAnswer || '')"
+                ></div>
+                </template>
             </div>
           </div>
         </div>

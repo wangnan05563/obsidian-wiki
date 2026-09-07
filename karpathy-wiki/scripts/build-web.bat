@@ -48,20 +48,17 @@ if not exist "node_modules" (
     exit /b 1
 )
 
-echo.
-echo [2/4] Cleaning old build output...
-if exist "api\public" (
-    rmdir /s /q "api\public"
-    echo   Cleaned api\public
-)
+REM Why no longer manually clean old build dirs (e.g. api\public):
+REM vite.config.ts emptyOutDir:true auto-empties outDir(release/spa/public) on build;
+REM manual rmdir may trigger the safe-delete hook block (see historical _build_err.log).
 
 echo.
-echo [3/4] Cleaning TypeScript/Vue compile artifacts...
+echo [2/4] Cleaning TypeScript/Vue compile artifacts...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -Path 'frontend\\src' -Recurse -Filter '*.js' -Exclude '*.vue.js','*.ts.js' | Remove-Item -Force -ErrorAction SilentlyContinue"
 echo   Cleaned stray .js files from src/
 
 echo.
-echo [4/4] Building SPA...
+echo [3/4] Building SPA...
 call %PKG_CMD% --filter @karpathy-wiki/web build
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -70,7 +67,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-if not exist "api\public\index.html" (
+if not exist "..\release\spa\public\index.html" (
     echo.
     echo [ERROR] index.html not found in build output
     echo Check vite.config.ts outDir setting
@@ -82,8 +79,8 @@ echo.
 echo ============================================
 echo   Frontend build complete
 echo ============================================
-echo   Output: api\public\
-echo   Entry:  api\public\index.html
+echo   Output: ..\release\spa\public\
+echo   Entry:  ..\release\spa\public\index.html
 echo ============================================
 echo.
 echo Press any key to exit...

@@ -9,7 +9,7 @@ import { createBackup, restoreBackup, downloadBackup, readBackupFile } from '../
 
 // ===== 类型定义 =====
 // 内容抽象为数据，渲染逻辑与内容分离，便于维护
-type BlockType = 'feature' | 'steps' | 'scenario' | 'config' | 'note';
+type BlockType = 'feature' | 'steps' | 'scenario' | 'config' | 'note' | 'code';
 
 interface DocBlock {
   type: BlockType;
@@ -17,6 +17,8 @@ interface DocBlock {
   // 不同类型对应不同载荷：steps/config 走结构化数据，feature/scenario/note 走字符串
   content: string | string[] | Array<[string, string, string]>;
   noteType?: 'info' | 'warning';
+  // code 类型：展示代码语言标记（用于顶部小徽标，如 json / shell）
+  codeLang?: string;
 }
 
 interface DocSection {
@@ -377,6 +379,63 @@ const DOC_SECTIONS: DocSection[] = [
     ],
   },
   {
+    id: 'mcp',
+    title: 'MCP 接口',
+    icon: 'M18 7h-2V5a2 2 0 0 0-4 0v2H8V5a2 2 0 0 0-4 0v2H2v6h2v2a3 3 0 0 0 3 3h2v4h2v-4h2v4h2v-4h2a3 3 0 0 0 3-3v-2h2V7z',
+    intro: '以 MCP（Model Context Protocol）服务器形式向外部 AI Agent 暴露知识库的查询 / 维护能力。',
+    blocks: [
+      {
+        type: 'feature',
+        title: '核心功能',
+        content: '通过 JSON-RPC 2.0 + Streamable HTTP（默认端点 /mcp）对外提供 15 个工具：8 个查询/检索类（列页、目录树、全文检索、读页、查路径、统计、智能问答、待审标签）与 7 个维护/增强类（写页、建页、删页、归档原稿、编译、AI 打标签、确认标签）。支持外部 AI Agent（Claude Code / Cursor / Cline 等）接入后对知识库进行全方位维护、增强与查询。采用 Bearer Token 双轨鉴权：userToken 读、adminToken 写。'
+      },
+      {
+        type: 'config',
+        title: 'MCP 配置参数（api/config.json 的 mcp 段，改后重启生效）',
+        content: [
+          ['enabled', 'true', '是否启用端点（默认 false，未启用返回 503）'],
+          ['endpointPath', '/mcp', 'HTTP 端点路径，可自定义'],
+          ['name', 'karpathy-wiki', '对客户端展示的服务名'],
+          ['version', '1.0.0', '对客户端展示的版本号'],
+          ['userToken', '', '读/查询类工具的 Bearer Token'],
+          ['adminToken', '', '写/维护类工具的 Bearer Token，未配置时写工具回退 userToken'],
+          ['authenticated', 'true', '是否要求鉴权；false 且无任何 token 时开放全部工具（仅内网自用）']
+        ]
+      },
+      {
+        type: 'code',
+        title: 'MCP JSON 配置示例（写入 api/config.json 的 mcp 段）',
+        content: `"mcp": {
+  "enabled": true,
+  "endpointPath": "/mcp",
+  "name": "karpathy-wiki",
+  "version": "1.0.0",
+  "userToken": "你的只读Token",
+  "adminToken": "你的管理Token",
+  "authenticated": true
+}`,
+        codeLang: 'json'
+      },
+      {
+        type: 'steps',
+        title: '启用与接入步骤',
+        content: [
+          '在 api/config.json 的 mcp 段填入 enabled:true，并设置 userToken（读）与 adminToken（写）',
+          '重启后端服务（端口 3000，配置修改需重启进程生效）',
+          '外部客户端以 http://host:3000/mcp 作为 MCP 服务器地址，HTTP 头携带 Authorization: Bearer token',
+          '客户端依次调用 initialize、tools/list、tools/call 完成握手、枚举与调用',
+          '客户端按工具权限使用：查询类用 userToken，写/维护类需 adminToken'
+        ]
+      },
+      {
+        type: 'note',
+        title: '安全与注意',
+        content: 'Token 即权限：userToken 只读、adminToken 可写/删/编译，务必保密勿提交版本库；对外暴露请保持 authenticated:true。写类工具与 llm_query/vault_compile/tags_suggest 会消耗 LLM 配额。编译为异步流式，客户端超时应设不小于 120 秒。完整的协议说明、工具清单、curl 与客户端接入示例见 docs/mcp-interface.md。',
+        noteType: 'warning'
+      }
+    ]
+  },
+  {
     id: 'tunnel',
     title: '内网穿透',
     icon: 'M20 10V8c0-1.1-.9-2-2-2h-7V5c0-.55-.45-1-1-1H6c-.55 0-1 .45-1 1v2c-1.1 0-2 .9-2 2v9c0 1.1.9 2 2 2h13c1.1 0 2-.9 2-2v-1h2v-5h-2z',
@@ -581,15 +640,31 @@ const activeAnchor = ref('');
 
 function scrollToSection(id: string) {
   const el = document.getElementById(id);
-  if (el) {
+  if (!el) return;
+  activeAnchor.value = id;
+  // 为什么手动驱动滚动而不是 scrollIntoView：.help-sidebar 自身 overflow-y:auto，
+  // scrollIntoView 会滚动最近的可滚动祖先（即侧栏），导致正文不定位。页面整体滚动由
+  // App.vue 外层 main.content 接管，须显式计算其在 .content 中的偏移并设置 scrollTop。
+  const container = document.querySelector('.content');
+  if (container) {
+    // 用 getBoundingClientRect 差值换算目标相对滚动容器的位置，
+    // 顶部留小量间距避免章节标题紧贴视口上缘
+    const cRect = (container as HTMLElement).getBoundingClientRect();
+    const eRect = el.getBoundingClientRect();
+    (container as HTMLElement).scrollTo({
+      top: (container as HTMLElement).scrollTop + (eRect.top - cRect.top) - 16,
+      behavior: 'smooth',
+    });
+  } else {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    activeAnchor.value = id;
   }
 }
 
 // 监听滚动更新激活的锚点
+// 注意：滚动由 App.vue 外层 main.content 统一接管，.help-content-area 自身无滚动，
+// 因此 scroll-spy 必须监听 .content，否则下拉时高亮永不更新
 function handleScroll() {
-  const scrollContainer = document.querySelector('.help-content-area');
+  const scrollContainer = document.querySelector('.content');
   if (!scrollContainer) return;
   // 找到离顶部最近的章节
   for (const section of DOC_SECTIONS) {
@@ -613,7 +688,7 @@ onMounted(async () => {
   }
   // 同步本地加密状态（FR-RM-07）：若已登录且密钥在内存 / sessionStorage，则视为已开启
   cryptoOn.value = isUnlocked();
-  const scrollContainer = document.querySelector('.help-content-area');
+  const scrollContainer = document.querySelector('.content');
   if (scrollContainer) {
     scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
   }
@@ -702,8 +777,30 @@ async function doImport() {
   }
 }
 
+// 复制代码块内容到剪贴板：优先 navigator.clipboard，失败降级 execCommand
+// 为什么单独实现而非抽公共工具：仅此处使用，保持 Help.vue 自包含，避免引入额外依赖
+async function handleCopyDocCode(text: string) {
+  try {
+    if (navigator.clipboard && globalThis.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    ElMessage.success('已复制');
+  } catch {
+    ElMessage.warning('复制失败，请手动选择');
+  }
+}
+
 onBeforeUnmount(() => {
-  const scrollContainer = document.querySelector('.help-content-area');
+  const scrollContainer = document.querySelector('.content');
   if (scrollContainer) {
     scrollContainer.removeEventListener('scroll', handleScroll);
   }
@@ -830,6 +927,19 @@ onBeforeUnmount(() => {
                   </tbody>
                 </table>
               </div>
+
+              <!-- code：代码块（原样展示 JSON / 命令等，含语言徽标 + 复制按钮） -->
+              <div v-else-if="block.type === 'code'" class="block-code">
+                <div class="block-code-head">
+                  <span class="code-lang-badge" v-if="block.codeLang">{{ block.codeLang }}</span>
+                </div>
+                <button
+                  class="code-copy-btn"
+                  :title="`复制${block.codeLang ? ' ' + block.codeLang : ''}`"
+                  @click="handleCopyDocCode(block.content as string)"
+                >复制</button>
+                <pre><code>{{ block.content }}</code></pre>
+              </div>
             </div>
           </div>
         </div>
@@ -882,7 +992,7 @@ onBeforeUnmount(() => {
                   size="small"
                   style="max-width: 240px"
                 />
-                <el-button size="small" type="primary" :disabled="!unlockPwd" @click="doUnlock">解锁</el-button>
+                <el-button size="small" type="primary" data-tip="使用登录密码解锁本地加密数据" :disabled="!unlockPwd" @click="doUnlock">解锁</el-button>
               </div>
             </div>
 
@@ -905,7 +1015,7 @@ onBeforeUnmount(() => {
                   size="small"
                   style="max-width: 240px"
                 />
-                <el-button size="small" type="primary" :disabled="!exportPwd || busy" @click="doExport">导出</el-button>
+                <el-button size="small" type="primary" data-tip="导出加密备份文件（使用独立备份口令，换设备可凭此恢复）" :disabled="!exportPwd || busy" @click="doExport">导出</el-button>
               </div>
             </div>
 
@@ -928,7 +1038,7 @@ onBeforeUnmount(() => {
                   size="small"
                   style="max-width: 240px"
                 />
-                <el-button size="small" type="primary" :disabled="!importFile || !importPwd || busy" @click="doImport">
+                <el-button size="small" type="primary" data-tip="从备份文件恢复会话与附件（合并写入本地，需备份口令）" :disabled="!importFile || !importPwd || busy" @click="doImport">
                   导入
                 </el-button>
               </div>
@@ -951,14 +1061,16 @@ onBeforeUnmount(() => {
 .help-page {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  min-height: 100%;
 }
 
 .help-layout {
   display: flex;
   gap: 16px;
-  height: 100%;
-  min-height: 0;
+  /* 高度交给内容决定（不加 height 锁死），否则 sticky 侧栏会被压死在视口高内、
+   * 长内容溢出后吸顶失效。align-items: flex-start 避免侧栏被拉伸到全高。 */
+  min-height: 100%;
+  align-items: flex-start;
 }
 
 /* 左侧侧栏 */
@@ -976,6 +1088,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  /* 目录树跟随屏幕：右侧内容下拉时侧栏吸附在视口顶部，始终可点击定位。
+   * 滚动由外层 main.content 接管，sticky 相对它生效；max-height 限制在视口内，
+   * 目录项过多时侧栏内部滚动而不溢出屏外。 */
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 24px);
 }
 
 .sidebar-header {
@@ -1294,6 +1412,66 @@ onBeforeUnmount(() => {
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 11px;
+}
+
+/* code 块：深色底 + 语言徽标 + 复制按钮，横向可滚动适配长 JSON */
+.block-code {
+  position: relative;
+  margin-top: 8px;
+}
+
+.block-code pre {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--accent-purple-a10);
+  border: 1px solid var(--accent-purple-a25);
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-bright);
+  white-space: pre;
+}
+
+.block-code code {
+  font-family: inherit;
+}
+
+.block-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.code-lang-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--neon-purple);
+  text-transform: uppercase;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-soft);
+  background: var(--accent-purple-a12);
+  border: 1px solid var(--accent-purple-a30);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.code-copy-btn:hover {
+  color: var(--neon-cyan);
+  border-color: var(--accent-cyan-a50);
+  background: var(--accent-cyan-a10);
 }
 
 .cell-example {

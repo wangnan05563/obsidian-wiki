@@ -3,6 +3,27 @@
 // 为什么用 BASE_URL 而非硬编码：开发模式 base='/' 时为 '/api'，生产模式 base='/wiki/' 时为 '/wiki/api'
 export const API_BASE = import.meta.env.BASE_URL + 'api'
 
+// 公开媒体路由（图像/视频/.pptx）的路径解析：与 API_BASE 同样的 base 处理思路
+// 为什么单独提供：浏览器 <img>/<video>/<a> 不能用 fetch 包装注入 Authorization，
+//   需要直接拼绝对路径走公开路由 /api/media/file/*；路径必须带与 Vite base 一致的前缀，
+//   否则开发模式 Vite 代理（只代理 /wiki/api）不会接管，请求 404。
+// 入参：后端返回的相对路径（以 '/api/...' 开头）。已是绝对 URL（http/https/blob）或已含 base 前缀时原样返回。
+// 为什么幂等：消息气泡中的 url 字段可能已经过 resolveMediaUrl 处理（消息持久化后回放），
+//   也可能直接来自后端（首轮推送），两种来源都需正确处理。
+export function resolveMediaUrl(url: string | undefined | null): string {
+  if (!url) return '';
+  // 已是绝对协议 / Blob URL / Data URL：直接返回（浏览器可直接加载）
+  if (/^(https?:|blob:|data:)/i.test(url)) return url;
+  // 已包含 Vite base 前缀（例如 /wiki/api/...）：幂等返回，避免重复拼接
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  if (url.startsWith(base) || url.startsWith(normalizedBase)) return url;
+  // 相对路径以 '/' 开头：拼上 base 前缀（base='/' 时原样返回，base='/wiki/' 时变 '/wiki/api/...'）
+  if (url.startsWith('/')) return `${normalizedBase.replace(/\/$/, '')}${url}`;
+  // 其他相对路径：按 base 解析
+  return `${normalizedBase}${url}`;
+}
+
 // 统一 API 请求封装：自动注入 Authorization 头（携带登录 token）。
 // 背景：后端开启 auth 后，受保护接口（/api/config、/api/ai/config 等）要求 Bearer token，
 //   此前大量视图/store 直接用裸 fetch 调用这些接口，未带 token → 返回 401。
