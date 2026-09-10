@@ -1,0 +1,131 @@
+{
+  "report": {
+    "batch": "20260910-114938",
+    "date": "2026-09-10T11:49:38+08:00",
+    "skill": "workspace-cleanup",
+    "config": "cleanup-config.yaml",
+    "workspace": "D:\\code\\otherProjects\\19_Karpathy-AI+Obsidian知识库",
+    "scope": "workspace_only",
+    "mode": "direct_delete_with_audit_log",
+    "dry_run": false,
+    "phases_executed": ["Recon", "Classify", "Impact", "Execute", "Verify", "Archive"]
+  },
+  "totals": {
+    "files_deleted": 1118,
+    "bytes_freed": 250295683,
+    "mb_freed": 238.7,
+    "errors": 0,
+    "batches": 4,
+    "workspace_before_mb": 636.64,
+    "workspace_after_mb": 397.94,
+    "workspace_before_files": 4120,
+    "workspace_after_files": 3002,
+    "reduction_percent": 37.5,
+    "size_scope_note": "剪枝统计：不含 .git（162MB）与 node_modules；release/ 清理时不存在"
+  },
+  "by_category": [
+    { "category": "e2e 测试 vault 备份", "path": "karpathy-wiki/data/_e2e_backup_vault_20260901_105235", "files": 567, "bytes": 188684070, "mb": 179.94 },
+    { "category": "vite 依赖预构建缓存", "path": "karpathy-wiki/frontend/node_modules/.vite", "files": 243, "bytes": 36326222, "mb": 34.64 },
+    { "category": "前端覆盖率产物", "path": "karpathy-wiki/frontend/coverage", "files": 218, "bytes": 19304909, "mb": 18.41 },
+    { "category": "构建中间产物", "path": "karpathy-wiki/.build", "files": 2, "bytes": 3859084, "mb": 3.68 },
+    { "category": "TOC 校验截图", "path": "tooling/wiki-toc-verify-*.png", "files": 3, "bytes": 587000, "mb": 0.56 },
+    { "category": "技能模板 __pycache__", "path": ".workbuddy/skills/*/templates", "files": 15, "bytes": 545000, "mb": 0.52 },
+    { "category": "运行时日志", "path": "karpathy-wiki/logs", "files": 32, "bytes": 514000, "mb": 0.49 },
+    { "category": "agent 测试日志与 __pycache__", "path": ".trae", "files": 17, "bytes": 440000, "mb": 0.42 },
+    { "category": "api 日志/扫描产物", "path": "karpathy-wiki/api", "files": 10, "bytes": 32000, "mb": 0.03 },
+    { "category": "前端临时文件与空脚本", "path": "karpathy-wiki/frontend", "files": 7, "bytes": 11000, "mb": 0.01 },
+    { "category": "__pycache__", "path": "karpathy-wiki/docs/test-evidence/sprint6", "files": 1, "bytes": 2000, "mb": 0 },
+    { "category": "空脚本", "path": "tooling/scripts", "files": 3, "bytes": 0, "mb": 0 },
+    { "category": "空测试截图目录", "path": "test_screenshots", "files": 0, "bytes": 0, "mb": 0 }
+  ],
+  "by_extension": [
+    { "ext": ".pdf", "files": 33, "mb": 145.89 },
+    { "ext": ".md", "files": 424, "mb": 25.66 },
+    { "ext": ".map", "files": 120, "mb": 22.59 },
+    { "ext": ".html", "files": 202, "mb": 14.63 },
+    { "ext": ".js", "files": 126, "mb": 12.09 },
+    { "ext": ".png", "files": 15, "mb": 7.71 },
+    { "ext": ".json", "files": 106, "mb": 3.9 },
+    { "ext": ".cjs", "files": 1, "mb": 3.68 },
+    { "ext": ".pyc", "files": 28, "mb": 0.89 },
+    { "ext": ".mp4", "files": 1, "mb": 0.68 }
+  ],
+  "by_batch": [
+    { "batch": "1-caches", "files": 495, "mb": 53.94, "targets": ["frontend/coverage", "frontend/node_modules/.vite", "api/node_modules/.vite", "api/.scannerwork", "frontend/.scannerwork", ".trae/**/__pycache__", ".workbuddy/**/__pycache__", "docs/test-evidence/sprint6/__pycache__"] },
+    { "batch": "2-artifacts-logs", "files": 33, "mb": 4.34, "targets": ["build/bundle_test.cjs", "_inspect.ps1", "wiki-toc-verify-*.png", "vite timestamp mjs", "test_screenshots/", "陈旧日志×20", "空脚本×5"] },
+    { "batch": "3-e2e-backup", "files": 567, "mb": 179.94, "targets": ["data/_e2e_backup_vault_20260901_105235"] },
+    { "batch": "4-stale-logs", "files": 23, "mb": 0.49, "targets": ["karpathy-wiki/logs 陈旧日志×22", "frontend/sonar-scan.log"] }
+  ],
+  "protected": [
+    { "path": "karpathy-wiki/api/_deploy_menu_build.mjs.bak", "reason": "上一轮 REVIEW 定性为唯一副本，无替代版本（虽匹配 *.bak 垃圾模式）" },
+    { "path": "karpathy-wiki/api/_deploy_build.mjs / _deploy_live.mjs", "reason": "核心 SPA 部署管线，被 spa-static.ts / spa-resolver.ts 引用" },
+    { "path": "karpathy-wiki/api/_smoke_proxy.mjs", "reason": "被 api/package.json 的 smoke:proxy 脚本引用" },
+    { "path": "wiki-harness/dist", "reason": "pnpm file: 依赖运行时需要（上一轮明确保留）" },
+    { "path": "karpathy-wiki/data/ 用户数据", "reason": "vault / conversations / threads / users.json 属用户数据，禁止清理" },
+    { "path": ".git", "reason": "版本控制目录，白名单保护" },
+    { "path": "karpathy-wiki/.env, api/config.json, cleanup-config.yaml, .gitignore 等", "reason": "必要配置文件，白名单保护" },
+    { "path": ".workbuddy/", "reason": "工作记忆与历史清理报告（审计凭证）" }
+  ],
+  "uncleaned_risky": [
+    { "path": "karpathy-wiki/data/config.json", "size": "0 字节", "reason": "数据目录下的空文件，疑似运行时占位或被截断，需人工确认后处理" },
+    { "path": "karpathy-wiki/data/.harness/logs/ (141 个日志)", "size": "658 KB", "reason": "位于 data/ 数据目录，配置无对应规则；已被 karpathy-wiki/.gitignore 的 .harness/ 覆盖，体积小，保守保留" },
+    { "path": "tooling/_archive_root_debug/", "size": "55 KB", "reason": "上一轮有意归档的调试脚本，距今 25 天未满 30 天阈值，下轮再评估" },
+    { "path": "karpathy-wiki/api/_smoke_*.mjs / _probe3000.mjs / _envtest.ts", "size": "约 30 KB", "reason": "无代码引用，但属可复用冒烟探针；删除收益极低、风险非零，保留" },
+    { "path": "karpathy-wiki/logs/api-dev*.log (3 个)", "size": "104 KB", "reason": "近期(9/6-9/9)运行日志，可能仍在排查中使用" },
+    { "path": "karpathy-wiki/docs/test-evidence/sprint5|6/*.log, tooling/perf-tests/jmeter.log", "size": "约 100 KB", "reason": "测试证据与压测记录，属可追溯数据，保留" },
+    { "path": "karpathy-wiki/logs/cleanup-20260723-015740.log, .workbuddy/cleanup-reports/*.log, logs/cleanup-20260910-114938.log", "reason": "历次清理审计凭证，禁止删除" },
+    { "path": "空目录：karpathy-wiki/services/api, data/{archive/2026-07-27,conversations,threads}, frontend/public/assets", "reason": "疑似框架运行时占位目录，保留避免影响应用创建逻辑" },
+    { "path": "_start_wiki_server.cmd, .npmrc", "reason": "不在 cleanup-config.yaml 的 root_allowlist 中，但属日常启动入口/包管理配置，保留；建议下轮补入白名单" }
+  ],
+  "out_of_scope": [
+    { "item": "系统级临时目录与全局应用缓存 (%TEMP% / AppData 缓存)", "reason": "超出工作空间边界，属系统级高危操作，按用户规范主动排除" },
+    { "item": "未使用依赖包分析 (pnpm/depcheck)", "reason": "需依赖图分析 + 重装验证，属破坏性操作；本项目含 pnpm 符号链接与 file: 依赖，建议单独立项" }
+  ],
+  "git": {
+    "tracked_deleted_before_sync": 576,
+    "tracked_deleted_after_sync": 0,
+    "rm_cached_targets": 10,
+    "rm_cached_exit": 0,
+    "deletion_manifest": "logs/cleanup-deleted-manifest.txt",
+    "note": "576 个被删文件曾入版本库（含 2026-09-01 e2e 快照 567 个），已 git rm --cached 记为暂存删除态；未执行 commit，避免扫入并发开发改动（11:38 提交 6343a83 已入库 22 个源码改动）"
+  },
+  "gitignore_added": [
+    "tooling/wiki-toc-verify-*.png",
+    "**/_e2e_backup_vault_*/"
+  ],
+  "gitattributes_export_ignore": {
+    "applied": false,
+    "reason": "历史垃圾文件已通过 git rm --cached 移出索引，随提交即消失，无需 export-ignore 兜底"
+  },
+  "precommit_updated": false,
+  "verification": {
+    "service_running_before": false,
+    "ports_checked": [3000, 8080],
+    "locked_files": 0,
+    "special_filenames": 0,
+    "stale_pid_removed": ["karpathy-wiki/logs/web.pid", "karpathy-wiki/logs/api.pid"],
+    "stability_check": { "enabled": true, "wait_seconds": 5, "recurrence_found": false, "note": "复扫命中 frontend/sonar-scan.log（侦察时被 head 截断漏扫，非复发），已补入批次 4" },
+    "protected_items_intact": true,
+    "source_tree_unchanged": true,
+    "root_entries_before": 14,
+    "root_entries_after": 14,
+    "audit_log": "logs/cleanup-20260910-114938.log",
+    "audit_entries": 1118,
+    "result": "PASS"
+  },
+  "release_rebuild": {
+    "trigger": "release/ 于今日 10:00 前后被整体删除（非本次清理所致），用户确认清理后重建",
+    "vite_build": { "command": "vite build --base=/wiki/", "duration": "2m45s", "files": 72, "out": "release/spa/public" },
+    "deploy_build": { "added": 0, "skipped": 72, "idempotent": true },
+    "deploy_live": { "dst": "release/spa/public_live_1789013416688", "added": 72 },
+    "bundle_markers": { "聆听": 2, "MobileListen": 1, "result": "PASS" },
+    "startup_marker": "[SPA] served from ...release\\spa\\public_live_1789013416688",
+    "health_probe": { "GET /": 200, "GET /wiki/": 200, "result": "PASS" },
+    "service_state": "running (pid 37648, log logs/api-dev.log, Tailscale Funnel https://desktop-g10o4nl.tailbca47.ts.net/wiki/)"
+  },
+  "followups": [
+    "karpathy-wiki/data/config.json 为 0 字节，需人工确认",
+    "release/app 与 release/installer 未重建（本轮仅重建 SPA 伺服根）；如需 EXE/安装包请跑 scripts/build-exe.ps1",
+    "建议下轮将 _start_wiki_server.cmd 与 .npmrc 补入 cleanup-config.yaml 的 root_allowlist"
+  ]
+}
