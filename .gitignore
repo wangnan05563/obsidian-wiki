@@ -116,3 +116,10 @@ _debug_*.py
 .workbuddy
 # 根目录调试/探针残留归档（2026-08-16 清理，非源码，可逆）
 tooling/_archive_root_debug/
+
+# ---------- 清理技能自动生成规则（2026-09-10 批次 #20260910-114938）----------
+# TOC 校验调试截图（tooling/wiki-toc-verify.cjs 的输出，非源码）
+tooling/wiki-toc-verify-*.png
+# e2e 测试 vault 备份（自动化测试每次生成的快照，体积大；2026-09-01 快照曾以 567 个文件
+# 误入版本库造成仓库膨胀，本次清理已物理删除并 git rm --cached 移出索引，此处加规则防复发）
+**/_e2e_backup_vault_*/
