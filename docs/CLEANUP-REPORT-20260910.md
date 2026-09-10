@@ -5,7 +5,7 @@
 - **配置**：`cleanup-config.yaml`（本轮沿用项目专属配置，零硬编码）
 - **工作空间**：`D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库`
 - **清理模式**：**直接删除 + SHA256 审计日志**（用户确认；未采用 24h 隔离区）
-- **执行结果**：✅ **1118 个文件 / 释放 238.70 MB / 0 错误**
+- **执行结果**：✅ **1122 个文件 / 释放 238.72 MB / 0 错误**
 
 ---
 
@@ -13,8 +13,8 @@
 
 | 指标 | 清理前 | 清理后 | 变化 |
 |---|---|---|---|
-| 工作空间占用（剪枝统计¹） | 636.64 MB | **397.94 MB** | **-238.70 MB（-37.5%）** |
-| 文件总数（同口径） | 4,120 | 3,002 | -1,118 |
+| 工作空间占用（剪枝统计¹） | 636.64 MB | **397.92 MB** | **-238.72 MB（-37.5%）** |
+| 文件总数（同口径） | 4,120 | 2,998 | -1,122 |
 | 根目录条目 | 14 | 14 | 0（`test_screenshots/` 移除，新增审计 `logs/`） |
 | Git 已跟踪缺失文件 | 576 | 0 | 已索引同步 |
 | 执行错误 | — | **0** | — |
@@ -62,6 +62,7 @@
 | 2-artifacts-logs | 构建产物、陈旧日志、空脚本、空目录 | 33 | 4.34 MB | 0 |
 | 3-e2e-backup | 9/1 e2e 测试 vault 快照（>5MB 已二次确认） | 567 | 179.94 MB | 0 |
 | 4-stale-logs | 补扫出的陈旧运行时日志 | 23 | 0.49 MB | 0 |
+| 5-vitest-temp | `vitest.config.ts.timestamp-*.mjs` 临时文件 | 4 | 0.02 MB | 0 |
 
 ## 四、未清理的风险/保护文件清单及原因
 
@@ -81,9 +82,30 @@
 | 空目录：`services/api`、`data/{archive/2026-07-27,conversations,threads}`、`frontend/public/assets` | 0 | 疑似框架运行时占位目录 |
 | `_start_wiki_server.cmd`、`.npmrc` | 5 KB | 不在 `root_allowlist`，但属启动入口/包管理配置，建议下轮补入白名单 |
 
+### 后续补扫新发现（待你确认，尚未处理）
+
+| 路径 | 体积 | 性质 |
+|---|---|---|
+| `karpathy-wiki/api/.harness/state/`（706 个 JSON） | **16 MB** | harness 运行状态文件（7 月起，已被 `karpathy-wiki/.gitignore` 的 `.harness/` 忽略）；**可能影响历史运行的可恢复流式（resume）**，且服务当前在跑，未擅动 |
+| `wiki-harness/.harness/state/`（17 个） | 72 KB | 同上 |
+| `karpathy-wiki/data/.harness/logs/`（141 个） | 658 KB | harness 执行日志 |
+| `karpathy-wiki/data/test-batch`（20）/ `test-batch2`（3）/ `test-sample.docx` | 31 KB | 7 月测试残留；`test-batch` 仅被 `.harness/state` 历史元数据提及，无源码引用 |
+| `karpathy-wiki/data/config.json` | **0 字节** | **git 跟踪**的历史空文件（提交 `d47adf4`），全仓无任何代码引用；应用实际读取 `api/config.json` |
+| `karpathy-wiki/data/_migrated_local_2026-08-05T03-10-27/` | 192 KB | 迁移备份（9 个**已跟踪**的会话文件），被 `scripts/migrate-sessions-local.mjs` 与设计文档引用 |
+
 **明确排除出范围的项**（按你的规范主动判断）：
 1. **系统级临时目录与全局应用缓存**（`%TEMP%` / `AppData` 缓存）——超出工作空间边界，属系统级高危操作。
-2. **未使用依赖包分析**（`pnpm`/`depcheck`）——需依赖图分析 + 重装验证的破坏性操作，且本项目含 pnpm 符号链接与 `file:` 依赖，建议单独立项。
+2. **依赖移除**：已完成**只读分析**（见下），结论是**无需移除**；因此未执行任何卸载。
+
+#### 未使用依赖只读分析结果
+
+| 包 | 类型 | 判定 |
+|---|---|---|
+| `@vitest/coverage-v8`（frontend、api） | devDep | ✅ 在用 —— `vitest.config.ts` 的 coverage provider |
+| `@vue/test-utils`（frontend） | devDep | ✅ 在用 —— `frontend/test/query-edit-resend-flow.test.ts` |
+| `typescript`（api） | devDep | ✅ 在用 —— 经 CLI（`tsc`）调用，非 import |
+
+**结论：`dependencies` 零未引用；4 个疑似项逐项核实后全部在用。本项目（pnpm workspace + `file:` 依赖）不宜盲目 `pnpm prune`，本轮不做依赖变更。**
 
 ## 五、安全与可追溯性
 

@@ -11,15 +11,15 @@
     "phases_executed": ["Recon", "Classify", "Impact", "Execute", "Verify", "Archive"]
   },
   "totals": {
-    "files_deleted": 1118,
-    "bytes_freed": 250295683,
-    "mb_freed": 238.7,
+    "files_deleted": 1122,
+    "bytes_freed": 250311919,
+    "mb_freed": 238.72,
     "errors": 0,
-    "batches": 4,
+    "batches": 5,
     "workspace_before_mb": 636.64,
-    "workspace_after_mb": 397.94,
+    "workspace_after_mb": 397.92,
     "workspace_before_files": 4120,
-    "workspace_after_files": 3002,
+    "workspace_after_files": 2998,
     "reduction_percent": 37.5,
     "size_scope_note": "剪枝统计：不含 .git（162MB）与 node_modules；release/ 清理时不存在"
   },
@@ -54,7 +54,8 @@
     { "batch": "1-caches", "files": 495, "mb": 53.94, "targets": ["frontend/coverage", "frontend/node_modules/.vite", "api/node_modules/.vite", "api/.scannerwork", "frontend/.scannerwork", ".trae/**/__pycache__", ".workbuddy/**/__pycache__", "docs/test-evidence/sprint6/__pycache__"] },
     { "batch": "2-artifacts-logs", "files": 33, "mb": 4.34, "targets": ["build/bundle_test.cjs", "_inspect.ps1", "wiki-toc-verify-*.png", "vite timestamp mjs", "test_screenshots/", "陈旧日志×20", "空脚本×5"] },
     { "batch": "3-e2e-backup", "files": 567, "mb": 179.94, "targets": ["data/_e2e_backup_vault_20260901_105235"] },
-    { "batch": "4-stale-logs", "files": 23, "mb": 0.49, "targets": ["karpathy-wiki/logs 陈旧日志×22", "frontend/sonar-scan.log"] }
+    { "batch": "4-stale-logs", "files": 23, "mb": 0.49, "targets": ["karpathy-wiki/logs 陈旧日志×22", "frontend/sonar-scan.log"] },
+    { "batch": "5-vitest-temp", "files": 4, "mb": 0.02, "targets": ["frontend/vitest.config.ts.timestamp-*.mjs"] }
   ],
   "protected": [
     { "path": "karpathy-wiki/api/_deploy_menu_build.mjs.bak", "reason": "上一轮 REVIEW 定性为唯一副本，无替代版本（虽匹配 *.bak 垃圾模式）" },
@@ -67,8 +68,12 @@
     { "path": ".workbuddy/", "reason": "工作记忆与历史清理报告（审计凭证）" }
   ],
   "uncleaned_risky": [
-    { "path": "karpathy-wiki/data/config.json", "size": "0 字节", "reason": "数据目录下的空文件，疑似运行时占位或被截断，需人工确认后处理" },
-    { "path": "karpathy-wiki/data/.harness/logs/ (141 个日志)", "size": "658 KB", "reason": "位于 data/ 数据目录，配置无对应规则；已被 karpathy-wiki/.gitignore 的 .harness/ 覆盖，体积小，保守保留" },
+    { "path": "karpathy-wiki/api/.harness/state/ (706 JSON)", "size": "16 MB", "reason": "harness 运行状态文件（gitignored）；可能影响历史运行的可恢复流式(resume)，且服务当前在运行，未擅动，待确认" },
+    { "path": "wiki-harness/.harness/state/ (17 JSON)", "size": "72 KB", "reason": "同上（harness 运行状态）" },
+    { "path": "karpathy-wiki/data/config.json", "size": "0 字节", "reason": "git 跟踪的历史空文件（提交 d47adf4），全仓无代码引用；应用实际读取 api/config.json，待确认后可从索引与磁盘移除" },
+    { "path": "karpathy-wiki/data/test-batch/ (20) + test-batch2/ (3) + test-sample.docx", "size": "31 KB", "reason": "7 月测试残留；仅被 .harness/state 历史元数据提及，无源码引用，待确认" },
+    { "path": "karpathy-wiki/data/_migrated_local_2026-08-05T03-10-27/", "size": "192 KB", "reason": "迁移备份（9 个已跟踪会话文件），被 scripts/migrate-sessions-local.mjs 与设计文档引用，保留" },
+    { "path": "karpathy-wiki/data/.harness/logs/ (141 个)", "size": "658 KB", "reason": "位于 data/ 数据目录，配置无对应规则；已被 karpathy-wiki/.gitignore 的 .harness/ 覆盖，体积小，保守保留" },
     { "path": "tooling/_archive_root_debug/", "size": "55 KB", "reason": "上一轮有意归档的调试脚本，距今 25 天未满 30 天阈值，下轮再评估" },
     { "path": "karpathy-wiki/api/_smoke_*.mjs / _probe3000.mjs / _envtest.ts", "size": "约 30 KB", "reason": "无代码引用，但属可复用冒烟探针；删除收益极低、风险非零，保留" },
     { "path": "karpathy-wiki/logs/api-dev*.log (3 个)", "size": "104 KB", "reason": "近期(9/6-9/9)运行日志，可能仍在排查中使用" },
@@ -79,7 +84,7 @@
   ],
   "out_of_scope": [
     { "item": "系统级临时目录与全局应用缓存 (%TEMP% / AppData 缓存)", "reason": "超出工作空间边界，属系统级高危操作，按用户规范主动排除" },
-    { "item": "未使用依赖包分析 (pnpm/depcheck)", "reason": "需依赖图分析 + 重装验证，属破坏性操作；本项目含 pnpm 符号链接与 file: 依赖，建议单独立项" }
+    { "item": "未使用依赖包分析 (pnpm/depcheck)", "status": "已只读分析完成", "conclusion": "dependencies 零未引用；4 个疑似 devDep（@vitest/coverage-v8 ×2、@vue/test-utils、typescript）逐项核实后均在用（coverage provider / frontend/test / CLI 调用）。**未执行任何卸载**。" }
   ],
   "git": {
     "tracked_deleted_before_sync": 576,
