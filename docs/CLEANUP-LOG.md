@@ -141,3 +141,9 @@
 - 启动后端：`[SPA] served from ...public_live_1789013416688`（命中 startup_marker），健康探测 `/` → **HTTP 200**、`/wiki/` → **HTTP 200** ✅
 
 **验证状态:** ✅ 1,118 目标全部 GONE；保护项/源码/配置完好；`git ls-files --deleted` 归零；SPA 重建并恢复服务（200）；0 错误。报告：`docs/CLEANUP-REPORT-20260910.md` + `.json`
+
+**后续补做（同一批次追加，同日完成）:**
+- **批次 5-vitest-temp**：补扫删除 `karpathy-wiki/frontend/vitest.config.ts.timestamp-*.mjs` ×4（4,059 B each，8/19–8/20 遗留；先前只匹配了 `vite.config.ts.timestamp-*` 前缀故漏扫）→ **合计 1,122 文件 / 250,311,919 字节（238.72 MB）**，工作空间 636.64 → 397.92 MB
+- **未使用依赖只读分析**：`dependencies` 零未引用；`@vitest/coverage-v8`(×2)、`@vue/test-utils`、`typescript` 4 个疑似 devDep 逐项核实均在用（coverage provider / `frontend/test/` / CLI 调用）→ **未做任何卸载**
+- **补扫发现新候选（未处理，待确认）**：`karpathy-wiki/api/.harness/state/`（706 JSON，**16 MB**，harness 运行状态，可能影响 resume 且服务在运行）、`wiki-harness/.harness/state/`（72 KB）、`data/test-batch`+`test-batch2`+`test-sample.docx`（31 KB，7 月测试残留）、`data/config.json`（0 字节 git 跟踪残留，无代码引用）、`data/_migrated_local_*`（192 KB 迁移备份，被脚本引用 → 保留）
+- **提交**：`5d0566b`（576 删除 + `.gitignore` + 报告）；后续补做另提交
