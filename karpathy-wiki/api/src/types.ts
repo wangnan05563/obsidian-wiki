@@ -577,6 +577,17 @@ export interface MediaConfig {
     // 默认视频时长（秒）
     defaultVideoSeconds: number;
   };
+  // T00320 管理员全局「共享媒体」配置：默认共享生图/视频，供未配置个人 BYOK 的用户降级使用。
+  // 为什么独立于 media.agnes：与「共享AI（LLM）」降级思路一致，管理员在「共享AI」Tab 显式维护
+  //   image/video 两组全局共享配置（可各自持有 baseUrl/apiKey/参数/扩展项），
+  //   生成时优先级：用户 BYOK > media.shared（管理员共享）> media.agnes（默认兜底）。
+  // 为什么 optional：未配置态与既有行为完全一致（个人 BYOK 与 media.agnes 兜底不受影响），向后兼容。
+  // 为什么复用 MediaImageUserConfig/MediaVideoUserConfig：字段集合与个人媒体配置带长度一致，
+  //   admin 表单/生成覆盖逻辑与 BYOK 共用同一套类型与 applyOverride 语义（type-sync-rule）。
+  shared?: {
+    image?: MediaImageUserConfig;
+    video?: MediaVideoUserConfig;
+  };
 }
 
 // ===== 媒体生成 BYOK 用户配置 + 预设（生图/视频可配置化）=====
@@ -964,7 +975,7 @@ export interface CleanupStorageStatus {
 // - chunk_threshold: 长群聊分块阈值（消息条数），超过则按时间窗口切分
 // - extract_model: 价值抽取专用模型（可与主 llm.model 不同，支持按任务选型）
 // - extract_base_url: 抽取专用模型 baseUrl（OpenAI 兼容协议）
-//   为什么独立：extract_model 可能用不同 provider（如 glm-4-plus vs 主 model agnes-2.0-flash），
+//   为什么独立：extract_model 可能用不同 provider（如 glm-4-plus vs 主 model agnes-2.5-flash），
 //   需独立 baseUrl 避免请求发错端点
 // - extract_token_budget: 抽取阶段 token 预算上限，独立于 budget.tokenBudget
 //   为什么独立：抽取任务长文本场景多，避免与编译任务争用预算

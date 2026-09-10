@@ -209,7 +209,16 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
     #   跳过可避免已知类型问题阻塞打包
     Push-Location (Join-Path $repoRoot "frontend")
     try {
-        & npx vite build 
+        # 为什么用 base='/wiki/'（与 vite.config.ts 默认一致，这里显式声明以消除歧义）：
+        #   Funnel set-path /wiki/ 只转发 /wiki/* 请求；若资源不带 /wiki/ 前缀（base=/），
+        #   浏览器请求 /assets/* 不经过 Funnel → 404 → 白屏。
+        #   base=/wiki/ 时资源为 /wiki/assets/*，浏览器请求经 Funnel 剥离 /wiki/ 后后端收到
+        #     /assets/*，命中 spa-static.ts 的 prefix='/' fastifyStatic；
+        #   API 为 /wiki/api 同样被剥离 → /api/*，命中后端路由。
+        #   exe 本地根路径访问也可用：index.html 资源带 /wiki/ 前缀，命中 prefix='/wiki/'。
+        # 为什么用等号形式 --base=/wiki/：PowerShell 下 --base /wiki/ 会被拆分为多个 token，
+        #   / 被当作 Windows 风格选项前缀，需用 commander 等号语法让值与选项一体传递（跨 shell 分词可靠）。
+        & npx vite build --base=/wiki/
     } finally {
         Pop-Location
     }
@@ -607,10 +616,13 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 [Files]
 ; ---- 程序文件 / 资源：每次安装都覆盖（只读应用代码与资源，随版本更新）----
 ; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "..\release\app\karpathy-wiki\*" 通配。
+; 为什么目录 Source 必须以 "\*" 结尾：Inno 对非通配符目录会把源目录末层名再拼接到 DestDir，
+; 导致 {app}\node_modules\node_modules、{app}\public\public 双重嵌套，运行时 require 找不到 pdf-parse。
+; 加 "\*" 后以通配符匹配目录内容并用 recursesubdirs 平铺，保持与构建产物一致的目录结构。
 Source: "..\release\app\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\release\app\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\release\app\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\release\app\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\public\*"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\prompts\*"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\release\app\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release\app\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 ; 品牌图标：安装到 {app} 供快捷方式 / 卸载项引用（exe 图标另由 build-exe.ps1 用 Windows API 注入，不依赖 rcedit）

@@ -2,6 +2,9 @@
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import {
+  CopyDocument, TopRight, VideoPlay, VideoPause, Link, RefreshRight, Close, Setting, MagicStick, Check, Key, CirclePlus, Connection,
+} from '@element-plus/icons-vue';
 import type {
   TunnelStatus,
   TunnelConfigData,
@@ -374,26 +377,31 @@ onBeforeUnmount(() => {
         <div class="url-box">
           <code class="url-text">{{ status.publicUrl }}</code>
           <div class="url-actions">
-            <el-button size="small" data-tip="复制公网地址到剪贴板" @click="copyUrl">复制</el-button>
-            <el-button size="small" type="primary" data-tip="在新标签页打开公网地址" @click="openUrl">打开</el-button>
+            <el-button size="small" :icon="CopyDocument" data-tip="复制-复制公网地址到剪贴板" @click="copyUrl" />
+            <el-button size="small" type="primary" :icon="TopRight" data-tip="打开-在新标签页打开公网地址" @click="openUrl" />
           </div>
         </div>
       </div>
       <div class="actions">
-        <el-button
-          type="primary"
-          data-tip="启动内网穿透隧道，将本地知识库服务暴露到公网"
-          :loading="starting"
-          :disabled="status?.status === 'running'"
-          @click="startTunnel"
-        >启动隧道</el-button>
-        <el-button
-          type="danger"
-          data-tip="停止当前穿透隧道，断开公网访问"
-          :loading="stopping"
-          :disabled="status?.status !== 'running'"
-          @click="stopTunnel"
-        >停止隧道</el-button>
+        <!-- 启动/停止按钮带 :disabled；disabled 的原生按钮不触发 mouseover，故外包 span 承载 data-tip 保证悬浮提示仍显示 -->
+        <span class="tunnel-action-wrap" data-tip="启动隧道-启动内网穿透，将本地知识库服务暴露到公网">
+          <el-button
+            type="primary"
+            :icon="VideoPlay"
+            :loading="starting"
+            :disabled="status?.status === 'running'"
+            @click="startTunnel"
+          />
+        </span>
+        <span class="tunnel-action-wrap" data-tip="停止隧道-停止当前穿透隧道，断开公网访问">
+          <el-button
+            type="danger"
+            :icon="VideoPause"
+            :loading="stopping"
+            :disabled="status?.status !== 'running'"
+            @click="stopTunnel"
+          />
+        </span>
       </div>
     </div>
 
@@ -423,9 +431,9 @@ onBeforeUnmount(() => {
         <template #title>Tailscale Funnel 需要授权</template>
         <div class="auth-detail">{{ authError.detail }}</div>
         <div class="auth-actions">
-          <el-button type="primary" size="small" data-tip="在浏览器中打开 Tailscale Funnel 授权页面" @click="openAuthUrl">打开授权链接</el-button>
-          <el-button size="small" data-tip="完成授权后重新启动隧道" @click="startTunnel">我已授权，重新启动</el-button>
-          <el-button size="small" data-tip="关闭此授权错误提示" @click="dismissAuthError">取消</el-button>
+          <el-button type="primary" size="small" :icon="Link" data-tip="打开授权-在浏览器中打开 Tailscale Funnel 授权页面" @click="openAuthUrl" />
+          <el-button size="small" :icon="RefreshRight" data-tip="重新启动-完成授权后重新启动隧道" @click="startTunnel" />
+          <el-button size="small" :icon="Close" data-tip="取消-关闭此授权错误提示" @click="dismissAuthError" />
         </div>
       </el-alert>
     </div>
@@ -477,10 +485,10 @@ onBeforeUnmount(() => {
                 <span class="info-label">固定域名：</span>
                 <code>{{ config.hostname }}</code>
               </div>
-              <el-button size="small" type="primary" data-tip="重新运行 Cloudflare Named 隧道配置向导" @click="openWizard">重新配置</el-button>
+              <el-button size="small" type="primary" :icon="Setting" data-tip="重新配置-重新运行 Cloudflare Named 隧道配置向导" @click="openWizard" />
             </div>
             <div v-else class="named-config-empty">
-              <el-button size="small" type="primary" data-tip="打开 Cloudflare Named 隧道三步配置向导（授权→创建→绑定域名）" @click="openWizard">开始配置向导</el-button>
+              <el-button size="small" type="primary" :icon="MagicStick" data-tip="配置向导-打开 Cloudflare Named 隧道三步配置向导（授权→创建→绑定域名）" @click="openWizard" />
               <span class="hint">三步配置：授权登录 → 创建隧道 → 绑定域名</span>
             </div>
           </div>
@@ -540,7 +548,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="actions">
-        <el-button type="primary" data-tip="保存穿透配置（Provider / 隧道模式 / Authtoken / 开机自启）" :loading="saving" @click="saveConfig">保存配置</el-button>
+        <el-button type="primary" :icon="Check" data-tip="保存配置-持久化穿透配置（Provider / 隧道模式 / Authtoken / 开机自启）" :loading="saving" @click="saveConfig" />
       </div>
     </div>
 
@@ -564,9 +572,7 @@ onBeforeUnmount(() => {
           点击"开始授权"后，cloudflared 会启动 OAuth 流程。在浏览器中完成 Cloudflare 账号授权后，系统会自动检测 cert.pem 生成并进入下一步。
         </div>
         <div class="wizard-actions">
-          <el-button type="primary" data-tip="打开 Cloudflare OAuth 授权登录流程" :loading="loginPolling" @click="startLogin">
-            {{ loginResult ? '重新授权' : '开始授权' }}
-          </el-button>
+          <el-button type="primary" :icon="Key" data-tip="授权登录-打开 Cloudflare OAuth 授权登录流程" :loading="loginPolling" @click="startLogin" />
         </div>
         <div class="wizard-login-status" v-if="loginResult">
           <el-alert
@@ -602,7 +608,7 @@ onBeforeUnmount(() => {
           :disabled="creatingTunnel"
         />
         <div class="wizard-actions">
-          <el-button type="primary" data-tip="创建命名隧道并生成 credentials 文件" :loading="creatingTunnel" @click="createTunnel">创建隧道</el-button>
+          <el-button type="primary" :icon="CirclePlus" data-tip="创建隧道-创建命名隧道并生成 credentials 文件" :loading="creatingTunnel" @click="createTunnel" />
         </div>
       </div>
 
@@ -617,7 +623,7 @@ onBeforeUnmount(() => {
           :disabled="routingDns"
         />
         <div class="wizard-actions">
-          <el-button type="primary" data-tip="为固定域名配置 Cloudflare DNS 解析并切换到 Named 模式" :loading="routingDns" @click="routeDns">配置 DNS</el-button>
+          <el-button type="primary" :icon="Connection" data-tip="配置DNS-为固定域名配置 Cloudflare DNS 解析并切换到 Named 模式" :loading="routingDns" @click="routeDns" />
         </div>
       </div>
     </el-dialog>
@@ -720,6 +726,11 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 12px;
   margin-top: 16px;
+}
+
+/* 包裹 disabled 按钮的容器：让图标按钮仍能水平对齐（disabled 原生按钮不触发 mouseover，data-tip 挂在此容器上） */
+.tunnel-action-wrap {
+  display: inline-flex;
 }
 
 .config-block {

@@ -9,12 +9,15 @@ import {
   saveSubAgentConfig,
   saveMcpConfig,
   maskApiKey,
+  buildConfigExport,
+  importConfigData,
+  ConfigMigrationError,
 } from '../config.js';
 import type { AppConfig } from '../types.js';
 import type { HarnessAdapter } from '../engine/harness-adapter.js';
 import { resolveSubAgents } from '../engine/harness-adapter.js';
 import type { IsolationGuards } from '../middleware/auth.js';
-import { createIsolationGuards } from '../middleware/auth.js';
+import { createIsolationGuards, audit } from '../middleware/auth.js';
 
 // 注册配置路由。
 //   GET  /api/config                  读取当前配置（API Key 字段脱敏）
@@ -324,6 +327,63 @@ export function registerConfigRoute(
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       return void reply.code(500).send({ error: msg });
+    }
+  });
+
+  // GET /api/config/export：导出全部配置（密钥已脱敏），供换服务器/环境迁移。
+  // 鉴权：requireAdmin——迁移属全局危险操作，仅管理员可见可执行。
+  // 大小：返回当前 config.json（多为 KB~MB 级），未压缩；如需大体积压缩可在此扩展 gzip。
+  app.get('/api/config/export', { preHandler: guards.requireAdmin }, async (request, reply) => {
+    try {
+      const { fileName, data } = await buildConfigExport();
+      // 附带 attachment 文件名：前端可据此命名下载文件
+      reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
+      audit({
+        request,
+        action: 'config_change',
+        resource: 'GET /api/config/export',
+        result: 'success',
+        message: `配置导出（${fileName}）`,
+      });
+      return void reply.send(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      audit({ request, action: 'config_change', resource: 'GET /api/config/export', result: 'fail', message: msg });
+      return void reply.code(500).send({ error: msg });
+    }
+  });
+
+  // POST /api/config/import：从导出文件批量导入配置（mode=merge 补齐缺失 / overwrite 整体替换）。
+  // 鉴权：requireAdmin；overwrite 先备份 config.json.bak，失败可回滚。
+  // 体积：Fastify 全局 bodyLimit=50MB 兜底（>50MB 直接在框架层拒绝）；
+  // 校验：config.ts 内做白名单 + 类型校验，未知字段忽略，密钥掩码回传沿用现值。
+  app.post('/api/config/import', { preHandler: guards.requireAdmin }, async (request, reply) => {
+    const body = (request.body ?? {}) as { data?: unknown; mode?: string };
+    const mode = body.mode === 'overwrite' ? 'overwrite' : body.mode === 'merge' ? 'merge' : undefined;
+    if (!mode) {
+      audit({ request, action: 'config_change', resource: 'POST /api/config/import', result: 'fail', message: 'mode 必须为 merge 或 overwrite' });
+      return void reply.code(400).send({ error: 'mode 必须为 merge 或 overwrite' });
+    }
+    if (body.data === undefined || body.data === null) {
+      audit({ request, action: 'config_change', resource: 'POST /api/config/import', result: 'fail', message: '请求体缺少 data 字段' });
+      return void reply.code(400).send({ error: '请求体缺少 data 字段' });
+    }
+    try {
+      const result = await importConfigData(body.data, mode);
+      audit({
+        request,
+        action: 'config_change',
+        resource: 'POST /api/config/import',
+        result: 'success',
+        message: `配置导入 mode=${mode} applied=${result.applied} skipped=${result.skipped} failed=${result.failed}`,
+      });
+      return void reply.send({ ok: true, mode, ...result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      audit({ request, action: 'config_change', resource: 'POST /api/config/import', result: 'fail', message: `mode=${mode} ${msg}` });
+      // ConfigMigrationError：格式/完整性不符，返回 400 + 明确 message；其余为写盘等内部错误 → 500
+      const status = err instanceof ConfigMigrationError ? 400 : 500;
+      return void reply.code(status).send({ error: msg });
     }
   });
 }

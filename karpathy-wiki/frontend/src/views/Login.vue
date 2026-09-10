@@ -118,8 +118,6 @@ function handleKeydown(e: KeyboardEvent) {
 
         <div class="login-hint">
           <span>默认账户：</span>
-          <code>admin/admin123</code>
-          <code>user/user123</code>
           <code>guest/guest123</code>
         </div>
 

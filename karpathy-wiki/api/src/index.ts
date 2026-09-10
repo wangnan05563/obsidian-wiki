@@ -74,20 +74,23 @@ const IS_PACKAGED = IS_SEA;
 /**
  * 加载 .env 文件环境变量（pkg 打包模式需要手动加载）
  * 为什么需要：开发模式由 start.ps1 加载，打包后需自行加载
- * 行解析拆分为独立函数，降�?loadEnvFile 认知复杂度（S3776�?
+
  */
 function applyEnvLine(line: string): void {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#')) return;
-  const m = trimmed.match(/^([^=]+)=(.*)$/); // NOSONAR: 单次匹配取键值，match 返回数组更适合此场�?
+
+  // 用 match 从 .env 行提取 KEY=VALUE；未匹配返回 null 跳过
+  // 为什么用 match 而非 exec：单行单次解析，数组结果直接取 [1]（键）与 [2]（值）
+  const m = trimmed.match(/^([^=]+)=(.*)$/);
   if (m && !process.env[m[1].trim()]) {
     process.env[m[1].trim()] = m[2].trim();
   }
 }
 
 function loadEnvFile(): void {
-  // 开发模式和打包模式都加�?.env，避免依赖启动脚本是否加�?.env
-  // 之前�?IS_PACKAGED 模式加载，但 start-service.ps1 不加�?.env 导致 401
+
+
   // SEA 模式：用户数据目录（%LOCALAPPDATA%/KarpathyWiki）下放 .env，普通用户可写、与 config.json 同目录
   const candidates = [
     getUserDataPath('.env'),
@@ -107,10 +110,10 @@ function loadEnvFile(): void {
 }
 
 /**
- * 端口清理：杀掉占用目标端口的残留进程（pkg 打包模式�?
- * 为什么需要：上次异常退出可能残留进程占用端�?
+ * 端口清理：杀掉占用目标端口的残留进程（pkg 打包模式）?
+ * 为什么需要：上次异常退出可能残留进程占用端口?
  */
-// 提取 kill 逻辑到独立函数，降低 cleanupPort 认知复杂度（S3776�?
+
 function killPid(pid: string): boolean {
   try {
     execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
@@ -126,13 +129,14 @@ function cleanupPort(port: number): void {
   try {
     output = execSync('netstat -aon', { encoding: 'utf8', timeout: 5000 });
   } catch {
-    return; // netstat 失败不阻�?
+
   }
-  // �?String.raw 避免正则字符串双重转义（S7780�?
+
   const pattern = new RegExp(String.raw`:${port}\s+\S+\s+\S+\s+LISTENING\s+(\d+)`);
   const killed = new Set<string>();
   for (const line of output.split(/\r?\n/)) {
-    const m = line.match(pattern); // NOSONAR: 单次匹配取监听端�?PID，match 返回数组更适合此场�?
+    // 用 exec 从当前行提取占用端口的 PID；未匹配返回 null 跳过
+    const m = pattern.exec(line);
     if (m && !killed.has(m[1]) && killPid(m[1])) {
       killed.add(m[1]);
     }
@@ -140,7 +144,7 @@ function cleanupPort(port: number): void {
 }
 
 /**
- * 自动打开浏览器（pkg 打包模式�?
+ * 自动打开浏览器（pkg 打包模式）?
  */
 function openBrowser(url: string): void {
   if (!IS_PACKAGED) return;
@@ -206,7 +210,7 @@ interface BuiltApp {
  * 监听与优雅停止由 main() 负责。
  */
 export async function buildApp(): Promise<BuiltApp> {
-  // pkg 打包模式：加�?.env + 端口清理
+
   loadEnvFile();
 
   // 全局代理配置：检测 HTTPS_PROXY/HTTP_PROXY 环境变量，配置 undici ProxyAgent
@@ -226,9 +230,9 @@ export async function buildApp(): Promise<BuiltApp> {
   // auth 未启用（单租户）时所有守卫放行，保持既有部署形态；启用时按登录/管理员校验。
   const isolationGuards = createIsolationGuards(config.auth);
 
-  // pkg 打包模式：清理残留端�?
+  // pkg 打包模式：清理残留端口
   if (IS_PACKAGED) {
-    console.log('[启动] Karpathy-Wiki 打包模式，清理残留端�?..');
+    console.log('[启动] Karpathy-Wiki 打包模式，清理残留端口...');
     cleanupPort(config.server.port);
   }
 
@@ -240,9 +244,9 @@ export async function buildApp(): Promise<BuiltApp> {
   await vault.startFileWatcher().catch((err) => {
     console.warn('[vault] 文件监听器启动失败，缓存失效依赖 writeFile + mtime 检测:', err);
   });
-  // 构�?HarnessAdapter。API Key 读取优先级：config.json.llm.apiKey > process.env[apiKeyRef]
+
   // 为什么用 getEffectiveApiKey：开发模式不加载 .env，仅靠环境变量会拿到空串导致 401
-  // §5.2 传�?webSearchConfig：query workflow 注入 web_search 工具时使�?
+
   const apiKey = getEffectiveApiKey(config);
 
   // §P3-SubAgent 显式配置：默认关闭（零破坏）。由 config.json 的 enableSubAgents 控制，
@@ -269,8 +273,8 @@ export async function buildApp(): Promise<BuiltApp> {
     subAgentsConfig,
   );
 
-  // 配置驱动�?Fastify logger：level �?config.json 读取，默�?info
-  // 为什么不�?logger: true：默认配置无法控制级别，且不记录请求级日�?
+
+
   const loggingConfig = config.logging ?? { level: 'info', enableRequestLog: true, logFilePath: '' };
 
   // 日志双写：同时输出到 stdout 和文件（提取为独立函数降低 main 认知复杂度）
@@ -293,14 +297,14 @@ export async function buildApp(): Promise<BuiltApp> {
     pluginTimeout: 60000,
   });
   // 请求级日志钩子：覆盖 HTTP 层，确保前端报错时后端日志有反馈
-  // 为什么需要：路由 catch 块只通过 SSE 推错误给前端，后端日志流无记�?
+
   if (loggingConfig.enableRequestLog) {
-    // onRequest：记录请求进入（method + url�?
+
     app.addHook('onRequest', async (request) => {
       request.log.info({ method: request.method, url: request.url }, 'incoming request');
     });
 
-    // onResponse：记录请求完成（method + url + statusCode + 耗时�?
+
     app.addHook('onResponse', async (request, reply) => {
       const elapsedMs = reply.elapsedTime.toFixed(2);
       request.log.info(
@@ -309,7 +313,7 @@ export async function buildApp(): Promise<BuiltApp> {
       );
     });
 
-    // onError：记录请求处理中抛出的错误（未捕获的异常�?
+
     app.addHook('onError', async (request, reply, error) => {
       request.log.error(
         { method: request.method, url: request.url, statusCode: reply.statusCode, err: error },
@@ -357,20 +361,20 @@ export async function buildApp(): Promise<BuiltApp> {
     }
   });
 
-  // 内网穿透：TunnelService 单例提前创建，供 CORS 白名单查询当�?tunnel 公网域名
-  // 为什么提前：CORS origin 回调需要同步查�?tunnel.publicUrl 判断是否放行
+
+
   const tunnel = new TunnelService();
 
-  // CORS：限�?origin 为本地开�?+ tunnel 域名白名�?
-  // 为什么需要：默认跨域全放开会暴露内�?API，白名单收敛到本地与已配�?tunnel
+
+
   await app.register(cors, {
     origin: (origin, cb) => {
-      // 允许本地开发前端、同源请求（�?origin�?
+
       if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
         cb(null, true);
         return;
       }
-      // 允许 tunnel 运行时的公网域名（quick tunnel 动态域�?+ tailscale/cpolar�?
+
       const tunnelUrl = tunnel.publicUrl;
       if (tunnelUrl) {
         try {
@@ -380,10 +384,10 @@ export async function buildApp(): Promise<BuiltApp> {
             return;
           }
         } catch {
-          // publicUrl 格式异常，跳�?
+
         }
       }
-      // 允许配置�?named tunnel 固定 hostname
+
       if (config.tunnel.hostname && origin === `https://${config.tunnel.hostname}`) {
         cb(null, true);
         return;
@@ -393,7 +397,7 @@ export async function buildApp(): Promise<BuiltApp> {
     credentials: true,
   });
 
-  // Helmet：安全响应头。CSP �?SPA 模式下需特殊配置，暂不启用避免阻断前端资�?
+
   // 冒烟环境(WIKI_SMOKE=1)跳过 helmet：@fastify/helmet 通过 onSend 钩子注入安全头，
   // 与本项目 Fastify 版本的 app.inject 不兼容（响应挂起、onResponse 永不触发）。
   // 仅绕过头部注入，不影响 API 行为契约验证；生产不受影响。
@@ -429,7 +433,7 @@ export async function buildApp(): Promise<BuiltApp> {
   //     （见 src/compression.ts 注释），已替换为同步压缩钩子，100% 可靠。
   registerCompression(app, { threshold: 1024 });
 
-  // 注册 multipart 插件以支�?compile 路由的文件上�?
+
   await app.register(multipart, {
     limits: { fileSize: 1024 * 1024 * 10 }, // 10MB 上限，防止超大文件耗尽内存
   });
@@ -471,35 +475,35 @@ export async function buildApp(): Promise<BuiltApp> {
   if (conversationsPersist) {
     registerConversationsRoute(app, dataDir, isolationGuards);
   }
-  // §5.1 全文检�?+ Vault 初始�?
+
   // §5.2 联网搜索路由：供前端直接调用展示搜索结果
   registerSearchRoute(app, vault);
   registerWebSearchRoute(app, config.webSearch);
   registerVaultRoute(app, vault, isolationGuards);
-  // AI 配置管理 + 系统清理：参�?17_xianyu 项目新增模块
+
   registerAiRoute(app, adapter, isolationGuards);
   registerCleanupRoute(app, vault, isolationGuards);
 registerDataCleanRoute(app, vault, isolationGuards);
   // QQ 聊天记录导入子系统（SRS §6.1 路由族）
-  // 为什么需�?config 完整对象：路由内�?config.qq ?? defaultQqConfig 兜底
+
   registerQqIngestRoute(app, adapter, vault, config, isolationGuards);
-  // URL 爬取子系统：从入�?URL 出发 BFS 爬取同级/子路径下、最�?N 跳内页面与附�?
-  // 为什么需�?config 完整对象：路由内�?config.urlCrawl ?? defaultUrlCrawlConfig 兜底
+
+
   registerUrlIngestRoute(app, adapter, vault, config, isolationGuards);
   // A1 网页捕获（书签捕获）：接收 bookmarklet 抓回的 outerHTML → 提取正文 → 合并 Markdown，供前端走 /api/compile text 模式
   registerRawIngestRoute(app, config, isolationGuards);
   // FR-16-2 浏览器书签导入：解析书签 HTML → Markdown → raw/ → compile
   // 为什么传入 vaultPath：路由需要将 combinedMarkdown 写入 raw/ 目录
   registerBookmarkIngestRoute(app, config.vaultPath, isolationGuards);
-  // 关于页面 + 检查更新：参�?17_xianyu 项目 about 模块
+
   registerAboutRoute(app);
-  // 工具配置管理：MCP/CLI/场景路由的可配置化调用（需�?4�?
+
   registerToolsRoute(app, adapter, isolationGuards);
   // MCP Server 端点：对外暴露知识库能力给外部 AI Agent。
   // 为什么独立于 isolationGuards：外部 Agent 无 Web 会话，改用 mcp.userToken/adminToken 双轨鉴权。
   registerMcpRoute(app, vault, adapter, config);
-  // 技能导入模块：支持上传 ZIP/.md 技能包，统一存储�?data/skills/
-  // 为什么放�?tools 之后：技能与工具配置同属扩展能力管理，但职责独立
+
+
   registerSkillRoute(app);
   // FR-10-1 AI 自动打标签：compile 末尾追加 ai_tags 建议 + 手动触发 + 确认
   // 为什么需要 config 完整对象：POST /api/tags/suggest 调用 LLM 需读取 llm.baseUrl/model/apiKey
@@ -519,8 +523,8 @@ registerDataCleanRoute(app, vault, isolationGuards);
   // Edge TTS 朗读：微软神经网络语音合成（免费、无 API Key），供前端朗读功能调用
   registerTtsRoute(app);
 
-  // RBAC 权限管理模块：必须在其他路由注册前初始化中间件（全局 preHandler）preHandler�?
-  // 为什么提前初始化：setupAuthMiddleware 通过 addHook 注册全局 preHandler�?
+
+
   // 必须在路由注册前调用，否则已注册的路由不会经过认证中间件
   if (config.auth) {
     await initAuthModule(config.auth, config.vaultPath);
@@ -530,7 +534,7 @@ registerDataCleanRoute(app, vault, isolationGuards);
     console.warn('[auth] 未配置 auth 字段，权限控制未启用');
   }
 
-  // 内网穿透：TunnelService 单例已提前创建（CORS 白名单依赖），此处注入路�?
+
   registerTunnelRoute(app, tunnel, isolationGuards);
   // autoStart 开启时服务启动即建立隧道，失败不阻断主服务
   if (config.tunnel.autoStart) {
@@ -539,7 +543,7 @@ registerDataCleanRoute(app, vault, isolationGuards);
     });
   }
 
-  // 健康检查端点（�?docker-compose healthcheck 用）
+
   app.get('/health', async () => ({ ok: true }));
 
   // SPA 静态资源托管（提取为独立函数降低 main 认知复杂度）
@@ -547,12 +551,12 @@ registerDataCleanRoute(app, vault, isolationGuards);
 
 
   // shutdown 优雅停止：优先停隧道，避免调度器停止后隧道仍转发流量到已关闭服务
-  // 为什么用 process 信号而非 Fastify 钩子：pkg 打包模式�?Ctrl+C �?SIGINT，需在进程级捕获
-  // 为什�?async：需等待 MCP 子进程清理完成再 exit，避免孤儿进�?
+
+
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[关闭] 收到 ${signal}，正在停止隧道与工具连接...`);
     tunnel.stop();
-    // 清理 MCP 子进程连接，�?graceful-shutdown-rule 顺序：子进程 �?连接 �?exit
+
     await shutdownToolRegistry();
     // § P2-7：关闭 chokidar 监听器，清空 VaultService 缓存
     await vault.dispose();

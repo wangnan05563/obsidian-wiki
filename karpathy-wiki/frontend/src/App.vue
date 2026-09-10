@@ -221,11 +221,7 @@ onBeforeUnmount(() => {
             v-for="tab in visibleMenuItems"
             :key="tab.key"
             class="tab-btn hover-glow"
-            :class="{
-              active: currentView === tab.key,
-              disabled: tab.key === 'progress' && !store.isCompiling && !store.isDone && !store.errorMessage && !store.isCancelled
-            }"
-            :disabled="tab.key === 'progress' && !store.isCompiling && !store.isDone && !store.errorMessage && !store.isCancelled"
+            :class="{ active: currentView === tab.key }"
             @click="go(tab.key)"
           >
             <NavIcons :name="tab.icon" :size="18" class="tab-icon" />
@@ -262,11 +258,7 @@ onBeforeUnmount(() => {
             v-for="tab in visibleMenuItems"
             :key="tab.key"
             class="icon-btn"
-            :class="{
-              active: currentView === tab.key,
-              disabled: tab.key === 'progress' && !store.isCompiling && !store.isDone && !store.errorMessage && !store.isCancelled
-            }"
-            :disabled="tab.key === 'progress' && !store.isCompiling && !store.isDone && !store.errorMessage && !store.isCancelled"
+            :class="{ active: currentView === tab.key }"
             @click="go(tab.key)"
             :aria-label="tab.label"
           >

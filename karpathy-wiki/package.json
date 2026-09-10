@@ -1,7 +1,7 @@
 {
   "name": "karpathy-wiki",
   "private": true,
-  "version": "0.1.202609071",
+  "version": "0.1.202609103",
   "scripts": {
     "dev:api": "pnpm --filter @karpathy-wiki/api dev",
     "dev:web": "pnpm --filter @karpathy-wiki/web dev",

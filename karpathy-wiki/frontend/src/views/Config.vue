@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { API_BASE } from '../utils/apiBase';
-import { ref, computed, reactive, onMounted, watch } from 'vue';
+import { ref, computed, reactive, onMounted, watch, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Check, Close } from '@element-plus/icons-vue';
+import { Check, Close, Connection, List, Download, Upload, Refresh, Document } from '@element-plus/icons-vue';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import MarkdownRenderer from '../components/MarkdownRenderer.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData, PromptFile, PromptTestRunEvent } from '../types';
@@ -37,9 +37,9 @@ import {
   DEFAULT_MEDIA_USER_CONFIG,
   type MediaUserConfig,
 } from '../services/mediaConfig';
-import type { MediaImagePreset, MediaVideoPreset } from '../types/media';
+import type { MediaImagePreset, MediaVideoPreset, MediaImageUserConfig, MediaVideoUserConfig } from '../types/media';
 
-const activeTab = ref<'schema' | 'config' | 'ai' | 'tts' | 'theme' | 'tools' | 'qq' | 'prompts' | 'mcp'>('schema');
+const activeTab = ref<'schema' | 'config' | 'ai' | 'sharedAi' | 'tts' | 'theme' | 'tools' | 'qq' | 'prompts' | 'mcp' | 'migrate'>('schema');
 const config = ref<ConfigData | null>(null);
 
 // ===== 朗读设置（按用户维度隔离）=====
@@ -256,6 +256,11 @@ const savingAi = ref(false);
 const testingAi = ref(false);
 const aiTestResult = ref<AiTestResult | null>(null);
 
+// T00355：系统配置页「私有配置」Key 状态。判定口径与本用户「AI 服务」页一致——
+// aiConfig.apiKeySet 由 loadAiConfig 的 localRealKey 派生（本用户浏览器本地是否存了真实 BYOK 密钥），
+// 与「共享AI 配置」（config.llm.apiKeySet 服务端 config.json）相互独立，避免两处状态口径不一致。
+const privateLlmKeySet = computed(() => Boolean(aiConfig.value?.apiKeySet));
+
 // AI 表单（可编辑，与 aiConfig 分离，保存时才同步）
 const aiForm = ref({
   provider: '',
@@ -275,6 +280,21 @@ const sharedAiForm = ref({
   apiKeySet: false, // 服务端共享是否已配置可用 Key
 });
 const savingSharedAi = ref(false);
+
+// ── T00319「共享AI」增强：预设快捷选择 / 获取模型 / 测试连接 ──
+// 这些状态均基于 sharedAiForm，独立于用户 BYOK（aiForm）相关的 testingAi/aiTestResult/fetchModelList，
+// 避免两区块状态互相干扰。模型列表存独立 sharedModels，而非 modelStore.availableModels（后者供 BYOK 下拉使用）。
+const testingSharedAi = ref(false);
+const sharedAiTestResult = ref<AiTestResult | null>(null);
+const sharedModels = ref<{ id: string }[]>([]);
+const sharedModelsLoading = ref(false);
+const sharedModelsError = ref('');
+// 共享区当前高亮的预设 key（仅用于标签高亮，不改动 sharedAiForm 之外的任何用户 BYOK 状态）
+const activeSharedPresetKey = ref('');
+// 当前 sharedAiForm.provider 匹配的预设（用于派生 model 输入框 placeholder，与 aiForm 的 matchedPreset 对称）
+const matchedSharedPreset = computed(() =>
+  aiPresets.value.find(p => p.provider === sharedAiForm.value.provider)
+);
 
 // 加载管理员「共享AI」当前值（GET，Key 脱敏）。
 async function loadSharedAi(): Promise<void> {
@@ -299,6 +319,11 @@ async function saveSharedAi(): Promise<void> {
   savingSharedAi.value = true;
   try {
     const cfg = sharedAiForm.value;
+    // T00324：随保存补发目标 provider 的 apiKeyRef（取自当前匹配预设）。
+    // 为什么必须带上：后端 saveAiConfig 仅在请求体提供 apiKeyRef 时才覆盖，否则保留旧值。
+    //   此前共享AI保存只发 provider/baseUrl/model/apiKey，切换 provider（如填选 Agnes 预设）后
+    //   config.json 仍残留旧 provider 的 apiKeyRef，导致"配置看似已保存却不生效、编译用错环境变量 key"。
+    const presetApiKeyRef = matchedSharedPreset.value?.apiKeyRef;
     const res = await authStore.authFetch(`${API_BASE}/ai/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -307,6 +332,7 @@ async function saveSharedAi(): Promise<void> {
         baseUrl: cfg.baseUrl,
         model: cfg.model,
         apiKey: cfg.apiKey,
+        ...(presetApiKeyRef ? { apiKeyRef: presetApiKeyRef } : {}),
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -319,6 +345,110 @@ async function saveSharedAi(): Promise<void> {
     ElMessage.error(apiErrorMessage('保存「共享AI」失败', err));
   } finally {
     savingSharedAi.value = false;
+  }
+}
+
+// T00319：把预设模板的 provider/baseUrl/model 应用到共享表单（保留 apiKey/apiKeySet 不变）。
+// 与用户 BYOK 的 applyPreset 不同：共享AI的 Key 由管理员统一维护在服务端，这里不加载/覆盖本地密钥，
+// 因此仅填充三个非敏感模板字段，避免把当前共享 Key 改掉或丢失脱敏回显值。
+function applySharedPreset(preset: LlmPreset): void {
+  if (!aiPresets.value.length) {
+    ElMessage.warning('预设列表尚未加载');
+    return;
+  }
+  activeSharedPresetKey.value = preset.key;
+  sharedAiForm.value.provider = preset.provider;
+  sharedAiForm.value.baseUrl = preset.baseUrl;
+  sharedAiForm.value.model = preset.model;
+  // 切换预设后旧 baseUrl 对应的模型清单已失效，清空列表与错误提示，避免下拉残留不匹配当前服务的模型
+  sharedModels.value = [];
+  sharedModelsError.value = '';
+  ElMessage.success(`已套用 ${preset.label}，请确认并保存「共享AI」配置`);
+}
+
+// T00319：基于共享表单校验连接（复用 testConnection 的 POST /api/ai/test-connection 模式与脱敏处理）。
+// 脱敏串（**** 开头）非真实密钥，发送前清空；并显式声明 useServerKey=true，告知后端「共享场景」：
+//   密钥口径是「服务端共享 llm key」（getEffectiveApiKey），而非个人 BYOK，
+//   从而避免已保存共享 Key 时被错误地提示「API Key 未设置，请到 AI 服务填个人 key」。
+async function testSharedAiConnection(): Promise<void> {
+  testingSharedAi.value = true;
+  sharedAiTestResult.value = null;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: sharedAiForm.value.baseUrl,
+        model: sharedAiForm.value.model,
+        provider: sharedAiForm.value.provider,
+        apiKey: sharedAiForm.value.apiKey.startsWith('****') ? '' : sharedAiForm.value.apiKey,
+        useServerKey: true,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result: AiTestResult = await res.json();
+    sharedAiTestResult.value = result;
+    if (result.ok) {
+      ElMessage.success('共享AI连接测试通过');
+    } else {
+      ElMessage.warning('共享AI连接测试失败');
+    }
+  } catch (err) {
+    sharedAiTestResult.value = { ok: false, detail: (err as Error).message };
+    ElMessage.error(apiErrorMessage('共享AI测试失败', err));
+  } finally {
+    testingSharedAi.value = false;
+  }
+}
+
+// 共享AI测试结果展示文本（计算属性，规避模板内 ref 类型收窄问题，与 testResultText 对称）
+const sharedTestResultText = computed(() => {
+  const r = sharedAiTestResult.value;
+  if (!r) return '';
+  return r.ok ? `连接成功（模型: ${r.model || '未知'}）` : r.detail;
+});
+
+// T00319：基于共享表单拉取服务商可用模型列表。
+// 复用 fetchModelList 思路（POST /api/ai/models + 脱敏 key + 空 baseUrl 拦截），但结果存入独立
+// sharedModels，不落入 modelStore.availableModels（后者是用户 BYOK 下拉的数据源，占用会串区）。
+async function fetchSharedModelList(): Promise<void> {
+  if (!sharedAiForm.value.baseUrl.trim()) {
+    ElMessage.warning('请先填写 API Base URL');
+    return;
+  }
+  sharedModelsLoading.value = true;
+  sharedModelsError.value = '';
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: sharedAiForm.value.baseUrl,
+        apiKey: sharedAiForm.value.apiKey.startsWith('****') ? '' : sharedAiForm.value.apiKey,
+        provider: sharedAiForm.value.provider,
+      }),
+    });
+    const data = (await res.json()) as { ok?: boolean; models?: { id: string }[]; detail?: string };
+    if (!data.ok) {
+      sharedModelsError.value = data.detail || '获取模型列表失败';
+      sharedModels.value = [];
+      ElMessage.warning(sharedModelsError.value);
+      return;
+    }
+    sharedModels.value = data.models ?? [];
+    if (!sharedModels.value.length) {
+      sharedModelsError.value = '服务商未返回任何可用模型';
+      sharedModels.value = [];
+      ElMessage.warning(sharedModelsError.value);
+    } else {
+      ElMessage.success(`已获取 ${sharedModels.value.length} 个可用模型，可从下拉选取`);
+    }
+  } catch (err) {
+    sharedModelsError.value = err instanceof Error ? err.message : String(err);
+    sharedModels.value = [];
+    ElMessage.warning(sharedModelsError.value || '获取模型列表失败');
+  } finally {
+    sharedModelsLoading.value = false;
   }
 }
 
@@ -809,6 +939,420 @@ const imageGenTestText = computed(() => {
   if (!r.ok) return r.detail;
   return r.model ? `连接成功（模型 ${r.model}）` : '连接成功';
 });
+
+// ── T00345 生图/视频：模型厂商预设 + 控制台链接 + 测试/获取模型/官方文档 ──
+// 厂商预设/控制台链接/官方文档以常量映射表集中维护，新增厂商只需在此追加一项，便于扩展。
+// 选中厂商后自动填充请求地址、默认模型模板与鉴权说明；「获取 API Key」与「官方文档」随厂商动态映射。
+interface MediaVendor {
+  id: string;
+  label: string;
+  baseUrl: string;
+  imageModel: string;
+  videoModel: string;
+  apiKeyUrl: string;
+  docsUrl: string;
+  authNote: string;
+}
+const MEDIA_VENDORS: MediaVendor[] = [
+  {
+    id: 'agnes', label: 'Agnes',
+    baseUrl: 'https://apihub.agnes-ai.com/v1',
+    imageModel: 'agnes-image-2.5-flash', videoModel: 'agnes-video-2.5-flash',
+    apiKeyUrl: 'https://apihub.agnes-ai.com',
+    docsUrl: 'https://docs.volcengine.com/cn/ai-studio/',
+    authNote: 'Agnes 采用 OpenAI 兼容 Bearer Token 鉴权，Key 请在 Agnes 控制台申请。',
+  },
+  {
+    id: 'openai', label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    imageModel: 'gpt-image-1', videoModel: '',
+    apiKeyUrl: 'https://platform.openai.com/api-keys',
+    docsUrl: 'https://platform.openai.com/docs/guides/image-generation',
+    authNote: 'OpenAI 采用 Bearer Token 鉴权，Key 请在 OpenAI Platform 生成。',
+  },
+  {
+    id: 'stability', label: 'Stability AI',
+    baseUrl: 'https://api.stability.ai',
+    imageModel: 'stable-image-ultra', videoModel: '',
+    apiKeyUrl: 'https://platform.stability.ai/account/keys',
+    docsUrl: 'https://platform.stability.ai/docs',
+    authNote: 'Stability 采用 Authorization: Bearer <Key> 鉴权，Key 请在 Stability 平台生成。',
+  },
+  {
+    id: 'zhipu', label: '智谱 GLM',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    imageModel: 'cogview-3-flash', videoModel: 'cogvideox-flash',
+    apiKeyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+    docsUrl: 'https://open.bigmodel.cn/dev/',
+    authNote: '智谱采用 OpenAI 兼容 Bearer Token 鉴权，Key 请在智谱开放平台获取。',
+  },
+];
+function vendorById(id: string): MediaVendor | undefined {
+  return MEDIA_VENDORS.find((v) => v.id === id);
+}
+// 脱敏（**** 开头）key 发前端置空，由后端回退服务端共享 key / 环境变量。
+function maskedMediaKey(k: string): string {
+  return k.startsWith('****') ? '' : k;
+}
+
+// 当前选中厂商（各表单独立），用于「获取 API Key」/「官方文档」随厂商动态映射
+const imageVendorSel = ref('');
+const videoVendorSel = ref('');
+const sharedImageVendorSel = ref('');
+const sharedVideoVendorSel = ref('');
+const imageVendor = computed(() => vendorById(imageVendorSel.value));
+const videoVendor = computed(() => vendorById(videoVendorSel.value));
+const sharedImageVendor = computed(() => vendorById(sharedImageVendorSel.value));
+const sharedVideoVendor = computed(() => vendorById(sharedVideoVendorSel.value));
+
+// 大模型拉到的可用模型列表（各表单独立，避免占用 modelStore.availableModels 与 LLM BYOK 下拉串区）
+const mediaImageModels = ref<{ id: string }[]>([]);
+const mediaVideoModels = ref<{ id: string }[]>([]);
+const sharedImageModels = ref<{ id: string }[]>([]);
+const sharedVideoModels = ref<{ id: string }[]>([]);
+const loadingMediaImageModels = ref(false);
+const loadingMediaVideoModels = ref(false);
+const loadingSharedImageModels = ref(false);
+const loadingSharedVideoModels = ref(false);
+
+// 生图/视频连接测试结果（AI 服务页视频、共享生图、共享视频各自独立展示）
+const videoGenTestResult = ref<{ ok: boolean; detail: string } | null>(null);
+const testingVideoGen = ref(false);
+const sharedImageGenTestResult = ref<{ ok: boolean; detail: string; model?: string } | null>(null);
+const testingSharedImageGen = ref(false);
+const sharedVideoGenTestResult = ref<{ ok: boolean; detail: string } | null>(null);
+const testingSharedVideoGen = ref(false);
+
+// 应用厂商预设：填充请求地址 + 默认模型模板 + 清空旧模型列表（厂商变了仍展示旧清单会误选）。
+// 各表单独立实现：image 落 model，video 落 videoModel，厂商 videoModel 为空（如 OpenAI/Stability）则不覆盖。
+function onImageVendorChange(sel: string): void {
+  const v = vendorById(sel);
+  if (!v) return;
+  mediaForm.value.image.baseUrl = v.baseUrl;
+  if (v.imageModel) mediaForm.value.image.model = v.imageModel;
+  mediaImageModels.value = [];
+}
+function onVideoVendorChange(sel: string): void {
+  const v = vendorById(sel);
+  if (!v) return;
+  mediaForm.value.video.baseUrl = v.baseUrl;
+  if (v.videoModel) mediaForm.value.video.videoModel = v.videoModel;
+  mediaVideoModels.value = [];
+  videoGenTestResult.value = null;
+}
+function onSharedImageVendorChange(sel: string): void {
+  const v = vendorById(sel);
+  if (!v) return;
+  sharedImageForm.value.baseUrl = v.baseUrl;
+  if (v.imageModel) sharedImageForm.value.model = v.imageModel;
+  sharedImageModels.value = [];
+  sharedImageGenTestResult.value = null;
+}
+function onSharedVideoVendorChange(sel: string): void {
+  const v = vendorById(sel);
+  if (!v) return;
+  sharedVideoForm.value.baseUrl = v.baseUrl;
+  if (v.videoModel) sharedVideoForm.value.videoModel = v.videoModel;
+  sharedVideoModels.value = [];
+  sharedVideoGenTestResult.value = null;
+}
+
+// 打开厂商官方文档（target=_blank，rel=noopener 防止反向 tab 劫持）
+function openDocs(vendorId: string): void {
+  const v = vendorById(vendorId);
+  if (v?.docsUrl) window.open(v.docsUrl, '_blank', 'noopener');
+}
+
+// 拉取生图/视频厂商的可用模型列表（复用后端 POST /api/ai/models：OpenAI 兼容 /models 探测并归一化）。
+// 各表单独立落位到对应 ref，避免共用 modelStore.availableModels 与 LLM BYOK 下拉串区。
+async function loadMediaModels(baseUrl: string, apiKey: string, out: Ref<{ id: string }[]>, load: Ref<boolean>): Promise<void> {
+  if (!baseUrl.trim()) {
+    ElMessage.warning('请先填写 API 地址');
+    return;
+  }
+  load.value = true;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl, apiKey: maskedMediaKey(apiKey) }),
+    });
+    const d = await res.json() as { ok?: boolean; models?: { id: string }[]; detail?: string };
+    if (!d.ok) {
+      out.value = [];
+      ElMessage.warning(d.detail || '获取模型列表失败');
+      return;
+    }
+    out.value = d.models ?? [];
+    if (out.value.length) {
+      ElMessage.success(`已获取 ${out.value.length} 个可用模型，可从下拉选取`);
+    } else {
+      ElMessage.warning('服务商未返回任何可用模型（可能不支持 /models 接口，请手动填写）');
+    }
+  } catch (err) {
+    out.value = [];
+    ElMessage.error(apiErrorMessage('获取模型列表失败', err));
+  } finally {
+    load.value = false;
+  }
+}
+async function fetchImageModels(): Promise<void> {
+  return loadMediaModels(mediaForm.value.image.baseUrl, mediaForm.value.image.apiKey, mediaImageModels, loadingMediaImageModels);
+}
+async function fetchVideoModels(): Promise<void> {
+  return loadMediaModels(mediaForm.value.video.baseUrl, mediaForm.value.video.apiKey, mediaVideoModels, loadingMediaVideoModels);
+}
+async function fetchSharedImageModels(): Promise<void> {
+  return loadMediaModels(sharedImageForm.value.baseUrl, sharedImageForm.value.apiKey, sharedImageModels, loadingSharedImageModels);
+}
+async function fetchSharedVideoModels(): Promise<void> {
+  return loadMediaModels(sharedVideoForm.value.baseUrl, sharedVideoForm.value.apiKey, sharedVideoModels, loadingSharedVideoModels);
+}
+
+// 视频连接测试（复用 /api/ai/models 探针：向后端真实打一次 /models 校验 key + 网络）。
+// 为什么没有专用视频 test 端点：后端仅对图片提供 /api/ai/image/test，视频采用同一 OpenAI 兼容 /models
+//   作为「连通性 + Key 有效性」统一探针，厂商不支持 /models 时给出明确引导。
+async function testVideoGenConnection(): Promise<void> {
+  const v = mediaForm.value.video;
+  if (!v.baseUrl.trim()) {
+    ElMessage.warning('请先填写 API 地址');
+    return;
+  }
+  testingVideoGen.value = true;
+  videoGenTestResult.value = null;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: v.baseUrl, apiKey: maskedMediaKey(v.apiKey) }),
+    });
+    const d = await res.json() as { ok?: boolean; detail?: string };
+    videoGenTestResult.value = d.ok
+      ? { ok: true, detail: '视频服务连接正常' }
+      : { ok: false, detail: d.detail || '视频服务连接失败' };
+    if (d.ok) ElMessage.success('视频生成连接测试成功');
+    else ElMessage.warning('视频生成连接测试失败');
+  } catch (err) {
+    videoGenTestResult.value = { ok: false, detail: (err as Error).message };
+    ElMessage.error(apiErrorMessage('测试失败', err));
+  } finally {
+    testingVideoGen.value = false;
+  }
+}
+const videoGenTestText = computed(() => {
+  const r = videoGenTestResult.value;
+  if (!r) return '';
+  return r.ok ? '连接成功' : r.detail;
+});
+
+// 共享生图连接测试：复用后端 /api/ai/image/test 校验共享生图配置（与个人 BYOK 的 testImageGenConnection 对称）。
+async function testSharedImageGenConnection(): Promise<void> {
+  testingSharedImageGen.value = true;
+  sharedImageGenTestResult.value = null;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/image/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageConfig: sharedImageForm.value }),
+    });
+    const d = await res.json() as { ok: boolean; detail: string; model?: string };
+    sharedImageGenTestResult.value = d;
+    if (d.ok) ElMessage.success('共享生图连接测试成功');
+    else ElMessage.warning('共享生图连接测试失败');
+  } catch (err) {
+    sharedImageGenTestResult.value = { ok: false, detail: (err as Error).message };
+    ElMessage.error(apiErrorMessage('测试失败', err));
+  } finally {
+    testingSharedImageGen.value = false;
+  }
+}
+const sharedImageGenTestText = computed(() => {
+  const r = sharedImageGenTestResult.value;
+  if (!r) return '';
+  if (!r.ok) return r.detail;
+  return r.model ? `连接成功（模型 ${r.model}）` : '连接成功';
+});
+
+// 共享视频连接测试（探针同 testVideoGenConnection，但用共享视频表单）。
+async function testSharedVideoGenConnection(): Promise<void> {
+  const v = sharedVideoForm.value;
+  if (!v.baseUrl.trim()) {
+    ElMessage.warning('请先填写 API 地址');
+    return;
+  }
+  testingSharedVideoGen.value = true;
+  sharedVideoGenTestResult.value = null;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/ai/models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: v.baseUrl, apiKey: maskedMediaKey(v.apiKey) }),
+    });
+    const d = await res.json() as { ok?: boolean; detail?: string };
+    sharedVideoGenTestResult.value = d.ok
+      ? { ok: true, detail: '共享视频服务连接正常' }
+      : { ok: false, detail: d.detail || '共享视频服务连接失败' };
+    if (d.ok) ElMessage.success('共享视频连接测试成功');
+    else ElMessage.warning('共享视频连接测试失败');
+  } catch (err) {
+    sharedVideoGenTestResult.value = { ok: false, detail: (err as Error).message };
+    ElMessage.error(apiErrorMessage('测试失败', err));
+  } finally {
+    testingSharedVideoGen.value = false;
+  }
+}
+const sharedVideoGenTestText = computed(() => {
+  const r = sharedVideoGenTestResult.value;
+  if (!r) return '';
+  return r.ok ? '连接成功' : r.detail;
+});
+
+// ── T00320「共享AI」增强：管理员全局「共享生图 / 共享视频」配置 ──
+// 与「共享模型」（LLM）降级思路一致：供未配置个人生图/视频（BYOK）的用户使用共享配置。
+// 存储在后端 config.json 的 media.shared.image/video，走 requireAdmin 的 /api/media/shared
+//（普通用户不可读写）；生成优先级：用户 BYOK > 管理员共享(media.shared) > media.agnes 默认兜底。
+// 与用户 BYOK 的 mediaForm 相互独立，各自持久化到服务端 config.json 与本地 IndexedDB，互不混用。
+const sharedImageForm = ref<MediaImageUserConfig>({ ...DEFAULT_MEDIA_USER_CONFIG.image });
+const sharedVideoForm = ref<MediaVideoUserConfig>({ ...DEFAULT_MEDIA_USER_CONFIG.video });
+// 服务端共享是否已配置可用 Key（GET 返回 apiKeySet；表单内 apiKey 为脱敏回显 ****…）
+const sharedImageKeySet = ref(false);
+const sharedVideoKeySet = ref(false);
+const savingSharedImage = ref(false);
+const savingSharedVideo = ref(false);
+// 共享区块的预设下拉 v-model（应用后置空，回到"请选择"占位）
+const sharedImagePresetSel = ref('');
+const sharedVideoPresetSel = ref('');
+
+// 加载管理员「共享生图/视频」当前值（GET requireAdmin，Key 脱敏）。
+async function loadSharedMedia(): Promise<void> {
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/media/shared`);
+    if (!res.ok) return;
+    const d = await res.json() as {
+      image?: Partial<MediaImageUserConfig> & { apiKeyMasked?: string; apiKeySet?: boolean };
+      video?: Partial<MediaVideoUserConfig> & { apiKeyMasked?: string; apiKeySet?: boolean };
+    };
+    const img = d.image ?? {};
+    const vid = d.video ?? {};
+    sharedImageForm.value = {
+      ...DEFAULT_MEDIA_USER_CONFIG.image,
+      baseUrl: img.baseUrl ?? '',
+      model: img.model ?? '',
+      size: img.size ?? '',
+      ratio: img.ratio ?? '',
+      steps: img.steps,
+      cfgScale: img.cfgScale,
+      sampler: img.sampler ?? '',
+      seed: img.seed,
+      negativePrompt: img.negativePrompt ?? '',
+      apiKey: img.apiKeyMasked ?? '',
+    };
+    sharedImageKeySet.value = Boolean(img.apiKeySet);
+    sharedVideoForm.value = {
+      ...DEFAULT_MEDIA_USER_CONFIG.video,
+      baseUrl: vid.baseUrl ?? '',
+      videoModel: vid.videoModel ?? '',
+      size: vid.size ?? '',
+      seconds: vid.seconds ?? 5,
+      fps: vid.fps,
+      motion: vid.motion,
+      seed: vid.seed,
+      negativePrompt: vid.negativePrompt ?? '',
+      apiKey: vid.apiKeyMasked ?? '',
+    };
+    sharedVideoKeySet.value = Boolean(vid.apiKeySet);
+  } catch {
+    // 加载失败不阻断，管理员可手动填写后保存
+  }
+}
+
+// 保存管理员「共享生图」（PUT requireAdmin）。apiKey 以 **** 开头视为未修改（后端复用 sanitize 语义）。
+async function saveSharedImage(): Promise<void> {
+  savingSharedImage.value = true;
+  try {
+    const cfg = sharedImageForm.value;
+    const res = await authStore.authFetch(`${API_BASE}/media/shared`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: {
+          baseUrl: cfg.baseUrl,
+          apiKey: cfg.apiKey,
+          model: cfg.model,
+          size: cfg.size,
+          ratio: cfg.ratio,
+          steps: cfg.steps,
+          cfgScale: cfg.cfgScale,
+          sampler: cfg.sampler,
+          seed: cfg.seed,
+          negativePrompt: cfg.negativePrompt,
+        },
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json() as { image?: { apiKeyMasked?: string; apiKeySet?: boolean } };
+    sharedImageForm.value.apiKey = d.image?.apiKeyMasked ?? sharedImageForm.value.apiKey;
+    sharedImageKeySet.value = Boolean(d.image?.apiKeySet);
+    ElMessage.success('已保存「共享生图」配置（对所有用户生效）');
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存「共享生图」失败', err));
+  } finally {
+    savingSharedImage.value = false;
+  }
+}
+
+// 保存管理员「共享视频」（PUT requireAdmin）。
+async function saveSharedVideo(): Promise<void> {
+  savingSharedVideo.value = true;
+  try {
+    const cfg = sharedVideoForm.value;
+    const res = await authStore.authFetch(`${API_BASE}/media/shared`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        video: {
+          baseUrl: cfg.baseUrl,
+          apiKey: cfg.apiKey,
+          videoModel: cfg.videoModel,
+          size: cfg.size,
+          seconds: cfg.seconds,
+          fps: cfg.fps,
+          motion: cfg.motion,
+          seed: cfg.seed,
+          negativePrompt: cfg.negativePrompt,
+        },
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json() as { video?: { apiKeyMasked?: string; apiKeySet?: boolean } };
+    sharedVideoForm.value.apiKey = d.video?.apiKeyMasked ?? sharedVideoForm.value.apiKey;
+    sharedVideoKeySet.value = Boolean(d.video?.apiKeySet);
+    ElMessage.success('已保存「共享视频」配置（对所有用户生效）');
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('保存「共享视频」失败', err));
+  } finally {
+    savingSharedVideo.value = false;
+  }
+}
+
+// 共享生图预设一键应用：把预设生成参数合并进共享表单（保留 baseUrl/apiKey/model 之外参数可微调）。
+function onSharedImagePresetChange(key: string) {
+  const p = mediaPresets.value.imagePresets.find((x) => x.key === key);
+  if (p) {
+    sharedImageForm.value = mergeImagePreset(sharedImageForm.value, p);
+    ElMessage.success(`已套用共享生图预设「${p.label}」，可微调后保存`);
+  }
+  sharedImagePresetSel.value = '';
+}
+// 共享视频预设一键应用。
+function onSharedVideoPresetChange(key: string) {
+  const p = mediaPresets.value.videoPresets.find((x) => x.key === key);
+  if (p) {
+    sharedVideoForm.value = mergeVideoPreset(sharedVideoForm.value, p);
+    ElMessage.success(`已套用共享视频预设「${p.label}」，可微调后保存`);
+  }
+  sharedVideoPresetSel.value = '';
+}
 
 // ===== 高级配置：运行参数 / 健康检查 / 批量编译 / 日志 =====
 // 这些表单补全 config.json 已有但前端缺失的编辑入口，降低用户配置门槛。
@@ -1682,6 +2226,8 @@ onMounted(async () => {
   }
   loadHistory();
   loadQqConfig();
+  // T00320「共享AI」：管理员全局「共享生图/视频」配置（requireAdmin），随配置页一并加载
+  loadSharedMedia();
   // FR-14-2 Prompt IDE：加载 prompt 文件列表，与其它配置并行加载
   // 为什么放在 onMounted 而非 watch activeTab：避免切换 tab 时首次加载延迟，影响用户体验
   loadPromptList();
@@ -1777,6 +2323,139 @@ async function saveMcpConfig() {
 watch(activeTab, (tab) => {
   if (tab === 'mcp' && isAdmin.value) void loadMcpConfig();
 });
+
+// 切入「共享AI」tab 时重载管理员全局「共享生图/视频」配置（管理员可能在其它设备改了 config.json）
+watch(activeTab, (tab) => {
+  if (tab === 'sharedAi' && isAdmin.value) void loadSharedMedia();
+});
+
+// ===== 数据迁移（T00332）：配置整体导出 / 导入 =====
+// 供更换服务器/环境迁移使用，仅管理员可见（全局危险操作）。
+// 导出：GET /api/config/export（后端已对密钥脱敏），前端包装为 JSON 下载。
+// 导入：POST /api/config/import { data, mode }，overwrite 模式弹二次确认（后端会先备份 config.json.bak）。
+const exporting = ref(false);
+const importing = ref(false);
+const importMode = ref<'merge' | 'overwrite'>('merge');
+const importFile = ref<File | null>(null);
+const selectedFileName = ref('');
+const importFileInput = ref<HTMLInputElement | null>(null);
+const importResult = ref<{
+  ok: boolean;
+  mode: string;
+  applied: number;
+  skipped: number;
+  failed: number;
+  details: string[];
+} | null>(null);
+
+// 导出配置：拉取脱敏 JSON 后触发浏览器下载
+async function exportConfig() {
+  exporting.value = true;
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/config/export`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(err?.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    // 文件名优先取后端 Content-Disposition 的权威名，否则用默认名兜底
+    let filename = `karpathy-wiki-config-${Date.now()}.json`;
+    const cd = res.headers.get('content-disposition') || '';
+    const m = /filename="?([^"]+)"?/i.exec(cd);
+    if (m) filename = m[1] || filename;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    ElMessage.success('配置已导出（含完整配置项，密钥已脱敏，不含明文 Key）');
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('导出配置失败', err));
+  } finally {
+    exporting.value = false;
+  }
+}
+
+// 选择导入文件：校验扩展名 .json 与大小上限 50MB（与后端 bodyLimit 兜底一致）
+function onImportFileSelected(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  // 每次选择后清空 input，允许重复选择同一文件
+  input.value = '';
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.json')) {
+    ElMessage.warning('请选择 .json 格式的「配置导出」文件');
+    selectedFileName.value = '';
+    importFile.value = null;
+    importResult.value = null;
+    return;
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.warning('文件超过 50MB 上限，无法导入');
+    selectedFileName.value = '';
+    importFile.value = null;
+    importResult.value = null;
+    return;
+  }
+  importFile.value = file;
+  selectedFileName.value = file.name;
+  importResult.value = null;
+}
+
+// 执行导入；覆盖模式需先二次确认
+async function importConfig() {
+  const file = importFile.value;
+  if (!file) {
+    ElMessage.warning('请先选择要导入的「配置导出」文件');
+    return;
+  }
+  if (importMode.value === 'overwrite') {
+    try {
+      await ElMessageBox.confirm(
+        '「覆盖」模式将整体替换当前全部配置项（后端会先自动备份旧配置到 config.json.bak，写入失败可回滚）。确定继续吗？',
+        '覆盖导入确认',
+        { confirmButtonText: '确定覆盖导入', cancelButtonText: '取消', type: 'warning' },
+      );
+    } catch {
+      // 用户取消
+      return;
+    }
+  }
+  importing.value = true;
+  importResult.value = null;
+  try {
+    const text = await file.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      ElMessage.error('文件不是合法的 JSON，请确认所选文件为「配置导出」生成的 .json 文件');
+      return;
+    }
+    const res = await authStore.authFetch(`${API_BASE}/config/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: parsed, mode: importMode.value }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    importResult.value = d;
+    if (d.failed > 0) {
+      ElMessage.warning(`导入完成：应用 ${d.applied} 项，失败/忽略 ${d.failed} 项`);
+    } else {
+      ElMessage.success(`配置导入成功：应用 ${d.applied} 项`);
+    }
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('导入配置失败', err));
+  } finally {
+    importing.value = false;
+  }
+}
 </script>
 
 <template>
@@ -1932,8 +2611,20 @@ watch(activeTab, (tab) => {
                   <span class="config-value">{{ config.llm.baseUrl }}</span>
                 </div>
       <div class="config-row">
-                  <span class="config-label">API Key</span>
+                  <span class="config-label">私有配置 Key</span>
                   <span class="config-value">
+                    <!-- T00355：私有配置 = 本用户浏览器本地 BYOK，口径与「AI 服务」页一致 -->
+                    <span class="key-badge key-badge-private">私有</span>
+                    <span :class="['key-status', privateLlmKeySet ? 'set' : 'unset']">
+                      {{ privateLlmKeySet ? '已设置' : '未设置' }}
+                    </span>
+                  </span>
+                </div>
+      <div class="config-row">
+                  <span class="config-label">共享AI 配置 Key</span>
+                  <span class="config-value">
+                    <!-- T00355：共享AI 配置 = 服务端 config.json 提供的 Key（env/config.json），供未配 BYOK 时降级 -->
+                    <span class="key-badge key-badge-shared">共享</span>
                     <span :class="['key-status', config.llm.apiKeySet ? 'set' : 'unset']">
                       {{ config.llm.apiKeySet ? '已设置' : '未设置' }}
                     </span>
@@ -1984,12 +2675,13 @@ watch(activeTab, (tab) => {
                 </div>
               </div>
 
-              <!-- API Key 提示 -->
-              <div v-if="!config.llm.apiKeySet" class="key-warning">
+              <!-- API Key 提示：仅当「私有配置」与「共享AI 配置」都未设置时才告警，
+                   任一生效即可编译，避免仅在共享未配置时误报 -->
+              <div v-if="!config.llm.apiKeySet && !privateLlmKeySet" class="key-warning">
                 <div class="warning-icon">?</div>
       <div class="warning-text">
-                  <strong>API Key 未设置</strong>
-                  <p>请设置环境变量 <code>{{ config.llm.apiKeyRef }}</code> 后重启服务，否则编译与问答将返回 401 错误。</p>
+                  <strong>LLM API Key 未设置</strong>
+                  <p>请设置环境变量 <code>{{ config.llm.apiKeyRef }}</code> 后重启服务（共享AI 配置），或在本页「AI 服务」页签填写本用户的「私有配置」Key，否则编译与问答将返回 401 错误。</p>
                 </div>
               </div>
             </div>
@@ -2149,6 +2841,89 @@ watch(activeTab, (tab) => {
           </div>
         </el-tab-pane>
 
+        <!-- 数据迁移（仅管理员）：配置整体导出 / 导入，便于更换服务器/环境迁移。全局危险操作，仅 admin。 -->
+        <el-tab-pane v-if="isAdmin" label="数据迁移" name="migrate">
+          <div class="config-section">
+            <div class="section-header">
+              <span class="section-desc">// 导出 / 导入全部配置（含完整配置项）。导出的文件已对 API Key 等密钥脱敏，不含明文密钥；导入沿用当前已配置的真实密钥。</span>
+            </div>
+
+            <!-- 导出功能区 -->
+            <div class="config-block hover-glow">
+              <h3 class="block-title"><span class="block-bracket">[</span> 导出 <span class="block-bracket">]</span></h3>
+              <div class="form-row">
+                <label class="form-label" for="migrate-export">导出当前全部配置</label>
+                <el-button
+                  id="migrate-export"
+                  size="small"
+                  class="neon-btn"
+                  data-tip="将当前全部配置导出为 .json 文件（密钥已脱敏）"
+                  :loading="exporting"
+                  @click="exportConfig"
+                >
+                  <el-icon v-if="!exporting" class="btn-icon"><Download /></el-icon>
+                  导出配置
+                </el-button>
+              </div>
+              <p class="block-hint">生成 .json 文件，可保存用于更换服务器 / 环境时迁移。文件包含全部配置项，密钥字段以 **** 掩码呈现，不含明文 Key。</p>
+            </div>
+
+            <!-- 导入功能区 -->
+            <div class="config-block hover-glow">
+              <h3 class="block-title"><span class="block-bracket">[</span> 导入 <span class="block-bracket">]</span></h3>
+              <div class="form-row">
+                <label class="form-label" for="migrate-file">选择导出文件（.json，≤50MB）</label>
+                <div class="migrate-file-row">
+                  <input
+                    id="migrate-file"
+                    ref="importFileInput"
+                    type="file"
+                    accept=".json,application/json"
+                    class="migrate-file-input"
+                    @change="onImportFileSelected"
+                  />
+                  <label for="migrate-file" class="migrate-file-trigger btn-like" data-tip="选择要导入的「配置导出」.json 文件（≤50MB）">
+                    <el-icon class="btn-icon"><Upload /></el-icon>
+                    选择文件
+                  </label>
+                  <span class="migrate-file-name">{{ selectedFileName || '未选择文件' }}</span>
+                </div>
+              </div>
+              <div class="form-row form-row-inline">
+                <label class="form-label" for="migrate-mode">导入模式</label>
+                <el-radio-group id="migrate-mode" v-model="importMode">
+                  <el-radio value="merge">合并（仅补齐缺失项，已有配置保持不变）</el-radio>
+                  <el-radio value="overwrite">覆盖（整体替换现有配置，含二次确认）</el-radio>
+                </el-radio-group>
+              </div>
+              <div class="form-row">
+                <el-button
+                  size="small"
+                  class="neon-btn-primary"
+                  data-tip="按所选模式导入所选文件中的配置"
+                  :disabled="!importFile"
+                  :loading="importing"
+                  @click="importConfig"
+                >
+                  <el-icon v-if="!importing" class="btn-icon"><Upload /></el-icon>
+                  开始导入
+                </el-button>
+              </div>
+              <p class="block-hint">「覆盖」模式会先备份旧配置到 config.json.bak 再写入，写入失败可回滚；「合并」模式只新增当前缺失的配置项。</p>
+            </div>
+
+            <!-- 导入结果摘要 -->
+            <div v-if="importResult" class="migrate-result" :class="{ ok: importResult.ok, warn: importResult.failed > 0 }">
+              <div class="result-title">
+                导入完成：应用 {{ importResult.applied }} 项，跳过 {{ importResult.skipped }} 项，失败/忽略 {{ importResult.failed }} 项
+              </div>
+              <div v-if="importResult.details.length > 0" class="result-details">
+                <div v-for="(item, idx) in importResult.details" :key="idx" class="result-detail-item">{{ item }}</div>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
         <!-- MCP 对外接口（仅管理员）：对外的 /mcp 端点，供外部 AI Agent 接入。
              与「工具配置」区别：工具配置是本应用作为 MCP 客户端连外部服务器；这里是暴露本库给外部 Agent。 -->
         <el-tab-pane v-if="isAdmin" label="MCP 接口" name="mcp">
@@ -2212,53 +2987,8 @@ watch(activeTab, (tab) => {
 
         <!-- AI 服务配置：按用户维度隔离，仅当前账户可见 -->
         <el-tab-pane label="AI 服务" name="ai">
-          <!-- T00315 共享AI：管理员全局共享配置，供未配置个人 AI 的用户降级使用
-               与服务端 /api/ai/config 对应；仅 admin 可见/可写，普通用户不可改 -->
-          <div v-if="isAdmin" class="ai-section shared-ai-section">
-            <div class="section-header">
-              <span class="section-desc">// 共享AI（管理员全局）</span>
-              <span class="user-badge" :class="{ ok: sharedAiForm.apiKeySet }">
-                {{ sharedAiForm.apiKeySet ? '已配置 Key' : '未配置 Key' }}
-              </span>
-            </div>
-            <div class="tts-note">
-              这是供全部「未配置个人 AI」的用户降级使用的「共享AI」。共享用户较多时可能出现排队或调用异常，
-              建议普通用户在下方「AI 服务」中配置各自的专属配置。此处的改动对所有用户生效，请谨慎填写。
-            </div>
-            <div class="ai-form">
-              <div class="config-block hover-glow">
-                <h3 class="block-title"><span class="block-bracket">[</span> 共享模型配置 <span class="block-bracket">]</span></h3>
-                <div class="form-row">
-                  <label class="form-label" for="shared-ai-provider">Provider</label>
-                  <el-input id="shared-ai-provider" v-model="sharedAiForm.provider" class="form-input" />
-                </div>
-                <div class="form-row">
-                  <label class="form-label" for="shared-ai-base-url">API Base URL</label>
-                  <el-input id="shared-ai-base-url" v-model="sharedAiForm.baseUrl" class="form-input" />
-                </div>
-                <div class="form-row">
-                  <label class="form-label" for="shared-ai-model">模型名称</label>
-                  <el-input id="shared-ai-model" v-model="sharedAiForm.model" class="form-input" />
-                </div>
-                <div class="form-row">
-                  <label class="form-label" for="shared-ai-api-key">API Key</label>
-                  <el-input
-                    id="shared-ai-api-key"
-                    v-model="sharedAiForm.apiKey"
-                    type="password"
-                    show-password
-                    class="form-input"
-                    placeholder="显示 **** 表示已配置；留空保存可清除 Key"
-                  />
-                </div>
-                <div class="form-row">
-                  <el-button class="neon-btn-primary" :loading="savingSharedAi" data-tip="保存管理员共享AI配置（对所有用户生效）" @click="saveSharedAi">
-                    保存「共享AI」
-                  </el-button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <!-- T00320 迁移说明：原「共享模型配置」（shared-ai-section）已整体迁至独立「共享AI」Tab，
+               本「AI 服务」页签现为纯用户 BYOK（个人 LLM 配置），与共享配置解耦互不混用。 -->
           <div class="ai-section">
             <div class="section-header">
               <span class="section-desc">// AI 服务（LLM）</span>
@@ -2323,7 +3053,7 @@ watch(activeTab, (tab) => {
                       :loading="modelStore.modelsLoading"
                       @click="fetchModelList"
                     >
-                      获取模型列表
+                      <el-icon class="btn-icon"><List /></el-icon>
                     </el-button>
                   </div>
                   <el-select
@@ -2348,10 +3078,10 @@ watch(activeTab, (tab) => {
               <!-- 操作按钮 -->
               <div class="ai-actions">
                 <el-button class="neon-btn" data-tip="用当前配置向 LLM 服务商发起连通性测试" :loading="testingAi" @click="testConnection">
-                  测试连接
+                  <el-icon class="btn-icon"><Connection /></el-icon>
                 </el-button>
                 <el-button class="neon-btn-primary" data-tip="保存当前账户的 LLM 配置（Base URL / Key / 模型）" :loading="savingAi" @click="saveAiConfig">
-                  保存配置
+                  <el-icon class="btn-icon"><Check /></el-icon>
                 </el-button>
                 <el-button
                   class="neon-btn"
@@ -2360,7 +3090,7 @@ watch(activeTab, (tab) => {
                   @click="resetAiConfig"
                   style="margin-left: auto;"
                 >
-                  恢复初始配置
+                  <el-icon class="btn-icon"><Refresh /></el-icon>
                 </el-button>
               </div>
 
@@ -2468,6 +3198,12 @@ watch(activeTab, (tab) => {
                   <span>在此配置你自己专用的生图服务（API 地址 / Key / 模型 / 分辨率 / 比例）。密钥按账户隔离仅存本机，生成时优先使用你的配置，避免共享额度排队。</span>
                 </p>
                 <div class="form-row">
+                  <span class="form-label">模型厂商</span>
+                  <el-select v-model="imageVendorSel" placeholder="选择厂商自动填充地址与模型" size="small" class="flex-1" @change="onImageVendorChange">
+                    <el-option v-for="v in MEDIA_VENDORS" :key="v.id" :label="v.label" :value="v.id" />
+                  </el-select>
+                </div>
+                <div class="form-row">
                   <span class="form-label">场景预设</span>
                   <el-select v-model="imagePresetSel" placeholder="一键套用生图场景预设" size="small" class="flex-1" @change="onImagePresetChange">
                     <el-option v-for="p in mediaPresets.imagePresets" :key="p.key" :label="p.label" :value="p.key" />
@@ -2480,11 +3216,27 @@ watch(activeTab, (tab) => {
                 <div class="form-row">
                   <span class="form-label">API Key</span>
                   <el-input v-model="mediaForm.image.apiKey" type="password" show-password size="small" placeholder="你的生图 API Key（仅存本地）" class="flex-1" />
+                  <a v-if="imageVendor?.apiKeyUrl" class="media-external-link" :href="imageVendor.apiKeyUrl" target="_blank" rel="noopener">获取 API Key</a>
                 </div>
+                <p v-if="imageVendor?.authNote" class="key-hint">
+                  <span class="hint-icon">i</span>
+                  <span>{{ imageVendor.authNote }}</span>
+                </p>
                 <div class="form-row">
                   <span class="form-label">模型</span>
                   <el-input v-model="mediaForm.image.model" size="small" placeholder="如 agnes-image-2.1-flash" class="flex-1" />
                 </div>
+                <el-select
+                  v-if="mediaImageModels.length"
+                  :model-value="mediaForm.image.model"
+                  class="model-select"
+                  placeholder="从服务商可用模型中选取"
+                  filterable
+                  size="small"
+                  @update:model-value="(v: string) => (mediaForm.image.model = v)"
+                >
+                  <el-option v-for="m in mediaImageModels" :key="m.id" :label="m.id" :value="m.id" />
+                </el-select>
                 <div class="form-row">
                   <span class="form-label">分辨率</span>
                   <el-input v-model="mediaForm.image.size" size="small" placeholder="如 1024x768" class="flex-1" />
@@ -2495,9 +3247,29 @@ watch(activeTab, (tab) => {
                   <span class="form-label">负面词</span>
                   <el-input v-model="mediaForm.image.negativePrompt" size="small" placeholder="避免出现的内容（可选）" class="flex-1" />
                 </div>
+                <!-- 预留扩展参数：预设一键套用后这些值会落到表单里，这里暴露为可手调控件（不填则不发送） -->
+                <div class="form-row">
+                  <span class="form-label">步数</span>
+                  <el-input-number v-model="mediaForm.image.steps" :min="1" :max="150" size="small" style="flex:1" />
+                  <span class="form-label form-label--sep">CFG</span>
+                  <el-input-number v-model="mediaForm.image.cfgScale" :min="1" :max="30" :step="0.5" size="small" style="flex:1" />
+                  <span class="form-label form-label--sep">采样器</span>
+                  <el-input v-model="mediaForm.image.sampler" size="small" placeholder="如 DPM++ 2M Karras（可选）" class="flex-1" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">随机种子</span>
+                  <el-input-number v-model="mediaForm.image.seed" :min="-1" :max="999999999" size="small" style="flex:1" />
+                  <span class="form-hint">-1 / 留空 = 每次随机</span>
+                </div>
                 <div class="ai-actions">
                   <el-button class="neon-btn" data-tip="用当前配置校验你的生图 API 是否可用、网络是否通畅" :loading="testingImageGen" @click="testImageGenConnection">
-                    测试生图连接
+                    <el-icon class="btn-icon"><Connection /></el-icon>
+                  </el-button>
+                  <el-button class="neon-btn" data-tip="从生图 API 地址拉取可用模型列表" :loading="loadingMediaImageModels" @click="fetchImageModels">
+                    <el-icon class="btn-icon"><List /></el-icon>
+                  </el-button>
+                  <el-button class="neon-btn" data-tip="打开所选厂商的官方在线文档/配置指南" :disabled="!imageVendorSel" @click="openDocs(imageVendorSel)">
+                    <el-icon class="btn-icon"><Document /></el-icon>
                   </el-button>
                 </div>
                 <div v-if="imageGenTestResult" class="test-result" :class="{ ok: imageGenTestResult.ok, fail: !imageGenTestResult.ok }">
@@ -2513,6 +3285,12 @@ watch(activeTab, (tab) => {
                   <span>在此配置你自己专用的视频生成服务（API 地址 / Key / 模型 / 尺寸 / 时长）。配置按账户隔离仅存本机，生成视频时优先使用。</span>
                 </p>
                 <div class="form-row">
+                  <span class="form-label">模型厂商</span>
+                  <el-select v-model="videoVendorSel" placeholder="选择厂商自动填充地址与模型" size="small" class="flex-1" @change="onVideoVendorChange">
+                    <el-option v-for="v in MEDIA_VENDORS" :key="v.id" :label="v.label" :value="v.id" />
+                  </el-select>
+                </div>
+                <div class="form-row">
                   <span class="form-label">场景预设</span>
                   <el-select v-model="videoPresetSel" placeholder="一键套用视频场景预设" size="small" class="flex-1" @change="onVideoPresetChange">
                     <el-option v-for="p in mediaPresets.videoPresets" :key="p.key" :label="p.label" :value="p.key" />
@@ -2525,11 +3303,27 @@ watch(activeTab, (tab) => {
                 <div class="form-row">
                   <span class="form-label">API Key</span>
                   <el-input v-model="mediaForm.video.apiKey" type="password" show-password size="small" placeholder="你的视频 API Key（仅存本地）" class="flex-1" />
+                  <a v-if="videoVendor?.apiKeyUrl" class="media-external-link" :href="videoVendor.apiKeyUrl" target="_blank" rel="noopener">获取 API Key</a>
                 </div>
+                <p v-if="videoVendor?.authNote" class="key-hint">
+                  <span class="hint-icon">i</span>
+                  <span>{{ videoVendor.authNote }}</span>
+                </p>
                 <div class="form-row">
                   <span class="form-label">模型</span>
-                  <el-input v-model="mediaForm.video.videoModel" size="small" placeholder="如 agnes-video-v2.0" class="flex-1" />
+                  <el-input v-model="mediaForm.video.videoModel" size="small" placeholder="如 agnes-video-2.5-flash" class="flex-1" />
                 </div>
+                <el-select
+                  v-if="mediaVideoModels.length"
+                  :model-value="mediaForm.video.videoModel"
+                  class="model-select"
+                  placeholder="从服务商可用模型中选取"
+                  filterable
+                  size="small"
+                  @update:model-value="(v: string) => (mediaForm.video.videoModel = v)"
+                >
+                  <el-option v-for="m in mediaVideoModels" :key="m.id" :label="m.id" :value="m.id" />
+                </el-select>
                 <div class="form-row">
                   <span class="form-label">尺寸</span>
                   <el-input v-model="mediaForm.video.size" size="small" placeholder="如 1280x720" class="flex-1" />
@@ -2540,12 +3334,313 @@ watch(activeTab, (tab) => {
                   <span class="form-label">负面词</span>
                   <el-input v-model="mediaForm.video.negativePrompt" size="small" placeholder="避免出现的内容（可选）" class="flex-1" />
                 </div>
+                <!-- 预留扩展参数：帧率/运动强度/种子，可手调（不填则不发送） -->
+                <div class="form-row">
+                  <span class="form-label">帧率</span>
+                  <el-input-number v-model="mediaForm.video.fps" :min="1" :max="60" size="small" style="flex:1" />
+                  <span class="form-label form-label--sep">运动</span>
+                  <el-input-number v-model="mediaForm.video.motion" :min="0" :max="10" size="small" style="flex:1" />
+                  <span class="form-label form-label--sep">种子</span>
+                  <el-input-number v-model="mediaForm.video.seed" :min="-1" :max="999999999" size="small" style="flex:1" />
+                </div>
+                <div class="ai-actions">
+                  <el-button class="neon-btn" data-tip="探测视频服务商连通性（通过 /models 列表与 Key 校验）" :loading="testingVideoGen" @click="testVideoGenConnection">
+                    <el-icon class="btn-icon"><Connection /></el-icon>
+                  </el-button>
+                  <el-button class="neon-btn" data-tip="从视频 API 地址拉取可用模型列表" :loading="loadingMediaVideoModels" @click="fetchVideoModels">
+                    <el-icon class="btn-icon"><List /></el-icon>
+                  </el-button>
+                  <el-button class="neon-btn" data-tip="打开所选厂商的官方在线文档/配置指南" :disabled="!videoVendorSel" @click="openDocs(videoVendorSel)">
+                    <el-icon class="btn-icon"><Document /></el-icon>
+                  </el-button>
+                </div>
+                <div v-if="videoGenTestResult" class="test-result" :class="{ ok: videoGenTestResult.ok, fail: !videoGenTestResult.ok }">
+                  <el-icon class="result-icon"><component :is="videoGenTestResult.ok ? Check : Close" /></el-icon>
+                  <span class="result-text">{{ videoGenTestText }}</span>
+                </div>
               </div>
 
               <div class="ai-actions" style="margin-top: 12px;">
-                <el-button class="neon-btn" data-tip="将生图/视频配置保存到你的本地账户" :loading="savingMedia" @click="saveMediaConfig">
-                  保存媒体配置
+                <el-button class="neon-btn-primary" data-tip="将生图/视频配置保存到你的本地账户" :loading="savingMedia" @click="saveMediaConfig">
+                  <el-icon class="btn-icon"><Check /></el-icon>
                 </el-button>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- T00320 共享AI：管理员全局配置区（共享模型 / 共享生图 / 共享视频），紧邻「AI 服务」。
+             普通用户不可见、不可切换（v-if isAdmin），与 mcp/qq/prompts 等 admin Tab 权限一致。
+             设计动机：全局共享配置供未配置个人（BYOK）的用户降级使用，与「共享模型」降级思路一致；
+             管理员统一维护，改动对所有用户生效。 -->
+        <el-tab-pane v-if="isAdmin" label="共享AI" name="sharedAi">
+          <div class="ai-section">
+            <div class="section-header">
+              <span class="section-desc">// 共享AI（管理员全局）</span>
+              <span class="user-badge">全部用户共享</span>
+            </div>
+            <div class="tts-note">
+              此处集中维护管理员全局的「共享模型 / 共享生图 / 共享视频」，供未配置个人（BYOK）配置的用户降级使用。
+              普通用户在「AI 服务」页配好各自的专属配置后会优先使用个人配置。改动对所有用户生效，请谨慎填写。
+            </div>
+
+            <!-- 区块1：共享模型配置（T00315/T00319，由原「AI 服务」页顶部原样迁移） -->
+            <div class="config-block hover-glow">
+              <h3 class="block-title"><span class="block-bracket">[</span> 共享模型配置 <span class="block-bracket">]</span></h3>
+              <div class="form-row">
+                <label class="form-label">LLM 预设</label>
+                <div class="preset-tags">
+                  <span
+                    v-for="preset in aiPresets"
+                    :key="preset.key"
+                    class="preset-tag"
+                    :class="{ active: activeSharedPresetKey === preset.key }"
+                    @click="applySharedPreset(preset)"
+                  >{{ preset.label }}</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="shared-ai-provider">Provider</label>
+                <el-input id="shared-ai-provider" v-model="sharedAiForm.provider" class="form-input" />
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="shared-ai-base-url">API Base URL</label>
+                <el-input id="shared-ai-base-url" v-model="sharedAiForm.baseUrl" class="form-input" />
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="shared-ai-model">模型名称</label>
+                <div class="model-input-row">
+                  <el-input id="shared-ai-model" v-model="sharedAiForm.model" :placeholder="matchedSharedPreset?.model ?? '请输入模型名称'" class="form-input" />
+                  <el-button
+                    class="neon-btn model-fetch-btn"
+                    data-tip="从共享 API Base URL 拉取服务商可用模型列表"
+                    :loading="sharedModelsLoading"
+                    @click="fetchSharedModelList"
+                  >
+                    <el-icon class="btn-icon"><List /></el-icon>
+                  </el-button>
+                </div>
+                <el-select
+                  v-if="sharedModels.length"
+                  :model-value="sharedAiForm.model"
+                  class="model-select"
+                  placeholder="从服务商可用模型中选取"
+                  filterable
+                  @update:model-value="(v: string) => (sharedAiForm.model = v)"
+                >
+                  <el-option v-for="m in sharedModels" :key="m.id" :label="m.id" :value="m.id" />
+                </el-select>
+                <p v-if="sharedModelsError" class="model-error">{{ sharedModelsError }}</p>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="shared-ai-api-key">API Key</label>
+                <el-input
+                  id="shared-ai-api-key"
+                  v-model="sharedAiForm.apiKey"
+                  type="password"
+                  show-password
+                  class="form-input"
+                  placeholder="显示 **** 表示已配置；留空保存可清除 Key"
+                />
+              </div>
+              <div class="ai-actions">
+                <el-button class="neon-btn" data-tip="用共享配置向 LLM 服务商发起连通性测试" :loading="testingSharedAi" @click="testSharedAiConnection">
+                  <el-icon class="btn-icon"><Connection /></el-icon>
+                </el-button>
+                <el-button class="neon-btn-primary" data-tip="保存管理员共享AI配置（对所有用户生效）" :loading="savingSharedAi" @click="saveSharedAi">
+                  <el-icon class="btn-icon"><Check /></el-icon>
+                </el-button>
+              </div>
+              <div v-if="sharedAiTestResult" class="test-result" :class="{ ok: sharedAiTestResult.ok, fail: !sharedAiTestResult.ok }">
+                <el-icon class="result-icon"><component :is="sharedAiTestResult.ok ? Check : Close" /></el-icon>
+                <span class="result-text">{{ sharedTestResultText }}</span>
+              </div>
+            </div>
+
+            <!-- 区块2：共享生图配置（T00320 新增，管理员全局，供未配个人生图的用户降级使用） -->
+            <div class="config-block hover-glow" style="margin-top: 12px;">
+              <h3 class="block-title">
+                <span class="block-bracket">[</span> 共享生图配置
+                <span class="user-badge" :class="{ ok: sharedImageKeySet }" style="margin-left: 6px;">
+                  {{ sharedImageKeySet ? '已配置 Key' : '未配置 Key' }}
+                </span>
+                <span class="block-bracket">]</span>
+              </h3>
+              <p class="key-hint">
+                <span class="hint-icon">i</span>
+                <span>管理员统一维护的全局生图服务。未在「AI 服务」配置个人生图 Key 的用户生成图片时自动降级使用这里的配置。</span>
+              </p>
+              <div class="form-row">
+                <span class="form-label">模型厂商</span>
+                <el-select v-model="sharedImageVendorSel" placeholder="选择厂商自动填充地址与模型" size="small" class="flex-1" @change="onSharedImageVendorChange">
+                  <el-option v-for="v in MEDIA_VENDORS" :key="v.id" :label="v.label" :value="v.id" />
+                </el-select>
+              </div>
+              <div class="form-row">
+                <span class="form-label">场景预设</span>
+                <el-select v-model="sharedImagePresetSel" placeholder="一键套用生图场景预设（仅生成参数）" size="small" class="flex-1" @change="onSharedImagePresetChange">
+                  <el-option v-for="p in mediaPresets.imagePresets" :key="p.key" :label="p.label" :value="p.key" />
+                </el-select>
+              </div>
+              <div class="form-row">
+                <span class="form-label">API 地址</span>
+                <el-input v-model="sharedImageForm.baseUrl" size="small" placeholder="https://apihub.agnes-ai.com/v1" class="flex-1" />
+              </div>
+              <div class="form-row">
+                <span class="form-label">API Key</span>
+                <el-input v-model="sharedImageForm.apiKey" type="password" show-password size="small" placeholder="显示 **** 表示已配置；留空保存可清除" class="flex-1" />
+                <a v-if="sharedImageVendor?.apiKeyUrl" class="media-external-link" :href="sharedImageVendor.apiKeyUrl" target="_blank" rel="noopener">获取 API Key</a>
+              </div>
+              <p v-if="sharedImageVendor?.authNote" class="key-hint">
+                <span class="hint-icon">i</span>
+                <span>{{ sharedImageVendor.authNote }}</span>
+              </p>
+              <div class="form-row">
+                <span class="form-label">模型</span>
+                <el-input v-model="sharedImageForm.model" size="small" placeholder="如 agnes-image-2.1-flash" class="flex-1" />
+              </div>
+              <el-select
+                v-if="sharedImageModels.length"
+                :model-value="sharedImageForm.model"
+                class="model-select"
+                placeholder="从服务商可用模型中选取"
+                filterable
+                size="small"
+                @update:model-value="(v: string) => (sharedImageForm.model = v)"
+              >
+                <el-option v-for="m in sharedImageModels" :key="m.id" :label="m.id" :value="m.id" />
+              </el-select>
+              <div class="form-row">
+                <span class="form-label">分辨率</span>
+                <el-input v-model="sharedImageForm.size" size="small" placeholder="如 1024x768" class="flex-1" />
+                <span class="form-label form-label--sep">比例</span>
+                <el-input v-model="sharedImageForm.ratio" size="small" placeholder="如 16:9" class="flex-1" />
+              </div>
+              <div class="form-row">
+                <span class="form-label">负面词</span>
+                <el-input v-model="sharedImageForm.negativePrompt" size="small" placeholder="避免出现的内容（可选）" class="flex-1" />
+              </div>
+              <div class="form-row">
+                <span class="form-label">步数</span>
+                <el-input-number v-model="sharedImageForm.steps" :min="1" :max="150" size="small" style="flex:1" />
+                <span class="form-label form-label--sep">CFG</span>
+                <el-input-number v-model="sharedImageForm.cfgScale" :min="1" :max="30" :step="0.5" size="small" style="flex:1" />
+                <span class="form-label form-label--sep">采样器</span>
+                <el-input v-model="sharedImageForm.sampler" size="small" placeholder="如 DPM++ 2M Karras（可选）" class="flex-1" />
+              </div>
+              <div class="form-row">
+                <span class="form-label">随机种子</span>
+                <el-input-number v-model="sharedImageForm.seed" :min="-1" :max="999999999" size="small" style="flex:1" />
+                <span class="form-hint">-1 / 留空 = 每次随机</span>
+              </div>
+              <div class="ai-actions">
+                <el-button class="neon-btn" data-tip="用当前共享生图配置校验 API 是否可用" :loading="testingSharedImageGen" @click="testSharedImageGenConnection">
+                  <el-icon class="btn-icon"><Connection /></el-icon>
+                </el-button>
+                <el-button class="neon-btn" data-tip="从共享生图 API 地址拉取可用模型列表" :loading="loadingSharedImageModels" @click="fetchSharedImageModels">
+                  <el-icon class="btn-icon"><List /></el-icon>
+                </el-button>
+                <el-button class="neon-btn" data-tip="打开所选厂商的官方在线文档/配置指南" :disabled="!sharedImageVendorSel" @click="openDocs(sharedImageVendorSel)">
+                  <el-icon class="btn-icon"><Document /></el-icon>
+                </el-button>
+                <el-button class="neon-btn-primary" data-tip="保存管理员共享生图配置（对所有用户生效）" :loading="savingSharedImage" @click="saveSharedImage">
+                  <el-icon class="btn-icon"><Check /></el-icon>
+                </el-button>
+              </div>
+              <div v-if="sharedImageGenTestResult" class="test-result" :class="{ ok: sharedImageGenTestResult.ok, fail: !sharedImageGenTestResult.ok }">
+                <el-icon class="result-icon"><component :is="sharedImageGenTestResult.ok ? Check : Close" /></el-icon>
+                <span class="result-text">{{ sharedImageGenTestText }}</span>
+              </div>
+            </div>
+
+            <!-- 区块3：共享视频配置（T00320 新增，管理员全局，供未配个人视频的用户降级使用） -->
+            <div class="config-block hover-glow" style="margin-top: 12px;">
+              <h3 class="block-title">
+                <span class="block-bracket">[</span> 共享视频配置
+                <span class="user-badge" :class="{ ok: sharedVideoKeySet }" style="margin-left: 6px;">
+                  {{ sharedVideoKeySet ? '已配置 Key' : '未配置 Key' }}
+                </span>
+                <span class="block-bracket">]</span>
+              </h3>
+              <p class="key-hint">
+                <span class="hint-icon">i</span>
+                <span>管理员统一维护的全局视频生成服务。未在「AI 服务」配置个人视频 Key 的用户生成视频时自动降级使用这里的配置。</span>
+              </p>
+              <div class="form-row">
+                <span class="form-label">场景预设</span>
+                <el-select v-model="sharedVideoPresetSel" placeholder="一键套用视频场景预设（仅生成参数）" size="small" class="flex-1" @change="onSharedVideoPresetChange">
+                  <el-option v-for="p in mediaPresets.videoPresets" :key="p.key" :label="p.label" :value="p.key" />
+                </el-select>
+              </div>
+              <div class="form-row">
+                <span class="form-label">模型厂商</span>
+                <el-select v-model="sharedVideoVendorSel" placeholder="选择厂商自动填充地址与模型" size="small" class="flex-1" @change="onSharedVideoVendorChange">
+                  <el-option v-for="v in MEDIA_VENDORS" :key="v.id" :label="v.label" :value="v.id" />
+                </el-select>
+              </div>
+              <div class="form-row">
+                <span class="form-label">API 地址</span>
+                <el-input v-model="sharedVideoForm.baseUrl" size="small" placeholder="https://apihub.agnes-ai.com/v1" class="flex-1" />
+              </div>
+              <div class="form-row">
+                <span class="form-label">API Key</span>
+                <el-input v-model="sharedVideoForm.apiKey" type="password" show-password size="small" placeholder="显示 **** 表示已配置；留空保存可清除" class="flex-1" />
+                <a v-if="sharedVideoVendor?.apiKeyUrl" class="media-external-link" :href="sharedVideoVendor.apiKeyUrl" target="_blank" rel="noopener">获取 API Key</a>
+              </div>
+              <p v-if="sharedVideoVendor?.authNote" class="key-hint">
+                <span class="hint-icon">i</span>
+                <span>{{ sharedVideoVendor.authNote }}</span>
+              </p>
+              <div class="form-row">
+                <span class="form-label">模型</span>
+                <el-input v-model="sharedVideoForm.videoModel" size="small" placeholder="如 agnes-video-2.5-flash" class="flex-1" />
+              </div>
+              <el-select
+                v-if="sharedVideoModels.length"
+                :model-value="sharedVideoForm.videoModel"
+                class="model-select"
+                placeholder="从服务商可用模型中选取"
+                filterable
+                size="small"
+                @update:model-value="(v: string) => (sharedVideoForm.videoModel = v)"
+              >
+                <el-option v-for="m in sharedVideoModels" :key="m.id" :label="m.id" :value="m.id" />
+              </el-select>
+              <div class="form-row">
+                <span class="form-label">尺寸</span>
+                <el-input v-model="sharedVideoForm.size" size="small" placeholder="如 1280x720" class="flex-1" />
+                <span class="form-label form-label--sep">时长(s)</span>
+                <el-input-number v-model="sharedVideoForm.seconds" :min="1" :max="60" size="small" style="flex: 1" />
+              </div>
+              <div class="form-row">
+                <span class="form-label">负面词</span>
+                <el-input v-model="sharedVideoForm.negativePrompt" size="small" placeholder="避免出现的内容（可选）" class="flex-1" />
+              </div>
+              <div class="form-row">
+                <span class="form-label">帧率</span>
+                <el-input-number v-model="sharedVideoForm.fps" :min="1" :max="60" size="small" style="flex:1" />
+                <span class="form-label form-label--sep">运动</span>
+                <el-input-number v-model="sharedVideoForm.motion" :min="0" :max="10" size="small" style="flex:1" />
+                <span class="form-label form-label--sep">种子</span>
+                <el-input-number v-model="sharedVideoForm.seed" :min="-1" :max="999999999" size="small" style="flex:1" />
+              </div>
+              <div class="ai-actions">
+                <el-button class="neon-btn" data-tip="探测共享视频服务商连通性（通过 /models 列表与 Key 校验）" :loading="testingSharedVideoGen" @click="testSharedVideoGenConnection">
+                  <el-icon class="btn-icon"><Connection /></el-icon>
+                </el-button>
+                <el-button class="neon-btn" data-tip="从共享视频 API 地址拉取可用模型列表" :loading="loadingSharedVideoModels" @click="fetchSharedVideoModels">
+                  <el-icon class="btn-icon"><List /></el-icon>
+                </el-button>
+                <el-button class="neon-btn" data-tip="打开所选厂商的官方在线文档/配置指南" :disabled="!sharedVideoVendorSel" @click="openDocs(sharedVideoVendorSel)">
+                  <el-icon class="btn-icon"><Document /></el-icon>
+                </el-button>
+                <el-button class="neon-btn-primary" data-tip="保存管理员共享视频配置（对所有用户生效）" :loading="savingSharedVideo" @click="saveSharedVideo">
+                  <el-icon class="btn-icon"><Check /></el-icon>
+                </el-button>
+              </div>
+              <div v-if="sharedVideoGenTestResult" class="test-result" :class="{ ok: sharedVideoGenTestResult.ok, fail: !sharedVideoGenTestResult.ok }">
+                <el-icon class="result-icon"><component :is="sharedVideoGenTestResult.ok ? Check : Close" /></el-icon>
+                <span class="result-text">{{ sharedVideoGenTestText }}</span>
               </div>
             </div>
           </div>
@@ -3485,6 +4580,28 @@ watch(activeTab, (tab) => {
   box-shadow: 0 0 10px var(--accent-pink-a30);
 }
 
+/* T00355：系统配置页区分「私有配置」与「共享AI 配置」两套 Key 状态的徽标 */
+.key-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid;
+}
+
+.key-badge-private {
+  background: var(--accent-purple-a15);
+  border-color: var(--accent-purple-a40);
+  color: var(--neon-purple);
+}
+
+.key-badge-shared {
+  background: var(--accent-cyan-a15);
+  border-color: var(--accent-cyan-a40);
+  color: var(--neon-cyan);
+}
+
 .env-name {
   padding: 2px 10px;
   background: var(--accent-purple-a12);
@@ -3832,6 +4949,13 @@ watch(activeTab, (tab) => {
   flex: none;
   white-space: nowrap;
 }
+/* 图标按钮：让 el-icon 在按钮内垂直水平居中（用于 T00319 共享AI 图标化按钮） */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
 /* 服务商真实模型下拉：占满整行，可搜索 */
 .model-select {
   width: 100%;
@@ -3841,6 +4965,18 @@ watch(activeTab, (tab) => {
   margin: 6px 0 0;
   font-size: 12px;
   color: var(--danger, #f56c6c);
+}
+/* 生图/视频表单「获取 API Key」外链（T00345）：内联在 API Key 输入行右侧 */
+.media-external-link {
+  flex: none;
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--accent, #4f7cff);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.media-external-link:hover {
+  text-decoration: underline;
 }
 
 .preset-bar {
@@ -4644,5 +5780,81 @@ watch(activeTab, (tab) => {
   color: var(--text-soft);
   background: var(--bg-card);
   border-radius: var(--radius-input);
+}
+
+/* ===== 数据迁移（T00332）===== */
+.migrate-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 隐藏原生文件选择框，仅保留其触发能力 */
+.migrate-file-input {
+  display: none;
+}
+
+/* 用仿按钮样式触发文件选择（label 指向隐藏 input） */
+.migrate-file-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-bright);
+  background: var(--bg-card);
+  border: 1px solid var(--accent-purple-a30);
+  border-radius: var(--radius-input);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.migrate-file-trigger:hover {
+  border-color: var(--neon-cyan);
+}
+
+.migrate-file-name {
+  font-size: 12px;
+  color: var(--text-soft);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.migrate-result {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-radius: var(--radius-input);
+  border: 1px solid var(--accent-purple-a25);
+  background: var(--bg-card);
+}
+
+.migrate-result.ok {
+  border-color: var(--success, #67c23a);
+}
+
+.migrate-result.warn {
+  border-color: var(--warning, #e6a23c);
+}
+
+.result-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.result-details {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result-detail-item {
+  font-size: 12px;
+  color: var(--text-soft);
+  font-family: var(--font-mono);
 }
 </style>

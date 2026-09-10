@@ -14,6 +14,21 @@ import type { IngestPayload, TimelineItem, RunSummary, LlmPreset } from '../type
 // 跳转 Config 页面切换后再返回 Progress 流程割裂，快捷切换提升体验
 const llmPresets = ref<LlmPreset[]>([]);
 const switchingProvider = ref(false);
+// T00329：编译失败时展示"当前模型"（compile 走服务端共享 AI，即 GET /api/ai/config 返回的 model）
+const currentModel = ref('');
+// 快捷切换下拉条的当前选中预设 key
+const switchPresetKey = ref('');
+
+async function loadCurrentModel() {
+  try {
+    const res = await apiFetch(`${API_BASE}/ai/config`);
+    if (!res.ok) return;
+    const cfg = await res.json() as { model?: string };
+    currentModel.value = cfg.model ?? '';
+  } catch {
+    // 拉取失败保持"未知"，不阻断编译流程
+  }
+}
 
 async function loadLlmPresets() {
   try {
@@ -24,6 +39,13 @@ async function loadLlmPresets() {
   } catch {
     // 预设加载失败不阻断编译流程
   }
+}
+
+// T00329：下拉条选中预设后触发既有 provider 切换逻辑（PUT /api/ai/config）
+async function onQuickSwitch(value: string) {
+  const preset = llmPresets.value.find(p => p.key === value);
+  if (!preset) return;
+  await quickSwitchProvider(preset);
 }
 
 async function quickSwitchProvider(preset: LlmPreset) {
@@ -182,6 +204,8 @@ function handleSingleCancel() {
 onMounted(() => {
   // 加载 LLM 预设列表：编译失败时供用户快捷切换 provider
   loadLlmPresets();
+  // T00329：加载当前生效模型名用于编译失败提示
+  loadCurrentModel();
   // §优化方案3：先尝试从 localStorage 恢复上次的编译状态
   // 为什么在 onMounted 最前面：恢复的 pendingPayload/isDone 等会影响后续 startCompile 判断，
   //   必须在判断之前完成恢复
@@ -291,6 +315,12 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             </template>
             <template v-else>{{ store.errorMessage }}</template>
           </p>
+        </div>
+        <!-- T00356：页面右上角常驻显示当前使用模型（编译走服务端共享 AI，即 GET /api/ai/config 返回的 model）。
+             与失败态的 current-model-bar 不同，这里无论编译成败都展示，便于用户随时核对当前生效模型 -->
+        <div class="head-model" data-tip="编译当前使用的模型">
+          <span class="head-model-label">当前模型：</span>
+          <code>{{ currentModel || '未知' }}</code>
         </div>
       </div>
 
@@ -429,22 +459,32 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
         </div>
       </div>
       <div v-else-if="store.errorMessage" class="restart-bar">
+        <!-- T00329：编译失败时展示当前调用模型，便于判断是否因模型/账户配置导致 -->
+        <div class="current-model-bar">
+          <span>当前模型：</span>
+          <code>{{ currentModel || '未知' }}</code>
+        </div>
           <el-button type="primary" size="large" data-tip="重新开始投递失败的内容" @click="handleRestart">
             重新投递
           </el-button>
-        <!-- LLM Provider 快捷切换：编译失败（特别是 5xx/超时）时无需跳转 Config 页面 -->
+        <!-- T00329：快捷切换模型改为统一下拉条选择，切换后触发既有 provider 切换逻辑 -->
         <div v-if="llmPresets.length > 0" class="quick-switch-provider">
-          <span class="quick-switch-label">快捷切换 LLM：</span>
-          <el-button
-            v-for="preset in llmPresets"
-            :key="preset.key"
-            size="small"
-            data-tip="切换 LLM Provider 后重试（无需跳转配置页）"
+          <span class="quick-switch-label">切换模型：</span>
+          <el-select
+            v-model="switchPresetKey"
+            class="quick-switch-select"
+            placeholder="选择模型后重试"
             :loading="switchingProvider"
-            @click="quickSwitchProvider(preset)"
+            @change="onQuickSwitch"
           >
-            {{ preset.label }}
-          </el-button>
+            <el-option
+              v-for="preset in llmPresets"
+              :key="preset.key"
+              :label="preset.label"
+              :value="preset.key"
+              :data-tip="`${preset.label}-切换到 ${preset.model} 后重新编译`"
+            />
+          </el-select>
         </div>
       </div>
 
@@ -561,6 +601,31 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   margin: 0;
   color: var(--text-soft);
   font-size: 12px;
+}
+
+/* T00356：页面右上角常驻展示当前使用模型（读写服务端共享 AI 配置期间不可用，失败显示“未知”）。 */
+.head-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
+  border-radius: var(--radius-pill);
+  padding: 4px 14px;
+  white-space: nowrap;
+}
+
+.head-model-label {
+  font-size: 12px;
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+}
+
+.head-model code {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
 }
 
 .timeline {
@@ -738,6 +803,23 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   gap: 16px;
 }
 
+/* 编译失败时展示当前模型 */
+.current-model-bar {
+  font-size: 13px;
+  color: var(--text-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.current-model-bar code {
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
 /* LLM Provider 快捷切换：编译失败时无需跳转 Config 页面 */
 .quick-switch-provider {
   display: flex;
@@ -745,6 +827,11 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px;
+}
+
+/* T00329：下拉条宽度与页面对齐 */
+.quick-switch-select {
+  width: 220px;
 }
 
 .quick-switch-label {

@@ -61,7 +61,7 @@ async function callLlmForExtract(
 ): Promise<LlmExtractOutput> {
   const qqConfig = config.qq!;
   // baseUrl 优先级：extract_base_url 非空 > llm.baseUrl（SRS §6.2 extract_model 独立调用决策）
-  // 为什么不直接复用 llm.baseUrl：extract_model 可能是不同 provider（如 glm-4-plus vs agnes-2.0-flash），
+  // 为什么不直接复用 llm.baseUrl：extract_model 可能是不同 provider（如 glm-4-plus vs agnes-2.5-flash），
   // 需独立 baseUrl 避免请求发错端点
   const baseUrl = (qqConfig.extract_base_url || config.llm.baseUrl).trim();
   const model = qqConfig.extract_model;

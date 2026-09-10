@@ -200,13 +200,15 @@ function defaultConfig(): AppConfig {
       agnes: {
         baseUrl: 'https://apihub.agnes-ai.com/v1',
         apiKeyRef: 'AGNES_API_KEY',
-        imageModel: 'agnes-image-2.1-flash',
-        videoModel: 'agnes-video-v2.0',
+        imageModel: 'agnes-image-2.5-flash',
+        videoModel: 'agnes-video-2.5-flash',
         defaultImageSize: '1024x768',
         defaultImageRatio: '16:9',
         defaultVideoSize: '1280x720',
         defaultVideoSeconds: 5,
       },
+      // T00320 管理员全局「共享媒体」默认不配置：与既有行为一致，个人 BYOK / media.agnes 兜底不受影响
+      shared: undefined,
     },
     // 会话持久化（对应「问答会话本地存储 + 线程隔离 + 本地记忆」需求）。
     // 默认关闭服务端落盘（D-1 决策 / SRS 核心需求：会话内容不存储于服务器端，仅在本地维护）：
@@ -329,8 +331,13 @@ function mergeConfigObjects(defaults: AppConfig, parsed: Partial<AppConfig>): Ap
       ? { ...defaults.podcast, ...parsed.podcast }
       : defaults.podcast,
     // v3 媒体生成配置合并：parsed.media 可选，未配置时用默认值
+    // 为什么保留 parsed.media.shared：管理员「共享媒体」（生图/视频）由 /api/media/shared 写入，
+    //   浅合并 agnes（敏感默认覆盖）时若丢弃 shared 会导致共享配置保存后丢失；条件带出即可。
     media: parsed.media && defaults.media
-      ? { agnes: { ...defaults.media.agnes, ...parsed.media.agnes } }
+      ? {
+          agnes: { ...defaults.media.agnes, ...parsed.media.agnes },
+          ...(parsed.media.shared ? { shared: parsed.media.shared } : {}),
+        }
       : defaults.media,
     // 会话持久化配置合并：parsed.sessionPersistence 可选，未配置时用默认值
     sessionPersistence: parsed.sessionPersistence && defaults.sessionPersistence
@@ -736,6 +743,75 @@ export async function saveMcpConfig(updates: {
   return merged;
 }
 
+// T00320 保存管理员「共享媒体」配置（media.shared.image / media.shared.video）到 config.json。
+// 为什么独立函数：共享生图/视频为管理员级全局配置，与 user BYOK（客户端 IndexedDB）生命周期不同，
+//   读写均走 requireAdmin 接口；仅更新显式提供的 image/video 组，未提供的组保留原值。
+// apiKey 处理与 saveAiConfig 一致：**** 开头视为脱敏回传不修改，空串表示清除，其他为新值。
+export async function saveSharedMediaConfig(updates: {
+  image?: import('./types.js').MediaImageUserConfig;
+  video?: import('./types.js').MediaVideoUserConfig;
+}): Promise<AppConfig> {
+  const current = await loadConfig();
+  const baseMedia: import('./types.js').MediaConfig = current.media ?? {
+    agnes: {
+      baseUrl: 'https://apihub.agnes-ai.com/v1',
+      apiKeyRef: 'AGNES_API_KEY',
+      imageModel: 'agnes-image-2.5-flash',
+      videoModel: 'agnes-video-2.5-flash',
+      defaultImageSize: '1024x768',
+      defaultImageRatio: '16:9',
+      defaultVideoSize: '1280x720',
+      defaultVideoSeconds: 5,
+    },
+  };
+
+  // 浅合并某组共享配置：仅覆盖显式提供的字段（undefined 字段保留旧值）；
+  // apiKey 以 **** 开头视为脱敏回传，不覆盖。返回新对象，不修改入参。
+  const mergeGroup = <T extends { apiKey?: string }>(
+    prev: T | undefined,
+    next: T | undefined,
+  ): T | undefined => {
+    if (next === undefined) return prev;
+    const merged = { ...(prev ?? {}), ...next } as T;
+    // apiKey 脱敏回传时恢复旧值
+    if (typeof next.apiKey === 'string' && next.apiKey.startsWith('****')) {
+      merged.apiKey = prev?.apiKey ?? '';
+    }
+    return merged;
+  };
+
+  const merged: AppConfig = {
+    ...current,
+    media: {
+      agnes: baseMedia.agnes,
+      ...(baseMedia.shared || updates.image !== undefined || updates.video !== undefined
+        ? {
+            shared: {
+              ...(updates.image !== undefined
+                ? { image: mergeGroup(baseMedia.shared?.image, updates.image) }
+                : baseMedia.shared?.image !== undefined
+                  ? { image: baseMedia.shared.image }
+                  : {}),
+              ...(updates.video !== undefined
+                ? { video: mergeGroup(baseMedia.shared?.video, updates.video) }
+                : baseMedia.shared?.video !== undefined
+                  ? { video: baseMedia.shared.video }
+                  : {}),
+            },
+          }
+        : {}),
+    },
+  };
+
+  const configPath = getConfigPath();
+  if (configPath) {
+    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+  }
+
+  refreshConfigCache(merged);
+  return merged;
+}
+
 // ===== 运行参数/健康检查/批量编译/日志 配置保存函数 =====
 // 这些函数为前端 Config.vue 提供编辑入口，落盘后由调用方（路由层）同步 adapter 运行时实例。
 // 为什么独立函数：与 LLM/webSearch 生命周期不同，且字段结构差异大，统一函数会增加类型复杂度。
@@ -1046,4 +1122,232 @@ export async function saveUrlCrawlConfig(updates: Partial<UrlCrawlConfig>): Prom
   }
   refreshConfigCache(merged);
   return merged;
+}
+
+// ===== 数据迁移（T00332）：配置整体导出 / 导入 =====
+// 目标：便于更换服务器 / 环境迁移时，把 config.json 的完整配置项打包传输。
+// 安全与校验策略（与 saveAiConfig/saveMcpConfig 的 **** 脱敏约定保持对称）：
+//   导出：对含密钥的字段递归脱敏（保留结构，值替换为 **** 掩码），避免明文 key 随文件泄露；
+//   导入：白名单（顶层 key）+ 轻量类型校验，忽略未知字段防异常注入；密钥字段若回传掩码/空串，
+//         视为"未修改"，沿用当前配置的真实值，避免导入后密钥被清空或误覆盖。
+// 为什么集中声明密钥键名而非引入 YAML/JSONSchema 依赖：满足"不引入冲突第三方依赖 + 不上强依赖"，
+//   集中枚举清晰可维护，键名覆盖本项目全部存明文 key 的字段。
+const MIGRATION_SECRET_KEYS: ReadonlySet<string> = new Set([
+  'apiKey',          // llm / webSearch / media(agnes|shared.image|shared.video) / ocr / audio 明文 key
+  'apiKeys',         // llm 多 key 持久化表（provider -> key，值逐个脱敏）
+  'userToken',       // mcp 读 token
+  'adminToken',      // mcp 写 token
+  'ttsApiKey',       // podcast TTS key
+  'cpolarAuthtoken', // tunnel cpolar 口令
+]);
+
+// 顶层允许持久化的配置键（AppConfig 顶层字段白名单）。
+// 为什么独立集合：导入只接受已知键，避免攻击者注入任意未知顶层字段污染结构。
+const CONFIG_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
+  'vaultPath', 'adapter', 'llm', 'budget', 'server', 'localOnly', 'healthCheck', 'tunnel',
+  'webSearch', 'logging', 'batch', 'tools', 'auth', 'qq', 'urlCrawl', 'audio', 'ocr',
+  'podcast', 'media', 'skills', 'activeSkill', 'sessionPersistence', 'contextGovernor',
+  'enableSubAgents', 'enableResumableStream', 'clarify', 'mcp', 'knowledge', 'graph', 'refs',
+]);
+
+// 导入校验专属错误：路由据此返回 400（格式/完整性不符），区别于写盘 500。
+export class ConfigMigrationError extends Error {}
+
+// 判断是否为纯对象（用于递归脱敏/合并/校验）
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+// 掩码单个字符串：保留末 4 位便于识别已配置，前缀 ****（与 maskApiKey 一致）。
+// 空串保持空串：表示"未配置"，导入时同样沿用现状，确保导出→导入对称。
+function maskSecretString(s: string): string {
+  if (!s) return s;
+  return s.length < 4 ? '****' : `****${s.slice(-4)}`;
+}
+
+// 递归脱敏：返回新对象，不修改入参。
+// 为什么递归处理整个树：密钥散落在多层嵌套（llm/media/tunnel 等），逐层遍历才无遗漏。
+function maskSecretsInConfig(node: unknown): unknown {
+  if (!isPlainObject(node)) return node;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (MIGRATION_SECRET_KEYS.has(k)) {
+      if (k === 'apiKeys') {
+        // 多 key 表：provider -> key 映射，逐个掩码（保留空串语义）
+        out[k] = isPlainObject(v)
+          ? Object.fromEntries(
+              Object.entries(v).map(([p, key]): [string, unknown] => [p, typeof key === 'string' ? maskSecretString(key) : key]),
+            )
+          : v;
+      } else {
+        out[k] = typeof v === 'string' ? maskSecretString(v) : v;
+      }
+      continue;
+    }
+    out[k] = maskSecretsInConfig(v);
+  }
+  return out;
+}
+
+// 递归还原密钥：import 中密钥字段为掩码(****)或空串时，沿用 current 现值；否则用 import 真实值。
+// current 为当前生效配置（含真实密钥），保证"导出→换机→导入"不丢 key 也不读明文。
+function restoreSecretsInConfig(importNode: unknown, current: unknown): unknown {
+  if (!isPlainObject(importNode)) return importNode;
+  const cur = isPlainObject(current) ? current : {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(importNode)) {
+    if (MIGRATION_SECRET_KEYS.has(k)) {
+      if (k === 'apiKeys') {
+        const curTable = isPlainObject(cur[k]) ? (cur[k] as Record<string, unknown>) : {};
+        out[k] = isPlainObject(v)
+          ? Object.fromEntries(
+              Object.entries(v).map(([p, key]): [string, unknown] => {
+                if (typeof key !== 'string') return [p, key];
+                // 掩码/空串：沿用当前表对应 provider 的真实值（未配置则保留原值）
+                if (key === '' || key.startsWith('****')) {
+                  return [p, typeof curTable[p] === 'string' ? curTable[p] : key];
+                }
+                return [p, key];
+              }),
+            )
+          : v;
+        continue;
+      }
+      if (typeof v === 'string' && (v === '' || v.startsWith('****'))) {
+        out[k] = typeof cur[k] === 'string' ? cur[k] : '';
+        continue;
+      }
+    }
+    out[k] = restoreSecretsInConfig(v, cur[k]);
+  }
+  return out;
+}
+
+// 清洗 + 白名单/类型校验导入数据：返回受支持字段子集，未知字段记录到 failed。
+// 为什么返回子集而非抛错：实现"忽略未知字段"，避免旧版本导出文件含新字段时导入被整体拒绝。
+function sanitizeImportConfig(raw: unknown): { data: Record<string, unknown>; failed: string[] } {
+  const failed: string[] = [];
+  if (!isPlainObject(raw)) {
+    throw new ConfigMigrationError('导入数据必须为一个 JSON 对象');
+  }
+  const data: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!CONFIG_TOP_LEVEL_KEYS.has(k)) {
+      failed.push(`忽略未知字段 "${k}"`);
+      continue;
+    }
+    data[k] = v;
+  }
+  // 顶层字段类型轻校验（明显异常类型直接拒绝，避免坏结构写盘）
+  const objectKeys: ReadonlyArray<string> = [
+    'llm', 'budget', 'server', 'healthCheck', 'tunnel', 'webSearch', 'logging', 'batch', 'tools',
+    'auth', 'qq', 'urlCrawl', 'audio', 'ocr', 'podcast', 'media', 'contextGovernor', 'clarify',
+    'mcp', 'knowledge', 'graph', 'refs', 'sessionPersistence',
+  ];
+  for (const k of objectKeys) {
+    if (k in data && data[k] !== undefined && !isPlainObject(data[k])) {
+      throw new ConfigMigrationError(`字段 "${k}" 应为对象`);
+    }
+  }
+  if ('skills' in data && data.skills !== undefined && !Array.isArray(data.skills)) {
+    throw new ConfigMigrationError('字段 "skills" 应为数组');
+  }
+  const boolKeys: ReadonlyArray<string> = ['localOnly', 'enableSubAgents', 'enableResumableStream'];
+  for (const k of boolKeys) {
+    if (k in data && data[k] !== undefined && typeof data[k] !== 'boolean') {
+      throw new ConfigMigrationError(`字段 "${k}" 应为 boolean`);
+    }
+  }
+  if ('vaultPath' in data && data.vaultPath !== undefined && typeof data.vaultPath !== 'string') {
+    throw new ConfigMigrationError('字段 "vaultPath" 应为 string');
+  }
+  if ('activeSkill' in data && data.activeSkill !== undefined && typeof data.activeSkill !== 'string') {
+    throw new ConfigMigrationError('字段 "activeSkill" 应为 string');
+  }
+  return { data, failed };
+}
+
+// 深度合并：base 已有字段保持不变，用 incoming 补齐 base 缺失的字段（仅对象间递归）。
+// 为什么只补缺失：merge 模式语义为"仅导入目标中不存在的配置项，已有的保持不变"。
+function deepMergeConfig(base: Record<string, unknown>, incoming: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(incoming)) {
+    const cur = base[k];
+    if (isPlainObject(v) && isPlainObject(cur)) {
+      out[k] = deepMergeConfig(cur as Record<string, unknown>, v as Record<string, unknown>);
+    } else if (cur === undefined) {
+      out[k] = v;
+    }
+    // 其余情况：base 已有值保持不变
+  }
+  return out;
+}
+
+// 生成导出版本元数据外壳。
+// 为什么带 meta：让导入端可识别文件来源/时间/格式，且不污染 config.json 结构。
+export async function buildConfigExport(): Promise<{ fileName: string; data: unknown }> {
+  const config = await loadConfig();
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  return {
+    fileName: `karpathy-wiki-config-${stamp}.json`,
+    data: {
+      format: 'karpathy-wiki-config',
+      version: 1,
+      exportedAt: now.toISOString(),
+      config: maskSecretsInConfig(config),
+    },
+  };
+}
+
+// 导入配置数据并持久化，返回结果摘要 { applied, skipped, failed, details }。
+// mode：
+//   merge    仅补齐当前配置缺失的项，已有配置项保持不变（含嵌套对象递归）；
+//   overwrite整体替换（先备份旧配置到 config.json.bak，写失败可从备份回滚）。
+// 密钥处理：导入文件默认来自 buildConfigExport（掩码/空串），restoreSecretsInConfig 沿用当前真实值。
+export async function importConfigData(
+  raw: unknown,
+  mode: 'merge' | 'overwrite',
+): Promise<{ applied: number; skipped: number; failed: number; details: string[] }> {
+  if (mode !== 'merge' && mode !== 'overwrite') {
+    throw new ConfigMigrationError('mode 必须为 merge 或 overwrite');
+  }
+  const { data, failed } = sanitizeImportConfig(raw);
+  if (Object.keys(data).length === 0) {
+    throw new ConfigMigrationError(`未发现任何受支持的配置字段${failed.length ? `：${failed.join('；')}` : ''}`);
+  }
+
+  const prev = (await loadConfig()) as unknown as Record<string, unknown>;
+  const base: Record<string, unknown> = mode === 'merge' ? deepMergeConfig(prev, data) : { ...prev, ...data };
+  // 密钥还原：以 prev（真实值）为基准，掩码/空串回传沿用现值
+  const restored = restoreSecretsInConfig(base, prev);
+
+  const configPath = getConfigPath();
+  if (!configPath) {
+    throw new ConfigMigrationError('无法定位 config.json 写入路径');
+  }
+
+  if (mode === 'overwrite') {
+    // 备份当前配置，写入失败时回滚
+    await fs.writeFile(`${configPath}.bak`, JSON.stringify(prev, null, 2), 'utf8');
+  }
+
+  try {
+    await fs.writeFile(configPath, JSON.stringify(restored, null, 2), 'utf8');
+  } catch (err) {
+    // 写入失败：尽力回滚备份（忽略回滚自身的二次错误，交由路由上报原始错误）
+    try {
+      await fs.writeFile(configPath, JSON.stringify(prev, null, 2), 'utf8');
+    } catch { /* 回滚失败不掩盖原始错误 */ }
+    throw err;
+  }
+
+  refreshConfigCache(restored as unknown as AppConfig);
+
+  return {
+    applied: Object.keys(data).length,
+    skipped: 0,
+    failed: failed.length,
+    details: failed,
+  };
 }
