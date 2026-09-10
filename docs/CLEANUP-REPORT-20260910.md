@@ -5,7 +5,7 @@
 - **配置**：`cleanup-config.yaml`（本轮沿用项目专属配置，零硬编码）
 - **工作空间**：`D:\code\otherProjects\19_Karpathy-AI+Obsidian知识库`
 - **清理模式**：**直接删除 + SHA256 审计日志**（用户确认；未采用 24h 隔离区）
-- **执行结果**：✅ **1122 个文件 / 释放 238.72 MB / 0 错误**
+- **执行结果**：✅ **2011 个文件 / 释放 252.98 MB / 0 错误**
 
 ---
 
@@ -13,10 +13,10 @@
 
 | 指标 | 清理前 | 清理后 | 变化 |
 |---|---|---|---|
-| 工作空间占用（剪枝统计¹） | 636.64 MB | **397.92 MB** | **-238.72 MB（-37.5%）** |
-| 文件总数（同口径） | 4,120 | 2,998 | -1,122 |
+| 工作空间占用（剪枝统计¹） | 636.64 MB | **383.66 MB** | **-252.98 MB（-39.7%）** |
+| 文件总数（同口径） | 4,120 | 2,109 | -2,011 |
 | 根目录条目 | 14 | 14 | 0（`test_screenshots/` 移除，新增审计 `logs/`） |
-| Git 已跟踪缺失文件 | 576 | 0 | 已索引同步 |
+| Git 已跟踪缺失文件 | 576+25 | 0 | 已索引同步（两批） |
 | 执行错误 | — | **0** | — |
 
 > ¹ 剪枝统计：排除 `.git`（162 MB 版本库对象，不属清理范围）与 `node_modules`；`release/` 在本次清理时已不存在。
@@ -63,6 +63,7 @@
 | 3-e2e-backup | 9/1 e2e 测试 vault 快照（>5MB 已二次确认） | 567 | 179.94 MB | 0 |
 | 4-stale-logs | 补扫出的陈旧运行时日志 | 23 | 0.49 MB | 0 |
 | 5-vitest-temp | `vitest.config.ts.timestamp-*.mjs` 临时文件 | 4 | 0.02 MB | 0 |
+| 6-harness-data | `.harness` 运行状态/日志 + `data/` 测试残留与空 config（用户勾选确认） | 889 | 14.26 MB | 0 |
 
 ## 四、未清理的风险/保护文件清单及原因
 
@@ -82,16 +83,16 @@
 | 空目录：`services/api`、`data/{archive/2026-07-27,conversations,threads}`、`frontend/public/assets` | 0 | 疑似框架运行时占位目录 |
 | `_start_wiki_server.cmd`、`.npmrc` | 5 KB | 不在 `root_allowlist`，但属启动入口/包管理配置，建议下轮补入白名单 |
 
-### 后续补扫新发现（待你确认，尚未处理）
+### 补扫新发现（批次 6，已由你勾选确认并处理）
 
-| 路径 | 体积 | 性质 |
+| 路径 | 体积 | 处理 |
 |---|---|---|
-| `karpathy-wiki/api/.harness/state/`（706 个 JSON） | **16 MB** | harness 运行状态文件（7 月起，已被 `karpathy-wiki/.gitignore` 的 `.harness/` 忽略）；**可能影响历史运行的可恢复流式（resume）**，且服务当前在跑，未擅动 |
-| `wiki-harness/.harness/state/`（17 个） | 72 KB | 同上 |
-| `karpathy-wiki/data/.harness/logs/`（141 个） | 658 KB | harness 执行日志 |
-| `karpathy-wiki/data/test-batch`（20）/ `test-batch2`（3）/ `test-sample.docx` | 31 KB | 7 月测试残留；`test-batch` 仅被 `.harness/state` 历史元数据提及，无源码引用 |
-| `karpathy-wiki/data/config.json` | **0 字节** | **git 跟踪**的历史空文件（提交 `d47adf4`），全仓无任何代码引用；应用实际读取 `api/config.json` |
-| `karpathy-wiki/data/_migrated_local_2026-08-05T03-10-27/` | 192 KB | 迁移备份（9 个**已跟踪**的会话文件），被 `scripts/migrate-sessions-local.mjs` 与设计文档引用 |
+| `karpathy-wiki/api/.harness/state/`（706 个 JSON） | 13.99 MB | ✅ 已删除（harness 运行状态；服务复查 `/` 仍 **HTTP 200**） |
+| `wiki-harness/.harness/state/`（17 个） | 0.01 MB | ✅ 已删除 |
+| `karpathy-wiki/data/.harness/logs/`（141 个） | 0.26 MB | ✅ 已删除（保留同目录的 `cleanup-audit.log` 审计与 `compile-cache.json` 编译缓存） |
+| `karpathy-wiki/data/test-batch`（20）/ `test-batch2`（3）/ `test-sample.docx` | 31 KB | ✅ 已删除（7 月测试残留；**注意：三者原本被 git 跟踪**，已 `git rm --cached` 移出索引） |
+| `karpathy-wiki/data/config.json` | 0 字节 | ✅ 已删除（git 跟踪的历史空文件，提交 `d47adf4`，全仓无代码引用）+ `git rm --cached` |
+| `karpathy-wiki/data/_migrated_local_2026-08-05T03-10-27/` | 192 KB | ⏸️ **保留** —— 迁移备份（9 个已跟踪会话文件），被 `scripts/migrate-sessions-local.mjs` 与设计文档引用 |
 
 **明确排除出范围的项**（按你的规范主动判断）：
 1. **系统级临时目录与全局应用缓存**（`%TEMP%` / `AppData` 缓存）——超出工作空间边界，属系统级高危操作。
@@ -121,18 +122,18 @@
 |---|---|
 | `.gitignore` 新增规则 | ✅ `tooling/wiki-toc-verify-*.png`、`**/_e2e_backup_vault_*/` |
 | 规则冲突检查 | ✅ 与现有规则无覆盖（`git check-ignore -v` 验证生效） |
-| 已跟踪垃圾文件处理 | ✅ 576 个曾被跟踪的删除项执行 `git rm --cached --ignore-unmatch`（EXIT=0，仅索引级），暂存为删除态待提交 |
+| 已跟踪垃圾文件处理 | ✅ **601 个**曾被跟踪的删除项执行 `git rm --cached --ignore-unmatch`（两轮：576 + 25，RETURN 0，仅索引级），暂存为删除态 |
 | 索引同步幂等验证 | ✅ `git ls-files --deleted` 由 576 → **0** |
 | `.gitattributes` export-ignore | ⏭️ **未采用**：历史垃圾已移出索引，随提交即消失，无需兜底 |
 | `pre-commit` 同步 | ⏭️ 配置 `auto_update_precommit: false`，按配置跳过 |
-| 提交 | ⚠️ **未执行 commit**：工作区存在并发开发改动（11:38 已有提交 `6343a83`），直接提交会扫入无关变更，留给你确认后提交 |
+| 提交 | ✅ 清理变更已提交：`5d0566b`（删除 + `.gitignore` + 报告）、`45f1c96`（报告补充）；提交前工作树**仅含**清理相关变更，未扫入并发开发改动 |
 
-**关键复发防护**：2026-09-01 的 e2e 快照曾以 **567 个文件（179.94 MB，含 33 个 PDF）误入版本库**，是本次最大污染源与仓库膨胀根因。新增 `**/_e2e_backup_vault_*/` 规则后，此类快照将不再入库。
+**关键复发防护**：2026-09-01 的 e2e 快照曾以 **567 个文件（179.94 MB，含 33 个 PDF）误入版本库**，是本次最大污染源与仓库膨胀根因。新增 `**/_e2e_backup_vault_*/` 规则后，此类快照将不再入库。同理，`data/test-batch*`、`data/config.json` 等 25 个文件也曾被误跟踪，本轮一并移出索引。
 
-## 七、需要你决策的两项
+## 七、此前需你决策的两项（均已闭环）
 
-1. **`release/` 目录于今日 10:00 前后被整体删除**（含 SPA 伺服根 `release/spa/public_live_*` 与当日构建的 exe/安装包），**非本次清理所致**。你已确认「清理后帮我重建」，重建结果见下方第八节。
-2. **`karpathy-wiki/data/config.json` 为 0 字节** —— 数据目录下的空文件，可能是运行时占位，也可能是被截断。请确认是否需要处理。
+1. **`release/` 目录于今日 10:00 前后被整体删除**（含 SPA 伺服根 `release/spa/public_live_*` 与当日构建的 exe/安装包），**非本次清理所致**。你已确认「清理后帮我重建」，重建结果见第八节。
+2. **`karpathy-wiki/data/config.json` 为 0 字节** —— 已查明为 **git 跟踪的历史空文件**（提交 `d47adf4`，全仓无代码引用，应用实际读取 `api/config.json`），已按你的勾选在**批次 6** 中删除并 `git rm --cached`。
 
 ## 八、release/ 重建与线上服务核验（附加动作）
 
