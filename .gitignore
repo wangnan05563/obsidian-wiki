@@ -123,3 +123,10 @@ tooling/wiki-toc-verify-*.png
 # e2e 测试 vault 备份（自动化测试每次生成的快照，体积大；2026-09-01 快照曾以 567 个文件
 # 误入版本库造成仓库膨胀，本次清理已物理删除并 git rm --cached 移出索引，此处加规则防复发）
 **/_e2e_backup_vault_*/
+# harness 运行状态与执行日志（本地运行产物；任意深度，含 wiki-harness/.harness）
+**/.harness/
+# 一次性测试残留（曾以 24 个文件被误跟踪，已移出索引）
+**/test-batch*/
+**/test-sample.docx
+# data 目录下的 0 字节历史残留（应用实际读取 api/config.json）
+karpathy-wiki/data/config.json
