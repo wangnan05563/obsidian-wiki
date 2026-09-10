@@ -62,6 +62,8 @@ garbage_patterns:
     - "*.tmp"
     - "*.bak"
     - "*.orig"
+    # vite / vitest 配置加载时生成的临时文件（2026-09-10 补：先前只匹配 vite.config 前缀，漏扫 vitest）
+    - "*.config.ts.timestamp-*.mjs"
   test_outputs:
     - "/test_result.txt"
     - "/pytest_output.txt"
@@ -104,6 +106,18 @@ garbage_patterns:
   # IDE 配置缓存
   ide_cache:
     - ".vscode/"
+  # harness 运行状态与执行日志（本地运行产物，可重建；2026-09-10 补，删除前须确认无进行中的 harness 任务）
+  harness_runtime:
+    - ".harness/state/"
+    - ".harness/logs/"
+  # 一次性测试残留（2026-09-10 补；曾以 24 个文件被误入版本库，删除后须 git rm --cached 同步索引）
+  stray_test_leftovers:
+    - "test-batch/"
+    - "test-batch2/"
+    - "test-sample.docx"
+  # 零字节历史残留（2026-09-10 补；如 data/config.json 曾以 0 字节被跟踪且无任何代码引用）
+  zero_byte_stale:
+    - "data/config.json"
 
 detection:
   enabled: true
