@@ -26,10 +26,13 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 [Files]
 ; ---- 程序文件 / 资源：每次安装都覆盖（只读应用代码与资源，随版本更新）----
 ; 注意：新增的顶层程序文件/目录必须在此显式列出，切勿改回 "..\release\app\karpathy-wiki\*" 通配。
+; 为什么目录 Source 必须以 "\*" 结尾：Inno 对非通配符目录会把源目录末层名再拼接到 DestDir，
+; 导致 {app}\node_modules\node_modules、{app}\public\public 双重嵌套，运行时 require 找不到 pdf-parse。
+; 加 "\*" 后以通配符匹配目录内容并用 recursesubdirs 平铺，保持与构建产物一致的目录结构。
 Source: "..\release\app\karpathy-wiki\karpathy-wiki.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\release\app\karpathy-wiki\public"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\release\app\karpathy-wiki\prompts"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\release\app\karpathy-wiki\node_modules"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\public\*"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\prompts\*"; DestDir: "{app}\prompts"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\app\karpathy-wiki\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\release\app\karpathy-wiki\llm-presets.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release\app\karpathy-wiki\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 ; 品牌图标：安装到 {app} 供快捷方式 / 卸载项引用（exe 图标另由 build-exe.ps1 用 rcedit 注入）

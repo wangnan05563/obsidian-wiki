@@ -272,6 +272,8 @@ export function registerAiRoute(
       baseUrl?: string;
       model?: string;
       apiKey?: string;
+      // 共享场景（管理员在「共享AI」测试）：置 true 使后端在 apiKey 脱敏/为空时回退服务端共享 llm key 校验
+      useServerKey?: boolean;
     } ?? {};
 
     const config = await loadConfig();
@@ -285,13 +287,21 @@ export function registerAiRoute(
     //   否则「user 已配置、guest 未配置」时，guest 也会借服务端共享 key 测通，
     //   造成"测试通过却问答失败"的误导。未配置的用户应明确得到"请配置自己的 API Key"，
     //   而非借用共享额度测通（问答本就强 BYOK，服务端 key 不为其提供额度）。
+    // ——但管理员在「共享AI」测试共享模型时，其口径本就是「服务端共享 llm key」（PUT /api/ai/config
+    //   写入 config.llm，问答/编译对未配 BYOK 的用户也回落到该 key），故显式声明 useServerKey=true
+    //   时，脱敏/为空 key 应回退服务端共享 key（getEffectiveApiKey 逐级：明文 > apiKeys 表 > 环境变量）。
     const rawKey = body.apiKey && !body.apiKey.startsWith('****') ? body.apiKey : '';
-    const apiKey: string = rawKey;
+    let apiKey: string = rawKey;
+    if (!apiKey && body.useServerKey) {
+      apiKey = getEffectiveApiKey(config);
+    }
 
     if (!apiKey && !baseUrl.includes('localhost')) {
       return void reply.send({
         ok: false,
-        detail: 'API Key 未设置：测试连接按个人 BYOK 密钥校验（与问答口径一致），请在「配置 → AI 服务」填写你自己的 API Key 后再测试',
+        detail: body.useServerKey
+          ? '共享AI 未配置 API Key：请先在「共享AI」页填写并保存共享 API Key'
+          : 'API Key 未设置：测试连接按个人 BYOK 密钥校验（与问答口径一致），请在「配置 → AI 服务」填写你自己的 API Key 后再测试',
       });
     }
 

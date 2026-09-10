@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
+import { Plus, Close, Check, Edit, Delete } from '@element-plus/icons-vue';
 import { useAuthStore } from '../stores/auth';
 import type { UserInfo, AuthRole, CreateUserRequest } from '../types';
 
@@ -142,8 +143,8 @@ onMounted(loadUsers);
           <h2 class="head-title grad-text">用户管理</h2>
           <p class="head-tip">用户列表 · 创建 · 编辑 · 启用禁用 · 删除</p>
         </div>
-        <button class="neon-btn" @click="showCreateForm = !showCreateForm">
-          {{ showCreateForm ? '取消' : '＋ 新建用户' }}
+        <button class="neon-btn" :data-tip="showCreateForm ? '取消-关闭新建用户表单' : '新建用户-创建新账户并分配角色'" @click="showCreateForm = !showCreateForm">
+          <el-icon class="btn-icon"><component :is="showCreateForm ? Close : Plus" /></el-icon>
         </button>
       </div>
 
@@ -195,8 +196,12 @@ onMounted(loadUsers);
           </div>
         </div>
         <div class="form-actions">
-          <button class="neon-btn" @click="handleCreate">创建</button>
-          <button class="neon-btn secondary" @click="showCreateForm = false">取消</button>
+          <button class="neon-btn" data-tip="创建-提交创建新用户" @click="handleCreate">
+            <el-icon class="btn-icon"><Check /></el-icon>
+          </button>
+          <button class="neon-btn secondary" data-tip="取消-关闭新建用户表单" @click="showCreateForm = false">
+            <el-icon class="btn-icon"><Close /></el-icon>
+          </button>
         </div>
       </div>
 
@@ -236,8 +241,12 @@ onMounted(loadUsers);
                   <input v-model="editForm.password" type="password" class="inline-input" placeholder="新密码（留空不修改）" />
                 </td>
                 <td>
-                  <button class="neon-btn btn-sm" @click="handleSaveEdit">保存</button>
-                  <button class="neon-btn secondary btn-sm" @click="cancelEdit">取消</button>
+                  <button class="neon-btn btn-sm" data-tip="保存-保存该用户的角色/启用状态与密码修改" @click="handleSaveEdit">
+                    <el-icon class="btn-icon"><Check /></el-icon>
+                  </button>
+                  <button class="neon-btn secondary btn-sm" data-tip="取消-放弃编辑该用户" @click="cancelEdit">
+                    <el-icon class="btn-icon"><Close /></el-icon>
+                  </button>
                 </td>
               </template>
               <!-- 查看模式 -->
@@ -251,8 +260,12 @@ onMounted(loadUsers);
                 <td class="td-date">{{ formatDate(u.createdAt) }}</td>
                 <td class="td-date">{{ formatDate(u.lastLoginAt) }}</td>
                 <td>
-                  <button class="neon-btn secondary btn-sm" @click="startEdit(u)">编辑</button>
-                  <button class="neon-btn danger btn-sm" @click="handleDelete(u)">删除</button>
+                  <button class="neon-btn secondary btn-sm" data-tip="编辑-修改该用户的角色/状态/密码" @click="startEdit(u)">
+                    <el-icon class="btn-icon"><Edit /></el-icon>
+                  </button>
+                  <button class="neon-btn danger btn-sm" data-tip="删除-删除该用户（当前登录用户不可删）" @click="handleDelete(u)">
+                    <el-icon class="btn-icon"><Delete /></el-icon>
+                  </button>
                 </td>
               </template>
             </tr>
@@ -479,6 +492,14 @@ onMounted(loadUsers);
 .neon-btn.danger:hover { background: var(--accent-pink-a20); }
 
 .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* 图标按钮：让 el-icon 在按钮内垂直水平居中 */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
 
 .loading-text {
   position: relative;

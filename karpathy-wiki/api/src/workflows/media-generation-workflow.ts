@@ -59,10 +59,11 @@ function resolveAgnesApiKey(mediaConfig: MediaConfig | undefined, appConfig?: Ap
 }
 
 // 应用用户 BYOK 生图覆盖到服务端媒体配置：返回新的 MediaConfig（不修改入参）。
-// 优先级：用户显式字段 > 服务端 media.agnes 默认。baseUrl/apiKey/model/size/ratio 为核心可配置项；
-//   预留扩展（steps/cfgScale/sampler/seed/negativePrompt）仅在用户显式设置时覆盖。
+// 优先级：用户显式字段 > media.shared（T00320 管理员全局「共享生图」）> media.agnes 默认。
+//   baseUrl/apiKey/model/size/ratio 为核心可配置项；预留扩展（steps/cfgScale/sampler/seed/negativePrompt）
+//   仅在用户或共享配置显式设置时覆盖（见 generateImage 内 buildImageExtras 的合并）。
 // 为什么 API key 也覆盖：BYOK 下用户用自己的 key 生图，覆盖进 media.agnes.apiKey 后，
-//   resolveAgnesApiKey 会优先取它，实现"用户自己的额度/配置"。
+//   resolveAgnesApiKey 会优先取它，实现"用户自己的额度/配置"；无 BYOK 时共享 key 同理兜底。
 // export 供 routes/ai.ts 的生图测试连接复用（测试用同一套"用户覆盖优先"规则，保证测试口径与真实生成一致）。
 export function applyImageOverride(base: MediaConfig | undefined, o: MediaImageUserConfig | undefined): MediaConfig {
   // 为什么 a 给完整默认对象而非 {}：MediaConfig.agnes 均为 required，空对象类型推断为 {}
@@ -71,17 +72,19 @@ export function applyImageOverride(base: MediaConfig | undefined, o: MediaImageU
     baseUrl: '', apiKey: '', apiKeyRef: 'AGNES_API_KEY', imageModel: '', videoModel: '',
     defaultImageSize: '', defaultImageRatio: '', defaultVideoSize: '', defaultVideoSeconds: 0,
   };
+  const s = base?.shared?.image; // T00320 管理员全局「共享生图」：介于 BYOK 与 agnes 兜底之间
   return {
     agnes: {
       // 为什么全部字段显式给默认：用户配置可独立于服务端 media.agnes 成立（BYOK），
       // base 为空时也要产出可直接调用的 agnes 视图，字段均为 required 需补安全默认。
-      baseUrl: o?.baseUrl?.trim() || a.baseUrl || '',
-      apiKey: o?.apiKey?.trim() || a.apiKey || '',
+      // 取值优先级：BYOK(o) > 共享(s) > agnes 兜底(a)；共享缺少的字段继续回退 agnes 默认。
+      baseUrl: o?.baseUrl?.trim() || s?.baseUrl?.trim() || a.baseUrl || '',
+      apiKey: o?.apiKey?.trim() || s?.apiKey?.trim() || a.apiKey || '',
       apiKeyRef: a.apiKeyRef || 'AGNES_API_KEY',
-      imageModel: o?.model?.trim() || a.imageModel || '',
+      imageModel: o?.model?.trim() || s?.model?.trim() || a.imageModel || '',
       videoModel: a.videoModel || '',
-      defaultImageSize: o?.size?.trim() || a.defaultImageSize || '1024x768',
-      defaultImageRatio: o?.ratio?.trim() || a.defaultImageRatio || '16:9',
+      defaultImageSize: o?.size?.trim() || s?.size?.trim() || a.defaultImageSize || '1024x768',
+      defaultImageRatio: o?.ratio?.trim() || s?.ratio?.trim() || a.defaultImageRatio || '16:9',
       defaultVideoSize: a.defaultVideoSize || '1280x720',
       defaultVideoSeconds: a.defaultVideoSeconds ?? 5,
     },
@@ -89,29 +92,33 @@ export function applyImageOverride(base: MediaConfig | undefined, o: MediaImageU
 }
 
 // 应用用户 BYOK 视频覆盖到服务端媒体配置（video override 覆盖 video 相关字段）。
+// 优先级与 applyImageOverride 一致：BYOK(o) > media.shared.video(s) > media.agnes 兜底(a)。
 function applyVideoOverride(base: MediaConfig | undefined, o: MediaVideoUserConfig | undefined): MediaConfig {
   const a: MediaConfig['agnes'] = base?.agnes ?? {
     baseUrl: '', apiKey: '', apiKeyRef: 'AGNES_API_KEY', imageModel: '', videoModel: '',
     defaultImageSize: '', defaultImageRatio: '', defaultVideoSize: '', defaultVideoSeconds: 0,
   };
+  const s = base?.shared?.video;
   return {
     agnes: {
-      baseUrl: o?.baseUrl?.trim() || a.baseUrl || '',
-      apiKey: o?.apiKey?.trim() || a.apiKey || '',
+      baseUrl: o?.baseUrl?.trim() || s?.baseUrl?.trim() || a.baseUrl || '',
+      apiKey: o?.apiKey?.trim() || s?.apiKey?.trim() || a.apiKey || '',
       apiKeyRef: a.apiKeyRef || 'AGNES_API_KEY',
       imageModel: a.imageModel || '',
-      videoModel: o?.videoModel?.trim() || a.videoModel || '',
+      videoModel: o?.videoModel?.trim() || s?.videoModel?.trim() || a.videoModel || '',
       defaultImageSize: a.defaultImageSize || '1024x768',
       defaultImageRatio: a.defaultImageRatio || '16:9',
-      defaultVideoSize: o?.size?.trim() || a.defaultVideoSize || '1280x720',
-      defaultVideoSeconds: o?.seconds ?? a.defaultVideoSeconds ?? 5,
+      defaultVideoSize: o?.size?.trim() || s?.size?.trim() || a.defaultVideoSize || '1280x720',
+      defaultVideoSeconds: o?.seconds ?? s?.seconds ?? a.defaultVideoSeconds ?? 5,
     },
   };
 }
 
-// 生图请求体追加"预留扩展"参数：仅当用户显式填写才加入，API 不识别则忽略，避免破坏既有请求。
+// 生图请求体追加"预留扩展"参数：仅当值显式定义才加入，API 不识别则忽略，避免破坏既有请求。
+// 为什么参数是 Partial：调用处传入 [{...shared.image, ...imageOverride}] 合对象，字段均可选
+//   （共享/用户可能都没填扩展项），仅需读取可选扩展字段，无需强类型完整配置。
 // 为什么 exporter 独立逻辑抽取：保持 generateImage 请求体构造可读（S3776），并集中管理扩展字段映射。
-function buildImageExtras(o: MediaImageUserConfig | undefined): Record<string, unknown> {
+function buildImageExtras(o: Partial<MediaImageUserConfig> | undefined): Record<string, unknown> {
   if (!o) return {};
   return {
     ...(o.steps !== undefined ? { steps: o.steps } : {}),
@@ -122,8 +129,8 @@ function buildImageExtras(o: MediaImageUserConfig | undefined): Record<string, u
   };
 }
 
-// 视频请求体追加"预留扩展"参数：帧率/运动强度/Seed/负面词，仅在用户显式设置时加入（尽力透传）。
-function buildVideoExtras(o: MediaVideoUserConfig | undefined): Record<string, unknown> {
+// 视频请求体追加"预留扩展"参数：帧率/运动强度/Seed/负面词，仅显式设置时加入（尽力透传）。
+function buildVideoExtras(o: Partial<MediaVideoUserConfig> | undefined): Record<string, unknown> {
   if (!o) return {};
   return {
     ...(o.fps !== undefined ? { fps: o.fps } : {}),
@@ -306,6 +313,9 @@ export async function generateImage(
 ): Promise<{ url: string; alt: string; archivePath: string }> {
   // 用户 BYOK 万能覆盖：前端透传 imageOverride 优先，服务端 media.agnes 作默认兜底。
   // applyImageOverride 在 mediaConfig 为空时也能用 imageOverride 独立构造配置。
+  // 为什么先捕获共享配置：applyImageOverride 返回的 agnes 视图不含 media.shared（shared 被消费进 agnes 字段），
+  //   扩展参数（steps 等）需由 [{...shared.image, ...imageOverride}] 合并在请求体附加，此处提前引用原 mediaConfig。
+  const sharedImage = mediaConfig?.shared?.image;
   mediaConfig = applyImageOverride(mediaConfig, imageOverride);
   if (!mediaConfig.agnes.imageModel && !mediaConfig.agnes.apiKey) {
     throw new Error('image generation: media config not configured');
@@ -365,8 +375,9 @@ ${pageContext}
       prompt: imagePrompt,
       size: mediaConfig.agnes.defaultImageSize,
       ratio: mediaConfig.agnes.defaultImageRatio,
-      // 预留扩展（步数/CFG/Sampler/Seed/负面词）：仅用户显式设置才追加，API 不识别则忽略
-      ...buildImageExtras(imageOverride),
+      // 预留扩展（步数/CFG/Sampler/Seed/负面词）：仅显式设置才追加，API 不识别则忽略。
+      // 合并 [{...shared.image, ...imageOverride}]：管理员共享扩展参数作为兜底，用户 BYOK 显式值覆盖之。
+      ...buildImageExtras({ ...sharedImage, ...(imageOverride ?? {}) }),
     }),
     60000,
   );
@@ -540,6 +551,8 @@ export async function generateVideo(
   videoOverride?: MediaVideoUserConfig,
 ): Promise<VideoTaskResult> {
   // 用户 BYOK 封面覆盖：videoOverride 优先，服务端 media.agnes 作默认兜底。
+  // 为什么先捕获共享配置：applyVideoOverride 返回的 agnes 视图不含 media.shared，扩展参数需提前引用原 mediaConfig。
+  const sharedVideo = mediaConfig?.shared?.video;
   mediaConfig = applyVideoOverride(mediaConfig, videoOverride);
   if (!mediaConfig.agnes.videoModel && !mediaConfig.agnes.apiKey) {
     throw new Error('video generation: media config not configured');
@@ -566,8 +579,9 @@ export async function generateVideo(
       // Agnes Video API 的 Go 后端要求 seconds 为 string 类型，
       // 传 number 会导致 400 "cannot unmarshal number into ...seconds of type string"
       seconds: String(mediaConfig.agnes.defaultVideoSeconds),
-      // 预留扩展（帧率/运动/Seed/负面词）：仅显式设置才发送
-      ...buildVideoExtras(videoOverride),
+      // 预留扩展（帧率/运动/Seed/负面词）：仅显式设置才发送。
+      // 合并 [{...shared.video, ...videoOverride}]：共享扩展参数兜底，用户 BYOK 显式值覆盖之。
+      ...buildVideoExtras({ ...sharedVideo, ...(videoOverride ?? {}) }),
     }),
     signal: AbortSignal.timeout(30000),
   });

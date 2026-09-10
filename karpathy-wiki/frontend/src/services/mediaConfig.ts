@@ -33,14 +33,14 @@ export const DEFAULT_MEDIA_USER_CONFIG: MediaUserConfig = {
   image: {
     baseUrl: 'https://apihub.agnes-ai.com/v1',
     apiKey: '',
-    model: 'agnes-image-2.1-flash',
+    model: 'agnes-image-2.5-flash',
     size: '1024x768',
     ratio: '16:9',
   },
   video: {
     baseUrl: 'https://apihub.agnes-ai.com/v1',
     apiKey: '',
-    videoModel: 'agnes-video-v2.0',
+    videoModel: 'agnes-video-2.5-flash',
     size: '1280x720',
     seconds: 5,
   },

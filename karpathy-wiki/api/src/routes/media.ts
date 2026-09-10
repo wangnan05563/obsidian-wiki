@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { EngineAdapter, AppConfig, MediaVideoUserConfig, MediaPresetsFile } from '../types.js';
+import type { EngineAdapter, AppConfig, MediaVideoUserConfig, MediaImageUserConfig, MediaPresetsFile, MediaConfig } from '../types.js';
 import { getResourcePath } from '../utils/runtime.js';
+import { loadConfig, saveSharedMediaConfig, maskApiKey } from '../config.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 
@@ -59,6 +60,45 @@ export function registerMediaRoute(
       const message = err instanceof Error ? err.message : String(err);
       requestErrorLog(_request, 'load media presets failed', message);
       return void reply.code(500).send({ error: '读取媒体预设文件失败' });
+    }
+  });
+
+  // T00320 GET /api/media/shared：返回管理员全局「共享媒体」配置（media.shared.image / video）。
+  // 鉴权：requireAdmin——共享媒体为管理员级全局配置，普通用户不可读可写。
+  // 返回结构对齐个人媒体配置（MediaImageUserConfig/MediaVideoUserConfig）+ apiKeyMasked/apiKeySet，
+  //   便于前端表单直接返显：apiKey 脱敏回传（**** 开头），apiKeySet 指示是否已配置共享 Key。
+  app.get('/api/media/shared', { preHandler: guards.requireAdmin }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    const config = await loadConfig();
+    const shared = config.media?.shared;
+    return void reply.send({
+      image: toSharedImageView(shared?.image),
+      video: toSharedVideoView(shared?.video),
+    });
+  });
+
+  // T00320 PUT /api/media/shared：保存管理员全局「共享媒体」配置到 config.json（media.shared）。
+  // 鉴权：requireAdmin。写入后 saveSharedMediaConfig 内部 refreshConfigCache，共享配置立即生效
+  //   （生成时：用户 BYOK > media.shared > media.agnes 兜底）。普通用户调用返回 403。
+  app.put('/api/media/shared', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as {
+      image?: import('../types.js').MediaImageUserConfig;
+      video?: import('../types.js').MediaVideoUserConfig;
+    };
+    try {
+      const merged = await saveSharedMediaConfig({
+        ...(body.image !== undefined ? { image: body.image } : {}),
+        ...(body.video !== undefined ? { video: body.video } : {}),
+      });
+      const shared = merged.media?.shared;
+      return void reply.send({
+        ok: true,
+        image: toSharedImageView(shared?.image),
+        video: toSharedVideoView(shared?.video),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      request.log.error({ err, msg: message }, 'save shared media config failed');
+      return void reply.code(500).send({ error: '保存「共享媒体」配置失败' });
     }
   });
 
@@ -137,4 +177,42 @@ export function registerMediaRoute(
 // 独立小函数记录预设读取失败的请求日志，避免内联重复逻辑（与视频路由错误记录方式一致）。
 function requestErrorLog(request: FastifyRequest, msg: string, detail: string): void {
   request.log.error({ msg, detail }, 'request error');
+}
+
+// 把共享生图配置（MediaImageUserConfig）映射为前端可返显视图：apiKey 脱敏 + apiKeySet 指示。
+// 为什么返回独立视图而非原对象：避免把明文 Key 回传给前端（安全），GET/PUT 共用同一映射保证口径一致。
+function toSharedImageView(cfg: MediaImageUserConfig | undefined): Record<string, unknown> {
+  const key = cfg?.apiKey ?? '';
+  return {
+    baseUrl: cfg?.baseUrl ?? '',
+    model: cfg?.model ?? '',
+    size: cfg?.size ?? '',
+    ratio: cfg?.ratio ?? '',
+    steps: cfg?.steps,
+    cfgScale: cfg?.cfgScale,
+    sampler: cfg?.sampler ?? '',
+    seed: cfg?.seed,
+    negativePrompt: cfg?.negativePrompt ?? '',
+    apiKey: '',
+    apiKeyMasked: maskApiKey(key),
+    apiKeySet: Boolean(key),
+  };
+}
+
+// 把共享视频配置映射为前端可返显视图（同 toSharedImageView）。
+function toSharedVideoView(cfg: MediaVideoUserConfig | undefined): Record<string, unknown> {
+  const key = cfg?.apiKey ?? '';
+  return {
+    baseUrl: cfg?.baseUrl ?? '',
+    videoModel: cfg?.videoModel ?? '',
+    size: cfg?.size ?? '',
+    seconds: cfg?.seconds ?? 5,
+    fps: cfg?.fps,
+    motion: cfg?.motion,
+    seed: cfg?.seed,
+    negativePrompt: cfg?.negativePrompt ?? '',
+    apiKey: '',
+    apiKeyMasked: maskApiKey(key),
+    apiKeySet: Boolean(key),
+  };
 }
