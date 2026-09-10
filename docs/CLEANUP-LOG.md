@@ -93,16 +93,16 @@
 
 | 指标 | 清理前 | 清理后 | 变化 |
 |---|---|---|---|
-| 工作空间占用（剪枝¹） | 636.64 MB | 397.94 MB | **-238.70 MB (-37.5%)** |
-| 文件总数（同口径） | 4,120 | 3,002 | -1,118 |
+| 工作空间占用（剪枝¹） | 636.64 MB | 383.66 MB | **-252.98 MB (-39.7%)** |
+| 文件总数（同口径） | 4,120 | 2,109 | -2,011 |
 | 根目录条目 | 14 | 14 | 0 |
-| 删除文件总数 | — | 1,118 | — |
-| 释放空间 | — | 250,295,683 字节 (≈238.70 MB) | — |
+| 删除文件总数 | — | 2,011 | — |
+| 释放空间 | — | 265,264,054 字节 (≈252.98 MB) | — |
 | 执行错误 | — | 0 | — |
 
 > ¹ 排除 `.git`(162MB) 与 `node_modules`；`release/` 在清理时已不存在。
 
-**删除类别（4 批）:**
+**删除类别（共 6 批）:**
 - 缓存目录（53.94 MB）：`frontend/coverage/`、`frontend/node_modules/.vite/`、`api/node_modules/.vite/`、`api|frontend/.scannerwork/`、3 处 `__pycache__/`
 - 构建/调试产物（4.24 MB）：`.build/bundle_test.cjs`、`.build/_inspect.ps1`、`tooling/wiki-toc-verify-*.png`(×3)、vite timestamp mjs
 - **e2e 测试快照（179.94 MB）**：`karpathy-wiki/data/_e2e_backup_vault_20260901_105235/`（567 文件，含 33 个 PDF；曾误入版本库，为仓库膨胀主因）
@@ -143,7 +143,15 @@
 **验证状态:** ✅ 1,118 目标全部 GONE；保护项/源码/配置完好；`git ls-files --deleted` 归零；SPA 重建并恢复服务（200）；0 错误。报告：`docs/CLEANUP-REPORT-20260910.md` + `.json`
 
 **后续补做（同一批次追加，同日完成）:**
-- **批次 5-vitest-temp**：补扫删除 `karpathy-wiki/frontend/vitest.config.ts.timestamp-*.mjs` ×4（4,059 B each，8/19–8/20 遗留；先前只匹配了 `vite.config.ts.timestamp-*` 前缀故漏扫）→ **合计 1,122 文件 / 250,311,919 字节（238.72 MB）**，工作空间 636.64 → 397.92 MB
+- **批次 5-vitest-temp**：补扫删除 `karpathy-wiki/frontend/vitest.config.ts.timestamp-*.mjs` ×4（4,059 B each，8/19–8/20 遗留；先前只匹配了 `vite.config.ts.timestamp-*` 前缀故漏扫）
+- **批次 6-harness-data**（用户勾选确认，889 文件 / 14.26 MB）：
+  - `karpathy-wiki/api/.harness/state/`（706 JSON，13.99 MB，harness 运行状态；删除后服务复查 `/` 仍 **HTTP 200**）
+  - `wiki-harness/.harness/state/`（17）、`karpathy-wiki/data/.harness/logs/`（141）
+  - `data/test-batch`(20) + `test-batch2`(3) + `test-sample.docx`（7 月测试残留，**原本被 git 跟踪**）
+  - `data/config.json`（0 字节 git 跟踪历史空文件，提交 `d47adf4`，全仓无代码引用）
+  - 保留：`data/.harness/compile-cache.json` + `cleanup-audit.log`、`data/_migrated_local_*`（迁移备份，被脚本引用）
+- **合计 2,011 文件 / 265,264,054 字节（252.98 MB）**，工作空间 636.64 → 383.66 MB
 - **未使用依赖只读分析**：`dependencies` 零未引用；`@vitest/coverage-v8`(×2)、`@vue/test-utils`、`typescript` 4 个疑似 devDep 逐项核实均在用（coverage provider / `frontend/test/` / CLI 调用）→ **未做任何卸载**
-- **补扫发现新候选（未处理，待确认）**：`karpathy-wiki/api/.harness/state/`（706 JSON，**16 MB**，harness 运行状态，可能影响 resume 且服务在运行）、`wiki-harness/.harness/state/`（72 KB）、`data/test-batch`+`test-batch2`+`test-sample.docx`（31 KB，7 月测试残留）、`data/config.json`（0 字节 git 跟踪残留，无代码引用）、`data/_migrated_local_*`（192 KB 迁移备份，被脚本引用 → 保留）
-- **提交**：`5d0566b`（576 删除 + `.gitignore` + 报告）；后续补做另提交
+- **git 索引同步（两轮）**：601 个已跟踪删除项（576 + 25）`git rm --cached --ignore-unmatch`，`git ls-files --deleted` 归零
+- **提交**：`5d0566b`（576 删除 + `.gitignore` + 报告）、`45f1c96`（报告补充 + 批次 5 记录）；提交前工作树仅含清理相关变更，未扫入并发开发改动
+- **教训**：`find | head -N` 与 `git ls-files | head -N` 会截断导致漏扫（先后漏 22 个日志、4 个 vitest 临时文件、24 个已跟踪测试残留），均已由补充批次补回
