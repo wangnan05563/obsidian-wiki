@@ -347,6 +347,20 @@ export interface WebSearchConfig {
   maxResults?: number;
 }
 
+// 自动更新配置（T00883）。
+// 为什么默认关闭：本项目首版无外网发布通道，enabled=false 时 check-update 维持
+//   既有"固定返回 has_update=false"的本地行为（避免 SSRF 与无意义的请求）；
+//   接入发布通道后由用户显式置 true 并填写 manifestUrl 才启用远端检查。
+export interface UpdateConfig {
+  // 是否启用远端 manifest 检查与下载代理。默认 false（零破坏向后兼容）。
+  enabled: boolean;
+  // 版本 manifest 的 HTTPS 地址：返回 JSON，含 version/latest/downloadUrl/sha256 字段。
+  // 该地址是 SSRF 白名单的信任根，下载代理端点只允许转发 manifest 声明的 downloadUrl。
+  manifestUrl: string;
+  // 拉取 manifest 的超时（毫秒）。默认 8000。
+  timeoutMs?: number;
+}
+
 // 日志配置：控制 Fastify pino logger 级别与请求级日志开关
 // 为什么需要：前端报错时后端日志无反馈，需可配置的请求级日志覆盖 HTTP 层
 export interface LoggingConfig {
@@ -446,6 +460,8 @@ export interface AppConfig {
   knowledge?: KnowledgeConfig;
   graph?: GraphGapsConfig;
   refs?: RefsConfig;
+  // 自动更新配置（T00883）：可选，缺失时由 defaultConfig 提供默认值（enabled=false，零破坏）
+  update?: UpdateConfig;
 }
 
 // MCP 服务端配置（对外给外部 AI Agent 调用知识库的 MCP Server）

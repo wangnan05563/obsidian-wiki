@@ -244,6 +244,14 @@ function defaultConfig(): AppConfig {
     knowledge: { staleDays: 365 },
     graph: { minPages: 20 },
     refs: { authorityMap: { web: 'high', manual: 'medium', 'qq-chat': 'low' } },
+    // 自动更新配置（T00883）：默认关闭，零破坏向后兼容。
+    // manifestUrl 留空串作为"未配置"哨兵：enabled 需用户显式置 true 且填写 manifestUrl
+    //   才启用远端检查，否则 check-update 维持既有"固定 has_update=false"的本地行为。
+    update: {
+      enabled: false,
+      manifestUrl: '',
+      timeoutMs: 8000,
+    },
   };
 }
 
@@ -370,6 +378,10 @@ function mergeConfigObjects(defaults: AppConfig, parsed: Partial<AppConfig>): Ap
     refs: parsed.refs && defaults.refs
       ? { ...defaults.refs, authorityMap: { ...defaults.refs.authorityMap, ...parsed.refs.authorityMap } }
       : defaults.refs,
+    // 自动更新配置合并：parsed.update 可选，未配置时用默认值（关闭）；浅合并支持单字段覆盖
+    update: parsed.update && defaults.update
+      ? { ...defaults.update, ...parsed.update }
+      : defaults.update,
   };
 }
 
@@ -1148,6 +1160,7 @@ const CONFIG_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   'webSearch', 'logging', 'batch', 'tools', 'auth', 'qq', 'urlCrawl', 'audio', 'ocr',
   'podcast', 'media', 'skills', 'activeSkill', 'sessionPersistence', 'contextGovernor',
   'enableSubAgents', 'enableResumableStream', 'clarify', 'mcp', 'knowledge', 'graph', 'refs',
+  'update',
 ]);
 
 // 导入校验专属错误：路由据此返回 400（格式/完整性不符），区别于写盘 500。
@@ -1242,7 +1255,7 @@ function sanitizeImportConfig(raw: unknown): { data: Record<string, unknown>; fa
   const objectKeys: ReadonlyArray<string> = [
     'llm', 'budget', 'server', 'healthCheck', 'tunnel', 'webSearch', 'logging', 'batch', 'tools',
     'auth', 'qq', 'urlCrawl', 'audio', 'ocr', 'podcast', 'media', 'contextGovernor', 'clarify',
-    'mcp', 'knowledge', 'graph', 'refs', 'sessionPersistence',
+    'mcp', 'knowledge', 'graph', 'refs', 'sessionPersistence', 'update',
   ];
   for (const k of objectKeys) {
     if (k in data && data[k] !== undefined && !isPlainObject(data[k])) {
