@@ -125,7 +125,8 @@ function killPid(pid: string): boolean {
 
 function cleanupPort(port: number): void {
   if (!IS_PACKAGED) return;
-  let output: string;
+  // 初始化为空串：execSync 失败时（catch 分支）仍保证下方 output.split 不抛 TypeError（TS2454 + 运行时隐患）
+  let output = '';
   try {
     output = execSync('netstat -aon', { encoding: 'utf8', timeout: 5000 });
   } catch {
@@ -496,7 +497,7 @@ registerDataCleanRoute(app, vault, isolationGuards);
   // 为什么传入 vaultPath：路由需要将 combinedMarkdown 写入 raw/ 目录
   registerBookmarkIngestRoute(app, config.vaultPath, isolationGuards);
 
-  registerAboutRoute(app);
+  registerAboutRoute(app, config);
 
   registerToolsRoute(app, adapter, isolationGuards);
   // MCP Server 端点：对外暴露知识库能力给外部 AI Agent。
