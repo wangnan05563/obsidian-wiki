@@ -17,13 +17,16 @@ interface BuildInfo {
   platform: string;
 }
 
-// 检查更新状态机：idle → loading → (latest | newer | error)
-// latest 3s 后自动回 idle；newer/error 为终态保持，让用户充分阅读
+// 检查更新状态机：idle → loading → (latest | newer | error)，newer 可进一步进入下载态。
+// latest 3s 后自动回 idle；newer/error/download-error 为终态保持，让用户充分阅读。
+// newer 携带 downloadUrl/sha256：downloadUrl 存在时走站内下载代理，否则回退打开 release 页。
 type UpdateState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'latest' }
-  | { kind: 'newer'; url: string; latest: string }
+  | { kind: 'newer'; url: string; latest: string; downloadUrl?: string; sha256?: string }
+  | { kind: 'downloading'; percent: number; received: number; total: number }
+  | { kind: 'download-error'; reason: 'network' | 'server' | 'hash' }
   | { kind: 'error'; reason: 'network' | 'server' };
 
 interface MenuItem {
@@ -57,6 +60,11 @@ const TEXTS = {
   updateLoading: '检查中…',
   updateLatest: '已是最新',
   updateNewer: '有新版本',
+  install: '立即更新',
+  installReady: '更新包已下载，请退出并安装新版本',
+  updateDownloading: '更新下载中',
+  updateDownloadFailed: '下载失败',
+  updateDownloadHashError: '校验失败',
   updateErrorNetwork: '网络异常',
   updateErrorServer: '服务异常',
   updateRetry: '重试',
@@ -198,6 +206,9 @@ async function performCheck() {
         kind: 'newer',
         url: data.release_url || '',
         latest: data.latest || '',
+        // 后端启用远端 manifest 时才携带 downloadUrl/sha256；未携带则回退"打开 release 页"
+        downloadUrl: data.download_url || '',
+        sha256: data.sha256 || '',
       };
     } else {
       updateState.value = { kind: 'latest' };
@@ -245,10 +256,84 @@ function handleMenuClick(item: MenuItem, e: MouseEvent) {
   }
 }
 
-// 打开新版本 release 页面（newer 状态按钮点击）
+// 打开新版本 release 页面（newer 状态无 downloadUrl 时回退动作）
 function openReleaseUrl(url: string) {
   if (url) {
     globalThis.open(url, '_blank', 'noopener,noreferrer');
+  }
+}
+
+// 计算 Blob 的 sha256 十六进制摘要（WebCrypto）。校验不通过能丢弃整包，防下载损坏/篡改。
+async function sha256Hex(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// 触发浏览器把 Blob 保存为文件。
+function saveBlob(blob: Blob, name: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 延迟回收 object URL，确保下载已开始
+  setTimeout(() => {
+    try { URL.revokeObjectURL(objectUrl); } catch { /* ignore */ }
+  }, 1500);
+}
+
+// 通过下载代理拉取更新包：流式读取 + 实时进度 → sha256 校验 → 触发保存安装包。
+// 为什么经后端代理：下载目标由后端 manifest 白名单决定，前端不透传任意 URL（规避 SSRF）。
+async function handleUpdate() {
+  const st = updateState.value;
+  if (st.kind !== 'newer') return;
+  try {
+    const res = await apiFetch(`${API_BASE}/about/download-update`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.body) throw new Error('empty response body');
+
+    const total = Number(res.headers.get('content-length') || 0);
+    const reader = res.body.getReader();
+    const chunks: Uint8Array<ArrayBuffer>[] = [];
+    let received = 0;
+    updateState.value = { kind: 'downloading', percent: 0, received, total };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // 拷贝进独立的 ArrayBuffer-backed 数组：reader 返回类型可能是 SharedArrayBuffer 视图，
+      //   直接 push 不满足 BlobPart 的类型约束；拷贝一份确保 Blob 构造通过且语义安全。
+      chunks.push(new Uint8Array(value));
+      received += value.length;
+      updateState.value = {
+        kind: 'downloading',
+        percent: total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0,
+        received,
+        total,
+      };
+    }
+
+    const blob = new Blob(chunks);
+    // manifest 声明了 sha256 才校验；不匹配则丢弃整包并提示，避免安装损坏/被篡改的更新
+    if (st.sha256) {
+      const actual = await sha256Hex(blob);
+      if (actual.toLowerCase() !== st.sha256.toLowerCase()) {
+        updateState.value = { kind: 'download-error', reason: 'hash' };
+        return;
+      }
+    }
+
+    saveBlob(blob, `karpathy-wiki-${st.latest || 'update'}.bin`);
+    ElMessage.success(TEXTS.installReady);
+    updateState.value = { kind: 'idle' };
+  } catch (e) {
+    updateState.value = { kind: 'download-error', reason: isNetworkError(e) ? 'network' : 'server' };
   }
 }
 
@@ -332,14 +417,40 @@ onBeforeUnmount(() => {
             {{ TEXTS.updateLatest }}
           </el-button>
 
+          <!-- 有新版本：优先一键下载更新包（有 downloadUrl），否则回退打开 release 页 -->
           <el-button
             v-else-if="updateState.kind === 'newer'"
             type="primary"
-            data-tip="打开下载页，获取并安装新版本"
+            data-tip="一键下载更新包"
             :icon="Top"
-            @click="openReleaseUrl(updateState.url)"
+            @click="updateState.downloadUrl ? handleUpdate() : openReleaseUrl(updateState.url)"
           >
-            {{ TEXTS.updateNewer }} ({{ updateState.latest }})
+            {{ updateState.downloadUrl ? TEXTS.install : TEXTS.updateNewer }} ({{ updateState.latest }})
+          </el-button>
+
+          <!-- 下载中：进度条实时反映拉取进度 -->
+          <div v-else-if="updateState.kind === 'downloading'" class="update-downloading">
+            <el-icon class="downloading-icon"><Top /></el-icon>
+            <el-progress
+              :percentage="updateState.percent"
+              :stroke-width="10"
+              class="downloading-bar"
+            />
+            <span class="downloading-label">
+              {{ TEXTS.updateDownloading }} {{ updateState.percent }}%
+            </span>
+          </div>
+
+          <!-- 下载失败 / sha256 校验失败：可重试 -->
+          <el-button
+            v-else-if="updateState.kind === 'download-error'"
+            type="danger"
+            data-tip="重新下载更新包"
+            :icon="Warning"
+            @click="handleUpdate"
+          >
+            {{ updateState.reason === 'hash' ? TEXTS.updateDownloadHashError : TEXTS.updateDownloadFailed }}
+            · {{ TEXTS.updateRetry }}
           </el-button>
 
           <el-button
@@ -592,6 +703,32 @@ onBeforeUnmount(() => {
 
 .update-btn-wrap {
   flex-shrink: 0;
+}
+
+/* 下载中进度条：固定最小宽度避免按钮区在百分比变化时抖动 */
+.update-downloading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 200px;
+  padding: 4px 0;
+}
+
+.downloading-icon {
+  color: var(--neon-cyan);
+  transform: rotate(45deg);
+}
+
+.downloading-bar {
+  flex: 1;
+  min-width: 0;
+}
+
+.downloading-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-soft);
+  white-space: nowrap;
 }
 
 /* 菜单列表 */
