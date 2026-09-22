@@ -27,12 +27,16 @@ import { STORAGE_KEYS } from './constants/storageKeys';
 import type { AuthPermission } from './types';
 import MobileShell from './components/mobile/MobileShell.vue';
 import { useIsMobile } from './composables/useIsMobile';
+import GuideOverlay from './components/GuideOverlay.vue';
+import GuideButton from './components/GuideButton.vue';
+import { useGuideStore } from './stores/guide';
 
 type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help' | 'users' | 'skill' | 'dataclean';
 
 const store = useCompileStore();
 const authStore = useAuthStore();
 const { isLoggedIn, isAdmin, canView, filterVisibleMenus } = usePermission();
+const guideStore = useGuideStore();
 const currentView = ref<ViewName>('dashboard');
 
 // 移动端判定：满足断点（<768px）时整页渲染 MobileShell，桌面端布局保持不变
@@ -106,6 +110,9 @@ function go(view: ViewName) {
     return;
   }
   currentView.value = view;
+  // T00864 用户引导：首次进入该视图时自动弹出引导（已引导过的视图不再触发）
+  // 为什么在权限通过后调用：避免无权限用户被引导到其无权访问的功能
+  void guideStore.maybeStartFirstTime(view);
 }
 
 function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health' | 'progress' | 'graph' | 'help') {
@@ -167,6 +174,12 @@ onMounted(() => {
       } else if (visibleMenuItems.value.length > 0) {
         currentView.value = visibleMenuItems.value[0].key;
       }
+      // T00864 用户引导：登录/恢复后触发当前默认视图的首次引导（非同一次会话去重）
+      // 为什么放 restoreSession 成功分支：只有已登录会话才需要引导，未登录不弹
+      // 用 maybeStartFirstTime 统一管理：未引导过才弹，并自动登记 seen，避免重复
+      if (currentView.value) {
+        guideStore.maybeStartFirstTime(currentView.value);
+      }
     }
   });
 });
@@ -222,6 +235,7 @@ onBeforeUnmount(() => {
             :key="tab.key"
             class="tab-btn hover-glow"
             :class="{ active: currentView === tab.key }"
+            :data-guide="tab.key"
             @click="go(tab.key)"
           >
             <NavIcons :name="tab.icon" :size="18" class="tab-icon" />
@@ -259,6 +273,7 @@ onBeforeUnmount(() => {
             :key="tab.key"
             class="icon-btn"
             :class="{ active: currentView === tab.key }"
+            :data-guide="tab.key"
             @click="go(tab.key)"
             :aria-label="tab.label"
           >
@@ -306,6 +321,12 @@ onBeforeUnmount(() => {
   <FloatingChat v-if="isLoggedIn && currentView !== 'query'" :in-query-page="false" />
   <!-- v3.1 移除全局悬浮主题切换器：右下角 52×52 按钮 + 展开面板会遮挡聊天区视野，
        主题切换入口移至 Config 页面（保留原 embedded 模式能力，但不挂在全局） -->
+  <!-- T00864 用户引导：遮罩 + 常驻入口按钮，仅桌面子布局（移动端走 MobileShell） -->
+  <template v-if="isLoggedIn && !isMobile">
+    <GuideOverlay />
+    <!-- T00887 新手指引入口默认隐藏，仅在帮助文档页展示：避免常驻按钮干扰其他视图操作 -->
+    <GuideButton v-if="currentView === 'help'" :view="currentView" />
+  </template>
   </div>
 
 </template>
