@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-09-30 (批次 #20260930-整理归并)
+
+**范围 (scope):** `reorganize` — 无删除性清理，纯结构归并（用户确认：全量整理）
+
+**变更明细:**
+
+| 操作 | 对象 | 说明 |
+|---|---|---|
+| 归并 | `tooling/{wiki-toc-verify.cjs, _clarify_e2e.mjs, _repro_office.mts}` → `tooling/scripts/` | tooling 根级散落脚本统一入 scripts/ |
+| 归并 | `_start_wiki_server.cmd` → `tooling/scripts/` | 双击启动器；路径以 `for %%I in ("%~dp0..\..")` 解析的 `%ROOT%` 重写，双击运行方式不变 |
+| 删除 | `ce_task.json`、`projects.json` | 零字节空文件（git rm，物理+索引同步移除）；root_allowlist 同步剔除 |
+| 规则同步 | `.gitignore` | `tooling/wiki-toc-verify-*.png` → `tooling/scripts/wiki-toc-verify-*.png`（跟随脚本位置） |
+| 修复 | `tooling/scripts/_repro_office.mts` | 相对导入 `../` → `../../`（层级加深一层） |
+| 修复 | `tooling/scripts/_clarify_e2e.mjs` | 头部运行命令注释同步新路径 |
+
+**验证:**
+- ROOT 解析：`tooling\scripts\..\..\karpathy-wiki\api\src\index.ts` 规范化后存在 ✅
+- `git check-ignore` 新规则命中（exit 0）✅
+- `git status`：2 D + 4 R + 2 M，全部符合预期，无意外变更 ✅
+
+**保留项 (preserve):**
+- `tooling/_archive_root_debug/`（上一轮调试残留归档，保持原位）
+- `.npmrc`、`.gitignore`、`cleanup-config.yaml`（根目录标准位置）
+
+---
+
 ## 2026-08-14 00:20 (批次 #20260814-002042)
 
 **范围 (scope):** `with_results` — 标准清理 + `perf-tests/results/`（用户确认追加，~196 MB 压测输出）
