@@ -4,7 +4,7 @@
 //   1. 首轮提问（无 clarifyId）→ SSE 收到 clarify 事件（round=1，无 done）
 //   2. 用户选择后重发（clarifyId + choiceIndex）→ 仍歧义且轮次未满 → 再收 clarify（round=2）
 //   3. 再次选择后重发 → 轮次已满 → 正常回答（收到 answer + done）
-// 运行：node tooling/_clarify_e2e.mjs
+// 运行：node tooling/scripts/_clarify_e2e.mjs
 import http from 'node:http';
 
 const MOCK_PORT = 9099;
