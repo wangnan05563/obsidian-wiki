@@ -4,18 +4,21 @@ rem Window title set FIRST so a double-click immediately shows a
 rem named window - if you see no "Karpathy-Wiki Starter" title,
 rem the script was NOT launched by double-click.
 title Karpathy-Wiki Starter
-set "TRACE=%~dp0karpathy-wiki\logs\start-trace.log"
+rem 脚本已归并到 tooling/scripts/，%~dp0 不再是项目根；
+rem 这里一次性解析出根目录，后续所有路径都基于 %ROOT%。
+for %%I in ("%~dp0..\..") do set "ROOT=%%~fI"
+set "TRACE=%ROOT%\karpathy-wiki\logs\start-trace.log"
 echo [S0] script start >> "%TRACE%"
 rem ============================================================
 rem  Karpathy-Wiki one-click starter: backend + frontend (hidden)
-rem  Run from PROJECT ROOT only.
+rem  Lives in tooling\scripts\; double-click to run.
 rem
 rem  Why wait for ports: backend (tsx) boots in 10s+, so we poll
 rem  3000/5173 until LISTEN. This keeps this window alive with
 rem  meaningful status instead of flashing and closing.
 rem ============================================================
 
-if not exist "%~dp0karpathy-wiki\api\src\index.ts" goto :noroot
+if not exist "%ROOT%\karpathy-wiki\api\src\index.ts" goto :noroot
 echo [S1] root ok >> "%TRACE%"
 
 where node >nul 2>nul
@@ -37,12 +40,12 @@ if errorlevel 1 goto :start_backend
 echo  [SKIP] Backend API already listening on port 3000, reusing it
 goto :after_backend
 :start_backend
-cd /d "%~dp0karpathy-wiki\api"
+cd /d "%ROOT%\karpathy-wiki\api"
 rem Why NOT -WindowStyle Hidden on the powershell itself: running a
 rem hidden powershell child steals the starter console window (handle 0)
 rem = "flash-close". Hidden applies only to the node child via Start-Process.
 powershell -NoProfile -Command "Start-Process -FilePath '%NODE_CMD%' -ArgumentList 'node_modules\tsx\dist\cli.mjs','src\index.ts' -WindowStyle Hidden -RedirectStandardOutput '..\logs\api-start.out.log' -RedirectStandardError '..\logs\api-start.err.log'"
-cd /d "%~dp0karpathy-wiki\api"
+cd /d "%ROOT%\karpathy-wiki\api"
 :after_backend
 
 call :isup 5173
@@ -50,9 +53,9 @@ if errorlevel 1 goto :start_frontend
 echo  [SKIP] Frontend Web already listening on port 5173, reusing it
 goto :after_frontend
 :start_frontend
-cd /d "%~dp0karpathy-wiki\frontend"
+cd /d "%ROOT%\karpathy-wiki\frontend"
 powershell -NoProfile -Command "Start-Process -FilePath '%NODE_CMD%' -ArgumentList 'node_modules\vite\bin\vite.js' -WindowStyle Hidden -RedirectStandardOutput '..\logs\web-dev.log' -RedirectStandardError '..\logs\web-dev-err.log'"
-cd /d "%~dp0karpathy-wiki\api"
+cd /d "%ROOT%\karpathy-wiki\api"
 :after_frontend
 
 echo [S4] services launched >> "%TRACE%"
@@ -114,8 +117,8 @@ echo    [WARN] %NAME% (port %PORT%) not ready after 60s; see logs\api-start.err.
 exit /b 0
 
 :noroot
-echo [ERROR] karpathy-wiki\api not found next to this script.
-echo         This script must be run from the PROJECT ROOT folder.
+echo [ERROR] karpathy-wiki\api not found relative to this script.
+echo         Expected layout: ^<project-root^>\tooling\scripts\this-script
 echo         Currently at: %~dp0
 echo.
 pause

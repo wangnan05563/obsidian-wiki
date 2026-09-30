@@ -1,4 +1,4 @@
-import { convertOfficeFile } from '../karpathy-wiki/api/src/utils/office-convert.ts';
+import { convertOfficeFile } from '../../karpathy-wiki/api/src/utils/office-convert.ts';
 import fs from 'node:fs/promises';
 
 const base = 'E:/000-交付经理/02培训/2026新人培训包/02票交所接口/中国票据业务系统接口规范V1.4';

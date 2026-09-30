@@ -26,8 +26,6 @@ root_allowlist:
   files:
     - "README.md"
     - "CHANGELOG.md"
-    - "projects.json"
-    - "ce_task.json"
     - "package.json"
     - "package-lock.json"
     - ".gitignore"
