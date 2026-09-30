@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(ellipse 900px 600px at 88% 50%, rgba(168,230,207,0.55) 0%, rgba(168,230,207,0) 60%),
+      radial-gradient(ellipse 800px 500px at 8% 92%, rgba(255,212,182,0.5) 0%, rgba(255,212,182,0) 62%),
+      radial-gradient(ellipse 700px 420px at 30% 0%, rgba(255,249,196,0.45) 0%, rgba(255,249,196,0) 60%),
+      linear-gradient(135deg, #ffffff 0%, #fafcf9 100%);
+    display: flex;
+    align-items: center;
+  }
+  .wrap {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 84px 0 96px;
+  }
+  .text { max-width: 640px; }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+  }
+  h1 {
+    font-size: 84px;
+    font-weight: 800;
+    color: #2d3a35;
+    letter-spacing: -1px;
+  }
+  h1 .accent { color: #4db6a0; }
+  .sub {
+    margin-top: 22px;
+    font-size: 34px;
+    font-weight: 600;
+    color: #4a5a54;
+  }
+  .tagline {
+    margin-top: 18px;
+    font-size: 24px;
+    color: #7a8a83;
+    letter-spacing: 0.5px;
+  }
+  .chips { margin-top: 44px; display: flex; gap: 14px; }
+  .chip {
+    padding: 10px 22px;
+    border-radius: 999px;
+    font-size: 22px;
+    font-weight: 600;
+    color: #35544a;
+    background: rgba(255,255,255,0.85);
+    border: 2px solid rgba(127,216,184,0.65);
+    box-shadow: 0 2px 8px rgba(77,182,160,0.12);
+  }
+  .chip.warm { border-color: rgba(255,170,165,0.7); color: #6d4740; box-shadow: 0 2px 8px rgba(255,170,165,0.15); }
+  .chip.cool { border-color: rgba(129,212,250,0.7); color: #3a5a6d; box-shadow: 0 2px 8px rgba(129,212,250,0.15); }
+  .logo-card {
+    width: 400px;
+    height: 400px;
+    border-radius: 72px;
+    background: #ffffff;
+    box-shadow: 0 24px 60px rgba(45,58,53,0.14), 0 4px 16px rgba(45,58,53,0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .logo-card img { width: 340px; height: 340px; display: block; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="text">
+      <div class="brand"><h1>Karpathy <span class="accent">Wiki</span></h1></div>
+      <div class="sub">Karpathy AI 内容 × Obsidian 知识库</div>
+      <div class="tagline">上传资料 · AI 编译成结构化 Wiki · 与知识库流式问答</div>
+      <div class="chips">
+        <span class="chip">知识编译</span>
+        <span class="chip warm">双向链接</span>
+        <span class="chip cool">知识图谱</span>
+        <span class="chip warm">RAG 问答</span>
+      </div>
+    </div>
+    <div class="logo-card">
+      <img src="../../../frontend/public/favicon.svg" alt="Karpathy Wiki logo">
+    </div>
+  </div>
+</body>
+</html>

@@ -299,6 +299,29 @@ Write-Host "`n[6/8] pkg --sea 打包 exe..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-2 分钟（需下载 Node.js 官方二进制）" -ForegroundColor DarkGray
 
 $exePath = Join-Path $pkgOutputDir "karpathy-wiki.exe"
+
+# 为什么必须指定一个「精确到完整版本」的 target：
+#   pkg 的 --sea 模式在节点版本只是主版本（如 node24）时会调用 getNodeVersion() 去
+#   https://nodejs.org/dist/index.json 查询最新补丁版——无外网环境下 fetch 直接失败
+#   （报 "TypeError: fetch failed"）。而传入完整版本（node24.21.0-win-x64）时 pkg 走
+#   "直接返回 v24.21.0" 的快捷分支免联网，且能命中 ~/.pkg-cache/sea 里已下载并带 .ok
+#   哨兵的 node 基座（跳过下载与校验），实现离线构建。
+# 版本来源：探测用户 SEA 缓存目录里已就绪的最高版 node（形如 node-v24.21.0-win-x64.exe.ok），
+#   避免硬编码——换机器/清缓存后按实际缓存自动取用；找不到缓存时回退不传 target（回到联网逻辑）。
+$seaCacheDir = Join-Path $env:USERPROFILE ".pkg-cache\sea"
+$seaNodePkg = Get-ChildItem $seaCacheDir -Filter "node-v*-win-x64.exe.ok" -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.Name } |
+    Sort-Object -Descending |
+    Select-Object -First 1
+$seaTarget = ""
+if ($seaNodePkg) {
+    # 形如 node-v24.21.0-win-x64.exe.ok → 提取 24.21.0，拼成 pkg 精确 target
+    if ($seaNodePkg -match 'node-v(\d+\.\d+\.\d+)-win-x64\.exe\.ok') {
+        $seaTarget = "node$($Matches[1])-win-x64"
+        Write-Host "  使用 SEA 缓存节点 $seaTarget（离线构建）" -ForegroundColor DarkGray
+    }
+}
+
 $pkgArgs = @(
     "node_modules\@yao-pkg\pkg\lib-es5\bin.js",
     $bundleFile,
@@ -306,6 +329,9 @@ $pkgArgs = @(
     "--output", $exePath,
     "--options", "max-old-space-size=512"
 )
+if ($seaTarget) {
+    $pkgArgs += @("--targets", $seaTarget)
+}
 
 & $NodeExe @pkgArgs
 if ($LASTEXITCODE -ne 0) { throw "pkg 打包失败" }

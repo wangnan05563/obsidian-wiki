@@ -113,7 +113,9 @@ tmp_*.ps1
 _debug_*.py
 # PID 文件（运行时生成，标识进程 ID）
 *.pid
+
 .workbuddy
+.trae
 # 根目录调试/探针残留归档（2026-08-16 清理，非源码，可逆）
 tooling/_archive_root_debug/
 
