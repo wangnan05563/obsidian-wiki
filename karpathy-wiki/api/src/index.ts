@@ -115,6 +115,9 @@ function loadEnvFile(): void {
  */
 
 function killPid(pid: string): boolean {
+  // 入参先做数字白名单校验：pid 来自 netstat 文本解析，虽已由正则约束为 (\d+)，
+  // 但 taskkill 命令行拼接属 OS 命令执行入口，显式校验可彻底排除注入面（Sonar 热点 command-injection）
+  if (!/^\d+$/.test(pid)) return false;
   try {
     execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
     return true;

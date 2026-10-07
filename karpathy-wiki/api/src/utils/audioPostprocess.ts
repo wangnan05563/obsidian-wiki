@@ -14,6 +14,7 @@
 //   - 所有 ffmpeg 调用通过 child_process.execFile（非 shell），避免命令注入
 //   - 临时文件写入 os.tmpdir()，单段处理失败（含临时目录不可写）时降级返回原音频，不影响朗读
 
+import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -41,7 +42,8 @@ export function isFfmpegAvailable(): boolean {
 /** 写临时文件，返回路径；失败抛错（由调用方捕获降级） */
 function writeTemp(data: Buffer, suffix: string): string {
   const dir = os.tmpdir();
-  const p = path.join(dir, `tts_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2)}_${suffix}`);
+  // 临时文件名用加密随机源：Math.random 可预测，共享临时目录下易被抢先创建/符号链接替换（Sonar 热点 weak-cryptography）
+  const p = path.join(dir, `tts_${process.pid}_${Date.now()}_${randomBytes(8).toString('hex')}_${suffix}`);
   fs.writeFileSync(p, data);
   return p;
 }
