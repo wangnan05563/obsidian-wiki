@@ -595,24 +595,26 @@ async function loadQueryUserConfigs(
   return { aiCfg, searchCfg, toolsCfg };
 }
 
-async function buildQueryBody(
-  opts: {
-    question: string;
-    history: any;
-    attachments: any;
-    activeThreadId: string | null;
-    activeMode: { value: string | null };
-    outputMode: { value: string };
-    store: any;
-    authStore: any;
-    modelStore: any;
-    // 意图澄清续答：用户选择解读后重发同一问题，携带 clarifyId + choiceIndex
-    // threadId：澄清中断时后端随 clarify 事件附带，续答必须带回同一线程（后端归属校验）
-    clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null;
-  },
-): Promise<Record<string, unknown>> {
-  const { question, history, attachments, activeThreadId, activeMode, outputMode, store, authStore, modelStore, clarify } = opts;
-  const body: Record<string, unknown> = { question };
+// buildQueryBody 及其私有辅助函数的入参（抽出命名，便于拆分后的辅助函数共享同一类型）
+interface QueryBodyOptions {
+  question: string;
+  history: any;
+  attachments: any;
+  activeThreadId: string | null;
+  activeMode: { value: string | null };
+  outputMode: { value: string };
+  store: any;
+  authStore: any;
+  modelStore: any;
+  // 意图澄清续答：用户选择解读后重发同一问题，携带 clarifyId + choiceIndex
+  // threadId：澄清中断时后端随 clarify 事件附带，续答必须带回同一线程（后端归属校验）
+  clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null;
+}
+
+// 请求体基础字段（同步段）：历史/线程/澄清续答/模式/附件/输出模式/流式与中间件
+// 为什么只拆同步段：BYOK 配置段含 await，留在 buildQueryBody 内以保持原有微任务时序
+function appendQueryBaseFields(body: Record<string, unknown>, opts: QueryBodyOptions) {
+  const { history, attachments, activeThreadId, activeMode, outputMode, store, clarify } = opts;
   if (history && history.length > 0) {
     body.history = history;
   }
@@ -644,6 +646,14 @@ async function buildQueryBody(
   }
   body.stream = store.streamMode;
   body.middlewares = [...store.middlewares];
+}
+
+async function buildQueryBody(
+  opts: QueryBodyOptions,
+): Promise<Record<string, unknown>> {
+  const { question, outputMode, authStore, modelStore } = opts;
+  const body: Record<string, unknown> = { question };
+  appendQueryBaseFields(body, opts);
 
   const uid = authStore.user?.id || 'guest';
   const { aiCfg, searchCfg, toolsCfg } = await loadQueryUserConfigs(uid, modelStore);

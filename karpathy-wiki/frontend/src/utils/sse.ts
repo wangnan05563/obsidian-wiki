@@ -215,6 +215,15 @@ function finalizeWriter(writer: SSEWriter): void {
   if (writer.isLoading && writer.streamingAnswer) writer.finalizeAnswer();
 }
 
+// 从后端错误响应体里取可读说明：优先 error，其次 detail，均非字符串（或 body 为 null）时为空串
+function pickErrorDetail(data: { error?: unknown; detail?: unknown } | null): string {
+  const error = data?.error;
+  if (typeof error === 'string') return error;
+  const detail = data?.detail;
+  if (typeof detail === 'string') return detail;
+  return '';
+}
+
 // 执行首连/重连请求，若失败则兜底 finalize 后抛出
 async function tryFetchResponse(fetchNext: () => Promise<Response>, writer: SSEWriter): Promise<Response> {
   let response: Response;
@@ -233,7 +242,7 @@ async function tryFetchResponse(fetchNext: () => Promise<Response>, writer: SSEW
     try {
       // 非 JSON 时静默降级，保持原有"仅状态码"行为
       const data = (await response.json()) as { error?: unknown; detail?: unknown };
-      detail = typeof data?.error === 'string' ? data.error : typeof data?.detail === 'string' ? data.detail : '';
+      detail = pickErrorDetail(data);
     } catch {
       /* body 非 JSON */
     }

@@ -40,9 +40,9 @@ function ensureLayer(): HTMLDivElement {
 
 function getTipText(el: HTMLElement): string {
   const dt = el.getAttribute(TIP_ATTR);
-  if (dt && dt.trim()) return dt.trim();
+  if (dt?.trim()) return dt.trim();
   const title = el.getAttribute('title');
-  if (title && title.trim()) return title.trim();
+  if (title?.trim()) return title.trim();
   // 不读 aria-label：aria-label 是无障碍语义标签，专供屏幕阅读器，不应触发自定义 tooltip 浮层。
   // 否则 App.vue 导航的 aria-label="主导航/主导航侧边栏/折叠态主导航" 等会误触发大量冗余浮层。
   return '';

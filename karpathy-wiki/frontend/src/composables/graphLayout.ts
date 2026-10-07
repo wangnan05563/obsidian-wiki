@@ -41,33 +41,19 @@ export function computeStretch(cw: number, ch: number): { fx: number; fy: number
   return { fx, fy: 1 / fx };
 }
 
-/**
- * 计算确定性径向布局。
- * 算法：
- * 1. 找连通分量；取节点数最多的为主分量，其余为卫星分量。
- * 2. 主分量内以其最大度节点为根做 BFS，按 BFS 层级排环；单环超 RING_CAPACITY 拆子环。
- * 3. 各卫星分量同样径向铺开，其"星群中心"围绕主分量最外环，间距取 SATELLITE_GAP。
- * 4. 整体按 fx/fy 椭圆化，贴合画布。
- * @returns 节点 id -> {x,y}（所有节点必有值）
- */
-export function computeRadialLayout(
-  data: GraphData,
-  fx = 1,
-  fy = 1,
-): Map<string, { x: number; y: number }> {
-  const pos = new Map<string, { x: number; y: number }>();
-  const { nodes, edges } = data;
-  if (!nodes.length) return pos;
-
-  // 无向邻接表（图谱关注双向可见性，忽略边的方向性）
+/** 无向邻接表（图谱关注双向可见性，忽略边的方向性） */
+function buildAdjacency(nodes: string[], edges: GraphData['edges']): Map<string, string[]> {
   const adj = new Map<string, string[]>();
   for (const n of nodes) adj.set(n, []);
   for (const e of edges) {
     adj.get(e.from)?.push(e.to);
     adj.get(e.to)?.push(e.from);
   }
+  return adj;
+}
 
-  // 找连通分量（并查集比递归 DFS 更稳，避免深递归爆栈）
+/** 找连通分量（并查集比递归 DFS 更稳，避免深递归爆栈），按节点数降序返回 */
+function detectComponents(nodes: string[], edges: GraphData['edges']): string[][] {
   const parent = new Map<string, string>();
   const find = (x: string): string => {
     while (parent.get(x) !== x) {
@@ -88,72 +74,107 @@ export function computeRadialLayout(
     if (arr) arr.push(n);
     else comps.set(r, [n]);
   }
-  const compList = [...comps.values()].sort((a, b) => b.length - a.length);
+  return [...comps.values()].sort((a, b) => b.length - a.length);
+}
 
-  // 每个分量的布局：返回 { nodes, radius, placed }，placed 是该分量内节点相对自身中心的坐标
-  const layoutComp = (comp: string[]) => {
-    // 以最大度节点为根，保证 hub 居中所见层次清晰
-    let root = comp[0];
-    let maxDeg = -1;
-    for (const n of comp) {
-      const d = adj.get(n)?.length ?? 0;
-      if (d > maxDeg) {
-        maxDeg = d;
-        root = n;
-      }
-    }
-    // BFS 分层
-    const level = new Map<string, number>([[root, 0]]);
-    const queue = [root];
-    const byLevel = new Map<number, string[]>();
-    byLevel.set(0, [root]);
-    let head = 0;
-    while (head < queue.length) {
-      const cur = queue[head++];
-      const lv = level.get(cur)!;
-      for (const nb of adj.get(cur) ?? []) {
-        if (!level.has(nb)) {
-          level.set(nb, lv + 1);
-          byLevel.set(lv + 1, [...(byLevel.get(lv + 1) ?? []), nb]);
-          queue.push(nb);
-        }
-      }
-    }
-    // 单环超容量则拆子环；子环半径在基础环半径上再外扩
-    const placed = new Map<string, { x: number; y: number }>();
-    const maxLevel = Math.max(0, ...level.values());
-    let maxR = 0;
-    for (const [lv, arr] of byLevel) {
-      const baseR = lv * LAYOUT.RING_GAP;
-      const subCount = Math.ceil(arr.length / LAYOUT.RING_CAPACITY);
-      for (let s = 0; s < subCount; s++) {
-        const sub = arr.slice(s * LAYOUT.RING_CAPACITY, (s + 1) * LAYOUT.RING_CAPACITY);
-        const r = baseR + s * LAYOUT.NODE_SPACING;
-        maxR = Math.max(maxR, r);
-        sub.forEach((n, i) => {
-          const a = (i / sub.length) * Math.PI * 2 - Math.PI / 2;
-          placed.set(n, { x: Math.cos(a) * r, y: Math.sin(a) * r });
-        });
-      }
-    }
-    void maxLevel;
-    return { comp, placed, radius: maxR };
-  };
+/** 单分量布局结果：placed 是分量内节点相对自身中心的坐标，radius 是最外环半径 */
+interface CompLayout {
+  placed: Map<string, { x: number; y: number }>;
+  radius: number;
+}
 
-  const main = layoutComp(compList[0]);
+/** 从根节点 BFS 分层，返回 层级 -> 该层节点（根为 0 层） */
+function bfsLevelsByRoot(root: string, adj: Map<string, string[]>): Map<number, string[]> {
+  const level = new Map<string, number>([[root, 0]]);
+  const byLevel = new Map<number, string[]>();
+  byLevel.set(0, [root]);
+  let head = 0;
+  const queue = [root];
+  while (head < queue.length) {
+    const cur = queue[head++];
+    const lv = level.get(cur)!;
+    for (const nb of adj.get(cur) ?? []) {
+      if (!level.has(nb)) {
+        level.set(nb, lv + 1);
+        byLevel.set(lv + 1, [...(byLevel.get(lv + 1) ?? []), nb]);
+        queue.push(nb);
+      }
+    }
+  }
+  return byLevel;
+}
+
+/**
+ * 单个分量的径向布局：以最大度节点为根（hub 居中、层次清晰），
+ * 按 BFS 层级排环；单环超 RING_CAPACITY 则拆子环，子环半径在基础环半径上外扩。
+ */
+function layoutComponent(comp: string[], adj: Map<string, string[]>): CompLayout {
+  let root = comp[0];
+  let maxDeg = -1;
+  for (const n of comp) {
+    const d = adj.get(n)?.length ?? 0;
+    if (d > maxDeg) {
+      maxDeg = d;
+      root = n;
+    }
+  }
+  const byLevel = bfsLevelsByRoot(root, adj);
+  const placed = new Map<string, { x: number; y: number }>();
+  let maxR = 0;
+  for (const [lv, arr] of byLevel) {
+    const baseR = lv * LAYOUT.RING_GAP;
+    const subCount = Math.ceil(arr.length / LAYOUT.RING_CAPACITY);
+    for (let s = 0; s < subCount; s++) {
+      const sub = arr.slice(s * LAYOUT.RING_CAPACITY, (s + 1) * LAYOUT.RING_CAPACITY);
+      const r = baseR + s * LAYOUT.NODE_SPACING;
+      maxR = Math.max(maxR, r);
+      sub.forEach((n, i) => {
+        const a = (i / sub.length) * Math.PI * 2 - Math.PI / 2;
+        placed.set(n, { x: Math.cos(a) * r, y: Math.sin(a) * r });
+      });
+    }
+  }
+  return { placed, radius: maxR };
+}
+
+/** 卫星分量围绕主分量外环摆放：星群中心放于以主分量中心为圆心的环上，角度均匀分布 */
+function placeSatellites(main: CompLayout, satellites: CompLayout[], pos: Map<string, { x: number; y: number }>) {
+  satellites.forEach((sat, idx) => {
+    const a = (idx / satellites.length) * Math.PI * 2 - Math.PI / 2;
+    const r = main.radius + sat.radius + LAYOUT.SATELLITE_GAP;
+    const cx = Math.cos(a) * r;
+    const cy = Math.sin(a) * r;
+    for (const [n, p] of sat.placed) pos.set(n, { x: cx + p.x, y: cy + p.y });
+  });
+}
+
+/**
+ * 计算确定性径向布局。
+ * 算法：
+ * 1. 找连通分量；取节点数最多的为主分量，其余为卫星分量。
+ * 2. 主分量内以其最大度节点为根做 BFS，按 BFS 层级排环；单环超 RING_CAPACITY 拆子环。
+ * 3. 各卫星分量同样径向铺开，其"星群中心"围绕主分量最外环，间距取 SATELLITE_GAP。
+ * 4. 整体按 fx/fy 椭圆化，贴合画布。
+ * @returns 节点 id -> {x,y}（所有节点必有值）
+ */
+export function computeRadialLayout(
+  data: GraphData,
+  fx = 1,
+  fy = 1,
+): Map<string, { x: number; y: number }> {
+  const pos = new Map<string, { x: number; y: number }>();
+  const { nodes, edges } = data;
+  if (!nodes.length) return pos;
+
+  const adj = buildAdjacency(nodes, edges);
+  const compList = detectComponents(nodes, edges);
+
+  const main = layoutComponent(compList[0], adj);
   for (const [n, p] of main.placed) pos.set(n, p);
 
   // 卫星分量围绕主分量外环摆放
   if (compList.length > 1) {
-    const satellites = compList.slice(1).map((c) => layoutComp(c));
-    satellites.forEach((sat, idx) => {
-      // 星群中心放于以主分量中心为圆心的环上，角度均匀分布
-      const a = (idx / satellites.length) * Math.PI * 2 - Math.PI / 2;
-      const r = main.radius + sat.radius + LAYOUT.SATELLITE_GAP;
-      const cx = Math.cos(a) * r;
-      const cy = Math.sin(a) * r;
-      for (const [n, p] of sat.placed) pos.set(n, { x: cx + p.x, y: cy + p.y });
-    });
+    placeSatellites(main, compList.slice(1).map((c) => layoutComponent(c, adj)), pos);
   }
 
   // 椭圆化（面积守恒）：shape 适配画布，同时不改变节点相对分散度
