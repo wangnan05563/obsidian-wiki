@@ -131,10 +131,30 @@ if ($nodeVersion) {
 }
 
 # 检测包管理器
+# T01553 加严：pnpm 存在不等于可用——根 package.json 的 packageManager 字段是带 sha512 摘要的版本锁定，
+# 当「已安装版本 ≠ 锁定版本」时，pnpm 的 pin 校验路径会抛
+#   [ERROR] Cannot use 'in' operator to search for 'integrity' in undefined
+# 且任何子命令（install / -r build / -w）都以同一条错误退出，看起来像「CLI 损坏」，实为版本不一致。
+# 因此这里显式比对锁定版本并给出可执行修法，避免下一台机器再花时间重新二分。
 $UsePnpm = $false
-try { $null = pnpm --version; $UsePnpm = $true } catch { }
+$pnpmVersion = $null
+try { $pnpmVersion = (pnpm --version 2>&1) | Select-Object -First 1; $UsePnpm = $true } catch { }
+if ($UsePnpm) {
+    $pinRaw = (Get-Content (Join-Path $repoRoot 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).packageManager
+    if ($pinRaw -and $pinRaw -match '^pnpm@(\d+\.\d+\.\d+)') {
+        $pinVersion = $Matches[1]
+        if ($pnpmVersion -ne $pinVersion) {
+            Write-Err "pnpm 版本与 packageManager 锁定不一致：已安装 $pnpmVersion，锁定 $pinVersion（$pinRaw）"
+            throw "请执行：npm install -g pnpm@$pinVersion 后重试（详见 T01553：版本不一致时 pnpm 所有子命令都会报 integrity 错误）"
+        }
+        Write-Ok "包管理器：pnpm $pnpmVersion（与 packageManager 锁定一致）"
+    } else {
+        Write-Ok "包管理器：pnpm $pnpmVersion（package.json 未锁定版本，跳过一致性校验）"
+    }
+} else {
+    Write-Ok "包管理器：npm（未检测到 pnpm）"
+}
 $pkgCmd = if ($UsePnpm) { 'pnpm' } else { 'npm' }
-Write-Ok "包管理器：$pkgCmd"
 
 # 安装根目录依赖
 if (-not $SkipDeps) {
