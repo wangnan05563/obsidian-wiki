@@ -173,7 +173,7 @@ cd karpathy-wiki/frontend && npx vue-tsc --noEmit && npx vitest run --coverage
 2. **覆盖率基线（`new_coverage` LT 80）**：api 的 `vitest.config.ts` 覆盖率范围目前只圈定 `src/auth/**` + `src/middleware/auth.ts`（该范围内 97–100%，`middleware/auth.ts` 已 100%），因此上报给 SonarQube 的全项目覆盖率只有 13.3%；web 全量覆盖率 26.2%（视图层测试缺口大）。把 include 直接放宽到全 `src` 会立刻撞上 `thresholds: 80` 让测试命令失败，所以这必须是一条**有计划的覆盖率提升工作**，而不是改配置数字。
 3. **本机 pnpm CLI 损坏**：阻塞 `pnpm -r build`、exe 与安装包构建、以及任何依赖 pnpm 的脚本。
 
-以上 3 项各建一张 `【AI回写待审核】` 单（项目 wiki），互不重复。
+以上 3 项各建一张 `【AI回写待审核】` 单（项目 wiki，派生自 T01364）：① 安全热点复核 **T01551**、② 覆盖率基线 **T01552**、③ pnpm CLI 损坏 **T01553**，互不重复。
 
 > 另外如实说明一个口径：两模块的 `sonar-project.properties` 里**本轮之前就已存在**大量规则级豁免（api 10 条、web 30 条，例如 `S7781/S6594/S7744/S4624/S1128(web)` 等）。这些被豁免的规则不会以 OPEN 形式出现，所以「0 OPEN」的含义是「在当前质量 profile 下无遗留问题」，不等于「所有 Sonar 规则一条未豁免」。本轮只新增了 1 条豁免（S7785，限定单个入口文件），并删除了 1 处旧 NOSONAR。
 
