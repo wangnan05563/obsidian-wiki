@@ -500,6 +500,49 @@ async function loadGaps() {
   }
 }
 
+// 解析单个 SSE 事件块：按行取出 event 名与 data JSON 串（其余行忽略）
+function parseGapSseBlock(chunk: string): { event: string; dataStr: string } {
+  let event = '';
+  let dataStr = '';
+  for (const line of chunk.split('\n')) {
+    if (line.startsWith('event: ')) event = line.slice(7);
+    else if (line.startsWith('data: ')) dataStr = line.slice(6);
+  }
+  return { event, dataStr };
+}
+
+// 处理一条已解析的 SSE 事件：text 累加建议文本，done 标记降级来源
+function applyGapSseEvent(event: string, dataStr: string) {
+  if (!dataStr) return;
+  if (event !== 'text' && event !== 'done') return;
+  try {
+    const parsed = JSON.parse(dataStr);
+    if (event === 'text' && parsed.text) gapSuggestion.value += parsed.text;
+    else if (event === 'done' && parsed.fallback) gapFallback.value = true;
+  } catch {
+    // 忽略单条畸形块，继续后续事件
+  }
+}
+
+// 逐块读取 SSE 流：按 \n\n 分隔事件，累加 text 文本，识别 done.fallback
+async function readGapSuggestionStream(res: Response) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const chunk = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const { event, dataStr } = parseGapSseBlock(chunk);
+      applyGapSseEvent(event, dataStr);
+    }
+  }
+}
+
 // POST LLM 建议：SSE 流式累积文本。
 // 后端在 LLM 失败时已降级推送拓扑摘要 + done.fallback，前端据此标记来源；
 // 仅当连接层直接报错（网络中断）时走本地兜底文案，因为拓扑列表本身已展示三类缺口。
@@ -525,41 +568,7 @@ async function analyzeGaps() {
       }
       throw new Error('unexpected response');
     }
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    // 逐块读取 SSE：按 \n\n 分隔事件，累加 text 文本，识别 done.fallback
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buffer.indexOf('\n\n')) !== -1) {
-        const chunk = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        let event = '';
-        let dataStr = '';
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('event: ')) event = line.slice(7);
-          else if (line.startsWith('data: ')) dataStr = line.slice(6);
-        }
-        if (event === 'text' && dataStr) {
-          try {
-            const parsed = JSON.parse(dataStr);
-            if (parsed.text) gapSuggestion.value += parsed.text;
-          } catch {
-            // 忽略单条畸形块，继续后续事件
-          }
-        } else if (event === 'done' && dataStr) {
-          try {
-            const parsed = JSON.parse(dataStr);
-            if (parsed.fallback) gapFallback.value = true;
-          } catch {
-            // 忽略
-          }
-        }
-      }
-    }
+    await readGapSuggestionStream(res);
   } catch (err) {
     // 连接层失败：无任何流式输出，本地兜底为拓扑摘要
     ElMessage.error('缺口分析失败：' + (err as Error).message);

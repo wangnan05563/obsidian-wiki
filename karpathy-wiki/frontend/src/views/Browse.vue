@@ -152,12 +152,19 @@ function statusClass(s: string | undefined): 'ok' | 'stale' | 'unknown' {
   return 'unknown';
 }
 
+// frontmatter 时间字段归一化为毫秒时间戳：字符串走 Date.parse，Date 取 getTime，其余非法返回 NaN
+function toTimestamp(raw: unknown): number {
+  if (typeof raw === 'string') return Date.parse(raw);
+  if (raw instanceof Date) return raw.getTime();
+  return NaN;
+}
+
 // 计算页面距最近时效日期（updated 优先，缺失回退 reviewed_at）的天数，供 hover 提示。
 // 不参与判定（判定在后端），仅展示人读信息；非法/缺失返回 null。
 function ageLabel(fm: Record<string, unknown>): string | null {
   const raw = fm.updated ?? fm.reviewed_at;
   if (raw == null) return null;
-  const t = typeof raw === 'string' ? Date.parse(raw) : raw instanceof Date ? raw.getTime() : NaN;
+  const t = toTimestamp(raw);
   if (Number.isNaN(t)) return null;
   const days = Math.floor((Date.now() - t) / (24 * 60 * 60 * 1000));
   if (days < 0) return null;
@@ -336,14 +343,48 @@ async function openTab(path: string, name: string): Promise<void> {
   void syncFileTocToPath(path);
 }
 
+// 请求单个文件内容并解析 JSON（非 2xx 抛出 HTTP 状态错误，供 404 判定复用）
+async function fetchFileContent(path: string): Promise<FileContent> {
+  const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// T00311：参考资料引用为『页面名』时 path 常无扩展名，后端 ENOENT 返回 404。
+//   补 .md 重试一次，命中同名文件即可正常打开；返回 true 表示已由重试分支处理完毕
+async function retryLoadTabWithMd(tab: DocTab): Promise<boolean> {
+  try {
+    const retry = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(tab.path + '.md')}`);
+    if (!retry.ok) return false;
+    const data = await retry.json();
+    if (openTabs.value.includes(tab)) {
+      // 命中后把 tab.path 归一化为真实文件路径（无扩展名 → +'.md'），
+      // 才能让目录树定位（setCurrentKey）与后续编辑保存使用一致路径（评审 H2）
+      tab.path += '.md';
+      tab.content = data;
+    }
+    tab.loading = false;
+    return true;
+  } catch {
+    /* 兜底失败按原路径提示 */
+    return false;
+  }
+}
+
+// 加载失败的落库与提示：清空内容，仅激活态 Tab 提示，避免后台 Tab 报错噪音
+function reportTabLoadError(tab: DocTab, msg: string, is404: boolean) {
+  tab.content = null;
+  if (activePath.value === tab.path) {
+    ElMessage.error(is404 ? `目标文件不存在或已移动（参考：${tab.path}）` : '读取文件失败：' + msg);
+  }
+}
+
 // 加载单个 Tab 内容并写入该 Tab 缓存（切换缓存策略：仅首次打开时请求）
 async function loadTabContent(tab: DocTab): Promise<void> {
   tab.loading = true;
   tab.content = null;
   try {
-    const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(tab.path)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await fetchFileContent(tab.path);
     // 加载期间用户可能已关闭该 Tab，不再写入缓存
     if (openTabs.value.includes(tab)) tab.content = data;
   } catch (err) {
@@ -353,34 +394,13 @@ async function loadTabContent(tab: DocTab): Promise<void> {
       return;
     }
     const msg = err instanceof Error ? err.message : String(err);
-    // T00311：参考资料引用为『页面名』时 path 常无扩展名，后端 ENOENT 返回 404。
-    //   补 .md 重试一次，命中同名文件即可正常打开；仍失败则落到下方友好提示
     const is404 = /^HTTP 404/.test(msg);
-    if (is404 && tab.path && !/\.[a-z0-9]+$/i.test(tab.path)) {
-      try {
-        const retry = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(tab.path + '.md')}`);
-        if (retry.ok) {
-          const data = await retry.json();
-          if (openTabs.value.includes(tab)) {
-            // 命中后把 tab.path 归一化为真实文件路径（无扩展名 → +'.md'），
-            // 才能让目录树定位（setCurrentKey）与后续编辑保存使用一致路径（评审 H2）
-            tab.path += '.md';
-            tab.content = data;
-          }
-          tab.loading = false;
-          return;
-        }
-      } catch {
-        /* 兜底失败按原路径提示 */
-      }
+    // 无扩展名的 404 补 .md 重试一次，仍失败则落到下方友好提示
+    const noExtension = !/\.[a-z0-9]+$/i.test(tab.path);
+    if (is404 && tab.path && noExtension && (await retryLoadTabWithMd(tab))) {
+      return;
     }
-    tab.content = null;
-    // 仅激活态 Tab 加载失败时提示，避免后台 Tab 报错噪音
-    if (activePath.value === tab.path) {
-      ElMessage.error(
-        is404 ? `目标文件不存在或已移动（参考：${tab.path}）` : '读取文件失败：' + msg,
-      );
-    }
+    reportTabLoadError(tab, msg, is404);
   } finally {
     tab.loading = false;
   }
@@ -642,7 +662,7 @@ function parseMarkdownToc(body: string): TocNode[] {
     m = line.match(/^## (.+)$/);
     if (m) { heads.push({ level: 2, text: m[1] }); continue; }
     m = line.match(/^# (.+)$/);
-    if (m) { heads.push({ level: 1, text: m[1] }); continue; }
+    if (m) { heads.push({ level: 1, text: m[1] }); }
   }
   // id 分配顺序与 renderMarkdown 链式 replace 一致（h3→h2→h1），
   // 保证重复标题的去重编号与右侧正文锚点相同，左侧跳转才能命中
@@ -1109,13 +1129,16 @@ function cancelEdit() {
   editBuffer.value = '';
 }
 
+// saveEdit 的写入目标路径：draft→当前草稿；knowledge→激活 Tab 路径（可能在切换模式后
+// currentNode 已被清空），兜底当前节点；其余（file）→当前节点
+function resolveSaveTarget(): string {
+  if (mode.value === 'draft') return currentDraftPath.value;
+  if (mode.value === 'knowledge') return activeTab.value?.path || currentNode.value;
+  return currentNode.value;
+}
+
 async function saveEdit() {
-  // knowledge 模式目标为激活 Tab 路径（可能在切换模式后 currentNode 已被清空）
-  const target = mode.value === 'draft'
-    ? currentDraftPath.value
-    : mode.value === 'knowledge'
-      ? (activeTab.value?.path || currentNode.value)
-      : currentNode.value;
+  const target = resolveSaveTarget();
   if (!target) return;
   try {
     const res = await apiFetch(`${API_BASE}/files?path=${encodeURIComponent(target)}`, {
@@ -1445,8 +1468,13 @@ function renderTable(block: string): string {
   const headers = parseTableRow(lines[0]);
   const aligns = parseTableRow(lines[1]).map(tableAlign);
   const attrs = (i: number) => (aligns[i] ? ` style="text-align:${aligns[i]}"` : '');
-  const thead = `<thead><tr>${headers.map((h, i) => `<th${attrs(i)}>${h}</th>`).join('')}</tr></thead>`;
-  const tbody = `<tbody>${lines.slice(2).map((r) => `<tr>${parseTableRow(r).map((c, i) => `<td${attrs(i)}>${c}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  // 单元格与行先用数组分段再 join，产出与模板字符串嵌套写法完全相同的 HTML
+  const headerCells = headers.map((h, i) => ['<th', attrs(i), '>', h, '</th>'].join('')).join('');
+  const bodyCells = (row: string) =>
+    parseTableRow(row).map((c, i) => ['<td', attrs(i), '>', c, '</td>'].join('')).join('');
+  const bodyRows = lines.slice(2).map((r) => ['<tr>', bodyCells(r), '</tr>'].join('')).join('');
+  const thead = ['<thead><tr>', headerCells, '</tr></thead>'].join('');
+  const tbody = ['<tbody>', bodyRows, '</tbody>'].join('');
   return `<table>${thead}${tbody}</table>`;
 }
 
@@ -1454,7 +1482,8 @@ function renderTable(block: string): string {
 // 保证左侧点击章节跳转时能命中正文同名锚点（重复标题去重编号也一致）
 function buildHeaderId(raw: string, used: Set<string>): string {
   const base = raw.trim().toLowerCase()
-    .replace(/[`*_~#\[\]()!<>]/g, '')
+    // 字符类内的 [ 无需转义（仅 ] 必须转义），去掉多余反斜杠语义不变
+    .replace(/[`*_~#[\]()!<>]/g, '')
     .replace(/[^\p{L}\p{N}\s-]/gu, '')
     .trim().replace(/\s+/g, '-') || 'sec';
   let id = base;

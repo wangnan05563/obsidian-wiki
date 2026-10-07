@@ -87,10 +87,10 @@ export function mergeImagePreset(
     model: p.model,
     size: p.size,
     ...(p.ratio ? { ratio: p.ratio } : {}),
-    ...(p.steps !== undefined ? { steps: p.steps } : {}),
-    ...(p.cfgScale !== undefined ? { cfgScale: p.cfgScale } : {}),
+    ...(p.steps === undefined ? {} : { steps: p.steps }),
+    ...(p.cfgScale === undefined ? {} : { cfgScale: p.cfgScale }),
     ...(p.sampler ? { sampler: p.sampler } : {}),
-    ...(p.seed !== undefined ? { seed: p.seed } : {}),
+    ...(p.seed === undefined ? {} : { seed: p.seed }),
     ...(p.negativePrompt ? { negativePrompt: p.negativePrompt } : {}),
   };
 }
@@ -105,9 +105,9 @@ export function mergeVideoPreset(
     videoModel: p.model,
     size: p.size,
     seconds: p.seconds,
-    ...(p.fps !== undefined ? { fps: p.fps } : {}),
-    ...(p.motion !== undefined ? { motion: p.motion } : {}),
-    ...(p.seed !== undefined ? { seed: p.seed } : {}),
+    ...(p.fps === undefined ? {} : { fps: p.fps }),
+    ...(p.motion === undefined ? {} : { motion: p.motion }),
+    ...(p.seed === undefined ? {} : { seed: p.seed }),
     ...(p.negativePrompt ? { negativePrompt: p.negativePrompt } : {}),
   };
 }

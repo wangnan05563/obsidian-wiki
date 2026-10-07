@@ -21,12 +21,14 @@ export interface TipPlacement {
 
 const GAP = 8;
 const MARGIN = 8;
+// anchorOrigin 默认值：模块级常量（避免默认参数写成对象字面量每次新建对象，也便于单测复用）
+const DEFAULT_ANCHOR_ORIGIN = { x: 0, y: 0 };
 
 export function computeTipPlacement(
   elRect: TipRect,
   tipSize: { width: number; height: number },
   viewport: { width: number; height: number },
-  anchorOrigin: { x: number; y: number } = { x: 0, y: 0 },
+  anchorOrigin: { x: number; y: number } = DEFAULT_ANCHOR_ORIGIN,
 ): TipPlacement {
   const fixedMode = anchorOrigin.x === 0 && anchorOrigin.y === 0;
 

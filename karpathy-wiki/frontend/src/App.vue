@@ -112,7 +112,8 @@ function go(view: ViewName) {
   currentView.value = view;
   // T00864 用户引导：首次进入该视图时自动弹出引导（已引导过的视图不再触发）
   // 为什么在权限通过后调用：避免无权限用户被引导到其无权访问的功能
-  void guideStore.maybeStartFirstTime(view);
+  // 该函数同步返回 boolean（是否启动了引导），此处无需 void 丢弃，与 onMounted 内的调用方式一致
+  guideStore.maybeStartFirstTime(view);
 }
 
 function handleNavigate(view: 'ingest' | 'browse' | 'query' | 'health' | 'progress' | 'graph' | 'help') {

@@ -436,12 +436,12 @@ async function fetchSharedModelList(): Promise<void> {
       return;
     }
     sharedModels.value = data.models ?? [];
-    if (!sharedModels.value.length) {
+    if (sharedModels.value.length) {
+      ElMessage.success(`已获取 ${sharedModels.value.length} 个可用模型，可从下拉选取`);
+    } else {
       sharedModelsError.value = '服务商未返回任何可用模型';
       sharedModels.value = [];
       ElMessage.warning(sharedModelsError.value);
-    } else {
-      ElMessage.success(`已获取 ${sharedModels.value.length} 个可用模型，可从下拉选取`);
     }
   } catch (err) {
     sharedModelsError.value = err instanceof Error ? err.message : String(err);

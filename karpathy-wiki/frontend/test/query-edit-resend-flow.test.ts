@@ -69,6 +69,23 @@ const stubs = {
   MultimodalOutputCard: true,
 };
 
+// 轮询等待异步链完成，替代「固定 setTimeout(N ms) + flushPromises」的经验值等待。
+// 为什么改：sendQuestion → buildQueryBody(含 await 配置加载) → fetch → 落消息 的微任务链
+// 长度取决于机器负载；本机在 SonarQube TS 分析并行时 CPU 争用，10/20/40ms 会不够，
+// 导致同一用例在单跑时通过、全量跑时偶发失败（假阳性）。轮询到断言条件成立即返回，
+// 超时上限 2000ms——条件不变、断言不变，只是把「猜时长」换成「等真实状态」。
+async function waitFor(label: string, predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error(`waitFor 超时（${timeoutMs}ms）：${label}`);
+    }
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  await flushPromises();
+}
+
 describe('Query.vue 编辑重发端到端', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -120,18 +137,17 @@ describe('Query.vue 编辑重发端到端', () => {
     expect(confirmBtn.exists(), '确认发送按钮应存在').toBe(true);
     await confirmBtn.trigger('click');
 
-    // 等待异步 sendQuestion 完成
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
-    await flushPromises();
+    // 等待异步 sendQuestion 完成（轮询真实状态而非固定时长）
+    const bodyHasNew = () =>
+      authFetch.mock.calls.some((c: any[]) => {
+        const body = c[1]?.body;
+        return typeof body === 'string' && body.includes('修改后的问题');
+      });
+    await waitFor('authFetch 请求体应包含修改后的文本', bodyHasNew);
 
     // 断言：新一轮问答被触发（authFetch 被调用，且请求体包含新文本）
     expect(authFetch).toHaveBeenCalled();
-    const calledWithNew = authFetch.mock.calls.some((c: any[]) => {
-      const body = c[1]?.body;
-      return typeof body === 'string' && body.includes('修改后的问题');
-    });
-    expect(calledWithNew, 'authFetch 请求体应包含修改后的文本').toBe(true);
+    expect(bodyHasNew(), 'authFetch 请求体应包含修改后的文本').toBe(true);
 
     // 断言：对话里存在以新文本开头的 user 消息
     const hasNewUser = queryStore.messages.some(
@@ -174,9 +190,7 @@ describe('Query.vue 编辑重发端到端', () => {
     // 发起一条在途问答（真实 abortController，isLoading=true）
     wrapper.vm.inputQuestion = '第二个问题';
     wrapper.vm.handleSubmit();
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 20));
-    await flushPromises();
+    await waitFor('应处于流式生成中', () => queryStore.isLoading);
     expect(queryStore.isLoading, '应处于流式生成中').toBe(true);
 
     // 编辑首条 user 消息（idx0）
@@ -191,15 +205,13 @@ describe('Query.vue 编辑重发端到端', () => {
 
     await wrapper.find('button[data-testid="confirm-edit"]').trigger('click');
 
-    // 等待中断 finally → 重发
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 40));
-    await flushPromises();
-
-    const resendCalled = authFetch.mock.calls.some(
-      (c: any[]) => typeof c[1]?.body === 'string' && c[1].body.includes('修改后的问题'),
-    );
-    expect(resendCalled, '中断后应触发携带新文本的重发').toBe(true);
+    // 等待中断 finally → 重发（轮询真实状态而非固定时长）
+    const resendCalled = () =>
+      authFetch.mock.calls.some(
+        (c: any[]) => typeof c[1]?.body === 'string' && c[1].body.includes('修改后的问题'),
+      );
+    await waitFor('中断后应触发携带新文本的重发', resendCalled);
+    expect(resendCalled(), '中断后应触发携带新文本的重发').toBe(true);
 
     wrapper.unmount();
   });
@@ -240,16 +252,15 @@ describe('Query.vue 编辑重发端到端', () => {
 
     // 直接确认发送（内容未变）
     await wrapper.find('button[data-testid="confirm-edit"]').trigger('click');
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
-    await flushPromises();
+    const calledWithOriginal = () =>
+      authFetch.mock.calls.some(
+        (c: any[]) => typeof c[1]?.body === 'string' && c[1].body.includes('原始问题'),
+      );
+    await waitFor('未修改内容也应触发携带原文本的重发', calledWithOriginal);
 
     // 回归点：内容未变也须触发重发（此前会因 newText===original 直接 return，sendQuestion 不调用）
     expect(authFetch).toHaveBeenCalled();
-    const calledWithOriginal = authFetch.mock.calls.some(
-      (c: any[]) => typeof c[1]?.body === 'string' && c[1].body.includes('原始问题'),
-    );
-    expect(calledWithOriginal, '未修改内容也应触发携带原文本的重发').toBe(true);
+    expect(calledWithOriginal(), '未修改内容也应触发携带原文本的重发').toBe(true);
 
     wrapper.unmount();
   });
