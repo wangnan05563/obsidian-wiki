@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply, preHandlerHookHandler } from 'fastify';
 import type { SessionRecord, AuthPermission, AuditAction } from '../auth/types.js';
 import { validateSession } from '../auth/session.js';
 import { checkPermission } from '../auth/permission-cache.js';
@@ -214,9 +214,9 @@ export interface IsolationGuards {
   /** auth 是否启用；路由层可据此决定是否做 owner 归属校验。 */
   enabled: boolean;
   /** 要求已登录（auth 启用时），未登录返回 401。auth 关闭时放行。 */
-  requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | void;
+  requireAuth: preHandlerHookHandler;
   /** 要求管理员角色（auth 启用时），否则 401/403。auth 关闭时放行。 */
-  requireAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | void;
+  requireAdmin: preHandlerHookHandler;
 }
 
 export function createIsolationGuards(auth?: IsolationGuardInput): IsolationGuards {
@@ -224,20 +224,28 @@ export function createIsolationGuards(auth?: IsolationGuardInput): IsolationGuar
   // AuthConfig.permissionCacheTtlSec 单位为秒，requireAdmin 内部需要毫秒
   const ttlMs = (auth?.permissionCacheTtlSec ?? 300) * 1000;
 
-  // 采用 async 风格而非回调（done）。理由：回调风格中 send(401) 后再调 done()，
-  // Fastify 仍会继续执行 handler，对已发送响应二次 send → FST_ERR_REP_ALREADY_SENT → 崩溃。
-  // async 失败分支必须 return reply.send()，Fastify 据此判定响应已发送并终止管线。
-  const authGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
-    if (!enabled) { return undefined; } // 单租户：放行
+  // 守卫采用 Fastify 的 done 回调签名（而非直接传 async 函数）。
+  // 理由：路由选项 `preHandler` 的声明类型是同步 hook（返回 void），传入返回 Promise 的
+  // 函数会命中 SonarQube S6544（Promise-returning function provided to property where a
+  // void return was expected）——本项目 86 处 `preHandler: guards.requireXxx` 全部因此报错。
+  // 拒绝分支「先 send 再 done」是安全的：reply.send() 会同步置位 reply.sent，而 Fastify 在
+  // lib/hooks.js 的 hookIterator 与 lib/route.js 的 runPreParsing 中都有
+  // `if (reply.sent === true) return` 守卫，后续 hook 与 handler 不再执行，
+  // 因此不会出现「对已发送响应二次 send → FST_ERR_REP_ALREADY_SENT」。
+  // 该 done 桥接写法与 src/routes/auth.ts 中登录/管理员守卫的既有桥接方式保持一致。
+  const authGuard: preHandlerHookHandler = (request: FastifyRequest, reply: FastifyReply, done) => {
+    if (!enabled) { done(); return; } // 单租户：放行
     if (!request.currentUser) {
-      return reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
+      reply.code(401).send({ error: '未登录或会话已过期', code: 'UNAUTHORIZED' });
     }
-    return undefined;
+    done();
   };
 
-  const adminGuard = async (request: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
-    if (!enabled) { return undefined; } // 单租户：放行
-    return requireAdmin(ttlMs)(request, reply);
+  // 复用 promise 风格的 requirePermission（保留 401/403 语义与审计日志），桥接为 done 签名
+  const adminPermissionGuard = requirePermission('users', ttlMs);
+  const adminGuard: preHandlerHookHandler = (request: FastifyRequest, reply: FastifyReply, done) => {
+    if (!enabled) { done(); return; } // 单租户：放行
+    adminPermissionGuard(request, reply).then(() => done(), (err: unknown) => done(err as Error));
   };
 
   return { enabled, requireAuth: authGuard, requireAdmin: adminGuard };
