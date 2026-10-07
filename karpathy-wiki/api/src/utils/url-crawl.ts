@@ -328,8 +328,13 @@ function robotsPatternToRegex(pattern: string) {
 
 }
 
+// 外部网页正文长度封顶（4M 字符 ≈ 单页 HTML 的极大值，正常站点远达不到）：
+// 下面的剥离链含带反向引用的结构匹配（<h(\d)>…</h\1>），回溯代价随输入长度超线性增长；
+// 在唯一入口封顶输入，可把最坏耗时约束在常数内（Sonar 热点 dos / 超线性正则）
+const MAX_HTML_CHARS = 4_000_000;
+
 export function extractHtmlContent(html: string, _baseUrl: string) {
-  let text = html;
+  let text = html.length > MAX_HTML_CHARS ? html.slice(0, MAX_HTML_CHARS) : html;
   text = text.replace(/<!--[\s\S]*?-->/g, '');
   // 移除无文本价值的块级元素：JS/CSS/模板占位/内联图标
   // 为什么在去标签前去块：若先去标签，<script> 内的 JS 代码会残留为正文噪声
