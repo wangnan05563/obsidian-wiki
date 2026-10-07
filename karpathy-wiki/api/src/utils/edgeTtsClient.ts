@@ -243,6 +243,16 @@ async function createConnectionWithConfig(): Promise<WebSocket> {
 }
 
 /**
+ * 摘除单次合成期间挂在连接上的事件回调（避免上一次合成的 handler 继续收到后续帧）。
+ * 提到外层作用域：行为与原内联函数一致，连接对象改为参数传入。
+ */
+function detachEvents(socket: WebSocket): void {
+  socket.onmessage = null;
+  socket.onclose = null;
+  socket.onerror = null;
+}
+
+/**
  * 在给定连接上完成一次合成：发送带新 requestId 的 SSML，按 turn.end 收集音频。
  * 串行模式下同一连接同时只有一个本调用在执行，事件 handler 可安全接管。
  */
@@ -257,7 +267,7 @@ function synthesizeOnce(ws: WebSocket, opts: {
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
-        detach();
+        detachEvents(ws);
         // 连接可能已异常/挂起，主动关闭以便下次重建
         closeSharedConnection();
         reject(new Error(`Edge TTS 合成超时（${EDGE_TTS_TIMEOUT_MS}ms）`));
@@ -268,7 +278,7 @@ function synthesizeOnce(ws: WebSocket, opts: {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      detach();
+      detachEvents(ws);
       if (err) reject(err);
       else if (audioChunks.length === 0) reject(new Error('Edge TTS 未返回音频数据（可能文本被过滤或音色无效）'));
       else resolve(Buffer.concat(audioChunks));
@@ -296,11 +306,6 @@ function synthesizeOnce(ws: WebSocket, opts: {
       ws.onmessage = onMessage;
       ws.onclose = onClose;
       ws.onerror = onError;
-    }
-    function detach(): void {
-      ws.onmessage = null;
-      ws.onclose = null;
-      ws.onerror = null;
     }
 
     attach();

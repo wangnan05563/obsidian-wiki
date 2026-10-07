@@ -8,7 +8,8 @@ export class ClarifySessionStore {
   // 会话总数上限：防恶意大量 clarifyId 撑爆内存（每会话仅 KB 级，500 上限足够）
   static readonly MAX_SESSIONS = 500;
 
-  private sessions = new Map<string, ClarifySession>();
+  // readonly：Map 引用从不整体替换（只 set/delete/clear 内部内容），满足 S2933
+  private readonly sessions = new Map<string, ClarifySession>();
 
   // 懒清理：仅在访问时剔除过期项，避免引入定时器增加服务生命周期管理负担
   private sweep(now: number): void {

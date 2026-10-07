@@ -9,10 +9,12 @@ import { randomUUID } from 'node:crypto';
 import type { HarnessConfig } from '@wiki/harness';
 import { detectAmbiguity } from './ambiguity-detector.js';
 import type {
+  AmbiguityReport,
   ClarificationPayload,
   ClarifyConfig,
   ClarifyGateResult,
   ClarifySession,
+  ClarifySkipReason,
 } from './clarify-types.js';
 import type { ClarifySessionStore } from './clarify-store.js';
 
@@ -58,41 +60,103 @@ export interface ClarifyGateParams {
   detect?: typeof detectAmbiguity;
 }
 
-// 门禁主流程。全部决策集中在此，便于单元测试。
-export async function runClarifyGate(params: ClarifyGateParams): Promise<ClarifyGateResult> {
-  const { config, store, question, clarifyId, choiceIndex, threadId, outputMode, hasAttachments, history, harnessConfig } = params;
-  // 检测器：支持测试注入（默认内置 detectAmbiguity）
-  const detector = params.detect ?? detectAmbiguity;
+// ── runClarifyGate 主干拆分出的模块级纯辅助函数（S3776：降低门禁主函数的认知复杂度）──
+// 说明：以下每个辅助都只做「把一段连贯决策搬出主干」的事，控制流与返回值与原内联写法逐字等价，
+//   不改变 fail-open 语义、轮次计数、选项截断/夹紧等任何行为。
 
-  // ── 0. 开关与跳过条件（fail-open 的第一道闸）──
+// 第一道闸（fail-open）：配置关闭 / 命中跳过输出模式 / 携带附件 → 直接给出「继续」结果；
+// 均未命中返回 null，交由主干继续判定。
+function resolveSkipResult(params: ClarifyGateParams): ClarifyGateResult | null {
+  const { config, outputMode, hasAttachments } = params;
   if (!config.enabled) return { type: 'continue', skipReason: 'disabled' };
   if (outputMode && config.skipWhenOutputMode.includes(outputMode)) {
     return { type: 'continue', skipReason: 'disabled' };
   }
-  if (hasAttachments) {
-    return { type: 'continue', skipReason: 'disabled' };
+  if (hasAttachments) return { type: 'continue', skipReason: 'disabled' };
+  return null;
+}
+
+// 解析上一轮用户选择（携带 clarifyId + choiceIndex 的续答请求）。
+// 命中有效会话（存在 + 问题一致 + 线程一致 + 选项合法）时返回该会话与已确认意图；
+// 任一条件不满足都返回 { session:null, confirmedIntent:null }（视为新提问、重新检测）。
+// 抽出原因：原「归属校验」是三重 && 嵌套 + 非法选项回退，嵌进主干会叠高复杂度；
+//   这里拆成先判存在、再判一致（各条独立早退），顺带消除 found && found.x 式判空（S6582）。
+function resolvePriorChoice(
+  store: ClarifySessionStore,
+  clarifyId: string | undefined,
+  choiceIndex: number | undefined,
+  question: string,
+  threadId: string | null,
+): { session: ClarifySession | null; confirmedIntent: string | null } {
+  if (!clarifyId) return { session: null, confirmedIntent: null };
+  const found = store.get(clarifyId);
+  // 归属校验①：会话必须存在（过期/未命中即视为新提问）
+  if (!found) return { session: null, confirmedIntent: null };
+  // 归属校验②：问题一致 + 线程一致，否则视为新提问（防串用/防过期复用）
+  if (found.question !== question || (found.threadId ?? null) !== (threadId ?? null)) {
+    return { session: null, confirmedIntent: null };
   }
+  const chosen = Number.isInteger(choiceIndex) ? (choiceIndex as number) : -1;
+  const option = chosen === -1 ? found.options[found.recommendedIndex] : found.options[chosen];
+  // 非法选项（越界/非整数）：视为未选择过，重新检测
+  if (!option) return { session: null, confirmedIntent: null };
+  return { session: found, confirmedIntent: `${option.label}：${option.description}` };
+}
+
+// 检测阶段产物：要么拿到合法的歧义报告，要么得到一个「继续」跳过原因（fail-open 或无歧义）。
+type DetectionOutcome =
+  | { kind: 'report'; report: AmbiguityReport }
+  | { kind: 'skip'; skipReason: ClarifySkipReason };
+
+// 歧义检测（fail-open：任何失败都跳过澄清继续回答）。
+// 抽出原因：try/catch + detector-error/no-ambiguity 两分支判定自成一段，搬出主干即可，
+//   且严格保留「检测器抛异常 → detector-error」与「无歧义/低置信 → no-ambiguity」的区分。
+async function detectForGate(
+  detector: typeof detectAmbiguity,
+  harnessConfig: HarnessConfig,
+  question: string,
+  history: ClarifyGateParams['history'],
+  config: ClarifyConfig,
+): Promise<DetectionOutcome> {
+  let report: AmbiguityReport | null = null;
+  let detectorFailed = false;
+  try {
+    report = await detector(harnessConfig, question, history);
+  } catch {
+    report = null;
+    detectorFailed = true;
+  }
+  if (detectorFailed) return { kind: 'skip', skipReason: 'detector-error' };
+  if (!report || !report.ambiguous || report.confidence < config.confidenceThreshold) {
+    return { kind: 'skip', skipReason: 'no-ambiguity' };
+  }
+  return { kind: 'report', report };
+}
+
+// 截断解读选项并按原语义夹紧推荐下标（slice → map 重编号 → min/max 夹紧）。
+function buildClarificationOptions(
+  report: AmbiguityReport,
+  config: ClarifyConfig,
+): { options: ClarifySession['options']; recommendedIndex: number } {
+  const options = report.interpretations
+    .slice(0, Math.max(2, config.maxInterpretations))
+    .map((it, i) => ({ index: i, label: it.label, description: it.description }));
+  const recommendedIndex = Math.min(Math.max(0, report.recommendedIndex ?? 0), options.length - 1);
+  return { options, recommendedIndex };
+}
+
+// 门禁主流程。全部决策集中在此，便于单元测试。
+export async function runClarifyGate(params: ClarifyGateParams): Promise<ClarifyGateResult> {
+  const { config, store, question, clarifyId, choiceIndex, threadId, history, harnessConfig } = params;
+  // 检测器：支持测试注入（默认内置 detectAmbiguity）
+  const detector = params.detect ?? detectAmbiguity;
+
+  // ── 0. 开关与跳过条件（fail-open 的第一道闸）──
+  const skip = resolveSkipResult(params);
+  if (skip) return skip;
 
   // ── 1. 解析上一轮用户选择（若有 clarifyId）──
-  let session: ClarifySession | null = null;
-  let confirmedIntent: string | null = null;
-  if (clarifyId) {
-    const found = store.get(clarifyId);
-    // 归属校验：会话存在 + 问题一致 + 线程一致，否则视为新提问（防串用/防过期复用）
-    if (found && found.question === question && (found.threadId ?? null) === (threadId ?? null)) {
-      session = found;
-      const chosen = Number.isInteger(choiceIndex) ? (choiceIndex as number) : -1;
-      const option = chosen === -1
-        ? session.options[session.recommendedIndex]
-        : session.options[chosen];
-      if (option) {
-        confirmedIntent = `${option.label}：${option.description}`;
-      } else {
-        // 非法选项（越界/非整数）：视为未选择过，重新检测
-        session = null;
-      }
-    }
-  }
+  const { session, confirmedIntent } = resolvePriorChoice(store, clarifyId, choiceIndex, question, threadId);
 
   // ── 2. 已确认过意图且轮次已满 → 不再打断，带已确认意图继续 ──
   // 兑现「不过度打断」：用户每确认一次即信任其意图；轮次耗尽后即便仍有歧义也强制继续。
@@ -101,33 +165,18 @@ export async function runClarifyGate(params: ClarifyGateParams): Promise<Clarify
   }
 
   // ── 3. 歧义检测（fail-open：任何失败都跳过澄清继续回答）──
-  let report = null;
-  let detectorFailed = false;
-  try {
-    report = await detector(harnessConfig, question, history);
-  } catch {
-    report = null;
-    detectorFailed = true;
+  const outcome = await detectForGate(detector, harnessConfig, question, history, config);
+  if (outcome.kind === 'skip') {
+    return { type: 'continue', confirmedIntent: confirmedIntent ?? undefined, skipReason: outcome.skipReason };
   }
-  if (detectorFailed) {
-    return { type: 'continue', confirmedIntent: confirmedIntent ?? undefined, skipReason: 'detector-error' };
-  }
-  if (!report || !report.ambiguous || report.confidence < config.confidenceThreshold) {
-    return { type: 'continue', confirmedIntent: confirmedIntent ?? undefined, skipReason: 'no-ambiguity' };
-  }
+  const report = outcome.report;
 
   // ── 4. 截断解读选项并校验 ──
-  const options = report.interpretations
-    .slice(0, Math.max(2, config.maxInterpretations))
-    .map((it, i) => ({ index: i, label: it.label, description: it.description }));
+  const { options, recommendedIndex } = buildClarificationOptions(report, config);
   // 少于 2 个有效解读 → 不算真歧义，直接继续（避免「一个选项怎么选」的尴尬卡片）
   if (options.length < 2) {
     return { type: 'continue', confirmedIntent: confirmedIntent ?? undefined, skipReason: 'no-ambiguity' };
   }
-  const recommendedIndex = Math.min(
-    Math.max(0, report.recommendedIndex ?? 0),
-    options.length - 1,
-  );
 
   // ── 5. 轮次递增：创建或更新澄清会话 ──
   const nextRound = (session?.round ?? 0) + 1;

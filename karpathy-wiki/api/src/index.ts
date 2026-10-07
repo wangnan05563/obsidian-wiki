@@ -591,14 +591,18 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
 
+async function bootstrap(): Promise<void> {
+  try {
+    await main();
+  } catch (err) {
+    console.error('启动失败:', err);
+    process.exit(1);
+  }
+}
+
 if (process.env.WIKI_SMOKE !== '1') {
-  // 包进 async IIFE：esbuild 固定 --format=cjs，CJS 不支持顶层 await
-  (async () => {
-    try {
-      await main();
-    } catch (err) {
-      console.error('启动失败:', err);
-      process.exit(1);
-    }
-  })();
+  // 用具名 async 函数 + void 调用，而非 async IIFE（S7785）。
+  // 不能改成顶层 await：esbuild 固定 --format=cjs（见 scripts/build-exe.ps1 / deploy-linux/deploy.sh），
+  // CJS 不支持顶层 await；错误处理已在 bootstrap 内部完成，不会产生未处理的 Promise 拒绝。
+  void bootstrap();
 }

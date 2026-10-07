@@ -59,6 +59,51 @@ const PAGE_H = 7.5;
 // ===== Marp Markdown → 结构化页 =====
 // frontmatter 移除：目录归档在 Markdown 前自动加了 --- marp:true ... --- 头块，
 //   它不是幻灯片内容，解析时必须剥掉否则被误判为分页符。
+// 子点判定：原行以「2+ 空格 + -/*」开头则为缩进子点（level 1），否则顶层（level 0）
+function bulletLevel(line: string): number {
+  return /^\s{2,}[-*]/.test(line) ? 1 : 0;
+}
+
+// 解析单个 Marp 分页块：识别标题 + 逐条要点；空块返回 null（避免产生空白页）。
+// 抽出原因（S3776）：逐行分类的多重 if 判定嵌在「分页遍历」里会叠高 parseMarpSlides 的
+//   认知复杂度，把「块内解析」独立成纯函数后主干只保留「分页 → 收集」。行为与原内联逻辑一致。
+function parseSlideBlock(block: string): Slide | null {
+  const lines = block.split(/\r?\n/);
+  let title = '';
+  const items: SlideItem[] = [];
+
+  for (const line of lines) {
+    // 剥掉行首可折叠的空格后判定，保证解析不受缩进噪声影响
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // 标题：单 # 或 ## 开头（Marp 封面用 #，内容页用 ##）
+    const heading = trimmed.match(/^#+\s+(.*)$/);
+    if (heading && !title) {
+      title = heading[1].trim();
+      continue;
+    }
+    // 编号列表（目录页）：保留文字、去掉编号
+    const ordered = trimmed.match(/^\d+[.)]\s+(.*)$/);
+    if (ordered) {
+      items.push({ kind: 'bullet', level: 0, text: ordered[1].trim() });
+      continue;
+    }
+    // 无序列表：顶层 `- ` 或子点（2 空格以上缩进）
+    const bullet = trimmed.match(/^[-*]\s+(.*)$/);
+    if (bullet) {
+      items.push({ kind: 'bullet', level: bulletLevel(line), text: bullet[1].trim() });
+      continue;
+    }
+    // 其它非列表文本（封面副标题/说明）：仅在没有标题内容时当作 plain 保留
+    items.push({ kind: 'plain', level: 0, text: trimmed });
+  }
+
+  // 空块（Markdown 末尾多一个分隔符等）跳过，避免产生空白页
+  if (!title && items.length === 0) return null;
+  return { title, items };
+}
+
 export function parseMarpSlides(markdown: string): Slide[] {
   const text = markdown
     // 剥离 frontmatter：开头 --- 到下一个独立 --- 行之间的 YAML 块
@@ -69,42 +114,8 @@ export function parseMarpSlides(markdown: string): Slide[] {
 
   const slides: Slide[] = [];
   for (const block of blocks) {
-    const lines = block.split(/\r?\n/);
-    let title = '';
-    const items: SlideItem[] = [];
-
-    for (let line of lines) {
-      // 剥掉行首可折叠的空格后判定，保证解析不受缩进噪声影响
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      // 标题：单 # 或 ## 开头（Marp 封面用 #，内容页用 ##）
-      const heading = trimmed.match(/^#+\s+(.*)$/);
-      if (heading && !title) {
-        title = heading[1].trim();
-        continue;
-      }
-      // 编号列表（目录页）：保留文字、去掉编号
-      const ordered = trimmed.match(/^\d+[.)]\s+(.*)$/);
-      if (ordered) {
-        items.push({ kind: 'bullet', level: 0, text: ordered[1].trim() });
-        continue;
-      }
-      // 无序列表：顶层 `- ` 或子点（2 空格以上缩进）
-      const bullet = trimmed.match(/^[-*]\s+(.*)$/);
-      if (bullet) {
-        // 子点判定：原行以「2+ 空格 + -/*」开头，且非顶层
-        const level = /^\s{2,}[-*]/.test(line) ? 1 : 0;
-        items.push({ kind: 'bullet', level, text: bullet[1].trim() });
-        continue;
-      }
-      // 其它非列表文本（封面副标题/说明）：仅在没有标题内容时当作 plain 保留
-      items.push({ kind: 'plain', level: 0, text: trimmed });
-    }
-
-    // 空块（Markdown 末尾多一个分隔符等）跳过，避免产生空白页
-    if (!title && items.length === 0) continue;
-    slides.push({ title, items });
+    const slide = parseSlideBlock(block);
+    if (slide) slides.push(slide);
   }
   return slides;
 }

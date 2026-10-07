@@ -2,8 +2,6 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { EngineAdapter, FixInput, BatchFixRequest, BatchFixProgressEvent } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 import { createSSESender } from '../utils/sse.js';
-import matter from 'gray-matter';
-import path from 'node:path';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // 注册健康检查路由。

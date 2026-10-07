@@ -359,7 +359,13 @@ export function registerConfigRoute(
   // 校验：config.ts 内做白名单 + 类型校验，未知字段忽略，密钥掩码回传沿用现值。
   app.post('/api/config/import', { preHandler: guards.requireAdmin }, async (request, reply) => {
     const body = (request.body ?? {}) as { data?: unknown; mode?: string };
-    const mode = body.mode === 'overwrite' ? 'overwrite' : body.mode === 'merge' ? 'merge' : undefined;
+    // 提取嵌套三元为独立语句（S3358）：mode 仅接受 'overwrite' / 'merge'，其余保持 undefined 走 400 分支
+    let mode: 'merge' | 'overwrite' | undefined;
+    if (body.mode === 'overwrite') {
+      mode = 'overwrite';
+    } else if (body.mode === 'merge') {
+      mode = 'merge';
+    }
     if (!mode) {
       audit({ request, action: 'config_change', resource: 'POST /api/config/import', result: 'fail', message: 'mode 必须为 merge 或 overwrite' });
       return void reply.code(400).send({ error: 'mode 必须为 merge 或 overwrite' });

@@ -221,9 +221,7 @@ export function registerAboutRoute(app: FastifyInstance, config: AppConfig): voi
     const enabled = Boolean(updateCfg?.enabled && updateCfg.manifestUrl?.trim());
 
     let data: CheckUpdateData;
-    if (!enabled) {
-      data = localData(current, 'local');
-    } else {
+    if (enabled) {
       try {
         const manifest = await fetchManifest(updateCfg!);
         const latest = manifest.version || current;
@@ -242,6 +240,8 @@ export function registerAboutRoute(app: FastifyInstance, config: AppConfig): voi
       } catch {
         data = localData(current, 'local-fallback');
       }
+    } else {
+      data = localData(current, 'local');
     }
 
     checkUpdateCache = { data, ts: now };

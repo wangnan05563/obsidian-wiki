@@ -86,7 +86,8 @@ export async function detectAmbiguity(
   question: string,
   history?: Array<{ role: string; content: string }>,
 ): Promise<AmbiguityReport | null> {
-  if (!question || !question.trim()) return null;
+  // 空串/纯空白（含 undefined 兜底）→ 无法判定，返回 null（视为无歧义、不中断）
+  if (!question?.trim()) return null;
   const task = await buildClarifyTask(question.trim(), history);
   const clarifyConfig: HarnessConfig = {
     ...harnessConfig,

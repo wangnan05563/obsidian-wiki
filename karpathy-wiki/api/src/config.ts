@@ -290,6 +290,63 @@ interface ConfigCache {
 const configCache: ConfigCache = { data: null, path: null, loadedAt: 0 };
 const CONFIG_CACHE_TTL_MS = 30 * 1000; // 30秒缓存
 
+// ===== mergeConfigObjects 拆分辅助（S3776 降认知复杂度）=====
+// 为什么抽小函数：嵌套段的合并语义只有两类通用形态 + 少量特例，逐个内联三元会推高复杂度。
+
+// parsed 段存在时以 defaults 段为底浅合并，否则沿用 defaults 段（原 `parsed.x ? { ...defaults.x, ...parsed.x } : defaults.x`）。
+function mergeSection<T extends object>(base: T | undefined, override: T | undefined): T | undefined {
+  return override ? { ...base, ...override } : base;
+}
+
+// parsed 段与 defaults 段均存在时才浅合并，否则沿用 defaults 段（原 `parsed.x && defaults.x ? ... : defaults.x`）。
+function mergeSectionWhenBoth<T extends object>(base: T | undefined, override: T | undefined): T | undefined {
+  return override && base ? { ...base, ...override } : base;
+}
+
+// QQ 导入子系统段合并：noise_rules/privacy_patterns 两张子表深合并，其余字段浅覆盖。
+function mergeQqSection(base: QqConfig | undefined, override: QqConfig | undefined): QqConfig | undefined {
+  if (override && base) {
+    return {
+      ...base,
+      ...override,
+      noise_rules: { ...base.noise_rules, ...override.noise_rules },
+      privacy_patterns: { ...base.privacy_patterns, ...override.privacy_patterns },
+    };
+  }
+  return base;
+}
+
+// v3 媒体生成段合并：agnes 浅合并；parsed.media.shared 有值才带出（保留管理员共享媒体配置）。
+function mergeMediaSection(base: AppConfig['media'], override: AppConfig['media']): AppConfig['media'] {
+  if (override && base) {
+    const shared = override.shared ? { shared: override.shared } : {};
+    return { agnes: { ...base.agnes, ...override.agnes }, ...shared };
+  }
+  return base;
+}
+
+// 会话持久化段合并：两个开关均以 ?? 保留 defaults 现值（显式提供才覆盖）。
+function mergeSessionPersistenceSection(
+  base: AppConfig['sessionPersistence'],
+  override: AppConfig['sessionPersistence'],
+): AppConfig['sessionPersistence'] {
+  if (override && base) {
+    return {
+      threadsPersist: override.threadsPersist ?? base.threadsPersist,
+      conversationsPersist: override.conversationsPersist ?? base.conversationsPersist,
+    };
+  }
+  return base;
+}
+
+// refs 段合并：authorityMap 键值表深合并，其余字段浅覆盖。
+function mergeRefsSection(base: AppConfig['refs'], override: AppConfig['refs']): AppConfig['refs'] {
+  if (override && base) {
+    return { ...base, authorityMap: { ...base.authorityMap, ...override.authorityMap } };
+  }
+  return base;
+}
+
 // 合并嵌套配置对象，避免下层数据丢失。
 // 提取为独立函数以降低 loadConfig 的认知复杂度（S3776）。
 function mergeConfigObjects(defaults: AppConfig, parsed: Partial<AppConfig>): AppConfig {
@@ -302,86 +359,41 @@ function mergeConfigObjects(defaults: AppConfig, parsed: Partial<AppConfig>): Ap
     healthCheck: { ...defaults.healthCheck, ...parsed.healthCheck },
     tunnel: { ...defaults.tunnel, ...parsed.tunnel },
     // 为什么用条件合并而非展开：parsed.logging 是可选的，展开后 level 会变成 string | undefined
-    logging: parsed.logging
-      ? { ...defaults.logging, ...parsed.logging }
-      : defaults.logging,
+    logging: mergeSection(defaults.logging, parsed.logging),
     // §5.2 webSearch 合并：parsed.webSearch 可选，未配置时用默认值（含空 apiKey）
-    webSearch: parsed.webSearch
-      ? { ...defaults.webSearch, ...parsed.webSearch }
-      : defaults.webSearch,
+    webSearch: mergeSection(defaults.webSearch, parsed.webSearch),
     // 批量编译配置合并：parsed.batch 可选，未配置时用默认值
     batch: parsed.batch
       ? { ...(defaults.batch ?? DEFAULT_BATCH_FALLBACK), ...parsed.batch }
       : defaults.batch,
     // RBAC auth 配置合并：parsed.auth 可选，未配置时用默认值
-    auth: parsed.auth
-      ? { ...defaults.auth, ...parsed.auth }
-      : defaults.auth,
+    auth: mergeSection(defaults.auth, parsed.auth),
     // QQ 导入子系统配置合并：parsed.qq 可选，未配置时用默认值
-    qq: parsed.qq && defaults.qq
-      ? {
-          ...defaults.qq,
-          ...parsed.qq,
-          noise_rules: { ...defaults.qq.noise_rules, ...parsed.qq.noise_rules },
-          privacy_patterns: { ...defaults.qq.privacy_patterns, ...parsed.qq.privacy_patterns },
-        }
-      : defaults.qq,
+    qq: mergeQqSection(defaults.qq, parsed.qq),
     // URL 爬取子系统配置合并：parsed.urlCrawl 可选，未配置时用默认值
-    urlCrawl: parsed.urlCrawl
-      ? { ...defaults.urlCrawl, ...parsed.urlCrawl }
-      : defaults.urlCrawl,
+    urlCrawl: mergeSection(defaults.urlCrawl, parsed.urlCrawl),
     // FR-13-2 OCR 配置合并：parsed.ocr 可选，未配置时为 undefined（resolveOcrConfig 会回退到 llm）
-    ocr: parsed.ocr
-      ? { ...defaults.ocr, ...parsed.ocr }
-      : defaults.ocr,
+    ocr: mergeSection(defaults.ocr, parsed.ocr),
     // FR-09-3 Podcast 配置合并：parsed.podcast 可选，未配置时为 undefined
-    podcast: parsed.podcast
-      ? { ...defaults.podcast, ...parsed.podcast }
-      : defaults.podcast,
+    podcast: mergeSection(defaults.podcast, parsed.podcast),
     // v3 媒体生成配置合并：parsed.media 可选，未配置时用默认值
     // 为什么保留 parsed.media.shared：管理员「共享媒体」（生图/视频）由 /api/media/shared 写入，
     //   浅合并 agnes（敏感默认覆盖）时若丢弃 shared 会导致共享配置保存后丢失；条件带出即可。
-    media: parsed.media && defaults.media
-      ? {
-          agnes: { ...defaults.media.agnes, ...parsed.media.agnes },
-          ...(parsed.media.shared ? { shared: parsed.media.shared } : {}),
-        }
-      : defaults.media,
+    media: mergeMediaSection(defaults.media, parsed.media),
     // 会话持久化配置合并：parsed.sessionPersistence 可选，未配置时用默认值
-    sessionPersistence: parsed.sessionPersistence && defaults.sessionPersistence
-      ? {
-          threadsPersist:
-            parsed.sessionPersistence.threadsPersist ?? defaults.sessionPersistence.threadsPersist,
-          conversationsPersist:
-            parsed.sessionPersistence.conversationsPersist ?? defaults.sessionPersistence.conversationsPersist,
-        }
-      : defaults.sessionPersistence,
+    sessionPersistence: mergeSessionPersistenceSection(defaults.sessionPersistence, parsed.sessionPersistence),
     // 上下文记忆治理配置合并：parsed.contextGovernor 可选，未配置时用默认值（开启）
-    contextGovernor: parsed.contextGovernor && defaults.contextGovernor
-      ? { ...defaults.contextGovernor, ...parsed.contextGovernor }
-      : defaults.contextGovernor,
+    contextGovernor: mergeSectionWhenBoth(defaults.contextGovernor, parsed.contextGovernor),
     // 意图澄清配置合并：parsed.clarify 可选，未配置时用默认值（开启）；浅合并支持单字段覆盖
-    clarify: parsed.clarify && defaults.clarify
-      ? { ...defaults.clarify, ...parsed.clarify }
-      : defaults.clarify,
+    clarify: mergeSectionWhenBoth(defaults.clarify, parsed.clarify),
     // MCP 服务端配置合并：parsed.mcp 可选，未配置时用默认值（关闭）；浅合并支持单字段覆盖
-    mcp: parsed.mcp && defaults.mcp
-      ? { ...defaults.mcp, ...parsed.mcp }
-      : defaults.mcp,
+    mcp: mergeSectionWhenBoth(defaults.mcp, parsed.mcp),
     // V4.0 配置合并：三个区间均可选，浅合并支持单字段覆盖，未配置时用默认值
-    knowledge: parsed.knowledge && defaults.knowledge
-      ? { ...defaults.knowledge, ...parsed.knowledge }
-      : defaults.knowledge,
-    graph: parsed.graph && defaults.graph
-      ? { ...defaults.graph, ...parsed.graph }
-      : defaults.graph,
-    refs: parsed.refs && defaults.refs
-      ? { ...defaults.refs, authorityMap: { ...defaults.refs.authorityMap, ...parsed.refs.authorityMap } }
-      : defaults.refs,
+    knowledge: mergeSectionWhenBoth(defaults.knowledge, parsed.knowledge),
+    graph: mergeSectionWhenBoth(defaults.graph, parsed.graph),
+    refs: mergeRefsSection(defaults.refs, parsed.refs),
     // 自动更新配置合并：parsed.update 可选，未配置时用默认值（关闭）；浅合并支持单字段覆盖
-    update: parsed.update && defaults.update
-      ? { ...defaults.update, ...parsed.update }
-      : defaults.update,
+    update: mergeSectionWhenBoth(defaults.update, parsed.update),
   };
 }
 
@@ -792,26 +804,29 @@ export async function saveSharedMediaConfig(updates: {
     return merged;
   };
 
+  // S3358/S7735 拆分：shared 的 image/video 两段各自独立计算，避免对象字面量内的嵌套三元与取反条件。
+  // 语义与原内联三元一致：updates 提供则浅合并（脱敏回传保留旧值）；未提供但 baseMedia 有则原样带出；均无则不产生该字段。
+  const hasUpdateImage = updates.image !== undefined;
+  const hasUpdateVideo = updates.video !== undefined;
+  const hasBaseImage = baseMedia.shared?.image !== undefined;
+  const hasBaseVideo = baseMedia.shared?.video !== undefined;
+  const sharedParts: NonNullable<AppConfig['media']>['shared'] = {};
+  if (hasUpdateImage) {
+    sharedParts.image = mergeGroup(baseMedia.shared?.image, updates.image);
+  } else if (hasBaseImage) {
+    sharedParts.image = baseMedia.shared?.image;
+  }
+  if (hasUpdateVideo) {
+    sharedParts.video = mergeGroup(baseMedia.shared?.video, updates.video);
+  } else if (hasBaseVideo) {
+    sharedParts.video = baseMedia.shared?.video;
+  }
+
   const merged: AppConfig = {
     ...current,
     media: {
       agnes: baseMedia.agnes,
-      ...(baseMedia.shared || updates.image !== undefined || updates.video !== undefined
-        ? {
-            shared: {
-              ...(updates.image !== undefined
-                ? { image: mergeGroup(baseMedia.shared?.image, updates.image) }
-                : baseMedia.shared?.image !== undefined
-                  ? { image: baseMedia.shared.image }
-                  : {}),
-              ...(updates.video !== undefined
-                ? { video: mergeGroup(baseMedia.shared?.video, updates.video) }
-                : baseMedia.shared?.video !== undefined
-                  ? { video: baseMedia.shared.video }
-                  : {}),
-            },
-          }
-        : {}),
+      ...(baseMedia.shared || hasUpdateImage || hasUpdateVideo ? { shared: sharedParts } : {}),
     },
   };
 
@@ -1178,6 +1193,25 @@ function maskSecretString(s: string): string {
   return s.length < 4 ? '****' : `****${s.slice(-4)}`;
 }
 
+// S3776 拆分辅助：单个密钥字段脱敏——apiKeys 多 key 表逐 provider 掩码，其余字符串字段整值掩码。
+function maskSecretValue(key: string, value: unknown): unknown {
+  if (key === 'apiKeys') return maskApiKeysTable(value);
+  return typeof value === 'string' ? maskSecretString(value) : value;
+}
+
+// S3776 拆分辅助：多 key 表（provider -> key 映射）逐个掩码（保留空串语义），非对象原样返回。
+function maskApiKeysTable(value: unknown): unknown {
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([p, key]): [string, unknown] => [p, maskSecretKeyItem(key)]),
+  );
+}
+
+// S3776 拆分辅助：单个 provider key 掩码，非字符串值原样保留。
+function maskSecretKeyItem(key: unknown): unknown {
+  return typeof key === 'string' ? maskSecretString(key) : key;
+}
+
 // 递归脱敏：返回新对象，不修改入参。
 // 为什么递归处理整个树：密钥散落在多层嵌套（llm/media/tunnel 等），逐层遍历才无遗漏。
 function maskSecretsInConfig(node: unknown): unknown {
@@ -1185,16 +1219,7 @@ function maskSecretsInConfig(node: unknown): unknown {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node)) {
     if (MIGRATION_SECRET_KEYS.has(k)) {
-      if (k === 'apiKeys') {
-        // 多 key 表：provider -> key 映射，逐个掩码（保留空串语义）
-        out[k] = isPlainObject(v)
-          ? Object.fromEntries(
-              Object.entries(v).map(([p, key]): [string, unknown] => [p, typeof key === 'string' ? maskSecretString(key) : key]),
-            )
-          : v;
-      } else {
-        out[k] = typeof v === 'string' ? maskSecretString(v) : v;
-      }
+      out[k] = maskSecretValue(k, v);
       continue;
     }
     out[k] = maskSecretsInConfig(v);
@@ -1202,38 +1227,119 @@ function maskSecretsInConfig(node: unknown): unknown {
   return out;
 }
 
+// S3776 拆分辅助：把可能非对象的密钥表/区段规整为普通记录（非对象按空表处理）。
+function toSecretRecord(value: unknown): Record<string, unknown> {
+  return isPlainObject(value) ? value : {};
+}
+
+// S3776 拆分辅助：判断密钥值是否为掩码回传（**** 开头）或空串（表示应沿用现值）。
+function isMaskedSecretValue(value: unknown): boolean {
+  return typeof value === 'string' && (value === '' || value.startsWith('****'));
+}
+
+// S3776 拆分辅助：掩码/空串回传的密钥字段沿用 current 现值；无现值则为空串。
+function restoreMaskedSecretValue(curValue: unknown): unknown {
+  return typeof curValue === 'string' ? curValue : '';
+}
+
+// S3776 拆分辅助：还原单个 provider 的 key——掩码/空串沿用当前表真实值，当前表未配置则保留原值。
+function restoreApiKeyEntry(
+  provider: string,
+  key: unknown,
+  curTable: Record<string, unknown>,
+): [string, unknown] {
+  if (typeof key !== 'string') return [provider, key];
+  if (key === '' || key.startsWith('****')) {
+    const current = curTable[provider];
+    if (typeof current === 'string') return [provider, current];
+    return [provider, key];
+  }
+  return [provider, key];
+}
+
+// S3776 拆分辅助：apiKeys 表还原——以当前表（curValue）为基准逐 provider 还原，非对象原样返回。
+function restoreApiKeysTable(importValue: unknown, curValue: unknown): unknown {
+  if (!isPlainObject(importValue)) return importValue;
+  const curTable = toSecretRecord(curValue);
+  return Object.fromEntries(
+    Object.entries(importValue).map(([p, key]): [string, unknown] => restoreApiKeyEntry(p, key, curTable)),
+  );
+}
+
 // 递归还原密钥：import 中密钥字段为掩码(****)或空串时，沿用 current 现值；否则用 import 真实值。
 // current 为当前生效配置（含真实密钥），保证"导出→换机→导入"不丢 key 也不读明文。
 function restoreSecretsInConfig(importNode: unknown, current: unknown): unknown {
   if (!isPlainObject(importNode)) return importNode;
-  const cur = isPlainObject(current) ? current : {};
+  const cur = toSecretRecord(current);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(importNode)) {
     if (MIGRATION_SECRET_KEYS.has(k)) {
       if (k === 'apiKeys') {
-        const curTable = isPlainObject(cur[k]) ? (cur[k] as Record<string, unknown>) : {};
-        out[k] = isPlainObject(v)
-          ? Object.fromEntries(
-              Object.entries(v).map(([p, key]): [string, unknown] => {
-                if (typeof key !== 'string') return [p, key];
-                // 掩码/空串：沿用当前表对应 provider 的真实值（未配置则保留原值）
-                if (key === '' || key.startsWith('****')) {
-                  return [p, typeof curTable[p] === 'string' ? curTable[p] : key];
-                }
-                return [p, key];
-              }),
-            )
-          : v;
+        out[k] = restoreApiKeysTable(v, cur[k]);
         continue;
       }
-      if (typeof v === 'string' && (v === '' || v.startsWith('****'))) {
-        out[k] = typeof cur[k] === 'string' ? cur[k] : '';
+      if (isMaskedSecretValue(v)) {
+        out[k] = restoreMaskedSecretValue(cur[k]);
         continue;
       }
     }
     out[k] = restoreSecretsInConfig(v, cur[k]);
   }
   return out;
+}
+
+// S3776 拆分辅助：白名单过滤——未知顶层键记入 failed，受支持键原样保留。
+function pickWhitelistedImportFields(raw: Record<string, unknown>, failed: string[]): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!CONFIG_TOP_LEVEL_KEYS.has(k)) {
+      failed.push(`忽略未知字段 "${k}"`);
+      continue;
+    }
+    data[k] = v;
+  }
+  return data;
+}
+
+// S3776 拆分辅助：判断 data 中某键有值（键存在且非 undefined）但未通过类型检查。
+function importFieldHasBadType(
+  data: Record<string, unknown>,
+  key: string,
+  check: (value: unknown) => boolean,
+): boolean {
+  if (key in data && data[key] !== undefined) {
+    return !check(data[key]);
+  }
+  return false;
+}
+
+// 顶层字段类型轻校验（明显异常类型直接拒绝，避免坏结构写盘）。
+function validateImportFieldTypes(data: Record<string, unknown>): void {
+  const objectKeys: ReadonlyArray<string> = [
+    'llm', 'budget', 'server', 'healthCheck', 'tunnel', 'webSearch', 'logging', 'batch', 'tools',
+    'auth', 'qq', 'urlCrawl', 'audio', 'ocr', 'podcast', 'media', 'contextGovernor', 'clarify',
+    'mcp', 'knowledge', 'graph', 'refs', 'sessionPersistence', 'update',
+  ];
+  for (const k of objectKeys) {
+    if (importFieldHasBadType(data, k, isPlainObject)) {
+      throw new ConfigMigrationError(`字段 "${k}" 应为对象`);
+    }
+  }
+  if (importFieldHasBadType(data, 'skills', Array.isArray)) {
+    throw new ConfigMigrationError('字段 "skills" 应为数组');
+  }
+  const boolKeys: ReadonlyArray<string> = ['localOnly', 'enableSubAgents', 'enableResumableStream'];
+  for (const k of boolKeys) {
+    if (importFieldHasBadType(data, k, (v) => typeof v === 'boolean')) {
+      throw new ConfigMigrationError(`字段 "${k}" 应为 boolean`);
+    }
+  }
+  if (importFieldHasBadType(data, 'vaultPath', (v) => typeof v === 'string')) {
+    throw new ConfigMigrationError('字段 "vaultPath" 应为 string');
+  }
+  if (importFieldHasBadType(data, 'activeSkill', (v) => typeof v === 'string')) {
+    throw new ConfigMigrationError('字段 "activeSkill" 应为 string');
+  }
 }
 
 // 清洗 + 白名单/类型校验导入数据：返回受支持字段子集，未知字段记录到 failed。
@@ -1243,40 +1349,8 @@ function sanitizeImportConfig(raw: unknown): { data: Record<string, unknown>; fa
   if (!isPlainObject(raw)) {
     throw new ConfigMigrationError('导入数据必须为一个 JSON 对象');
   }
-  const data: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (!CONFIG_TOP_LEVEL_KEYS.has(k)) {
-      failed.push(`忽略未知字段 "${k}"`);
-      continue;
-    }
-    data[k] = v;
-  }
-  // 顶层字段类型轻校验（明显异常类型直接拒绝，避免坏结构写盘）
-  const objectKeys: ReadonlyArray<string> = [
-    'llm', 'budget', 'server', 'healthCheck', 'tunnel', 'webSearch', 'logging', 'batch', 'tools',
-    'auth', 'qq', 'urlCrawl', 'audio', 'ocr', 'podcast', 'media', 'contextGovernor', 'clarify',
-    'mcp', 'knowledge', 'graph', 'refs', 'sessionPersistence', 'update',
-  ];
-  for (const k of objectKeys) {
-    if (k in data && data[k] !== undefined && !isPlainObject(data[k])) {
-      throw new ConfigMigrationError(`字段 "${k}" 应为对象`);
-    }
-  }
-  if ('skills' in data && data.skills !== undefined && !Array.isArray(data.skills)) {
-    throw new ConfigMigrationError('字段 "skills" 应为数组');
-  }
-  const boolKeys: ReadonlyArray<string> = ['localOnly', 'enableSubAgents', 'enableResumableStream'];
-  for (const k of boolKeys) {
-    if (k in data && data[k] !== undefined && typeof data[k] !== 'boolean') {
-      throw new ConfigMigrationError(`字段 "${k}" 应为 boolean`);
-    }
-  }
-  if ('vaultPath' in data && data.vaultPath !== undefined && typeof data.vaultPath !== 'string') {
-    throw new ConfigMigrationError('字段 "vaultPath" 应为 string');
-  }
-  if ('activeSkill' in data && data.activeSkill !== undefined && typeof data.activeSkill !== 'string') {
-    throw new ConfigMigrationError('字段 "activeSkill" 应为 string');
-  }
+  const data = pickWhitelistedImportFields(raw, failed);
+  validateImportFieldTypes(data);
   return { data, failed };
 }
 
@@ -1287,7 +1361,7 @@ function deepMergeConfig(base: Record<string, unknown>, incoming: Record<string,
   for (const [k, v] of Object.entries(incoming)) {
     const cur = base[k];
     if (isPlainObject(v) && isPlainObject(cur)) {
-      out[k] = deepMergeConfig(cur as Record<string, unknown>, v as Record<string, unknown>);
+      out[k] = deepMergeConfig(cur, v);
     } else if (cur === undefined) {
       out[k] = v;
     }
@@ -1355,7 +1429,7 @@ export async function importConfigData(
     throw err;
   }
 
-  refreshConfigCache(restored as unknown as AppConfig);
+  refreshConfigCache(restored as AppConfig);
 
   return {
     applied: Object.keys(data).length,
