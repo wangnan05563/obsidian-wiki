@@ -18,7 +18,8 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      // lcov：供 SonarQube 读取覆盖率（sonar-project.properties 的 sonar.javascript.lcov.reportPaths）
+      reporter: ['text', 'json', 'html', 'lcov'],
       include: ['src/auth/**/*.ts', 'src/middleware/auth.ts'],
       thresholds: {
         lines: 80,

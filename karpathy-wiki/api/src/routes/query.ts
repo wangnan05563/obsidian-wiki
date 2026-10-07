@@ -69,6 +69,18 @@ async function resolveThreadContext(
   return { threadId, governorStats };
 }
 
+// BYOK 配置完备性校验：apiKey 必带，且 provider/baseUrl/model 均非空。
+// 提取为独立函数降低 /api/query handler 认知复杂度（S3776），判定语义与原内联实现完全一致
+// （原式 !llmOverride || !keyOk || !fieldsOk 拒绝 ⇔ 此处三条件全满足才放行）。
+function isByokConfigValid(llmOverride: QueryInput['llmConfig']): boolean {
+  if (!llmOverride) return false;
+  const keyOk = typeof llmOverride.apiKey === 'string' && llmOverride.apiKey.trim() !== '';
+  if (!keyOk) return false;
+  return typeof llmOverride.provider === 'string' && llmOverride.provider.trim() !== ''
+    && typeof llmOverride.baseUrl === 'string' && llmOverride.baseUrl.trim() !== ''
+    && typeof llmOverride.model === 'string' && llmOverride.model.trim() !== '';
+}
+
 // 注册 POST /api/query 路由。
 // §5.2 改造：请求体扩展 mode/webSearch/attachments/model；SSE 事件扩展 thinking/progress/followups
 // 本地持久化改造：问答会话与记忆通过 ThreadMemoryStore 落盘到 data/threads/{threadId}/，
@@ -146,12 +158,7 @@ export function registerQueryRoute(
     // 同时校验 provider/baseUrl/model 非空，避免畸形配置透传到 harness 后触发 500。
     // 前端仅在用户已填完整 API 配置时才下发 llmConfig，未配置用户会命中此处得到明确指引。
     const llmOverride = body.llmConfig;
-    const keyOk = !!llmOverride && typeof llmOverride.apiKey === 'string' && llmOverride.apiKey.trim() !== '';
-    const fieldsOk = !!llmOverride
-      && typeof llmOverride.provider === 'string' && llmOverride.provider.trim() !== ''
-      && typeof llmOverride.baseUrl === 'string' && llmOverride.baseUrl.trim() !== ''
-      && typeof llmOverride.model === 'string' && llmOverride.model.trim() !== '';
-    if (!llmOverride || !keyOk || !fieldsOk) {
+    if (!isByokConfigValid(llmOverride)) {
       return void reply.code(400).send({
         error: '请先在「配置 → AI 服务」中填写完整且有效的 API 配置（provider / baseUrl / model / API Key）。本应用不为用户共用服务端密钥，各用户的额度与限流相互独立。',
       });

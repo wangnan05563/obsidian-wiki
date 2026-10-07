@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig, saveAiConfig, saveWebSearchConfig, resetAiConfig, getEffectiveApiKey, maskApiKey, getProviderKeyStatus, saveSkillsConfig } from '../config.js';
 import { getResourcePath } from '../utils/runtime.js';
-import type { EngineAdapter, LlmPreset } from '../types.js';
+import type { AppConfig, EngineAdapter, LlmPreset } from '../types.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 import { testWebSearchConnection } from '../tools/web-search.js';
@@ -73,6 +73,21 @@ function normalizeModels(json: unknown): { id: string }[] {
       .map((id) => ({ id }));
   }
   return [];
+}
+
+// 测试连接的 API Key 解析（抽为纯函数降低 test-connection 路由认知复杂度，语义与原内联实现完全一致）：
+//   - 请求体携带明文 key（非 **** 脱敏前缀开头）→ 直接使用（BYOK 口径）
+//   - key 为空/脱敏 且 useServerKey=true（管理员在「共享AI」页测试）→ 回退服务端共享 key
+function resolveTestApiKey(
+  rawApiKey: string | undefined,
+  useServerKey: boolean | undefined,
+  config: AppConfig,
+): string {
+  const rawKey = rawApiKey && !rawApiKey.startsWith('****') ? rawApiKey : '';
+  if (!rawKey && useServerKey) {
+    return getEffectiveApiKey(config);
+  }
+  return rawKey;
 }
 
 // 模型列表内存缓存：按 baseUrl|provider 维度缓存 5 分钟。
@@ -290,11 +305,7 @@ export function registerAiRoute(
     // ——但管理员在「共享AI」测试共享模型时，其口径本就是「服务端共享 llm key」（PUT /api/ai/config
     //   写入 config.llm，问答/编译对未配 BYOK 的用户也回落到该 key），故显式声明 useServerKey=true
     //   时，脱敏/为空 key 应回退服务端共享 key（getEffectiveApiKey 逐级：明文 > apiKeys 表 > 环境变量）。
-    const rawKey = body.apiKey && !body.apiKey.startsWith('****') ? body.apiKey : '';
-    let apiKey: string = rawKey;
-    if (!apiKey && body.useServerKey) {
-      apiKey = getEffectiveApiKey(config);
-    }
+    const apiKey = resolveTestApiKey(body.apiKey, body.useServerKey, config);
 
     if (!apiKey && !baseUrl.includes('localhost')) {
       return void reply.send({

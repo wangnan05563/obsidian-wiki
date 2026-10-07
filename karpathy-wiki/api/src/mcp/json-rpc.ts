@@ -2,9 +2,12 @@
 // 为什么单独拆出：MCP 端点的核心是协议层（消息校验 + 响应构造），
 // 与具体工具（tools.ts）解耦，便于单测与后续扩展资源/提示方法。
 
+// JSON-RPC 消息 id 形态（S4323：以 type alias 收敛重复的内联联合类型）
+export type JsonRpcId = string | number | null;
+
 export interface JsonRpcRequest {
   jsonrpc: string;
-  id?: string | number | null;
+  id?: JsonRpcId;
   method: string;
   params?: unknown;
 }
@@ -17,14 +20,14 @@ export interface JsonRpcErrorPayload {
 
 export interface JsonRpcResponse {
   jsonrpc: string;
-  id: string | number | null;
+  id: JsonRpcId;
   result?: unknown;
   error?: JsonRpcErrorPayload;
 }
 
 // 是否为 MCP 通知（无 id）：客户端发 `notifications/initialized` 等时不期望响应
 export function isNotification(msg: unknown): msg is JsonRpcRequest {
-  return !!msg && typeof msg === 'object' && 'method' in (msg as object) && !('id' in (msg as object));
+  return !!msg && typeof msg === 'object' && 'method' in msg && !('id' in msg);
 }
 
 // 是否为批量请求（MCP 主要用单消息，这里保留识别以便安全拒绝）
@@ -37,7 +40,7 @@ export function parseRequest(raw: unknown): JsonRpcRequest | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   if (r.jsonrpc !== '2.0' || typeof r.method !== 'string') return null;
-  const id = r.id === undefined ? null : (r.id as string | number | null);
+  const id = r.id === undefined ? null : (r.id as JsonRpcId);
   // id 类型不合法则视为非法请求（通知除外）
   if (r.id !== undefined && !(typeof id === 'string' || typeof id === 'number')) return null;
   return { jsonrpc: '2.0', id, method: r.method, params: r.params };
@@ -54,11 +57,11 @@ export const ErrCodes = {
   requestCancelled: -32800,
 } as const;
 
-export function success(id: string | number | null, result: unknown): JsonRpcResponse {
+export function success(id: JsonRpcId, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id, result };
 }
 
-export function failure(id: string | number | null, code: number, message: string, data?: unknown): JsonRpcResponse {
+export function failure(id: JsonRpcId, code: number, message: string, data?: unknown): JsonRpcResponse {
   const error: JsonRpcErrorPayload = { code, message };
   if (data !== undefined) error.data = data;
   return { jsonrpc: '2.0', id, error };

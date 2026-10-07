@@ -121,10 +121,10 @@ function applyVideoOverride(base: MediaConfig | undefined, o: MediaVideoUserConf
 function buildImageExtras(o: Partial<MediaImageUserConfig> | undefined): Record<string, unknown> {
   if (!o) return {};
   return {
-    ...(o.steps !== undefined ? { steps: o.steps } : {}),
-    ...(o.cfgScale !== undefined ? { cfgScale: o.cfgScale } : {}),
+    ...(o.steps === undefined ? {} : { steps: o.steps }),
+    ...(o.cfgScale === undefined ? {} : { cfgScale: o.cfgScale }),
     ...(o.sampler ? { sampler: o.sampler } : {}),
-    ...(o.seed !== undefined ? { seed: o.seed } : {}),
+    ...(o.seed === undefined ? {} : { seed: o.seed }),
     ...(o.negativePrompt ? { negative_prompt: o.negativePrompt } : {}),
   };
 }
@@ -133,9 +133,9 @@ function buildImageExtras(o: Partial<MediaImageUserConfig> | undefined): Record<
 function buildVideoExtras(o: Partial<MediaVideoUserConfig> | undefined): Record<string, unknown> {
   if (!o) return {};
   return {
-    ...(o.fps !== undefined ? { fps: o.fps } : {}),
-    ...(o.motion !== undefined ? { motion: o.motion } : {}),
-    ...(o.seed !== undefined ? { seed: o.seed } : {}),
+    ...(o.fps === undefined ? {} : { fps: o.fps }),
+    ...(o.motion === undefined ? {} : { motion: o.motion }),
+    ...(o.seed === undefined ? {} : { seed: o.seed }),
     ...(o.negativePrompt ? { negative_prompt: o.negativePrompt } : {}),
   };
 }

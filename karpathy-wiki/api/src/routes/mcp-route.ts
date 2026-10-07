@@ -9,12 +9,13 @@
 //   - adminToken  → 全部工具（含写/维护类），未配置时写工具回退 userToken
 //   - authenticated=false 且未配置任何 token → 对内网开放全部工具（本地方便）
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import crypto from 'node:crypto';
 import { loadConfig } from '../config.js';
 import type { VaultService } from '../vault/vault-service.js';
 import type { EngineAdapter, AppConfig, McpConfig } from '../types.js';
 import { parseRequest, success, failure, ErrCodes, isNotification, isBatch } from '../mcp/json-rpc.js';
+import type { JsonRpcRequest } from '../mcp/json-rpc.js';
 import { listTools, callTool, getTool } from '../mcp/tools.js';
 import type { McpToolContext } from '../mcp/tools.js';
 
@@ -60,6 +61,29 @@ export function registerMcpRoute(
     a.openAll || (write ? a.isAdmin : a.isUser || a.isAdmin);
 
   const deny = (id: string | number | null, message: string) => ({ jsonrpc: '2.0', id, error: { code: AUTH_ERROR, message } });
+
+  // tools/call 处理：参数校验 → 鉴权（先于执行）→ 调用工具。
+  // 抽为私有辅助函数降低 POST handler 认知复杂度（S3776），返回值与 reply 写出时机和原内联分支完全一致。
+  const handleToolsCall = async (
+    req: JsonRpcRequest,
+    id: string | number | null,
+    a: { isAdmin: boolean; isUser: boolean; openAll: boolean },
+    reply: FastifyReply,
+  ) => {
+    const params = (req.params && typeof req.params === 'object' ? req.params : {}) as Record<string, unknown>;
+    const toolName = typeof params.name === 'string' ? params.name : '';
+    if (!toolName) {
+      return reply.send(failure(id, ErrCodes.invalidParams, '缺少 tools/call 参数 name'));
+    }
+    // 鉴权先于执行：写工具需 admin，读工具需 user/admin；未授信一律 401
+    const tool = getTool(toolName);
+    if (tool ? !toolAllowed(tool.write, a) : !(a.openAll || a.isUser || a.isAdmin)) {
+      return reply.code(401).send(deny(id, '未授权：缺少有效凭据或该工具需要更高级别权限'));
+    }
+    const ctx: McpToolContext = { vault, adapter, config };
+    const result = await callTool(toolName, params.arguments, ctx);
+    return reply.send(success(id, result));
+  };
 
   // GET：Streamable HTTP 的服务端事件流通道。本服务不主动推送，仅做协议占位（客户端大多用 POST 单响应）。
   app.get(endpointPath, async (_req, reply) => {
@@ -118,19 +142,7 @@ export function registerMcpRoute(
       return reply.send(success(id, listTools()));
     }
     if (req.method === 'tools/call') {
-      const params = (req.params && typeof req.params === 'object' ? req.params : {}) as Record<string, unknown>;
-      const toolName = typeof params.name === 'string' ? params.name : '';
-      if (!toolName) {
-        return reply.send(failure(id, ErrCodes.invalidParams, '缺少 tools/call 参数 name'));
-      }
-      // 鉴权先于执行：写工具需 admin，读工具需 user/admin；未授信一律 401
-      const tool = getTool(toolName);
-      if (tool ? !toolAllowed(tool.write, a) : !(a.openAll || a.isUser || a.isAdmin)) {
-        return reply.code(401).send(deny(id, '未授权：缺少有效凭据或该工具需要更高级别权限'));
-      }
-      const ctx: McpToolContext = { vault, adapter, config };
-      const result = await callTool(toolName, params.arguments, ctx);
-      return reply.send(success(id, result));
+      return await handleToolsCall(req, id, a, reply);
     }
 
     return reply.send(failure(id, ErrCodes.methodNotFound, `不存在的方法: ${req.method}`));

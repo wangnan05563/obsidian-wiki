@@ -20,7 +20,6 @@
 //     → 返回 AiCleanAnalysisResult
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { VaultService } from '../vault/vault-service.js';
 import type { PageQualityScore, DeduplicateResult, AppConfig } from '../types.js';
 import { getEffectiveApiKey } from '../config.js';
@@ -146,7 +145,7 @@ export async function callLlmForAnalysis(
 
 // ─── 确定性候选提取（纯函数，可单测）───
 
-const REDUNDANT_NAME = /(^|\/)(test-|proxy-test|.*-copy|.*副本|.*草稿|.*draft|.*tmp|.*temp|.*~|copy of )/i;
+const REDUNDANT_NAME = /(^|\/)(test-|proxy-test|.*(?:-copy|副本|草稿|draft|tmp|temp|~)|copy of )/i;
 
 /** 判断某页是否为"可安全删除"的冗余候选，返回原因或 null */
 export function isRedundantCandidate(p: PageQualityScore): string | null {
@@ -167,7 +166,7 @@ export function needsRename(fileName: string): boolean {
   const base = fileName.replace(/\.md$/i, '');
   if (/[A-Z]/.test(base)) return true; // 大写字母
   if (/[\s_]/.test(base)) return true; // 空格或下划线
-  if (/^[-]|[-]$/.test(base)) return true; // 首尾连字符
+  if (/(?:^-)|(?:-$)/.test(base)) return true; // 首尾连字符
   if (/--/.test(base)) return true; // 连续连字符
   if (/(copy|副本|草稿|draft|backup|bak|tmp|temp|～|~)/i.test(base)) return true; // 冗余词
   if (/[^A-Za-z0-9一-龥-]/.test(base)) return true; // 其他不允许字符
@@ -183,7 +182,7 @@ export function toKebabName(fileName: string): string {
     .replace(/[A-Z]+/g, (m) => m.toLowerCase())
     .replace(/[^A-Za-z0-9一-龥-]+/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/(?:^-+)|(?:-+$)/g, '');
   return (s || 'untitled') + '.md';
 }
 

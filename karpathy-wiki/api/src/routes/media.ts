@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { EngineAdapter, AppConfig, MediaVideoUserConfig, MediaImageUserConfig, MediaPresetsFile, MediaConfig } from '../types.js';
+import type { EngineAdapter, AppConfig, MediaVideoUserConfig, MediaImageUserConfig, MediaPresetsFile } from '../types.js';
 import { getResourcePath } from '../utils/runtime.js';
 import { loadConfig, saveSharedMediaConfig, maskApiKey } from '../config.js';
 import type { IsolationGuards } from '../middleware/auth.js';
@@ -86,8 +86,8 @@ export function registerMediaRoute(
     };
     try {
       const merged = await saveSharedMediaConfig({
-        ...(body.image !== undefined ? { image: body.image } : {}),
-        ...(body.video !== undefined ? { video: body.video } : {}),
+        ...(body.image === undefined ? {} : { image: body.image }),
+        ...(body.video === undefined ? {} : { video: body.video }),
       });
       const shared = merged.media?.shared;
       return void reply.send({

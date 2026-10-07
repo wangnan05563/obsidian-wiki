@@ -58,9 +58,7 @@ function validateKbPath(rel: string, allowWrite: boolean): string {
   if (!top) throw new Error(`非法路径: ${rel}`);
   if (allowWrite) {
     if (!WRITABLE_DIRS.has(top)) throw new Error(`写入被拒绝，目录不在白名单: ${rel}`);
-  } else {
-    if (!READABLE_DIRS.includes(top)) throw new Error(`读取被拒绝，目录不在白名单: ${rel}`);
-  }
+  } else if (!READABLE_DIRS.includes(top)) throw new Error(`读取被拒绝，目录不在白名单: ${rel}`);
   if (/(^|\/)\.\.(\/|$)/.test(norm)) throw new Error(`路径越界: ${rel}`);
   return norm;
 }

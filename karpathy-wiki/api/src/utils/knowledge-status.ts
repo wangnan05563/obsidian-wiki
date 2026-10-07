@@ -16,11 +16,15 @@ export type KnowledgeFrontmatter = {
 // （宁可提示复核，不误判新鲜）。
 function isOlderThanDays(dateStr: unknown, staleDays: number, now: Date): boolean {
   if (dateStr == null) return true;
-  const t = typeof dateStr === 'string'
-    ? Date.parse(dateStr)
-    : dateStr instanceof Date
-      ? dateStr.getTime()
-      : NaN;
+  // 提取嵌套三元为独立语句（S3358）：按类型取时间戳，其他类型保持 NaN（保守判过期）
+  let t: number;
+  if (typeof dateStr === 'string') {
+    t = Date.parse(dateStr);
+  } else if (dateStr instanceof Date) {
+    t = dateStr.getTime();
+  } else {
+    t = NaN;
+  }
   if (Number.isNaN(t)) return true; // 非法日期同样保守判过期
   const ageMs = now.getTime() - t;
   return ageMs > staleDays * 24 * 60 * 60 * 1000;

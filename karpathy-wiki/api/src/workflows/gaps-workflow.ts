@@ -51,18 +51,28 @@ export interface PageMeta {
   wikilinks: Set<string>;
 }
 
-export function computeGaps(pages: PageMeta[], minPages = 20): GapResult {
-  if (pages.length < minPages) {
-    return { status: 'insufficient-data', pageCount: pages.length };
-  }
+// ── computeGaps 拆分出的纯拓扑辅助函数（S3776：计算内核认知复杂度需 ≤15）──
+// 原 computeGaps 把「建索引 / 邻接表 / 孤立点 / 连通分量 / 低密度 / 同标签未链对」全部内联，
+//   多重嵌套循环叠加 continue/三元 使复杂度飙到 55。这里按检测维度拆成各自独立的纯函数，
+//   computeGaps 退化为「按序编排」；认知计数器逐函数复位，每个辅助都只处理一个维度。
+//   所有遍历顺序、字典序去重、阈值判定均与原实现逐字对齐，运行行为不变。
 
-  // 按页面名建立索引，解析 [[页面名]] wikilink 为真实路径
+type AdjacencyMap = Map<string, Set<string>>;
+
+// 按页面名建立「页面名 → 路径」索引，解析 [[页面名]] wikilink 为真实路径
+function buildNameIndex(pages: PageMeta[]): Map<string, string> {
   const byName = new Map<string, string>();
   for (const p of pages) byName.set(p.pageName, p.path);
+  return byName;
+}
 
-  // 拓扑：adjacency[p] 无向邻居；outByName 出链目标（页面名）
-  const adjacency = new Map<string, Set<string>>();
-  const outByName = new Map<string, Set<string>>();
+// 构建拓扑：adjacency[path] 无向邻居；outByName[pageName] 出链目标（页面名）
+function buildLinkTopology(
+  pages: PageMeta[],
+  byName: Map<string, string>,
+): { adjacency: AdjacencyMap; outByName: AdjacencyMap } {
+  const adjacency: AdjacencyMap = new Map();
+  const outByName: AdjacencyMap = new Map();
   for (const p of pages) {
     adjacency.set(p.path, new Set<string>());
     outByName.set(p.pageName, new Set<string>());
@@ -76,47 +86,72 @@ export function computeGaps(pages: PageMeta[], minPages = 20): GapResult {
       outByName.get(p.pageName)!.add(linkName);
     }
   }
+  return { adjacency, outByName };
+}
 
-  // 孤立节点：无向邻居数为 0
+// 孤立节点：无向邻居数为 0
+function findIsolatedNodes(pages: PageMeta[], adjacency: AdjacencyMap): string[] {
   const isolated: string[] = [];
   for (const p of pages) {
     if ((adjacency.get(p.path)?.size ?? 0) === 0) isolated.push(p.path);
   }
+  return isolated;
+}
 
-  // 连通分量（迭代 BFS）：用于低密度社区检测
+// 从 startPath 出发做迭代 DFS（栈）：把访问到的节点登记进共享 visited，返回分量成员
+function traverseComponent(startPath: string, visited: Set<string>, adjacency: AdjacencyMap): string[] {
+  const comp: string[] = [];
+  const stack = [startPath];
+  visited.add(startPath);
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    comp.push(cur);
+    for (const nb of adjacency.get(cur) ?? []) {
+      if (!visited.has(nb)) {
+        visited.add(nb);
+        stack.push(nb);
+      }
+    }
+  }
+  return comp;
+}
+
+// 统计分量内部无向边数：字典序 a<b 去重，每条边只计一次
+function countInternalEdges(comp: string[], adjacency: AdjacencyMap): number {
+  const compSet = new Set(comp);
+  let edges = 0;
+  for (const a of comp) {
+    for (const b of adjacency.get(a) ?? []) {
+      if (a < b && compSet.has(b)) edges++;
+    }
+  }
+  return edges;
+}
+
+// 连通分量集合（供低密度社区检测）：对每个未访问页面依次 DFS 收集分量并计内部边数
+function computeConnectedComponents(
+  pages: PageMeta[],
+  adjacency: AdjacencyMap,
+): Array<{ paths: string[]; edgeCount: number }> {
   const visited = new Set<string>();
   const components: Array<{ paths: string[]; edgeCount: number }> = [];
   for (const p of pages) {
     if (visited.has(p.path)) continue;
-    const comp: string[] = [];
-    const stack = [p.path];
-    visited.add(p.path);
-    while (stack.length > 0) {
-      const cur = stack.pop()!;
-      comp.push(cur);
-      for (const nb of adjacency.get(cur) ?? []) {
-        if (!visited.has(nb)) {
-          visited.add(nb);
-          stack.push(nb);
-        }
-      }
-    }
-    const compSet = new Set(comp);
-    let edges = 0;
-    for (const a of comp) {
-      for (const b of adjacency.get(a) ?? []) {
-        if (a < b && compSet.has(b)) edges++; // 字典序去重，每条无向边计一次
-      }
-    }
-    components.push({ paths: comp, edgeCount: edges });
+    const comp = traverseComponent(p.path, visited, adjacency);
+    components.push({ paths: comp, edgeCount: countInternalEdges(comp, adjacency) });
   }
+  return components;
+}
 
-  // 低密度社区：size>=3 且 边数 < 节点数（等价平均度数 < 2）
-  const lowDensity: LowDensityCommunity[] = components
+// 低密度社区：size>=3 且 边数 < 节点数（等价平均度数 < 2）
+function filterLowDensity(components: Array<{ paths: string[]; edgeCount: number }>): LowDensityCommunity[] {
+  return components
     .filter((c) => c.paths.length >= 3 && c.edgeCount < c.paths.length)
     .map((c) => ({ paths: c.paths, edgeCount: c.edgeCount }));
+}
 
-  // 同标签未双链对：按标签索引页面，组内两两组合判断「任一方向无引用」
+// 按 frontmatter 标签把页面分组（一个页面可属多个标签组）
+function groupPagesByTag(pages: PageMeta[]): Map<string, PageMeta[]> {
   const tagToPages = new Map<string, PageMeta[]>();
   for (const p of pages) {
     for (const t of p.tags) {
@@ -125,24 +160,55 @@ export function computeGaps(pages: PageMeta[], minPages = 20): GapResult {
       else tagToPages.set(t, [p]);
     }
   }
+  return tagToPages;
+}
+
+// 组内一对页面的未双链判定：任一方向已有引用 / 已收录（seen 去重）→ null；否则登记 seen 并返回配对
+function buildUnlinkedPair(
+  pa: PageMeta,
+  pb: PageMeta,
+  tag: string,
+  outByName: AdjacencyMap,
+  seen: Set<string>,
+): UnlinkedTagPair | null {
+  if (outByName.get(pa.pageName)?.has(pb.pageName) || outByName.get(pb.pageName)?.has(pa.pageName)) return null;
+  const key = `${pa.pageName}|${pb.pageName}`;
+  if (seen.has(key)) return null;
+  seen.add(key);
+  return { a: pa.pageName, b: pb.pageName, pathA: pa.path, pathB: pb.path, sharedTags: [tag] };
+}
+
+// 同标签未双链对：按标签分组，组内（页面名序）两两组合，收集「任一方向无引用」的配对
+function findUnlinkedTagPairs(pages: PageMeta[], outByName: AdjacencyMap): UnlinkedTagPair[] {
   const unlinkedPairs: UnlinkedTagPair[] = [];
   const seen = new Set<string>();
-  for (const [tag, group] of tagToPages) {
+  for (const [tag, group] of groupPagesByTag(pages)) {
     const sorted = [...group].sort((x, y) => x.pageName.localeCompare(y.pageName));
     for (let i = 0; i < sorted.length; i++) {
       for (let j = i + 1; j < sorted.length; j++) {
-        const pa = sorted[i];
-        const pb = sorted[j];
-        if (outByName.get(pa.pageName)?.has(pb.pageName) || outByName.get(pb.pageName)?.has(pa.pageName)) continue;
-        const key = `${pa.pageName}|${pb.pageName}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        unlinkedPairs.push({ a: pa.pageName, b: pb.pageName, pathA: pa.path, pathB: pb.path, sharedTags: [tag] });
+        const pair = buildUnlinkedPair(sorted[i], sorted[j], tag, outByName, seen);
+        if (pair) unlinkedPairs.push(pair);
       }
     }
   }
+  return unlinkedPairs;
+}
 
-  return { status: 'ok', pageCount: pages.length, isolated, lowDensity, unlinkedPairs };
+export function computeGaps(pages: PageMeta[], minPages = 20): GapResult {
+  if (pages.length < minPages) {
+    return { status: 'insufficient-data', pageCount: pages.length };
+  }
+
+  const byName = buildNameIndex(pages);
+  const { adjacency, outByName } = buildLinkTopology(pages, byName);
+
+  return {
+    status: 'ok',
+    pageCount: pages.length,
+    isolated: findIsolatedNodes(pages, adjacency),
+    lowDensity: filterLowDensity(computeConnectedComponents(pages, adjacency)),
+    unlinkedPairs: findUnlinkedTagPairs(pages, outByName),
+  };
 }
 
 export async function detectGaps(vault: VaultService, minPages = 20): Promise<GapResult> {

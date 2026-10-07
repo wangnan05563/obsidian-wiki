@@ -5,6 +5,22 @@ import { extractOle2Text } from './ole2-extract.js';
 // ZIP Parser - Central Directory scan
 interface ZipEntry { name: string; data: Buffer; }
 
+// 解压单个 zip 条目：method 8 = deflate。优先按 raw deflate 解，
+// 失败再试带 zlib 头的 deflate（部分写入器会这么做），都失败则原样返回。
+function inflateEntry(raw: Buffer, method: number): Buffer {
+  if (method !== 8) return raw;
+  try {
+    return zlib.inflateRawSync(raw);
+  } catch {
+    // Some writers wrap the stream with a zlib header instead of raw deflate.
+    try {
+      return zlib.inflateSync(raw);
+    } catch {
+      return raw;
+    }
+  }
+}
+
 // 为什么 export：qq-preprocess 解析 xlsx 时需复用同一 zip 解压实现，避免重复维护
 export async function parseZip(buffer: Buffer): Promise<Map<string, Buffer>> {
   const entries = new Map<string, Buffer>();
@@ -28,21 +44,7 @@ export async function parseZip(buffer: Buffer): Promise<Map<string, Buffer>> {
     const raw = buffer.subarray(dataStart, dataStart + compressedSize);
     // Local file header at relativeOffset holds the compression method (offset 8).
     const method = buffer.readUInt16LE(relativeOffset + 8);
-    let data: Buffer;
-    if (method === 8) {
-      try {
-        data = zlib.inflateRawSync(raw);
-      } catch {
-        // Some writers wrap the stream with a zlib header instead of raw deflate.
-        try {
-          data = zlib.inflateSync(raw);
-        } catch {
-          data = raw;
-        }
-      }
-    } else {
-      data = raw;
-    }
+    const data = inflateEntry(raw, method);
     entries.set(name, data);
     pos += 46 + fileNameLen + extraFieldLen + commentLen;
   }
@@ -159,6 +161,15 @@ function renderSheetTable(rows: Map<number, Array<{ col: number; value: string }
   return markdown + '\n';
 }
 
+// 解析工作表文件路径：优先用 rels 映射定位实际文件名；缺失（无 rels 或 rels 为空）时
+// 回退到 rId 序号路径（xl/worksheets/sheet{N}.xml），否则会因取不到文件而整表跳过。
+function resolveSheetFile(target: string, rid: string): string {
+  if (target) {
+    return target.startsWith('/') ? target.slice(1) : 'xl/' + target;
+  }
+  return 'xl/worksheets/sheet' + ((rid.match(/\d+/) || ['0'])[0]) + '.xml';
+}
+
 export async function convertXlsxToMarkdown(buffer: Buffer): Promise<string> {
   const entries = await parseZip(buffer);
   let markdown = '# Excel 工作簿\n\n';
@@ -186,12 +197,8 @@ export async function convertXlsxToMarkdown(buffer: Buffer): Promise<string> {
     const ridM = attrs.match(/r:id="([^"]*)"/);
     if (!nameM || !ridM) continue;
     const sheetName = nameM[1];
-    // 优先用 rels 映射定位实际文件名；缺失（无 rels 或 rels 为空）时回退到
-    // rId 序号路径（xl/worksheets/sheet{N}.xml），否则会因取不到文件而整表跳过。
     const target = ridToTarget.get(ridM[1]) || '';
-    const sheetFile = target
-      ? (target.startsWith('/') ? target.slice(1) : 'xl/' + target)
-      : 'xl/worksheets/sheet' + ((ridM[1].match(/\d+/) || ['0'])[0]) + '.xml';
+    const sheetFile = resolveSheetFile(target, ridM[1]);
     const sheetBuf = entries.get(sheetFile);
     if (!sheetBuf) continue;
     const sheetXml = sheetBuf.toString('utf-8');
@@ -251,14 +258,28 @@ export interface ConversionResult {
   markdown: string;
 }
 
+const META_DENY =
+  /^(Normal|Administrator|Default|WPS Office|微软中国|KSOProductBuildVer|KSOTemplateDocerSaveRecord|等线|标题|链接单元格|Calibri|宋体|黑体|仿宋|楷体|Times New Roman|Arial)/i;
+
+// 判断单行是否为 OLE2 提取噪声：Word 域代码（TOC / PAGEREF / HYPERLINK…）、
+// 文档属性垃圾（app 名、作者、内置样式名）、base64 块、十六进制 GUID、版本号等。
+function isOle2NoiseLine(t: string): boolean {
+  if (META_DENY.test(t)) return true;
+  if (/^(TOC|PAGEREF|HYPERLINK|REF|NOTEREF|SEQ|STYLEREF|FORMULA|SYMBOL|INDEX|TC|RD)\b/i.test(t)) return true;
+  if (/^\s*_Toc\d+\s*$/.test(t)) return true;
+  if (/\\[ohzutfp]\b/i.test(t)) return true;
+  if (/^[A-Za-z0-9+/=]{40,}$/.test(t)) return true; // base64 blob (e.g. embedded JWT)
+  if (/^[0-9A-Fa-f]{16,}(_\d+)?$/.test(t)) return true; // hex GUID + suffix e.g. 6C712A53…_13
+  if (/^\d{3,4}-[\d.]+$/.test(t)) return true; // version/lang code e.g. 2052-12.1.0.26895
+  return false;
+}
+
 // Legacy Office (OLE2) files store text as raw bytes; the extractor pulls runs of
 // printable characters, which includes Word field-code artifacts (TOC / PAGEREF /
 // HYPERLINK / _Toc anchors) and document-property junk from the FIB/style region
 // (app names, author, base64 blobs, Excel built-in style names). Strip those so
 // the downstream LLM sees clean prose.
 function cleanOle2Text(text: string): string {
-  const META_DENY =
-    /^(Normal|Administrator|Default|WPS Office|微软中国|KSOProductBuildVer|KSOTemplateDocerSaveRecord|等线|标题|链接单元格|Calibri|宋体|黑体|仿宋|楷体|Times New Roman|Arial)/i;
   const out: string[] = [];
   for (const line of text.split('\n')) {
     const t = line.trim();
@@ -266,16 +287,17 @@ function cleanOle2Text(text: string): string {
       out.push('');
       continue;
     }
-    if (META_DENY.test(t)) continue;
-    if (/^(TOC|PAGEREF|HYPERLINK|REF|NOTEREF|SEQ|STYLEREF|FORMULA|SYMBOL|INDEX|TC|RD)\b/i.test(t)) continue;
-    if (/^\s*_Toc\d+\s*$/.test(t)) continue;
-    if (/\\(o|h|z|u|t|f|p)\b/i.test(t)) continue;
-    if (/^[A-Za-z0-9+/=]{40,}$/.test(t)) continue; // base64 blob (e.g. embedded JWT)
-    if (/^[0-9A-Fa-f]{16,}(_\d+)?$/.test(t)) continue; // hex GUID + suffix e.g. 6C712A53…_13
-    if (/^\d{3,4}-[\d.]+$/.test(t)) continue; // version/lang code e.g. 2052-12.1.0.26895
+    if (isOle2NoiseLine(t)) continue;
     out.push(line);
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// OLE2 扩展名 → 内容类型（.doc / .xls / .ppt 三种遗留二进制格式）
+function ole2ContentType(ext: string): ConversionResult['contentType'] {
+  if (ext === 'doc') return 'document';
+  if (ext === 'xls') return 'spreadsheet';
+  return 'presentation';
 }
 
 export async function convertOfficeFile(fileName: string, buffer: Buffer): Promise<ConversionResult> {
@@ -286,8 +308,7 @@ export async function convertOfficeFile(fileName: string, buffer: Buffer): Promi
   if (['doc', 'xls', 'ppt'].includes(ext)) {
     const text = extractOle2Text(buffer);
     if (text && text.trim().length > 0) {
-      const contentType =
-        ext === 'doc' ? 'document' : ext === 'xls' ? 'spreadsheet' : 'presentation';
+      const contentType = ole2ContentType(ext);
       return { contentType, markdown: cleanOle2Text(text) };
     }
     // 提示用户另存为新格式，便于自行转换后重试
