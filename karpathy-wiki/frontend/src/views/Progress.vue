@@ -2,7 +2,11 @@
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { onMounted, onBeforeUnmount, computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Loading, Check, Close, Lightning } from '@element-plus/icons-vue';
+import { Loading, Check, Close, Lightning, Refresh } from '@element-plus/icons-vue';
+// T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
+import IconActionButton from '../components/IconActionButton.vue';
+// T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
+import AppModal from '../components/AppModal.vue';
 import { useCompileStore } from '../stores/compile';
 import { consumeSSE } from '../utils/sse';
 import BatchProgressBar from '../components/BatchProgressBar.vue';
@@ -494,7 +498,14 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           <h3 class="runs-title">
             <span class="title-bracket">[</span> 历史编译任务 <span class="title-bracket">]</span>
           </h3>
-          <el-button size="small" data-tip="刷新历史编译任务列表" :loading="store.loadingRuns" @click="store.loadRuns()">刷新</el-button>
+          <IconActionButton
+            name="刷新"
+            desc="刷新历史编译任务列表"
+            :icon="Refresh"
+            size="small"
+            :loading="store.loadingRuns"
+            @click="store.loadRuns()"
+          />
         </div>
       <div v-if="store.loadingRuns" class="section-loading">LOADING...</div>
       <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务</div>
@@ -523,7 +534,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
     </div>
 
     <!-- 日志查看 Dialog -->
-    <el-dialog v-model="logDialogVisible" title="编译运行日志" width="700px" class="log-dialog">
+    <AppModal v-model="logDialogVisible" title="编译运行日志" width="700px" class="log-dialog">
       <div v-if="store.loadingLog" class="section-loading">LOADING...</div>
       <div v-else-if="store.logEntries.length === 0" class="runs-empty">暂无日志</div>
       <div v-else class="log-list">
@@ -536,7 +547,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           <span v-if="entry.error" class="log-err">{{ entry.error }}</span>
         </div>
       </div>
-    </el-dialog>
+    </AppModal>
   </div>
 </template>
 

@@ -9,6 +9,8 @@ import './style.css';
 import './styles/themes/index.css';
 // 移动端浅白极简主题（仅作用于 .mobile-root 子树，不影响桌面 aurora 主题）
 import './styles/mobile-light.css';
+// 统一弹窗交互规范（对话框 / 抽屉 / 确认框共用一套遮罩、动效、容器样式）
+import './styles/modal.css';
 
 const app = createApp(App);
 app.use(createPinia());

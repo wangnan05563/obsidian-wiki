@@ -3,7 +3,9 @@ import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Warning, CircleCheck, Tools, MagicStick, Check, Lightning } from '@element-plus/icons-vue';
+import { Warning, CircleCheck, Tools, MagicStick, Check, Lightning, RefreshRight } from '@element-plus/icons-vue';
+// T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
+import IconActionButton from '../components/IconActionButton.vue';
 import type { HealthReport, FixRequest, FixProgressEvent, BatchFixRequest, BatchFixProgressEvent, BatchDoneEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 import { useHealthStore } from '../stores/health';
@@ -329,7 +331,16 @@ onMounted(() => {
           >
             批量修复全部
           </el-button>
-          <el-button size="small" class="neon-btn" data-tip="重新扫描孤立页面、断链与过期内容" :loading="loading" :disabled="anyFixing" @click="runCheck">重新体检</el-button>
+          <IconActionButton
+            name="重新体检"
+            desc="重新扫描孤立页面、断链与过期内容"
+            :icon="RefreshRight"
+            size="small"
+            class="neon-btn"
+            :loading="loading"
+            :disabled="anyFixing"
+            @click="runCheck"
+          />
         </div>
       </div>
 

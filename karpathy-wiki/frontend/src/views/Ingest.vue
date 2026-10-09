@@ -3,7 +3,9 @@ import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
-import { ArrowDown, FolderOpened, UploadFilled, WarningFilled } from '@element-plus/icons-vue';
+import { ArrowDown, FolderOpened, UploadFilled, WarningFilled, VideoPlay, Delete, RefreshRight } from '@element-plus/icons-vue';
+// T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
+import IconActionButton from '../components/IconActionButton.vue';
 import { useCompileStore } from '../stores/compile';
 import { consumeSSE } from '../utils/sse';
 import type { ConfigData, QqUploadEvent, DraftCompileEvent, UrlCrawlEvent, UrlCrawlPageSummary, UrlCrawlAttachment } from '../types';
@@ -893,7 +895,14 @@ function handleUrlInputChange() {
               <span class="folder-files-title">
                 已选 {{ folderFiles.length }} 个文件
               </span>
-              <el-button size="small" text data-tip="清空已选择的本地文件夹文件列表" @click="clearFolderFiles">清空</el-button>
+              <IconActionButton
+                name="清空"
+                desc="清空已选择的本地文件夹文件列表"
+                :icon="Delete"
+                size="small"
+                text
+                @click="clearFolderFiles"
+              />
             </div>
             <ul class="folder-files-list">
               <li v-for="(item, idx) in folderFiles" :key="idx" class="folder-file-item">
@@ -1077,14 +1086,21 @@ function handleUrlInputChange() {
                 </div>
               </div>
               <div class="url-action-row">
-                <el-button
-                  type="primary"
+                <IconActionButton
+                  name="开始编译"
+                  :desc="`将勾选的 ${selectedPageCount}/${urlCrawlResult.pages.length} 个页面与附件编译为知识库文档`"
+                  :icon="VideoPlay"
+                  variant="primary"
                   :disabled="!urlCombinedMarkdown || store.isCompiling || submitting || selectedPageCount === 0"
                   :loading="store.isCompiling"
-                  data-tip="将勾选的页面与附件编译为知识库文档"
                   @click="startUrlCompile"
-                >开始编译（{{ selectedPageCount }}/{{ urlCrawlResult.pages.length }}）</el-button>
-                <el-button data-tip="清空当前爬取结果与选择，重新输入 URL" @click="resetUrlFlow">重新爬取</el-button>
+                />
+                <IconActionButton
+                  name="重新爬取"
+                  desc="清空当前爬取结果与选择，重新输入 URL"
+                  :icon="RefreshRight"
+                  @click="resetUrlFlow"
+                />
               </div>
             </div>
 
@@ -1140,15 +1156,15 @@ function handleUrlInputChange() {
                 :closable="false"
                 show-icon
               />
-              <el-button
-                type="primary"
+              <IconActionButton
+                name="开始编译"
+                desc="将解析出的书签与文件夹编译为知识库文档"
+                :icon="VideoPlay"
+                variant="primary"
                 :loading="bookmarkCompiling"
-                data-tip="将解析出的书签与文件夹编译为知识库文档"
-                @click="compileBookmarks"
                 style="margin-top:12px"
-              >
-                开始编译
-              </el-button>
+                @click="compileBookmarks"
+              />
             </div>
           </div>
         </el-tab-pane>
@@ -1322,17 +1338,23 @@ function handleUrlInputChange() {
 
       <!-- QQ / URL / 网页捕获 Tab 自带操作按钮，file/folder/text 共用 submit-bar -->
       <div v-if="activeTab !== 'qq' && activeTab !== 'url' && activeTab !== 'capture'" class="submit-bar">
-        <el-button
-          type="primary"
+        <IconActionButton
+          name="开始编译"
+          desc="将当前已配置的来源（文件/文件夹/文本）编译为知识库文档"
+          :icon="VideoPlay"
           size="large"
-          data-tip="将当前已配置的来源（文件/文件夹/文本）编译为知识库文档"
+          variant="primary"
           :disabled="!canSubmit || store.isCompiling || submitting"
           :loading="store.isCompiling"
           @click="handleSubmit"
-        >
-          {{ store.isCompiling ? '编译中...' : '开始编译' }}
-        </el-button>
-        <el-button size="large" data-tip="清空当前所有输入来源与配置" @click="resetInputs">清空</el-button>
+        />
+        <IconActionButton
+          name="清空"
+          desc="清空当前所有输入来源与配置"
+          :icon="Delete"
+          size="large"
+          @click="resetInputs"
+        />
       </div>
     </div>
   </div>
