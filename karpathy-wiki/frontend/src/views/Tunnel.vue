@@ -5,6 +5,8 @@ import { ElMessage } from 'element-plus';
 import {
   CopyDocument, TopRight, VideoPlay, VideoPause, Link, RefreshRight, Close, Setting, MagicStick, Check, Key, CirclePlus, Connection,
 } from '@element-plus/icons-vue';
+// T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
+import AppModal from '../components/AppModal.vue';
 import type {
   TunnelStatus,
   TunnelConfigData,
@@ -553,11 +555,10 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Named Tunnel 配置向导 -->
-    <el-dialog
+    <AppModal
       v-model="wizardVisible"
       title="Cloudflare Named Tunnel 配置向导"
       width="600px"
-      :close-on-click-modal="false"
       @close="closeWizard"
     >
       <el-steps :active="wizardStep" finish-status="success" align-center>
@@ -626,7 +627,7 @@ onBeforeUnmount(() => {
           <el-button type="primary" :icon="Connection" data-tip="配置DNS-为固定域名配置 Cloudflare DNS 解析并切换到 Named 模式" :loading="routingDns" @click="routeDns" />
         </div>
       </div>
-    </el-dialog>
+    </AppModal>
 
     <!-- 使用说明 -->
     <div class="glass-card">

@@ -3,6 +3,8 @@ import { API_BASE, resolveMediaUrl } from '../utils/apiBase';
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Promotion, VideoPause, Menu, Loading } from '@element-plus/icons-vue';
+// T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
+import AppModal from '../components/AppModal.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import AttachmentUploader from '../components/AttachmentUploader.vue';
 import InputToolbar from '../components/InputToolbar.vue';
@@ -1687,11 +1689,10 @@ onBeforeUnmount(() => {
       </div>
       <!-- 输入框偏好设置对话框：按用户隔离的个人输入框设置（字体/主题/快捷回复/历史/回车发送/紧凑）
            每次打开从当前用户 store 同步草稿，保存时一次性持久化到 'usercfg::inputbox::<userId>' 命名空间 -->
-      <el-dialog
+      <AppModal
         v-model="ibSettingsVisible"
         title="输入框偏好设置"
         width="480px"
-        :close-on-click-modal="false"
       >
         <div class="ib-settings-body">
           <div class="ib-field">
@@ -1749,7 +1750,7 @@ onBeforeUnmount(() => {
           <el-button data-tip="放弃本次修改并关闭设置" @click="ibSettingsVisible = false">取消</el-button>
           <el-button type="primary" data-tip="保存隔离浏览器设置更改" @click="saveIbSettings">保存</el-button>
         </template>
-      </el-dialog>
+      </AppModal>
     </div>
     <!-- F-3.2 图片点击放大预览：通过事件委托捕获 v-html 中的 img 点击触发 -->
     <el-image-viewer
@@ -1759,11 +1760,10 @@ onBeforeUnmount(() => {
     />
     <!-- v3 视频生成对话框：独立于 query SSE 流，走 POST /api/media/video + 轮询 -->
     <!-- 为什么独立对话框：视频生成需数分钟，走 SSE 流会触发 60s 超时，独立对话框 + 轮询更稳定 -->
-    <el-dialog
+    <AppModal
       v-model="videoDialogVisible"
       title="视频生成"
       width="560px"
-      :close-on-click-modal="false"
       @close="closeVideoDialog"
     >
       <div class="video-dialog-body">
@@ -1815,7 +1815,7 @@ onBeforeUnmount(() => {
       <template #footer>
         <el-button data-tip="关闭视频生成对话框" @click="closeVideoDialog">关闭</el-button>
       </template>
-    </el-dialog>
+    </AppModal>
   </div>
 </template>
 

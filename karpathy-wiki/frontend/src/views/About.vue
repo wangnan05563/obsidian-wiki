@@ -3,6 +3,8 @@ import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { CopyDocument, Refresh, Check, Top, Warning, Search } from '@element-plus/icons-vue';
+// T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
+import AppModal from '../components/AppModal.vue';
 
 // vite define 注入的构建变量（见 vite.config.ts），不联网、跟随打包构建
 declare const __APP_VERSION__: string;
@@ -493,11 +495,10 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 开源软件声明 Modal -->
-    <el-dialog
+    <AppModal
       v-model="licensesOpen"
       :title="TEXTS.licensesTitle"
       width="720"
-      destroy-on-close
     >
       <el-input
         v-model="search"
@@ -526,7 +527,7 @@ onBeforeUnmount(() => {
       <template #footer>
         <span class="dialog-footer-hint">{{ TEXTS.licensesFooter }}</span>
       </template>
-    </el-dialog>
+    </AppModal>
   </div>
 </template>
 

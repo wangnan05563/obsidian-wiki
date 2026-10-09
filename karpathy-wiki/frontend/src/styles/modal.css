@@ -1,0 +1,157 @@
+/* ============================================================
+ * 统一弹窗交互规范（T01629）
+ * ------------------------------------------------------------------
+ * 背景：原先各菜单页面各自直接调用 el-dialog / el-drawer，尺寸、圆角、
+ *   遮罩、动效、点击遮罩是否关闭等各不相同。本文件把弹窗规格收敛为「单一事实来源」，
+ *   所有弹窗统一经 components/AppModal.vue 渲染，样式只在此维护，页面不再重复编写。
+ *
+ * 规格（全站一致）：
+ *   1. 遮罩：半透明 + 6px 背景模糊；默认点击遮罩【不】关闭（防止表单/长任务误关），ESC 始终可关闭；
+ *   2. 容器：对话框居中（align-center）/ 抽屉贴右侧；圆角 --radius-card，玻璃描边 + 主题阴影；
+ *   3. 尺寸：宽度由调用方传入；内容区统一限制在 70vh 内并纵向滚动；
+ *   4. 动效：进场 220ms（scale .96→1 + 上浮 10px + 淡入），退场 180ms 反向，统一缓动曲线；
+ *   5. 关闭：右上角统一关闭按钮，hover 主题强调色。
+ * ============================================================ */
+
+/* 遮罩层：颜色与模糊统一；--modal-mask 可由主题覆盖（浅色主题需要更淡的遮罩） */
+.el-overlay {
+  /* 统一动效时长：EP 弹窗/抽屉动画都读这个变量 */
+  --el-transition-duration: 0.22s;
+  background-color: var(--modal-mask, rgba(4, 2, 12, 0.58));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* ── 统一容器 ── */
+.app-modal.el-dialog,
+.app-modal.el-drawer {
+  border-radius: var(--radius-card) !important;
+  background: var(--bg-card-solid) !important;
+  border: var(--border-glass);
+  box-shadow: var(--glow-purple) !important;
+}
+
+/* 顶部霓虹高光线：与 .glass-card 同源，保持全站卡片语言一致 */
+.app-modal.el-dialog::before,
+.app-modal.el-drawer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--neon-purple), var(--neon-cyan), transparent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* ── 标题 / 正文 / 关闭按钮 ── */
+.app-modal .el-dialog__title,
+.app-modal .el-drawer__title {
+  color: var(--text-bright) !important;
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+
+.app-modal .el-dialog__headerbtn,
+.app-modal .el-drawer__close-btn {
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.app-modal .el-dialog__headerbtn:hover .el-dialog__close,
+.app-modal .el-drawer__close-btn:hover {
+  color: var(--neon-cyan);
+  transform: scale(1.08);
+}
+
+/* 内容区：统一限制高度并内部滚动，避免长内容把弹窗顶出视口 */
+.app-modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+/* 抽屉形态：铺满剩余高度，滚动交给自身 */
+.app-modal-drawer .app-modal-body {
+  max-height: none;
+  height: 100%;
+}
+
+/* ── 统一动效：覆盖 Element Plus 自带的 dialog-fade 关键帧 ── */
+@keyframes app-modal-in {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes app-modal-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+
+@keyframes app-mask-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes app-mask-out {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.dialog-fade-enter-active,
+.el-drawer-fade-enter-active {
+  animation: app-mask-in 0.22s ease;
+}
+
+.dialog-fade-leave-active,
+.el-drawer-fade-leave-active {
+  animation: app-mask-out 0.18s ease-in;
+}
+
+.dialog-fade-enter-active .el-overlay-dialog {
+  animation: app-modal-in 0.22s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.dialog-fade-leave-active .el-overlay-dialog {
+  animation: app-modal-out 0.18s ease-in;
+}
+
+/* 抽屉沿用 EP 的位移进场，仅统一缓动（时长由 --el-transition-duration 统一） */
+.el-drawer.rtl {
+  transition: transform 0.22s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* ── 确认框（ElMessageBox）：与弹窗同一套容器语言 ── */
+.el-message-box {
+  border-radius: var(--radius-card) !important;
+  background: var(--bg-card-solid) !important;
+  border: var(--border-glass);
+  box-shadow: var(--glow-purple) !important;
+}
+
+.el-message-box__title {
+  color: var(--text-bright) !important;
+  font-family: var(--font-display);
+}
+
+.el-message-box__content {
+  color: var(--text-base) !important;
+}
+
+/* 浅色主题：遮罩需减淡，否则与白底弹窗形成过强反差 */
+[data-theme='light-business'] {
+  --modal-mask: rgba(17, 17, 17, 0.34);
+}

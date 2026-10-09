@@ -2,7 +2,12 @@
 import { API_BASE } from '../utils/apiBase';
 import { ref, computed, reactive, onMounted, watch, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Check, Close, Connection, List, Download, Upload, Refresh, Document } from '@element-plus/icons-vue';
+import {
+  Check, Close, Connection, List, Download, Upload, Refresh, Document,
+  EditPen, Select, Files, RefreshRight, RefreshLeft, FolderOpened, Plus, VideoPlay, Delete,
+} from '@element-plus/icons-vue';
+// T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
+import IconActionButton from '../components/IconActionButton.vue';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import MarkdownRenderer from '../components/MarkdownRenderer.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData, PromptFile, PromptTestRunEvent } from '../types';
@@ -2478,14 +2483,33 @@ async function importConfig() {
             <div class="action-bar">
               <span class="section-desc">页面规范文件，控制 AI 编译时的页面结构与约束</span>
               <div class="actions">
-                <el-button v-if="!editingSchema" size="small" class="neon-btn" data-tip="进入 SCHEMA 规范编辑模式" @click="editingSchema = true">
-                  编辑
-                </el-button>
+                <IconActionButton
+                  v-if="!editingSchema"
+                  name="编辑"
+                  desc="进入 SCHEMA 规范编辑模式"
+                  :icon="EditPen"
+                  size="small"
+                  class="neon-btn"
+                  @click="editingSchema = true"
+                />
                 <template v-else>
-                  <el-button size="small" class="neon-btn-primary" data-tip="保存 SCHEMA 规范文件" :loading="savingSchema" @click="saveSchema">
-                    保存
-                  </el-button>
-                  <el-button size="small" class="neon-btn" data-tip="退出 SCHEMA 编辑模式并放弃修改" @click="cancelEdit">取消</el-button>
+                  <IconActionButton
+                    name="保存"
+                    desc="保存 SCHEMA 规范文件"
+                    :icon="Select"
+                    size="small"
+                    class="neon-btn-primary"
+                    :loading="savingSchema"
+                    @click="saveSchema"
+                  />
+                  <IconActionButton
+                    name="取消"
+                    desc="退出 SCHEMA 编辑模式并放弃修改"
+                    :icon="Close"
+                    size="small"
+                    class="neon-btn"
+                    @click="cancelEdit"
+                  />
                 </template>
               </div>
             </div>
@@ -2506,7 +2530,16 @@ async function importConfig() {
             <div class="history-section">
               <div class="history-head">
                 <span class="section-desc">// 版本历史（Git）</span>
-                <el-button size="small" class="neon-btn" text data-tip="刷新 SCHEMA 版本历史（Git 提交记录）" :loading="loadingHistory" @click="loadHistory">刷新</el-button>
+                <IconActionButton
+                  name="刷新"
+                  desc="刷新 SCHEMA 版本历史（Git 提交记录）"
+                  :icon="Refresh"
+                  size="small"
+                  class="neon-btn"
+                  text
+                  :loading="loadingHistory"
+                  @click="loadHistory"
+                />
               </div>
       <div v-if="!gitEnabled" class="history-disabled">
                 Vault 未启用 Git，无法查看版本历史。在 Vault 目录执行 <code>git init</code> 即可启用。
@@ -2534,16 +2567,16 @@ async function importConfig() {
                   <span class="section-desc">
                     对比：{{ selectedFrom ? selectedFrom.slice(0, 8) : '选择基线' }} → HEAD
                   </span>
-                  <el-button
+                  <IconActionButton
+                    name="对比"
+                    desc="对比所选基线版本与当前 HEAD 的差异"
+                    :icon="Files"
                     size="small"
                     class="neon-btn-primary"
-                    data-tip="对比所选基线版本与当前 HEAD 的差异"
                     :disabled="!selectedFrom"
                     :loading="loadingDiff"
                     @click="loadDiff"
-                  >
-                    对比
-                  </el-button>
+                  />
                 </div>
       <div v-if="showDiff && !loadingDiff" class="diff-result">
                   <div v-if="diffLines.length === 0" class="diff-empty">? 无差异</div>
@@ -2572,9 +2605,15 @@ async function importConfig() {
             <!-- §12.3-7 热加载操作栏 -->
             <div class="reload-bar">
               <span class="section-desc">修改 config.json 后点击热加载，无需重启服务即可应用运行时参数</span>
-              <el-button size="small" class="neon-btn-primary" data-tip="热加载 config.json，无需重启服务即可应用运行时参数" :loading="reloading" @click="reloadConfig">
-                热加载配置
-              </el-button>
+              <IconActionButton
+                name="热加载配置"
+                desc="热加载 config.json，无需重启服务即可应用运行时参数"
+                :icon="RefreshRight"
+                size="small"
+                class="neon-btn-primary"
+                :loading="reloading"
+                @click="reloadConfig"
+              />
             </div>
 
             <!-- 热加载结果反馈 -->
@@ -2718,9 +2757,14 @@ async function importConfig() {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" data-tip="保存 Token 预算配置" :loading="savingBudget" @click="saveBudget">
-                    保存
-                  </el-button>
+                  <IconActionButton
+                    name="保存"
+                    desc="保存 Token 预算配置"
+                    :icon="Select"
+                    class="neon-btn-primary"
+                    :loading="savingBudget"
+                    @click="saveBudget"
+                  />
                 </div>
               </div>
 
@@ -2739,9 +2783,14 @@ async function importConfig() {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" data-tip="保存健康检查（过期阈值）配置" :loading="savingHealthCheck" @click="saveHealthCheck">
-                    保存
-                  </el-button>
+                  <IconActionButton
+                    name="保存"
+                    desc="保存健康检查（过期阈值）配置"
+                    :icon="Select"
+                    class="neon-btn-primary"
+                    :loading="savingHealthCheck"
+                    @click="saveHealthCheck"
+                  />
                 </div>
               </div>
 
@@ -2800,9 +2849,14 @@ async function importConfig() {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" data-tip="保存批量编译配置（扩展名 / 批量上限 / 单文件上限）" :loading="savingBatch" @click="saveBatch">
-                    保存
-                  </el-button>
+                  <IconActionButton
+                    name="保存"
+                    desc="保存批量编译配置（扩展名 / 批量上限 / 单文件上限）"
+                    :icon="Select"
+                    class="neon-btn-primary"
+                    :loading="savingBatch"
+                    @click="saveBatch"
+                  />
                 </div>
               </div>
 
@@ -2832,9 +2886,14 @@ async function importConfig() {
                   />
                 </div>
                 <div class="ai-actions">
-                  <el-button class="neon-btn-primary" data-tip="保存日志配置（级别 / 请求日志开关）" :loading="savingLogging" @click="saveLogging">
-                    保存
-                  </el-button>
+                  <IconActionButton
+                    name="保存"
+                    desc="保存日志配置（级别 / 请求日志开关）"
+                    :icon="Select"
+                    class="neon-btn-primary"
+                    :loading="savingLogging"
+                    @click="saveLogging"
+                  />
                 </div>
               </div>
             </div>
@@ -2853,17 +2912,16 @@ async function importConfig() {
               <h3 class="block-title"><span class="block-bracket">[</span> 导出 <span class="block-bracket">]</span></h3>
               <div class="form-row">
                 <label class="form-label" for="migrate-export">导出当前全部配置</label>
-                <el-button
+                <IconActionButton
                   id="migrate-export"
+                  name="导出配置"
+                  desc="将当前全部配置导出为 .json 文件（密钥已脱敏）"
+                  :icon="Download"
                   size="small"
                   class="neon-btn"
-                  data-tip="将当前全部配置导出为 .json 文件（密钥已脱敏）"
                   :loading="exporting"
                   @click="exportConfig"
-                >
-                  <el-icon v-if="!exporting" class="btn-icon"><Download /></el-icon>
-                  导出配置
-                </el-button>
+                />
               </div>
               <p class="block-hint">生成 .json 文件，可保存用于更换服务器 / 环境时迁移。文件包含全部配置项，密钥字段以 **** 掩码呈现，不含明文 Key。</p>
             </div>
@@ -2882,9 +2940,13 @@ async function importConfig() {
                     class="migrate-file-input"
                     @change="onImportFileSelected"
                   />
-                  <label for="migrate-file" class="migrate-file-trigger btn-like" data-tip="选择要导入的「配置导出」.json 文件（≤50MB）">
-                    <el-icon class="btn-icon"><Upload /></el-icon>
-                    选择文件
+                  <label
+                    for="migrate-file"
+                    class="migrate-file-trigger btn-like icon-action-btn"
+                    aria-label="选择文件"
+                    data-tip="选择文件 - 选择要导入的「配置导出」.json 文件（≤50MB）"
+                  >
+                    <el-icon :size="14"><FolderOpened /></el-icon>
                   </label>
                   <span class="migrate-file-name">{{ selectedFileName || '未选择文件' }}</span>
                 </div>
@@ -2897,17 +2959,16 @@ async function importConfig() {
                 </el-radio-group>
               </div>
               <div class="form-row">
-                <el-button
+                <IconActionButton
+                  name="开始导入"
+                  desc="按所选模式导入所选文件中的配置"
+                  :icon="Upload"
                   size="small"
                   class="neon-btn-primary"
-                  data-tip="按所选模式导入所选文件中的配置"
                   :disabled="!importFile"
                   :loading="importing"
                   @click="importConfig"
-                >
-                  <el-icon v-if="!importing" class="btn-icon"><Upload /></el-icon>
-                  开始导入
-                </el-button>
+                />
               </div>
               <p class="block-hint">「覆盖」模式会先备份旧配置到 config.json.bak 再写入，写入失败可回滚；「合并」模式只新增当前缺失的配置项。</p>
             </div>
@@ -3166,12 +3227,22 @@ async function importConfig() {
                   </div>
                 </div>
       <div class="ai-actions">
-                  <el-button class="neon-btn" data-tip="向搜索引擎服务发起连通性测试" :loading="testingWebSearch" @click="testWebSearchConnection">
-                    测试连接
-                  </el-button>
-                  <el-button class="neon-btn-primary" data-tip="保存联网搜索配置（Base URL / Key / 模型）" :loading="savingWebSearch" @click="saveWebSearchConfig">
-                    保存配置
-                  </el-button>
+                  <IconActionButton
+                    name="测试连接"
+                    desc="向搜索引擎服务发起连通性测试"
+                    :icon="Connection"
+                    class="neon-btn"
+                    :loading="testingWebSearch"
+                    @click="testWebSearchConnection"
+                  />
+                  <IconActionButton
+                    name="保存配置"
+                    desc="保存联网搜索配置（Base URL / Key / 模型）"
+                    :icon="Select"
+                    class="neon-btn-primary"
+                    :loading="savingWebSearch"
+                    @click="saveWebSearchConfig"
+                  />
                 </div>
                 <!-- 搜索引擎连接测试结果 -->
                 <div v-if="webSearchTestResult" class="test-result" :class="{ ok: webSearchTestResult.ok, fail: !webSearchTestResult.ok }">
@@ -3747,7 +3818,13 @@ async function importConfig() {
             </div>
 
             <div class="ai-actions">
-              <el-button class="neon-btn" data-tip="将朗读偏好（引擎 / 音色 / 语速 / 音量 / 音调）恢复为默认值" @click="resetTtsConfig">恢复默认</el-button>
+              <IconActionButton
+                name="恢复默认"
+                desc="将朗读偏好（引擎 / 音色 / 语速 / 音量 / 音调）恢复为默认值"
+                :icon="RefreshLeft"
+                class="neon-btn"
+                @click="resetTtsConfig"
+              />
             </div>
           </div>
         </el-tab-pane>
@@ -3954,7 +4031,15 @@ async function importConfig() {
               <div class="config-block hover-glow" :class="{ disabled: toolsForm.routerMode !== 'keyword' }">
                 <div class="block-header">
                   <h3 class="block-title"><span class="block-bracket">[</span> 场景规则 <span class="block-bracket">]</span></h3>
-                  <el-button size="small" class="neon-btn" data-tip="新增一条场景路由规则" :disabled="toolsForm.routerMode !== 'keyword'" @click="addScene">+ 新增</el-button>
+                  <IconActionButton
+                    name="新增"
+                    desc="新增一条场景路由规则"
+                    :icon="Plus"
+                    size="small"
+                    class="neon-btn"
+                    :disabled="toolsForm.routerMode !== 'keyword'"
+                    @click="addScene"
+                  />
                 </div>
                 <div v-if="toolsForm.routerMode !== 'keyword'" class="empty-hint">
                   场景规则仅在「关键词」路由模式下生效。切换到关键词模式后可配置规则。
@@ -3995,9 +4080,14 @@ async function importConfig() {
 
               <!-- 保存按钮 -->
               <div class="ai-actions">
-                <el-button class="neon-btn-primary" data-tip="保存 MCP / CLI / 场景路由等工具配置" :loading="savingTools" @click="saveToolsConfig">
-                  保存工具配置
-                </el-button>
+                <IconActionButton
+                  name="保存工具配置"
+                  desc="保存 MCP / CLI / 场景路由等工具配置"
+                  :icon="Select"
+                  class="neon-btn-primary"
+                  :loading="savingTools"
+                  @click="saveToolsConfig"
+                />
               </div>
             </div>
           </div>
@@ -4022,7 +4112,13 @@ async function importConfig() {
                 <h3>QQ 聊天记录导入配置</h3>
                 <p>配置噪声过滤规则、PII 脱敏正则与抽取模型参数。</p>
               </div>
-              <el-button size="small" data-tip="将 QQ 导入配置（噪声过滤 / 脱敏 / 抽取参数）恢复为默认值" @click="resetQqConfig">重置默认</el-button>
+              <IconActionButton
+                name="重置默认"
+                desc="将 QQ 导入配置（噪声过滤 / 脱敏 / 抽取参数）恢复为默认值"
+                :icon="RefreshLeft"
+                size="small"
+                @click="resetQqConfig"
+              />
             </div>
 
             <!-- 噪声过滤规则：NR-1~NR-6 开关 -->
@@ -4137,13 +4233,15 @@ async function importConfig() {
 
             <div class="qq-actions">
               <span v-if="qqConfigDirty" class="dirty-indicator">CHANGED</span>
-              <el-button
-                type="primary"
-                data-tip="保存 QQ 导入配置（噪声过滤 / 脱敏 / 抽取参数）"
+              <IconActionButton
+                name="保存 QQ 配置"
+                desc="保存 QQ 导入配置（噪声过滤 / 脱敏 / 抽取参数）"
+                :icon="Select"
+                variant="primary"
                 :loading="savingQqConfig"
                 :disabled="!qqConfigDirty"
                 @click="saveQqConfigForm"
-              >保存 QQ 配置</el-button>
+              />
             </div>
           </section>
         </el-tab-pane>
@@ -4185,14 +4283,16 @@ async function importConfig() {
                 </div>
                 <div class="actions">
                   <span v-if="promptDirty" class="dirty-indicator">CHANGED</span>
-                  <el-button
+                  <IconActionButton
+                    name="保存"
+                    desc="保存当前 prompt 文件内容"
+                    :icon="Select"
                     size="small"
                     class="neon-btn"
-                    data-tip="保存当前 prompt 文件内容"
                     :loading="savingPrompt"
-                    @click="savePrompt"
                     :disabled="!currentPromptName || !promptDirty"
-                  >保存</el-button>
+                    @click="savePrompt"
+                  />
                 </div>
               </div>
 
@@ -4225,21 +4325,25 @@ async function importConfig() {
               <div class="section-header">
                 <span class="section-desc">// 试运行（仅 compile.md）</span>
                 <div class="test-actions">
-                  <el-button
+                  <IconActionButton
+                    name="清空结果"
+                    desc="清空试运行的输出事件与生成页面"
+                    :icon="Delete"
                     size="small"
                     class="neon-btn"
-                    data-tip="清空试运行的输出事件与生成页面"
-                    @click="clearTestResult"
                     :disabled="testEvents.length === 0 && testPages.length === 0 && !testError"
-                  >清空结果</el-button>
-                  <el-button
+                    @click="clearTestResult"
+                  />
+                  <IconActionButton
+                    :name="testRunning ? '停止' : '开始试运行'"
+                    :desc="testRunning ? '中止当前正在进行的试运行' : '用测试资料运行一次 compile 预览结果'"
+                    :icon="VideoPlay"
                     size="small"
                     class="neon-btn-primary"
-                    data-tip="用测试资料运行一次 compile 预览结果（运行中可点击停止）"
                     :loading="testRunning"
-                    @click="testRunning ? stopTest() : runTest()"
                     :disabled="!currentPromptName || currentPromptName !== 'compile.md'"
-                  >{{ testRunning ? '停止' : '开始试运行' }}</el-button>
+                    @click="testRunning ? stopTest() : runTest()"
+                  />
                 </div>
               </div>
 

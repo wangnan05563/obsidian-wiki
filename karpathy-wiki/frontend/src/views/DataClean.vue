@@ -2,7 +2,11 @@
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Sort, MagicStick, Right, Loading } from '@element-plus/icons-vue';
+import { Sort, MagicStick, Right, Loading, Refresh, View, CopyDocument } from '@element-plus/icons-vue';
+// T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
+import IconActionButton from '../components/IconActionButton.vue';
+// T01629：统一弹窗（抽屉形态沿用同一套遮罩/动效/容器规格）
+import AppModal from '../components/AppModal.vue';
 import { usePermission } from '../composables/usePermission';
 import { useAuthStore } from '../stores/auth';
 import { useModelStore } from '../stores/model';
@@ -466,12 +470,37 @@ onMounted(() => loadPages());
           <p class="head-tip">扫描 · 去重 · 合并 · 报告 · 归档 · 修复</p>
         </div>
         <el-button-group style="display:flex;gap:8px">
-          <el-button class="neon-btn" :loading="loading" data-tip="重新扫描 vault 并加载全部页面数据" @click="loadPages">刷新</el-button>
-          <el-button class="neon-btn secondary" data-tip="执行 Vault 预检，检查链接、frontmatter、重复等潜在问题" @click="runPrecheck">预检</el-button>
-          <el-button class="neon-btn secondary" :loading="deduping" data-tip="基于内容哈希与相似度检测重复页面并聚合为重复组" @click="runDeduplication">去重</el-button>
-          <el-button class="neon-btn secondary" :loading="analyzing" data-tip="调用你自己的模型（BYOK）智能分析：识别冗余、重复与待重命名文档" @click="runAiAnalysis">
-            <el-icon v-if="!analyzing" style="margin-right:4px;vertical-align:middle"><MagicStick /></el-icon>AI分析
-          </el-button>
+          <IconActionButton
+            name="刷新"
+            desc="重新扫描 vault 并加载全部页面数据"
+            :icon="Refresh"
+            class="neon-btn"
+            :loading="loading"
+            @click="loadPages"
+          />
+          <IconActionButton
+            name="预检"
+            desc="执行 Vault 预检，检查链接、frontmatter、重复等潜在问题"
+            :icon="View"
+            class="neon-btn secondary"
+            @click="runPrecheck"
+          />
+          <IconActionButton
+            name="去重"
+            desc="基于内容哈希与相似度检测重复页面并聚合为重复组"
+            :icon="CopyDocument"
+            class="neon-btn secondary"
+            :loading="deduping"
+            @click="runDeduplication"
+          />
+          <IconActionButton
+            name="AI分析"
+            desc="调用你自己的模型（BYOK）智能分析：识别冗余、重复与待重命名文档"
+            :icon="MagicStick"
+            class="neon-btn secondary"
+            :loading="analyzing"
+            @click="runAiAnalysis"
+          />
         </el-button-group>
       </div>
       
@@ -724,7 +753,7 @@ onMounted(() => loadPages());
       </div>
 
       <!-- 差异对比抽屉：行级 diff，红绿对照 -->
-      <el-drawer v-model="diffDrawerVisible" :title="`差异对比：${diffPairLabel}`" size="60%" direction="rtl">
+      <AppModal v-model="diffDrawerVisible" variant="drawer" :title="`差异对比：${diffPairLabel}`" size="60%">
         <div v-if="diffLoading" class="diff-loading" role="status" aria-live="polite">
           <span class="diff-spinner" aria-hidden="true"></span>
           <span class="diff-loading-text">正在加载差异…</span>
@@ -750,7 +779,7 @@ onMounted(() => loadPages());
           </div>
         </div>
         <div v-else class="empty-state">无差异数据</div>
-      </el-drawer>
+      </AppModal>
       
       <!-- 空状态 -->
       <div v-if="!loading && pages.length === 0 && !scanProgress.includes('Failed')" class="empty-state">

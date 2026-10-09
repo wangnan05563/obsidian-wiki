@@ -92,8 +92,15 @@ function lastAnalyzeBody(): any {
   return typeof init?.body === 'string' ? JSON.parse(init.body) : null;
 }
 
+// T01628：按钮已改为「仅图标 + aria-label + data-tip」，文本不再是按钮名。
+// 查找时同时匹配可见文本 / aria-label / data-tip，保证改造后测试仍能定位到按钮。
 function findButton(wrapper: any, label: string) {
-  return wrapper.findAll('button').find((b: any) => (b.text() || '').includes(label));
+  return wrapper.findAll('button').find((b: any) => {
+    const text = b.text() || '';
+    const aria = b.attributes('aria-label') || '';
+    const tip = b.attributes('data-tip') || '';
+    return text.includes(label) || aria.includes(label) || tip.includes(label);
+  });
 }
 
 describe('DataClean AI 分析 BYOK llmConfig 注入 + 结论渲染', () => {
