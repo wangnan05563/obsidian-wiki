@@ -7,6 +7,7 @@ import {
 } from '@element-plus/icons-vue';
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
 import AppModal from '../components/AppModal.vue';
+import IconActionButton from '../components/IconActionButton.vue';
 import type {
   TunnelStatus,
   TunnelConfigData,
@@ -379,14 +380,14 @@ onBeforeUnmount(() => {
         <div class="url-box">
           <code class="url-text">{{ status.publicUrl }}</code>
           <div class="url-actions">
-            <el-button size="small" :icon="CopyDocument" data-tip="复制-复制公网地址到剪贴板" @click="copyUrl" />
-            <el-button size="small" type="primary" :icon="TopRight" data-tip="打开-在新标签页打开公网地址" @click="openUrl" />
+            <IconActionButton name="复制" desc="复制公网地址到剪贴板" :icon="CopyDocument" size="small" @click="copyUrl" />
+            <IconActionButton name="打开" desc="在新标签页打开公网地址" :icon="TopRight" size="small" variant="primary" @click="openUrl" />
           </div>
         </div>
       </div>
       <div class="actions">
         <!-- 启动/停止按钮带 :disabled；disabled 的原生按钮不触发 mouseover，故外包 span 承载 data-tip 保证悬浮提示仍显示 -->
-        <span class="tunnel-action-wrap" data-tip="启动隧道-启动内网穿透，将本地知识库服务暴露到公网">
+        <span class="tunnel-action-wrap" data-tip="启动隧道 - 启动内网穿透，将本地知识库服务暴露到公网">
           <el-button
             type="primary"
             :icon="VideoPlay"
@@ -395,7 +396,7 @@ onBeforeUnmount(() => {
             @click="startTunnel"
           />
         </span>
-        <span class="tunnel-action-wrap" data-tip="停止隧道-停止当前穿透隧道，断开公网访问">
+        <span class="tunnel-action-wrap" data-tip="停止隧道 - 停止当前穿透隧道，断开公网访问">
           <el-button
             type="danger"
             :icon="VideoPause"
@@ -433,9 +434,9 @@ onBeforeUnmount(() => {
         <template #title>Tailscale Funnel 需要授权</template>
         <div class="auth-detail">{{ authError.detail }}</div>
         <div class="auth-actions">
-          <el-button type="primary" size="small" :icon="Link" data-tip="打开授权-在浏览器中打开 Tailscale Funnel 授权页面" @click="openAuthUrl" />
-          <el-button size="small" :icon="RefreshRight" data-tip="重新启动-完成授权后重新启动隧道" @click="startTunnel" />
-          <el-button size="small" :icon="Close" data-tip="取消-关闭此授权错误提示" @click="dismissAuthError" />
+          <IconActionButton name="打开授权" desc="在浏览器中打开 Tailscale Funnel 授权页面" :icon="Link" size="small" variant="primary" @click="openAuthUrl" />
+          <IconActionButton name="重新启动" desc="完成授权后重新启动隧道" :icon="RefreshRight" size="small" @click="startTunnel" />
+          <IconActionButton name="取消" desc="关闭此授权错误提示" :icon="Close" size="small" @click="dismissAuthError" />
         </div>
       </el-alert>
     </div>
@@ -487,10 +488,10 @@ onBeforeUnmount(() => {
                 <span class="info-label">固定域名：</span>
                 <code>{{ config.hostname }}</code>
               </div>
-              <el-button size="small" type="primary" :icon="Setting" data-tip="重新配置-重新运行 Cloudflare Named 隧道配置向导" @click="openWizard" />
+              <IconActionButton name="重新配置" desc="重新运行 Cloudflare Named 隧道配置向导" :icon="Setting" size="small" variant="primary" @click="openWizard" />
             </div>
             <div v-else class="named-config-empty">
-              <el-button size="small" type="primary" :icon="MagicStick" data-tip="配置向导-打开 Cloudflare Named 隧道三步配置向导（授权→创建→绑定域名）" @click="openWizard" />
+              <IconActionButton name="配置向导" desc="打开 Cloudflare Named 隧道三步配置向导（授权→创建→绑定域名）" :icon="MagicStick" size="small" variant="primary" @click="openWizard" />
               <span class="hint">三步配置：授权登录 → 创建隧道 → 绑定域名</span>
             </div>
           </div>
@@ -550,7 +551,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="actions">
-        <el-button type="primary" :icon="Check" data-tip="保存配置-持久化穿透配置（Provider / 隧道模式 / Authtoken / 开机自启）" :loading="saving" @click="saveConfig" />
+        <IconActionButton name="保存配置" desc="持久化穿透配置（Provider / 隧道模式 / Authtoken / 开机自启）" :icon="Check" variant="primary" :loading="saving" @click="saveConfig" />
       </div>
     </div>
 
@@ -573,7 +574,7 @@ onBeforeUnmount(() => {
           点击"开始授权"后，cloudflared 会启动 OAuth 流程。在浏览器中完成 Cloudflare 账号授权后，系统会自动检测 cert.pem 生成并进入下一步。
         </div>
         <div class="wizard-actions">
-          <el-button type="primary" :icon="Key" data-tip="授权登录-打开 Cloudflare OAuth 授权登录流程" :loading="loginPolling" @click="startLogin" />
+          <IconActionButton name="授权登录" desc="打开 Cloudflare OAuth 授权登录流程" :icon="Key" variant="primary" :loading="loginPolling" @click="startLogin" />
         </div>
         <div class="wizard-login-status" v-if="loginResult">
           <el-alert
@@ -609,7 +610,7 @@ onBeforeUnmount(() => {
           :disabled="creatingTunnel"
         />
         <div class="wizard-actions">
-          <el-button type="primary" :icon="CirclePlus" data-tip="创建隧道-创建命名隧道并生成 credentials 文件" :loading="creatingTunnel" @click="createTunnel" />
+          <IconActionButton name="创建隧道" desc="创建命名隧道并生成 credentials 文件" :icon="CirclePlus" variant="primary" :loading="creatingTunnel" @click="createTunnel" />
         </div>
       </div>
 
@@ -624,7 +625,7 @@ onBeforeUnmount(() => {
           :disabled="routingDns"
         />
         <div class="wizard-actions">
-          <el-button type="primary" :icon="Connection" data-tip="配置DNS-为固定域名配置 Cloudflare DNS 解析并切换到 Named 模式" :loading="routingDns" @click="routeDns" />
+          <IconActionButton name="配置DNS" desc="为固定域名配置 Cloudflare DNS 解析并切换到 Named 模式" :icon="Connection" variant="primary" :loading="routingDns" @click="routeDns" />
         </div>
       </div>
     </AppModal>

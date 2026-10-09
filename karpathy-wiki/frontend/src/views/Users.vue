@@ -143,7 +143,7 @@ onMounted(loadUsers);
           <h2 class="head-title grad-text">用户管理</h2>
           <p class="head-tip">用户列表 · 创建 · 编辑 · 启用禁用 · 删除</p>
         </div>
-        <button class="neon-btn" :data-tip="showCreateForm ? '取消-关闭新建用户表单' : '新建用户-创建新账户并分配角色'" @click="showCreateForm = !showCreateForm">
+        <button class="neon-btn" :data-tip="showCreateForm ? '取消 - 关闭新建用户表单' : '新建用户 - 创建新账户并分配角色'" @click="showCreateForm = !showCreateForm">
           <el-icon class="btn-icon"><component :is="showCreateForm ? Close : Plus" /></el-icon>
         </button>
       </div>
@@ -196,10 +196,10 @@ onMounted(loadUsers);
           </div>
         </div>
         <div class="form-actions">
-          <button class="neon-btn" data-tip="创建-提交创建新用户" @click="handleCreate">
+          <button class="neon-btn" data-tip="创建 - 提交创建新用户" @click="handleCreate">
             <el-icon class="btn-icon"><Check /></el-icon>
           </button>
-          <button class="neon-btn secondary" data-tip="取消-关闭新建用户表单" @click="showCreateForm = false">
+          <button class="neon-btn secondary" data-tip="取消 - 关闭新建用户表单" @click="showCreateForm = false">
             <el-icon class="btn-icon"><Close /></el-icon>
           </button>
         </div>
@@ -241,10 +241,10 @@ onMounted(loadUsers);
                   <input v-model="editForm.password" type="password" class="inline-input" placeholder="新密码（留空不修改）" />
                 </td>
                 <td>
-                  <button class="neon-btn btn-sm" data-tip="保存-保存该用户的角色/启用状态与密码修改" @click="handleSaveEdit">
+                  <button class="neon-btn btn-sm" data-tip="保存 - 保存该用户的角色/启用状态与密码修改" @click="handleSaveEdit">
                     <el-icon class="btn-icon"><Check /></el-icon>
                   </button>
-                  <button class="neon-btn secondary btn-sm" data-tip="取消-放弃编辑该用户" @click="cancelEdit">
+                  <button class="neon-btn secondary btn-sm" data-tip="取消 - 放弃编辑该用户" @click="cancelEdit">
                     <el-icon class="btn-icon"><Close /></el-icon>
                   </button>
                 </td>
@@ -260,10 +260,10 @@ onMounted(loadUsers);
                 <td class="td-date">{{ formatDate(u.createdAt) }}</td>
                 <td class="td-date">{{ formatDate(u.lastLoginAt) }}</td>
                 <td>
-                  <button class="neon-btn secondary btn-sm" data-tip="编辑-修改该用户的角色/状态/密码" @click="startEdit(u)">
+                  <button class="neon-btn secondary btn-sm" data-tip="编辑 - 修改该用户的角色/状态/密码" @click="startEdit(u)">
                     <el-icon class="btn-icon"><Edit /></el-icon>
                   </button>
-                  <button class="neon-btn danger btn-sm" data-tip="删除-删除该用户（当前登录用户不可删）" @click="handleDelete(u)">
+                  <button class="neon-btn danger btn-sm" data-tip="删除 - 删除该用户（当前登录用户不可删）" @click="handleDelete(u)">
                     <el-icon class="btn-icon"><Delete /></el-icon>
                   </button>
                 </td>

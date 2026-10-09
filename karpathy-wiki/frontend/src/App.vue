@@ -422,6 +422,10 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
   flex: 1;
+  /* min-height:0 必须显式声明：flex 子项默认 min-height:auto 不允许收缩到内容高度以下，
+     菜单项多时（15 项）列表会溢出 aside，尾部菜单项滑入 .nav-bottom（用户区/登出）下方，
+     视口较矮时点击「用户管理」等尾部项会穿透点到「登出」按钮（实测 1258x566 视口 100% 复现） */
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   z-index: 1;
