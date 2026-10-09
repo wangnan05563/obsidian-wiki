@@ -309,8 +309,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           <h2 class="head-title">
             <span v-if="store.isCompiling" class="grad-text">机器人正在编译…</span>
             <span v-else-if="store.isDone" class="grad-text">编译完成</span>
-            <span v-else-if="store.errorMessage">出错了</span>
-            <span v-else>准备就绪</span>
+            <span v-else-if="store.errorMessage" class="grad-text">出错了</span>
+            <span v-else class="grad-text">准备就绪</span>
           </h2>
           <p class="head-tip">
             <template v-if="robotMood === 'thinking'">小提示：编译过程是流式的，可实时查看每一步</template>
@@ -486,7 +486,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
               :key="preset.key"
               :label="preset.label"
               :value="preset.key"
-              :data-tip="`${preset.label}-切换到 ${preset.model} 后重新编译`"
+              :data-tip="`${preset.label} - 切换到 ${preset.model} 后重新编译`"
             />
           </el-select>
         </div>

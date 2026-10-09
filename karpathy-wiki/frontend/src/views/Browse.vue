@@ -8,6 +8,7 @@ import { consumeSSE } from '../utils/sse';
 import { useCompileStore } from '../stores/compile';
 import { usePermission } from '../composables/usePermission';
 import DocumentTabs from '../components/DocumentTabs.vue';
+import IconActionButton from '../components/IconActionButton.vue';
 import TocTree from '../components/TocTree.vue';
 import type { TocNode } from '../components/TocTree.vue';
 import type {
@@ -2314,14 +2315,15 @@ onMounted(async () => {
                 @click="downloadCurrent"
               ></el-button>
               <!-- T00294：文档浏览栏右上角全屏查看/编辑图标（打开全屏遮罩浏览或编辑文本） -->
-              <el-button
+              <IconActionButton
                 v-if="activeTab?.content"
-                size="small"
+                name="全屏"
+                desc="全屏查看/编辑当前文档"
                 :icon="FullScreen"
-                data-tip="全屏查看/编辑当前文档"
+                size="small"
                 @click="fullscreenView = true"
-              ></el-button>
-              <el-button v-if="!editing" size="small" :icon="Edit" data-tip="进入内容编辑模式" @click="startEdit"></el-button>
+              />
+              <IconActionButton v-if="!editing" name="编辑" desc="进入内容编辑模式" :icon="Edit" size="small" @click="startEdit" />
               <template v-else>
                 <el-button size="small" type="primary" data-tip="保存对内容的修改" @click="saveEdit">保存</el-button>
                 <el-button size="small" data-tip="退出编辑模式并放弃未保存的修改" @click="cancelEdit">取消</el-button>
@@ -2364,12 +2366,12 @@ onMounted(async () => {
           </div>
           <div class="fs-actions">
             <!-- T00296：全屏内编辑为图标，退出用 X 图标，简洁可交互 -->
-            <el-button v-if="!editing" size="small" :icon="Edit" data-tip="进入内容编辑模式" @click="startEdit"></el-button>
+            <IconActionButton v-if="!editing" name="编辑" desc="进入内容编辑模式" :icon="Edit" size="small" @click="startEdit" />
             <template v-else>
               <el-button size="small" type="primary" data-tip="保存对内容的修改" @click="saveEdit">保存</el-button>
               <el-button size="small" data-tip="退出编辑模式并放弃未保存的修改" @click="cancelEdit">取消</el-button>
             </template>
-            <el-button size="small" :icon="Close" data-tip="退出全屏" @click="fullscreenView = false"></el-button>
+            <IconActionButton name="退出全屏" desc="退出全屏模式" :icon="Close" size="small" @click="fullscreenView = false" />
           </div>
         </div>
         <!-- 编辑态：全屏文本编辑 -->
