@@ -31,6 +31,8 @@
   --grad-neon: linear-gradient(135deg, #ff6b35 0%, #ff8c42 50%, #00a8e8 100%);
   --grad-fire: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%);
   --grad-cool: linear-gradient(135deg, #00a8e8 0%, #0066cc 100%);
+  /* T01630：电商橙渐变激活背景（亮度约 0.36）压白色仅 2.6:1，改为深棕前景 → ~5.6:1 */
+  --menu-active-fg: #3a1a05;
   --grad-aurora: linear-gradient(120deg, #00a8e8 0%, #6c5ce7 40%, #ff6b35 80%, #ff8c42 100%);
 
   /* 柔和阴影 */

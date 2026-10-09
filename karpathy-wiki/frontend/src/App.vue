@@ -471,12 +471,13 @@ onBeforeUnmount(() => {
   text-shadow: 0 0 12px rgba(0, 245, 255, 0.6);
 }
 
-/* 激活态：渐变背景 + 左侧光条强调 */
+/* 激活态：渐变背景 + 左侧光条强调
+   T01630：前景色改用 --menu-active-fg（默认 #fff），浅色/马卡龙等浅底主题可覆盖为深色，
+   避免「白字/白图标压在浅色渐变上」或「图标色与背景同色系」导致的不可见问题。 */
 .tab-btn.active {
   background: var(--grad-fire);
-  color: #fff;
+  color: var(--menu-active-fg, #fff);
   box-shadow: 0 4px 20px rgba(255, 0, 110, 0.4);
-  text-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
 }
 
 .tab-btn.active::before {
@@ -486,9 +487,9 @@ onBeforeUnmount(() => {
   top: 10%;
   bottom: 10%;
   width: 3px;
-  background: #fff;
+  background: var(--menu-active-fg, #fff);
   border-radius: 0 2px 2px 0;
-  box-shadow: 0 0 8px #fff;
+  box-shadow: 0 0 8px var(--menu-active-fg, #fff);
 }
 
 .tab-btn.disabled {
@@ -503,8 +504,14 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
-.tab-btn:hover:not(.disabled) .tab-icon,
+.tab-btn:hover:not(.disabled) .tab-icon {
+  opacity: 1;
+}
+
+/* T01630：选中态图标不再沿用 --neon-cyan（商务浅白主题下该值与激活背景同为品牌蓝 → 图标隐形），
+   改为继承按钮前景色 --menu-active-fg，与菜单文字始终同色，任何主题下都保持可读。 */
 .tab-btn.active .tab-icon {
+  color: inherit;
   opacity: 1;
 }
 
@@ -711,16 +718,16 @@ onBeforeUnmount(() => {
   transform: translateX(2px);
 }
 
+/* T01630：折叠态同样改用 --menu-active-fg，图标色随主题前景走，不再硬编码白色 */
 .icon-btn.active {
-  color: var(--neon-magenta);
+  color: var(--menu-active-fg, #fff);
   background: var(--grad-fire);
   box-shadow: 0 4px 16px rgba(255, 0, 110, 0.4);
 }
 
-/* active 图标用白色突出 */
 .icon-btn.active :deep(.nav-icon) {
-  color: #fff;
-  filter: drop-shadow(0 0 6px #fff);
+  color: inherit;
+  filter: drop-shadow(0 0 6px var(--menu-active-fg, #fff));
 }
 
 .icon-btn.disabled {
