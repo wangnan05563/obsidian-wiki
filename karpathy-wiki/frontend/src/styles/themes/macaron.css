@@ -31,6 +31,9 @@
   --grad-neon: linear-gradient(135deg, #ffb3d1 0%, #c8a2e8 50%, #a8e0d8 100%);
   --grad-fire: linear-gradient(135deg, #ffb3d1 0%, #ffc4d6 100%);
   --grad-cool: linear-gradient(135deg, #a8e0d8 0%, #c8a2e8 100%);
+  /* T01630：马卡龙激活态背景为浅粉渐变（亮度约 0.58），白色图标/文字对比度仅 1.7:1，
+     改为深紫褐前景 → 对比度 ~7:1，满足 WCAG AA（4.5:1）。 */
+  --menu-active-fg: #4a2b3a;
   --grad-aurora: linear-gradient(120deg, #a8e0d8 0%, #c8a2e8 40%, #ffb3d1 80%, #ffc4d6 100%);
 
   /* Soft shadows (no strong glow) */
