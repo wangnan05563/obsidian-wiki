@@ -1353,7 +1353,7 @@ onBeforeUnmount(() => {
               <div class="user-avatar">ME</div>
             </div>
             <div class="msg-content-wrapper" :class="[msg.role, (msg.role === 'user' && editingIdx === idx) ? 'editing' : '']">
-      <div class="msg-bubble" :class="msg.role">
+      <div class="msg-bubble" :class="[msg.role, msg.status === 'interrupted' ? 'status-interrupted' : '', msg.status === 'error' ? 'status-error' : '']">
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
               <!-- 编辑态：user 消息切换为可编辑 textarea + 确认/取消（终止当前回复后重发） -->
               <div v-if="msg.role === 'user' && editingIdx === idx" class="msg-edit" @click.stop>
@@ -2136,6 +2136,17 @@ onBeforeUnmount(() => {
   top: 0; left: 0; right: 0;
   height: 1px;
   background: linear-gradient(90deg, var(--neon-cyan), transparent);
+}
+
+/* FR-22 终态视觉区分（T01737）：已中断/已失败的气泡左侧加状态色竖条。
+   为什么只用边条不整块变色：interrupted 是用户主动行为（非错误），轻提示即可；
+   error 用 --danger 强提示。颜色消费 T01728 语义变量，暗色/多主题自动适配。 */
+.msg-bubble.assistant.status-interrupted {
+  border-left: 3px solid var(--warning, #e6a23c);
+}
+
+.msg-bubble.assistant.status-error {
+  border-left: 3px solid var(--danger, #f56c6c);
 }
 
 .msg-bubble.user {
