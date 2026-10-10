@@ -82,6 +82,11 @@
   --bg-input: #161b22;
   --bg-elevated: #1c2128;
 
+  /* 引用溯源命中高亮（FR-21）：暗色下提高黄底不透明度，
+     避免半透明黄叠深底后黑字对比不足（浅色主题走组件 fallback） */
+  --cite-hit-bg: rgba(255, 213, 79, 0.9);
+  --cite-hit-fg: #1a1a1a;
+
   /* URL 探测状态三色：暗底半透明底色 */
   --probe-ok: #3fb950;
   --probe-ok-bg: rgba(63, 185, 80, 0.15);

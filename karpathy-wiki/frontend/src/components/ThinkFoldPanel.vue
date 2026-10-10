@@ -77,7 +77,7 @@ const title = computed(() => `思考过程（${props.thinking.length} 字）`);
   background: transparent;
   cursor: pointer;
   font-size: 12px;
-  color: var(--text-2, #666);
+  color: var(--text-soft, #888);
   text-align: left;
 }
 
@@ -114,7 +114,7 @@ const title = computed(() => `思考过程（${props.thinking.length} 字）`);
   border-top: 1px dashed var(--border-color, rgba(128, 128, 128, 0.25));
   font-size: 12.5px;
   line-height: 1.7;
-  color: var(--text-2, #666);
+  color: var(--text-soft, #888);
   /* FR-23 规格 3：纯文本 + 换行渲染，禁止 Markdown 重排 */
   white-space: pre-wrap;
   word-break: break-word;
