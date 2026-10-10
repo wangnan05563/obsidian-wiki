@@ -301,7 +301,10 @@ export async function consumeQuerySSEResumable(
 
     // 可重连续接条件：未收 done 且仍持有 managerRunId 且未达上限。
     // 流读取异常（streamError 非空）只要满足上述条件也走此分支，实现「网络中断可恢复」。
-    if (writer.managerRunId && resumeCount < maxResume) {
+    // FR-22 用户停止：signal 已 abort 时禁止重连——否则 resetForResume 会清空已收部分答案，
+    // 且重连 fetch 因 signal 已 abort 立即失败，最终既无「已中断」终态也无部分答案（实测踩坑：
+    // 停止被重连分支吞掉，整轮消息消失）。
+    if (writer.managerRunId && !signal?.aborted && resumeCount < maxResume) {
       resumeCount++;
       const runId = writer.managerRunId;
       const threadId = writer.threadId;
@@ -311,6 +314,11 @@ export async function consumeQuerySSEResumable(
     }
 
     // 不可恢复：兜底 finalize 部分答案后退出；若因读取异常退出则原样抛出
+    // FR-22 用户停止：signal 已 abort 时必须跳过兜底 finalize——finalize 会把部分答案
+    // 误标为 complete 终态并置 isLoading=false，导致调用方 finally 的 stopLoading('user')
+    // 被跳过，[已停止]/interrupted 终态丢失（停止被伪装成正常完成，实测踩坑）。
+    // 停止时部分答案保留在 streamingAnswer 缓冲，由调用方 stopLoading 统一落终态。
+    if (signal?.aborted) return;
     finalizeWriter(writer);
     if (streamError) throw streamError;
     return;

@@ -103,7 +103,10 @@ export function registerQueryRoute(
     const body = request.body as { runId?: string } | null;
     const runId = body?.runId;
     if (!runId || !UUID_RE.test(runId)) {
-      return void reply.code(400).send({ error: '请求体须含合法 runId' });
+      // Fastify async handler 约定：直接返回值由框架统一 send；
+      // reply.send() 后再 return 非 undefined 会触发 "Reply was already sent" 告警
+      // 与后续 ERR_HTTP_HEADERS_SENT unhandledRejection（本单实测踩坑）
+      return reply.code(400).send({ error: '请求体须含合法 runId' });
     }
     const stopped = streamRunManager.cancel(runId);
     request.log.info({ reqId: request.id, runId, stopped, phase: 'user-stop' }, 'query-pipeline');
