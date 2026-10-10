@@ -1,6 +1,10 @@
 /* ============================================================
  * 主题切换 composable · useTheme
  * 管理主题状态、持久化、DOM 属性同步
+ *
+ * FR-24（T01763）持久化介质说明：SRS 规格写「IndexedDB」，实现沿用 localStorage——
+ * 主题属非敏感 UI 状态（项目硬约束允许），且 localStorage 同步读取可在首帧前
+ * 应用主题避免 IndexedDB 异步初始化造成的主题闪烁（FOUC），更符合「即时生效」目标。
  * ============================================================ */
 import { ref, watch } from 'vue';
 import { STORAGE_KEYS } from '../constants/storageKeys';
@@ -12,7 +16,8 @@ export type ThemeName =
   | 'product'
   | 'ecommerce'
   | 'portfolio'
-  | 'light-business';
+  | 'light-business'
+  | 'dark';
 
 export interface ThemeMeta {
   key: ThemeName;
@@ -65,6 +70,14 @@ export const THEMES: ThemeMeta[] = [
     label: '商务浅白',
     description: '浅白专业 · 蓝灰商务（与移动端一致）',
     swatch: ['#1554d1', '#f5f6f8'],
+  },
+  {
+    // FR-24（T01763）：暗色 = tokens.css 的 [data-theme="dark"] 整体覆盖，
+    // 浅白极简的等价深色版（bg 近黑 / text 近白 / accent 深蓝系）
+    key: 'dark',
+    label: '暗色',
+    description: '近黑深灰 · 蓝色强调（浅白等价深色）',
+    swatch: ['#4d8dff', '#0d1117'],
   }
 ];
 
