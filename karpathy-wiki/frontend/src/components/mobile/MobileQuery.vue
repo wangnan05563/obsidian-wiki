@@ -35,6 +35,8 @@ import { AUTO_MODEL, resolveAutoPresetForUser } from '../../utils/autoModel';
 import { useChatAutoScroll } from '../../composables/useChatAutoScroll';
 import { useSpeechRecognition } from '../../composables/useSpeechRecognition';
 import ThinkingBlock from '../ThinkingBlock.vue';
+// FR-23 思考过程折叠：模型 <think> 内容面板（与桌面端同组件，样式自适应）
+import ThinkFoldPanel from '../ThinkFoldPanel.vue';
 import RefsList from '../RefsList.vue';
 import FollowupsChips from '../FollowupsChips.vue';
 import SessionStatusIcon from '../SessionStatusIcon.vue';
@@ -806,6 +808,8 @@ onBeforeUnmount(() => {
           <div v-for="(msg, idx) in store.messages" :key="msg.id || idx" class="mq-row" :class="msg.role">
             <div class="mq-bubble" :class="[msg.role, msg.status === 'interrupted' ? 'status-interrupted' : '', msg.status === 'error' ? 'status-error' : '']">
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
+              <!-- FR-23 折叠面板（历史消息）：无思考时零渲染 -->
+              <ThinkFoldPanel v-if="msg.modelThinking" :thinking="msg.modelThinking" :panel-key="msg.id" />
               <div class="markdown-body mq-md" v-html="renderMarkdown(msg.content)"></div>
               <FollowupsChips
                 v-if="msg.followups && msg.followups.length > 0"
@@ -842,6 +846,8 @@ onBeforeUnmount(() => {
                   :steps="store.currentThinking"
                   :live="store.isLoading"
                 />
+                <!-- FR-23 流式折叠面板（移动端）：模型 <think> 内容实时跟随 -->
+                <ThinkFoldPanel v-if="store.modelThinking" :thinking="store.modelThinking" live />
                 <div v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0" class="mq-dots">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span class="mq-dots-text">正在思考…</span>

@@ -1,10 +1,12 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, nextTick, watch, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Promotion, Close, Minus, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import RobotAvatar from './RobotAvatar.vue';
 import ThinkingBlock from './ThinkingBlock.vue';
+// FR-23 思考过程折叠：模型 <think> 内容面板（与 Query 页同组件）
+import ThinkFoldPanel from './ThinkFoldPanel.vue';
 // 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续
 import ClarifyCard from './ClarifyCard.vue';
 // §X-1 步骤级追踪面板：渲染每步耗时分解，定位长耗时瓶颈
@@ -523,6 +525,8 @@ onBeforeUnmount(() => {
                   v-if="msg.thinking && msg.thinking.length > 0"
                   :steps="msg.thinking"
                 />
+                <!-- FR-23 模型 <think> 折叠面板（历史消息）：无思考时零渲染 -->
+                <ThinkFoldPanel v-if="msg.modelThinking" :thinking="msg.modelThinking" :panel-key="msg.id" />
                 <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
                 <!-- 联想追问 -->
                 <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
@@ -595,6 +599,8 @@ onBeforeUnmount(() => {
                   :steps="store.currentThinking"
                   :live="store.isLoading"
                 />
+                <!-- FR-23 流式折叠面板（悬浮窗）：模型 <think> 内容实时跟随 -->
+                <ThinkFoldPanel v-if="store.modelThinking" :thinking="store.modelThinking" live />
                 <!-- 首字节前 loading dots：让用户感知"正在思考" -->
                 <div
                   v-if="store.isLoading && !store.streamingAnswer && store.currentThinking.length === 0"
