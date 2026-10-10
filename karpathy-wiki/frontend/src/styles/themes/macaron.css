@@ -27,6 +27,19 @@
   --text-soft: #8a7a96;
   --text-dim: #b5a8c0;
 
+  /* 语义状态色（T01728）：柔和粉嫩适配 */
+  --success: #4d9e63;
+  --danger: #e06c6c;
+  --warning: #d99a3d;
+
+  /* URL 探测状态三色（保持既有浅色观感） */
+  --probe-ok: #1a7f37;
+  --probe-ok-bg: #e6f4ea;
+  --probe-warn: #9a6700;
+  --probe-warn-bg: #fdf3d7;
+  --probe-error: #c62828;
+  --probe-error-bg: #fdecea;
+
   /* Soft gradients */
   --grad-neon: linear-gradient(135deg, #ffb3d1 0%, #c8a2e8 50%, #a8e0d8 100%);
   --grad-fire: linear-gradient(135deg, #ffb3d1 0%, #ffc4d6 100%);

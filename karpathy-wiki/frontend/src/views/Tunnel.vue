@@ -360,6 +360,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="tunnel-page" v-loading="loading">
+    <!-- 页面级标题（T01728：与其他视图 head-text 结构对齐，此前直接以「隧道状态」卡片开头缺页头） -->
+    <div class="tunnel-head fade-up">
+      <div class="head-text">
+        <h2 class="head-title grad-text">内网穿透</h2>
+        <p class="head-tip">将本地知识库服务通过隧道暴露到公网，支持 Cloudflare / Tailscale</p>
+      </div>
+    </div>
     <!-- 状态卡片 -->
     <div class="glass-card">
       <h2 class="card-title">隧道状态</h2>
@@ -658,6 +665,25 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+/* 页面级标题（T01728）：与 Health/Cleanup 等 head-text 结构同款 */
+.tunnel-head {
+  padding: 0 4px;
+}
+
+.tunnel-head .head-title {
+  margin: 0 0 2px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.tunnel-head .head-tip {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
 }
 
 /* 玻璃态卡片：与项目赛博朋克主题一致 */

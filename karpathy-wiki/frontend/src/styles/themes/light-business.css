@@ -27,6 +27,19 @@
   --text-soft: #5a5f66;
   --text-dim: #9aa0a6;
 
+  /* 语义状态色（T01728）：浅色主题覆盖 :root 暗色默认值 */
+  --success: #15803d;
+  --danger: #dc2626;
+  --warning: #b45309;
+
+  /* URL 探测状态三色（保持既有浅色观感） */
+  --probe-ok: #1a7f37;
+  --probe-ok-bg: #e6f4ea;
+  --probe-warn: #9a6700;
+  --probe-warn-bg: #fdf3d7;
+  --probe-error: #c62828;
+  --probe-error-bg: #fdecea;
+
   /* 核心语义别名：aurora 默认未定义这些变量（被 Browse/Config 等视图直接引用，
      此前靠 CSS 继承/initial 兜底）。浅色主题显式补齐，避免继承到深色祖先色值导致不可读。 */
   --text-primary: #111111;

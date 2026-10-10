@@ -544,18 +544,18 @@ onMounted(() => {
 }
 
 .status-done {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.1);
+  color: var(--success, #22c55e);
+  background: color-mix(in srgb, var(--success, #22c55e) 12%, transparent);
 }
 
 .status-failed {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
 }
 
 .status-running {
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.1);
+  color: var(--warning, #f59e0b);
+  background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
   animation: pulse 1.5s ease-in-out infinite;
 }
 

@@ -299,7 +299,7 @@ function sigStaleTip(status: RefSignals['knowledgeStatus'] | undefined): string 
 }
 /* stale 警告：橙色强调，区别于普通信号 */
 .sig-stale {
-  color: #f59e0b;
+  color: var(--warning, #f59e0b);
 }
 .ref-snippet {
   font-size: 11px;
