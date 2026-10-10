@@ -1,0 +1,246 @@
+/* ============================================================
+ * 主题 Token 语义层 · tokens.css（FR-24 / T01760）
+ * ------------------------------------------------------------------
+ * 分层模型：主题 = 一组 token 值（SRS §1.3）。
+ *   --tk-*  是全站组件唯一允许消费的语义接口（base/surface/accent/text/border）；
+ *   底层变量（--bg-* / --text-* / --neon-* 等）是各主题的品牌实现细节。
+ *
+ * 为什么 :root 用「映射桥」而非字面色值：
+ *   自定义属性在消费元素上解析，而 data-theme 也挂在 <html> 上，
+ *   因此 var(--bg-void) 会取到当前主题覆盖后的值——
+ *   现有 7 主题（含 creative :root 默认）无需逐个补声明即自动具备 token 语义，
+ *   后续新增主题只要定义底层变量，token 层零改动。
+ *
+ * fallback 值即「浅色默认」：底层变量缺失时兜底为商务浅白系（与默认主题
+ * light-business 对齐），保证任何环境下 token 都解析出可读的浅色。
+ *
+ * 暗色模式：[data-theme="dark"] 整体覆盖（SRS FR-24 规格 1）。
+ *   视觉基准 = 浅白极简风的等价深色版（规格 6）：
+ *   bg 近黑（#0d1117 系）、text 近白、accent 沿用深蓝系（提亮保证暗底对比度）。
+ *   同时显式给出 --tk-* 字面值与 Element Plus --el-* 桥接，
+ *   使 EP 组件（弹层/输入/表格等）不依赖逐组件适配即整体换肤。
+ * ============================================================ */
+
+/* ---- 浅色默认：语义 token → 既有主题变量映射桥 ---- */
+:root {
+  --tk-base: var(--bg-void, #f5f6f8);          /* 页面底色 */
+  --tk-surface: var(--bg-card, #ffffff);       /* 卡片 / 面板 */
+  --tk-surface-2: var(--bg-scene, #f5f6f8);    /* 二级嵌入面（代码块 / 树 / 统计卡） */
+  --tk-accent: var(--neon-cyan, #1554d1);      /* 强调 / 激活 / 链接 */
+  --tk-accent-fg: var(--menu-active-fg, #ffffff); /* 激活背景上的前景色（NFR-2 配对硬规则） */
+  --tk-text: var(--text-bright, #111111);      /* 主文字 */
+  --tk-text-2: var(--text-soft, #5a5f66);      /* 次要文字 */
+  --tk-border: var(--border-color, #e6e8ec);   /* 分隔线 / 描边 */
+}
+
+/* ---- 暗色整体覆盖（浅白极简的等价深色版） ---- */
+[data-theme="dark"] {
+  /* 语义 token 字面值：dark 是完整主题，不依赖映射桥的间接解析 */
+  --tk-base: #0d1117;
+  --tk-surface: #161b22;
+  --tk-surface-2: #0f141a;
+  --tk-accent: #4d8dff;
+  --tk-accent-fg: #ffffff;
+  --tk-text: #e6edf3;
+  --tk-text-2: #9aa4b2;
+  --tk-border: #2d333b;
+
+  /* 品牌主色族：商务语义对齐 light-business（purple=主蓝 / magenta=危险红 /
+     pink=警告琥珀 / lime=成功绿），色值整体提亮以满足暗底对比度 */
+  --neon-purple: #4d8dff;
+  --neon-magenta: #f85149;
+  --neon-cyan: #4d8dff;
+  --neon-violet: #6b9dff;
+  --neon-pink: #f0883e;
+  --neon-lime: #3fb950;
+
+  /* 背景层次：近黑底 + 深灰抬升面 */
+  --bg-void: #0d1117;
+  --bg-deep: #090d13;
+  --bg-mid: #131922;
+  --bg-card: rgba(22, 27, 34, 0.82);
+  --bg-card-solid: #161b22;
+  --bg-glass: rgba(255, 255, 255, 0.05);
+
+  /* 文字：近白 + 灰阶 */
+  --text-bright: #e6edf3;
+  --text-base: #c9d1d9;
+  --text-soft: #9aa4b2;
+  --text-dim: #6e7681;
+
+  /* 语义状态色：GitHub Dark 校准的暗底友好色 */
+  --success: #3fb950;
+  --danger: #f85149;
+  --warning: #d29922;
+
+  /* 语义别名（light-business 同款补充，浅色主题显式补齐经验的暗色对应） */
+  --text-primary: #e6edf3;
+  --text-main: #c9d1d9;
+  --text-muted: #9aa4b2;
+  --border-color: #2d333b;
+  --border-soft: #262c34;
+  --bg-input: #161b22;
+  --bg-elevated: #1c2128;
+
+  /* URL 探测状态三色：暗底半透明底色 */
+  --probe-ok: #3fb950;
+  --probe-ok-bg: rgba(63, 185, 80, 0.15);
+  --probe-warn: #d29922;
+  --probe-warn-bg: rgba(210, 153, 34, 0.15);
+  --probe-error: #f85149;
+  --probe-error-bg: rgba(248, 81, 73, 0.15);
+
+  /* 渐变 / 阴影：克制深蓝系，避免暗底眩光 */
+  --grad-neon: linear-gradient(135deg, #4d8dff 0%, #6b9dff 100%);
+  --grad-fire: linear-gradient(135deg, #4d8dff 0%, #2f6fd4 100%);
+  --grad-cool: linear-gradient(135deg, #6b9dff 0%, #4d8dff 100%);
+  --grad-aurora: linear-gradient(120deg, #6b9dff 0%, #4d8dff 40%, #3b82f6 80%, #2f6fd4 100%);
+  --glow-purple: 0 0 20px rgba(77, 141, 255, 0.2);
+  --glow-magenta: 0 0 20px rgba(248, 81, 73, 0.2);
+  --glow-cyan: 0 0 20px rgba(77, 141, 255, 0.22);
+  --glow-soft: 0 8px 40px rgba(0, 0, 0, 0.4);
+
+  /* 边框 / 几何 / 字体：几何与字体与 light-business 对齐（等价深色版） */
+  --border-neon: 1px solid rgba(77, 141, 255, 0.3);
+  --border-glass: 1px solid #2d333b;
+  --border-accent: rgba(77, 141, 255, 0.3);
+  --radius-card: 14px;
+  --radius-btn: 10px;
+  --radius-input: 8px;
+  --radius-pill: 999px;
+  --blur: blur(10px);
+  --font-display: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-body: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Courier New', monospace;
+
+  /* 场景底色（代码块 / 树 / 统计卡深度区） */
+  --bg-scene: #0f141a;
+
+  /* 图谱节点：暗底提亮蓝系 + 状态色 */
+  --graph-entities: #4d8dff;
+  --graph-concepts: #6b9dff;
+  --graph-comparisons: #3b82f6;
+  --graph-queries: #5a9bff;
+  --graph-entities-border: #6b9dff;
+  --graph-concepts-border: #8db4ff;
+  --graph-comparisons-border: #6f9fe8;
+  --graph-queries-border: #7aa8ff;
+  --graph-qa: #f0883e;
+  --graph-solutions: #3fb950;
+  --graph-qa-border: #f0a35e;
+  --graph-solutions-border: #5fc78f;
+  --graph-edge: rgba(77, 141, 255, 0.35);
+  --graph-edge-highlight: #4d8dff;
+  --graph-label: #e6edf3;
+
+  /* 激活态配对硬规则（NFR-2）：暗底激活背景（深蓝）→ 白色前景。
+     --menu-active-fg 为旧变量名别名，保留避免既有消费点断裂（FR-24 规格 2） */
+  --menu-active-fg: #ffffff;
+
+  /* accent 半透明梯度：由品牌蓝派生（a03~a70，消费点遍布全站） */
+  --accent-purple-base: #4d8dff;
+  --accent-cyan-base: #6b9dff;
+  --accent-pink-base: #f85149;
+  --accent-magenta-base: #f0883e;
+  --accent-purple-a03: rgba(77, 141, 255, 0.03);
+  --accent-cyan-a03: rgba(107, 157, 255, 0.03);
+  --accent-pink-a03: rgba(248, 81, 73, 0.03);
+  --accent-magenta-a03: rgba(240, 136, 62, 0.03);
+  --accent-purple-a04: rgba(77, 141, 255, 0.04);
+  --accent-cyan-a04: rgba(107, 157, 255, 0.04);
+  --accent-pink-a04: rgba(248, 81, 73, 0.04);
+  --accent-magenta-a04: rgba(240, 136, 62, 0.04);
+  --accent-purple-a05: rgba(77, 141, 255, 0.05);
+  --accent-cyan-a05: rgba(107, 157, 255, 0.05);
+  --accent-pink-a05: rgba(248, 81, 73, 0.05);
+  --accent-magenta-a05: rgba(240, 136, 62, 0.05);
+  --accent-purple-a06: rgba(77, 141, 255, 0.06);
+  --accent-cyan-a06: rgba(107, 157, 255, 0.06);
+  --accent-pink-a06: rgba(248, 81, 73, 0.06);
+  --accent-magenta-a06: rgba(240, 136, 62, 0.06);
+  --accent-purple-a08: rgba(77, 141, 255, 0.08);
+  --accent-cyan-a08: rgba(107, 157, 255, 0.08);
+  --accent-pink-a08: rgba(248, 81, 73, 0.08);
+  --accent-magenta-a08: rgba(240, 136, 62, 0.08);
+  --accent-purple-a10: rgba(77, 141, 255, 0.1);
+  --accent-cyan-a10: rgba(107, 157, 255, 0.1);
+  --accent-pink-a10: rgba(248, 81, 73, 0.1);
+  --accent-magenta-a10: rgba(240, 136, 62, 0.1);
+  --accent-purple-a12: rgba(77, 141, 255, 0.12);
+  --accent-cyan-a12: rgba(107, 157, 255, 0.12);
+  --accent-pink-a12: rgba(248, 81, 73, 0.12);
+  --accent-magenta-a12: rgba(240, 136, 62, 0.12);
+  --accent-purple-a15: rgba(77, 141, 255, 0.15);
+  --accent-cyan-a15: rgba(107, 157, 255, 0.15);
+  --accent-pink-a15: rgba(248, 81, 73, 0.15);
+  --accent-magenta-a15: rgba(240, 136, 62, 0.15);
+  --accent-purple-a18: rgba(77, 141, 255, 0.18);
+  --accent-cyan-a18: rgba(107, 157, 255, 0.18);
+  --accent-pink-a18: rgba(248, 81, 73, 0.18);
+  --accent-magenta-a18: rgba(240, 136, 62, 0.18);
+  --accent-purple-a20: rgba(77, 141, 255, 0.2);
+  --accent-cyan-a20: rgba(107, 157, 255, 0.2);
+  --accent-pink-a20: rgba(248, 81, 73, 0.2);
+  --accent-magenta-a20: rgba(240, 136, 62, 0.2);
+  --accent-purple-a25: rgba(77, 141, 255, 0.25);
+  --accent-cyan-a25: rgba(107, 157, 255, 0.25);
+  --accent-pink-a25: rgba(248, 81, 73, 0.25);
+  --accent-magenta-a25: rgba(240, 136, 62, 0.25);
+  --accent-purple-a30: rgba(77, 141, 255, 0.3);
+  --accent-cyan-a30: rgba(107, 157, 255, 0.3);
+  --accent-pink-a30: rgba(248, 81, 73, 0.3);
+  --accent-magenta-a30: rgba(240, 136, 62, 0.3);
+  --accent-purple-a35: rgba(77, 141, 255, 0.35);
+  --accent-cyan-a35: rgba(107, 157, 255, 0.35);
+  --accent-pink-a35: rgba(248, 81, 73, 0.35);
+  --accent-magenta-a35: rgba(240, 136, 62, 0.35);
+  --accent-purple-a40: rgba(77, 141, 255, 0.4);
+  --accent-cyan-a40: rgba(107, 157, 255, 0.4);
+  --accent-pink-a40: rgba(248, 81, 73, 0.4);
+  --accent-magenta-a40: rgba(240, 136, 62, 0.4);
+  --accent-purple-a45: rgba(77, 141, 255, 0.45);
+  --accent-cyan-a45: rgba(107, 157, 255, 0.45);
+  --accent-pink-a45: rgba(248, 81, 73, 0.45);
+  --accent-magenta-a45: rgba(240, 136, 62, 0.45);
+  --accent-purple-a50: rgba(77, 141, 255, 0.5);
+  --accent-cyan-a50: rgba(107, 157, 255, 0.5);
+  --accent-pink-a50: rgba(248, 81, 73, 0.5);
+  --accent-magenta-a50: rgba(240, 136, 62, 0.5);
+  --accent-purple-a60: rgba(77, 141, 255, 0.6);
+  --accent-cyan-a60: rgba(107, 157, 255, 0.6);
+  --accent-pink-a60: rgba(248, 81, 73, 0.6);
+  --accent-magenta-a60: rgba(240, 136, 62, 0.6);
+  --accent-purple-a70: rgba(77, 141, 255, 0.7);
+  --accent-cyan-a70: rgba(107, 157, 255, 0.7);
+  --accent-pink-a70: rgba(248, 81, 73, 0.7);
+  --accent-magenta-a70: rgba(240, 136, 62, 0.7);
+
+  /* ---- Element Plus --el-* 桥接（FR-24 规格 5）----
+     EP 弹层 teleport 到 body，但 data-theme 挂在 <html>，变量经继承到达，
+     因此此处声明即可整体换肤，无需逐组件深覆盖 */
+  --el-bg-color: #161b22;
+  --el-bg-color-overlay: #1c2128;
+  --el-bg-color-page: #0d1117;
+  --el-text-color-primary: #e6edf3;
+  --el-text-color-regular: #c9d1d9;
+  --el-text-color-secondary: #9aa4b2;
+  --el-text-color-placeholder: #6e7681;
+  --el-text-color-disabled: #6e7681;
+  --el-border-color: #2d333b;
+  --el-border-color-light: #262c34;
+  --el-border-color-lighter: #21262d;
+  --el-border-color-extra-light: #21262d;
+  --el-fill-color: #1c2128;
+  --el-fill-color-light: #21262d;
+  --el-fill-color-lighter: #161b22;
+  --el-fill-color-blank: #161b22;
+  --el-fill-color-dark: #262c34;
+  --el-color-primary: #4d8dff;
+  --el-color-primary-light-3: #6b9dff;
+  --el-color-primary-light-5: #8db4ff;
+  --el-color-primary-light-7: #3a5a8f;
+  --el-color-primary-light-8: #2f4a75;
+  --el-color-primary-light-9: #1c2c48;
+  --el-color-primary-dark-2: #3b76e0;
+  --el-mask-color: rgba(0, 0, 0, 0.65);
+}
