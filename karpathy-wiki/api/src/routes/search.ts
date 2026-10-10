@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 import type { WebSearchConfig } from '../types.js';
+import type { IsolationGuards } from '../middleware/auth.js';
 import { searchPages } from '../search-util.js';
 import { createWebSearchTool } from '../tools/web-search.js';
 // FR-20 语义搜索：混合检索（FTS5 关键词 + BYOK 向量语义双路 RRF）与索引管理
@@ -15,7 +16,11 @@ import { getIndexDb, getIndexStatus } from '../search/sqlite-index.js';
 //
 // source/status/type 按页面 frontmatter 字段过滤（AC-10 / FR-15-3），可与 q 组合使用。
 // 当仅提供 source/status/type 而无 q 时，返回所有匹配过滤条件的页面。
-export function registerSearchRoute(app: FastifyInstance, vault: VaultService, dataDir?: string) {
+//
+// 安全（T01771 复核修复）：guards 未传（旧形态）或 auth 关闭（单租户）时行为零变化；
+// auth 启用时——chunks 是引用溯源数据源，匿名可读即泄露 vault 页面原文，要求登录；
+// rebuild/reindex-page 是触发 embedding 消耗的写操作，要求管理员（与 PUT /api/files 同档）。
+export function registerSearchRoute(app: FastifyInstance, vault: VaultService, dataDir?: string, guards?: IsolationGuards) {
   app.get('/api/search', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { q?: string; source?: string; status?: string; type?: string };
     const hasFilter = query.source || query.status || query.type;
@@ -70,7 +75,7 @@ export function registerSearchRoute(app: FastifyInstance, vault: VaultService, d
   });
 
   // ── FR-20 索引重建（设置页入口）：清空后逐页切分 + embedding，返回已索引/待补统计 ──
-  app.post('/api/search/rebuild', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/search/rebuild', { preHandler: guards?.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     if (!dataDir) {
       return void reply.code(400).send({ error: '索引功能未启用（缺少数据目录配置）' });
     }
@@ -97,7 +102,7 @@ export function registerSearchRoute(app: FastifyInstance, vault: VaultService, d
 
   // ── FR-21 引用溯源：读取某页面的全部 chunk（浮层展示 chunk 原文 + 定位）──
   // 槽位坐标（页面路径）来自 refs；chunk 内容从 SQLite 索引读取，未索引页面返回空
-  app.get('/api/search/chunks', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/search/chunks', { preHandler: guards?.requireAuth }, async (request: FastifyRequest, reply: FastifyReply) => {
     if (!dataDir) {
       return reply.send({ chunks: [] });
     }
@@ -119,7 +124,7 @@ export function registerSearchRoute(app: FastifyInstance, vault: VaultService, d
   });
 
   // ── FR-20 单页重索引（chokidar 变更钩子复用；也供单页修复）──
-  app.post('/api/search/reindex-page', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/search/reindex-page', { preHandler: guards?.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     if (!dataDir) {
       return void reply.code(400).send({ error: '索引功能未启用（缺少数据目录配置）' });
     }
