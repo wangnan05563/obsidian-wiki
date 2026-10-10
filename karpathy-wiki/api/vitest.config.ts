@@ -12,6 +12,12 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // FR-20：node:sqlite 是 Node 22.5+ 内置模块，vitest 1.x / vite 5 的模块解析器
+  // 不认识它（内置模块清单未更新），会误当 npm 包解析 'sqlite' 导致加载失败。
+  // ssr.external 让 vite 跳过打包直接交给 Node 运行时 require（测试跑在真实 Node 进程内）。
+  ssr: {
+    external: ['node:sqlite'],
+  },
   test: {
     // 包含 test 目录下所有 .test.ts 文件（RBAC 单元测试 + 集成测试）
     // 同时包含 src 下的 .test.ts（项目原有测试）

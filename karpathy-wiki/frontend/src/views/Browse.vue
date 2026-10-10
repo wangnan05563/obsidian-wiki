@@ -11,6 +11,10 @@ import DocumentTabs from '../components/DocumentTabs.vue';
 import IconActionButton from '../components/IconActionButton.vue';
 import TocTree from '../components/TocTree.vue';
 import type { TocNode } from '../components/TocTree.vue';
+// FR-20 语义搜索：embedding BYOK 配置读取（随搜索请求下发，不落盘）
+import { loadEmbeddingConfigForSearch } from '../services/userConfig';
+import { useAuthStore } from '../stores/auth';
+import { useModelStore } from '../stores/model';
 import type {
   TreeNode,
   FileContent,
@@ -1039,8 +1043,12 @@ function buildSearchUrl(): string | null {
 }
 
 async function doSearch() {
-  const url = buildSearchUrl();
-  if (!url) {
+  const q = searchQuery.value.trim();
+  const src = sourceFilter.value;
+  const st = statusFilter.value;
+  const tp = typeFilter.value;
+  const hasFilter = !!(src || st || tp);
+  if (!q && !hasFilter) {
     showSearchResults.value = false;
     searchHits.value = [];
     return;
@@ -1048,9 +1056,34 @@ async function doSearch() {
   searching.value = true;
   showSearchResults.value = true;
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    let data: { hits?: Array<SearchHit & { source?: string }>; semanticEnabled?: boolean };
+    if (q && !hasFilter) {
+      // FR-20 混合检索：纯关键词搜索走双路召回（embedding 配置随请求携带，BYOK 不落盘）；
+      // 配置了 embeddingModel 才启用语义路，未配置时后端自动仅关键词路（无报错无回落）
+      const authStore = useAuthStore();
+      const modelStore = useModelStore();
+      const emb = await loadEmbeddingConfigForSearch(
+        authStore.user?.id || 'guest',
+        modelStore.selectedPresetKey,
+      );
+      const res = await fetch(`${API_BASE}/search/hybrid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, embedding: emb }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      data = await res.json();
+      if (!data.semanticEnabled && !semanticHintShown) {
+        semanticHintShown = true;
+        ElMessage.info('语义检索未启用（未配置 embedding 模型），当前仅关键词检索');
+      }
+    } else {
+      const url = buildSearchUrl();
+      if (!url) throw new Error('无效搜索条件');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      data = await res.json();
+    }
     searchHits.value = data.hits ?? [];
   } catch (err) {
     ElMessage.error('搜索失败：' + (err as Error).message);
@@ -1059,6 +1092,9 @@ async function doSearch() {
     searching.value = false;
   }
 }
+
+// FR-20 语义命中轻提示：每页面生命周期仅提示一次，避免刷屏
+let semanticHintShown = false;
 
 function clearSearch() {
   searchQuery.value = '';
@@ -2077,7 +2113,12 @@ onMounted(async () => {
               class="search-hit-item hover-glow"
               @click="handleSearchHit(hit)"
             >
-              <div class="hit-title">{{ hit.title }}</div>
+              <div class="hit-title">
+                {{ hit.title }}
+                <!-- FR-20 语义命中标识：语义/双命中加可区分标签（规格 5），关键词命中不加 -->
+                <span v-if="(hit as any).source === 'semantic'" class="hit-source-badge semantic" data-tip="语义相似命中">语义</span>
+                <span v-else-if="(hit as any).source === 'both'" class="hit-source-badge both" data-tip="关键词与语义双命中">双命中</span>
+              </div>
               <div class="hit-path">{{ hit.path }}</div>
               <div class="hit-snippet">{{ hit.snippet }}</div>
             </div>
@@ -3008,6 +3049,26 @@ onMounted(async () => {
   font-weight: 600;
   color: var(--text-bright);
   margin-bottom: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* FR-20 语义命中标识：小号描边徽章，语义=紫、双命中=青，与页面 accent 色系一致 */
+.hit-source-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 6px;
+  line-height: 16px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+}
+.hit-source-badge.semantic {
+  color: var(--neon-purple);
+}
+.hit-source-badge.both {
+  color: var(--neon-cyan);
 }
 
 .hit-path {
