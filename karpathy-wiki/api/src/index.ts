@@ -482,7 +482,9 @@ export async function buildApp(): Promise<BuiltApp> {
 
   // §5.2 联网搜索路由：供前端直接调用展示搜索结果
   // FR-20：传入 dataDir（SQLite 索引库 wiki-index.db 所在目录），启用混合检索/重建/状态端点
-  registerSearchRoute(app, vault, dataDir);
+  // T01771 安全复核：传入 isolationGuards——chunks（引用溯源）要求登录防匿名泄露，
+  // rebuild/reindex-page（写操作）要求管理员
+  registerSearchRoute(app, vault, dataDir, isolationGuards);
   registerWebSearchRoute(app, config.webSearch);
   registerVaultRoute(app, vault, isolationGuards);
 
