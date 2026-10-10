@@ -5,6 +5,20 @@
  * ============================================================ */
 
 [data-theme="light-business"] {
+  /* ---- FR-24 token 迁移（T01761）：主题 = 浅色 token 集 ----
+     显式声明覆盖 tokens.css 的 :root 映射桥（默认主题，桥 fallback 与此同源）；
+     激活态配对硬规则（NFR-2）：深蓝激活背景（--grad-fire）→ 白色前景 */
+  --tk-base: #f5f6f8;
+  --tk-surface: #ffffff;
+  --tk-surface-2: #f5f6f8;
+  --tk-accent: #1554d1;
+  --tk-accent-fg: #ffffff;
+  --tk-text: #111111;
+  --tk-text-2: #5a5f66;
+  --tk-border: #e6e8ec;
+  /* T01761：别名化——新权威为 --tk-accent-fg，旧变量名保留避免消费点断裂 */
+  --menu-active-fg: var(--tk-accent-fg);
+
   /* 品牌主色：商务深蓝（与移动端 --m-primary:#1554d1 对齐） */
   --neon-purple: #1554d1;   /* 主品牌蓝 */
   --neon-magenta: #d93636;  /* 危险/退出红 */

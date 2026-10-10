@@ -5,6 +5,18 @@
  * ============================================================ */
 
 [data-theme="macaron"] {
+  /* ---- FR-24 token 迁移（T01761）：主题 = 浅色 token 集 ----
+     显式声明覆盖 tokens.css 的 :root 映射桥，品牌值与既有底层变量保持同源；
+     激活态配对硬规则（NFR-2）：浅粉激活背景（--grad-fire）→ 深紫褐前景 */
+  --tk-base: #fff9f5;
+  --tk-surface: rgba(255, 255, 255, 0.72);
+  --tk-surface-2: #fff5f0;
+  --tk-accent: #a8e0d8;
+  --tk-accent-fg: #4a2b3a;
+  --tk-text: #4a3a52;
+  --tk-text-2: #8a7a96;
+  --tk-border: rgba(200, 162, 232, 0.25);
+
   /* Macaron palette: soft pastel colors */
   --neon-purple: #c8a2e8;
   --neon-magenta: #ffb3d1;
@@ -45,8 +57,9 @@
   --grad-fire: linear-gradient(135deg, #ffb3d1 0%, #ffc4d6 100%);
   --grad-cool: linear-gradient(135deg, #a8e0d8 0%, #c8a2e8 100%);
   /* T01630：马卡龙激活态背景为浅粉渐变（亮度约 0.58），白色图标/文字对比度仅 1.7:1，
-     改为深紫褐前景 → 对比度 ~7:1，满足 WCAG AA（4.5:1）。 */
-  --menu-active-fg: #4a2b3a;
+     改为深紫褐前景 → 对比度 ~7:1，满足 WCAG AA（4.5:1）。
+     T01761：别名化——新权威为 --tk-accent-fg，旧变量名保留引用避免消费点断裂 */
+  --menu-active-fg: var(--tk-accent-fg);
   --grad-aurora: linear-gradient(120deg, #a8e0d8 0%, #c8a2e8 40%, #ffb3d1 80%, #ffc4d6 100%);
 
   /* Soft shadows (no strong glow) */

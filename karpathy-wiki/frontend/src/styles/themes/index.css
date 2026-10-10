@@ -19,7 +19,8 @@
 
 @import './macaron.css';
 @import './enterprise.css';
-/* creative 主题使用 :root 默认值，无需单独文件 */
+/* creative 主题品牌变量在 style.css :root；此处为 FR-24 token 迁移声明（T01761） */
+@import './creative.css';
 @import './product.css';
 @import './ecommerce.css';
 @import './portfolio.css';
