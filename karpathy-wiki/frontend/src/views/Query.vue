@@ -11,6 +11,9 @@ import InputToolbar from '../components/InputToolbar.vue';
 import IconActionButton from '../components/IconActionButton.vue';
 // FR-23 思考过程折叠：模型 <think> 内容面板（纯文本渲染，会话级展开记忆）
 import ThinkFoldPanel from '../components/ThinkFoldPanel.vue';
+// FR-21 引用溯源：[n] 角标解析 + 引用浮层（chunk 原文/高亮/打开页面）
+import CitationText from '../components/CitationText.vue';
+import CitationModal from '../components/CitationModal.vue';
 import ThinkingBlock from '../components/ThinkingBlock.vue';
 // 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续
 import ClarifyCard from '../components/ClarifyCard.vue';
@@ -579,6 +582,54 @@ function normalizeRefs(refs: string[] | Reference[] | undefined): Reference[] {
   return refs as Reference[];
 }
 
+// FR-21 引用溯源（T01755）：浮层状态与打开逻辑
+// citePagePath 取 refs[slot-1]（refs 数组下标 = [n]-1，与后端 citationSink 槽位登记一致）
+const citeOpen = ref(false);
+const citeSlot = ref(0);
+const citePagePath = ref('');
+const citeQuery = ref('');
+
+// 高亮词取该条回答前最近一条 user 消息（即触发本次回答的问题）
+function openCitation(n: number, msgIdx: number) {
+  const msg = store.messages[msgIdx];
+  if (!msg) return;
+  const paths = normalizeRefs(msg.refs).map((r) => r.path);
+  if (n < 1 || n > paths.length) return;
+  citeSlot.value = n;
+  citePagePath.value = paths[n - 1] ?? '';
+  citeQuery.value = '';
+  for (let i = msgIdx - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      citeQuery.value = store.messages[i].content;
+      break;
+    }
+  }
+  citeOpen.value = true;
+}
+
+// 流式阶段的角标点击：refs 来自 store.currentRefs，问题取输入框当前值之前的 store 无存档，
+// 故用最近一条 user 消息（bufSubmitQuestion 已把问题写入 messages）
+function openLiveCitation(n: number) {
+  const paths = store.currentRefs.map((r) => r.path);
+  if (n < 1 || n > paths.length) return;
+  citeSlot.value = n;
+  citePagePath.value = paths[n - 1] ?? '';
+  citeQuery.value = '';
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      citeQuery.value = store.messages[i].content;
+      break;
+    }
+  }
+  citeOpen.value = true;
+}
+
+// 「打开页面」跳转 Browse：复用 RefsList 的 karpathy:jump-vault 事件通道（App.vue 监听），
+// 不引入第二套跳转机制（项目无 vue-router，跨视图切换靠该 CustomEvent + sessionStorage）
+function handleCitationOpenPage(path: string) {
+  sessionStorage.setItem('karpathy:jumpPath', path);
+  globalThis.dispatchEvent(new CustomEvent('karpathy:jump-vault', { detail: { path } }));
+}
 
 /** 加载用户配置（AI 模型、搜索、工具） */
 async function loadQueryUserConfigs(
@@ -809,8 +860,7 @@ function handleStop() {
   }
 }
 
-// FR-RM-09 断点续答：流式过程中持续落盘中间态，使刷新/切页后状态不丢失。
-// 为什么组件内 watch：组件卸载（切页）时 watch 自动停止；但切页时后台流仍通过 sendQuestion 的
+// FR-RM-09 断点续答：流式过程中持续落盘中间态，使刷新/切页后状态不丢失。// 为什么组件内 watch：组件卸载（切页）时 watch 自动停止；但切页时后台流仍通过 sendQuestion 的
 // finally 在完成后落盘完整答案，且刷新前的防抖已落盘过「用户问题 + streaming 标记」，
 // 重载据此自动续答（重新生成），故组件内 watch 已满足需求，无需脱离组件生命周期。
 let persistDebounceTimer: number | null = null;
@@ -1376,7 +1426,12 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <template v-else>
-              <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
+              <!-- FR-21 引用溯源：正文经 CitationText 解析 [n] 角标（非法编号保留文本），点击角标开浮层 -->
+              <CitationText
+                :html="renderMarkdown(msg.content)"
+                :refs="normalizeRefs(msg.refs).map((r) => r.path ?? '')"
+                @cite="(n: number) => openCitation(n, idx)"
+              />
               <!-- FR-09-2 多模态输出卡片：在主答案之后、追问之前渲染 mindmap/faq/timeline -->
               <MultimodalOutputCard v-if="msg.multimodal" :output="msg.multimodal" />
               <!-- v3 图像生成卡片：通过 SSE image 事件推送，独立于 multimodal -->
@@ -1498,7 +1553,12 @@ onBeforeUnmount(() => {
                 <span class="dot"></span>
                 <span class="loading-text">正在思考…</span>
               </div>
-              <div v-else class="msg-content markdown-body" v-html="renderMarkdown(store.streamingAnswer || '')"></div>
+              <!-- FR-21 流式阶段同样经 CitationText 解析 [n]（refs 取 currentRefs 实时槽位） -->
+              <CitationText
+                :html="renderMarkdown(store.streamingAnswer || '')"
+                :refs="store.currentRefs.map((r) => r.path ?? '')"
+                @cite="openLiveCitation"
+              />
               <!-- FR-09-2 流式阶段预览 multimodal：done 之前到达的结构化输出 -->
               <MultimodalOutputCard v-if="store.currentMultimodal" :output="store.currentMultimodal" />
               <RefsList v-if="store.currentRefs.length > 0" :refs="store.currentRefs" />
@@ -1857,6 +1917,14 @@ onBeforeUnmount(() => {
         <el-button data-tip="关闭视频生成对话框" @click="closeVideoDialog">关闭</el-button>
       </template>
     </AppModal>
+    <!-- FR-21 引用溯源浮层（T01755）：点击正文 [n] 角标展示被引页 chunk 原文 -->
+    <CitationModal
+      v-model:open="citeOpen"
+      :page-path="citePagePath"
+      :slot-num="citeSlot"
+      :query="citeQuery"
+      @open-page="handleCitationOpenPage"
+    />
   </div>
 </template>
 
