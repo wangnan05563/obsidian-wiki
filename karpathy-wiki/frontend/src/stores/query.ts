@@ -645,6 +645,9 @@ export const useQueryStore = defineStore('query', () => {
         bufFinalizeAnswer(b(), sessionId, messageIndex, threadId, followups);
       },
       handleError: (message: string) => bufHandleError(b(), message),
+      // FR-22 移动端停止：MobileQuery 无桌面端的 abortReason 机制，经 writer 落「已中断」终态
+      // （追加 [已停止] 后缀 + interrupted 状态），保证停止后中间答案落盘且重载不自动续答
+      stopLoading: (reason: 'user' | 'timeout' | 'edit') => bufStopLoading(b(), reason),
     };
   }
 

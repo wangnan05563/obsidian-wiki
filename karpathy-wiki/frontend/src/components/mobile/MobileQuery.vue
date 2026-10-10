@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 // 移动端知识问答页（SRS FR-QRY，v2 多会话优化）：
 // - 双模式：列表模式（历史会话，首屏有历史时进入）/ 聊天模式（首屏无历史直接进入，展示招呼语）
 // - 历史会话：置顶排序、长按弹出操作菜单（置顶/取消置顶 · 重命名 · 删除）、右下 FAB 新建会话
@@ -523,9 +523,27 @@ async function sendQuestion(question: string, convId: string, clarify?: { clarif
       });
     await consumeQuerySSEResumable(initialFetch, resumeFetch, writer, activeAbort.signal);
   } catch (err: unknown) {
-    if ((err as Error).name === 'AbortError') return;
+    if ((err as Error).name === 'AbortError') {
+      // FR-22 用户停止：与桌面端 handleQueryFinally 对齐——落「已中断」终态
+      // （writer.stopLoading 追加 [已停止] 后缀 + interrupted 状态）并落盘，
+      // 保证停止后的部分答案在刷新/重进后完整可回看且不自动续答
+      const w = store.getSessionWriter(convId);
+      w.stopLoading('user');
+      conversationsStore.currentConversationId = convId;
+      conversationsStore.persistConversation(
+        store.messagesWithStreamingFor(convId),
+        store.getSessionBuffer(convId)?.currentThreadId ?? undefined,
+      );
+      return;
+    }
     store.getSessionWriter(convId).handleError((err as Error).message);
-    ElMessage.warning((err as Error).message);
+    // FR-22 BYOK 400：缺配置是确定性错误，以 error 级呈现配置引导（不回落、重试无意义）
+    const errMsg = (err as Error).message;
+    if (errMsg.includes('配置 → AI 服务')) {
+      ElMessage.error(errMsg);
+    } else {
+      ElMessage.warning(errMsg);
+    }
   } finally {
     // 澄清重发流程结束（成功产出答案 / 再次中断 / 失败），复位重发加载态
     clarifyResending.value = false;
@@ -542,9 +560,39 @@ async function sendQuestion(question: string, convId: string, clarify?: { clarif
 
 function handleStop() {
   if (activeAbort) {
+    const convId = store.activeId;
+    const managerRunId = convId ? store.getSessionWriter(convId).managerRunId : null;
     activeAbort.abort();
     activeAbort = null;
+    // FR-22 可恢复流式模式：后端 run 与请求解耦，须显式通知取消（与桌面端 handleStop 一致）
+    if (managerRunId) {
+      void apiFetch(`${API_BASE}/query/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: managerRunId }),
+      }).catch(() => { /* 停止通知失败不阻断前端停止；后端 60s LLM 超时兜底 */ });
+    }
   }
+}
+
+// FR-22 失败重试：error/interrupted 消息的常驻「重试」按钮（与桌面端语义一致——
+// 丢弃失败答案 + 原问题重发）。移动端消息渲染统一走 active buffer，直接用扁平 API。
+function handleRetry(idx: number) {
+  if (store.isLoading) return;
+  const msgs = store.messages;
+  let question: string | undefined;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (msgs[i].role === 'user') {
+      question = msgs[i].content;
+      break;
+    }
+  }
+  if (!question) return;
+  const convId = ensureSessionId();
+  store.removeMessagesFrom(idx);
+  conversationsStore.currentConversationId = convId;
+  conversationsStore.persistConversation(store.messagesWithStreamingFor(convId));
+  sendQuestion(question, convId);
 }
 
 function handleNewSession() {
@@ -756,7 +804,7 @@ onBeforeUnmount(() => {
 
         <div v-else class="mq-list">
           <div v-for="(msg, idx) in store.messages" :key="msg.id || idx" class="mq-row" :class="msg.role">
-            <div class="mq-bubble" :class="msg.role">
+            <div class="mq-bubble" :class="[msg.role, msg.status === 'interrupted' ? 'status-interrupted' : '', msg.status === 'error' ? 'status-error' : '']">
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
               <div class="markdown-body mq-md" v-html="renderMarkdown(msg.content)"></div>
               <FollowupsChips
@@ -765,6 +813,14 @@ onBeforeUnmount(() => {
                 @click="onFollowup"
               />
               <RefsList v-if="normalizeRefs(msg.refs).length > 0" :refs="normalizeRefs(msg.refs)" />
+              <!-- FR-22 失败重试入口（移动端）：失败/中断消息常驻重试按钮，与桌面端语义一致 -->
+              <button
+                v-if="msg.role === 'assistant' && (msg.status === 'error' || msg.status === 'interrupted')"
+                class="mq-retry-btn"
+                data-testid="error-retry"
+                title="丢弃本次结果并重新提问"
+                @click="handleRetry(idx)"
+              >重试</button>
               <div v-if="msg.createdAt" class="mq-time">{{ formatTime(msg.createdAt) }}</div>
             </div>
           </div>
@@ -1311,6 +1367,30 @@ onBeforeUnmount(() => {
   background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
   border: 1px solid rgba(21, 84, 209, 0.18);
   border-bottom-right-radius: 5px;
+}
+
+/* FR-22 终态视觉区分（T01737/T01738）：与桌面端一致的中断/失败边条，
+   颜色消费语义变量（--warning/--danger），FR-24 暗色模式自动适配 */
+.mq-bubble.assistant.status-interrupted {
+  border-left: 3px solid var(--warning, #e6a23c);
+}
+.mq-bubble.assistant.status-error {
+  border-left: 3px solid var(--danger, #f56c6c);
+}
+
+/* FR-22 失败重试按钮（移动端）：小尺寸幽灵按钮，常驻失败/中断气泡内 */
+.mq-retry-btn {
+  margin-top: 8px;
+  padding: 5px 14px;
+  font-size: 13px;
+  border-radius: 12px;
+  border: 1px solid var(--m-border-2, #e2e4e8);
+  background: transparent;
+  color: var(--m-primary, #1554d1);
+  cursor: pointer;
+}
+.mq-retry-btn:active {
+  opacity: 0.7;
 }
 .mq-md { font-size: 15px; }
 .mq-time {
