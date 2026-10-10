@@ -261,7 +261,9 @@ onBeforeUnmount(() => {
 
 .theme-item.selected {
   background: var(--bg-glass);
-  border-color: var(--border-neon);
+  /* --border-neon 是 border 简写值（1px solid 色），须整体用于 border 属性；
+     若拆给 border-color 会因值不合法而失效（激活态边框不可见） */
+  border: var(--border-neon);
 }
 
 /* Swatch preview */
