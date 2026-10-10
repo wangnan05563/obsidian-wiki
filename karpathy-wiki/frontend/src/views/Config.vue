@@ -272,7 +272,44 @@ const aiForm = ref({
   baseUrl: '',
   model: '',
   apiKey: '', // 脱敏值或新输入值
+  embeddingModel: '', // FR-20 语义搜索：选填，留空则仅关键词检索
 });
+
+// ── FR-20 语义索引状态与重建（设置页入口，规格 4）──
+const indexStatus = ref({ indexedPages: 0, pendingPages: 0, totalChunks: 0 });
+const rebuildingIndex = ref(false);
+
+async function refreshIndexStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/search/status`);
+    if (res.ok) indexStatus.value = await res.json();
+  } catch {
+    /* 状态获取失败静默（旧后端无此端点时展示默认 0） */
+  }
+}
+
+async function handleRebuildIndex() {
+  rebuildingIndex.value = true;
+  try {
+    // embedding 配置随重建请求携带（BYOK）：复用当前表单的 baseUrl/apiKey + embeddingModel
+    const embedding = aiForm.value.embeddingModel?.trim() && aiForm.value.apiKey && aiForm.value.baseUrl
+      ? { baseUrl: aiForm.value.baseUrl, apiKey: aiForm.value.apiKey, model: aiForm.value.embeddingModel.trim() }
+      : undefined;
+    const res = await fetch(`${API_BASE}/search/rebuild`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ embedding }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    indexStatus.value = data.status ?? indexStatus.value;
+    ElMessage.success(`索引重建完成：已索引 ${indexStatus.value.indexedPages} 页，待补 ${indexStatus.value.pendingPages} 页`);
+  } catch (err) {
+    ElMessage.error(apiErrorMessage('索引重建失败', err));
+  } finally {
+    rebuildingIndex.value = false;
+  }
+}
 
 // ── T00315「共享AI」：管理员全局共享 LLM 配置，供未配置个人 AI 的用户降级使用 ──
 // 与服务端 /api/ai/config 对应（requireAdmin，普通用户不可写）；与 aiForm（用户 BYOK）相互独立，
@@ -538,6 +575,7 @@ async function loadAiConfig() {
       baseUrl: cfg.baseUrl,
       model: cfg.model,
       apiKey: cfg.apiKey,
+      embeddingModel: cfg.embeddingModel ?? '',
     };
     // 判定「是否已配置」必须以「本用户本地是否存了真实 Key」为准，而非服务端脱敏回填值。
     // 为什么：服务端兜底会把脱敏串（**** 开头，仅服务端基线）回填进 apiKey，若据此置 apiKeySet=true
@@ -587,6 +625,7 @@ async function applyPreset(preset: LlmPreset) {
     baseUrl: cfg.baseUrl || preset.baseUrl,
     model: cfg.model || preset.model,
     apiKey: cfg.apiKey, // 该预设已保存的密钥（未保存则为空，由用户填写）
+    embeddingModel: cfg.embeddingModel ?? '', // FR-20：embedding 模型随预设独立保存
   };
   aiConfig.value = deriveAiSummary(aiForm.value);
   // 清空上一预设残留的「服务商可用模型」清单：否则下拉会因模型名不匹配当前预设而显示空白，
@@ -622,7 +661,11 @@ async function saveAiConfig() {
       // 服务端兜底回显的是脱敏值（**** 开头）；用户未改直接保存时不能把脱敏串当真实密钥写入本地，
       // 否则污染本地 BYOK 槽、后续问答下发无效密钥。脱敏值按"未修改/沿用服务端"处理 → 存空（继承服务端基线）。
       apiKey: aiForm.value.apiKey.startsWith('****') ? '' : aiForm.value.apiKey,
+      // FR-20 语义搜索：embedding 模型随预设槽位持久化（BYOK，不回传服务端）
+      embeddingModel: aiForm.value.embeddingModel?.trim() || undefined,
     });
+    // FR-20：配置变化可能影响 embedding 可用性，刷新索引状态展示
+    void refreshIndexStatus();
     // 更新本地派生状态摘要
     aiConfig.value = deriveAiSummary(aiForm.value);
     const label = targetKey ? `模型 ${targetKey}` : '当前模型';
@@ -654,7 +697,7 @@ async function resetAiConfig() {
     await saveAiUserConfigMap(currentUserId.value, {});
     const def = { ...DEFAULT_AI_USER_CONFIG };
     selectedPresetKey.value = aiPresets.value[0]?.key ?? '';
-    aiForm.value = { ...def };
+    aiForm.value = { ...def, embeddingModel: def.embeddingModel ?? '' };
     aiConfig.value = deriveAiSummary(def);
     aiTestResult.value = null;
     ElMessage.success('已恢复当前账户默认配置');
@@ -2236,6 +2279,8 @@ onMounted(async () => {
   // FR-14-2 Prompt IDE：加载 prompt 文件列表，与其它配置并行加载
   // 为什么放在 onMounted 而非 watch activeTab：避免切换 tab 时首次加载延迟，影响用户体验
   loadPromptList();
+  // FR-20 语义搜索：加载索引状态（设置页展示已索引/待补页面数）
+  void refreshIndexStatus();
 });
 
 // 进入 AI 服务 tab 时，若当前 selectedPresetKey 为空/非法（如 aiPresets 晚于 loadAiConfig 加载、
@@ -3133,6 +3178,34 @@ async function importConfig() {
                     />
                   </el-select>
                   <p v-if="modelStore.modelsError" class="model-error">{{ modelStore.modelsError }}</p>
+                </div>
+                <!-- FR-20 语义搜索：embedding 模型（可选）。留空时语义检索自动关闭；
+                     baseUrl/apiKey 复用上方 LLM 配置（OpenAI 兼容服务同域名提供 /embeddings） -->
+                <div class="form-row">
+                  <label class="form-label" for="ai-embedding-model">Embedding 模型</label>
+                  <el-input
+                    id="ai-embedding-model"
+                    v-model="aiForm.embeddingModel"
+                    placeholder="选填，如 text-embedding-3-small；留空则仅关键词检索"
+                    class="form-input"
+                  />
+                </div>
+              </div>
+
+              <!-- FR-20 索引重建（语义搜索）：显示已索引/待补页面数，重建走 BYOK embedding -->
+              <div class="form-row">
+                <label class="form-label">语义索引</label>
+                <div class="model-input-row">
+                  <span class="index-status" data-testid="search-index-status">
+                    已索引 {{ indexStatus.indexedPages }} 页 / 待补 {{ indexStatus.pendingPages }} 页（{{ indexStatus.totalChunks }} 块）
+                  </span>
+                  <el-button
+                    class="neon-btn"
+                    data-testid="rebuild-index-btn"
+                    data-tip="重建知识库语义索引（含向量计算，耗时取决于页面数）"
+                    :loading="rebuildingIndex"
+                    @click="handleRebuildIndex"
+                  >重建索引</el-button>
                 </div>
               </div>
 

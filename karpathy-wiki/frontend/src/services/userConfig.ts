@@ -30,6 +30,9 @@ export interface AiUserConfig {
   baseUrl: string;
   model: string;
   apiKey: string;
+  // FR-20 语义搜索：embedding 模型名（可选）。留空时语义路关闭（仅关键词检索）；
+  // baseUrl/apiKey 复用上方 LLM 配置——主流 OpenAI 兼容服务在同域名提供 /embeddings。
+  embeddingModel?: string;
 }
 
 // 搜索引擎配置：对应后端 WebSearchConfig（provider/apiKey/maxResults）。
@@ -153,6 +156,19 @@ export async function saveAiUserConfigForPreset(
   const key = presetKey?.trim() ? presetKey : LEGACY_AI_CONFIG_KEY;
   map[key] = cfg;
   await saveUserConfig(userId, 'ai', map);
+}
+
+// FR-20 语义搜索：读取当前用户当前预设的 embedding 配置（BYOK，随搜索请求下发）。
+// embeddingModel 未配置时返回 null——语义路自动关闭（仅关键词检索，无报错无回落）；
+// baseUrl/apiKey 复用 LLM 配置（OpenAI 兼容服务同域名提供 /embeddings）。
+export async function loadEmbeddingConfigForSearch(
+  userId: string,
+  presetKey: string | undefined,
+  preset?: LlmPreset,
+): Promise<{ baseUrl: string; apiKey: string; model: string } | null> {
+  const cfg = await loadAiUserConfigForPreset(userId, presetKey, preset);
+  if (!cfg.embeddingModel?.trim() || !cfg.apiKey || !cfg.baseUrl) return null;
+  return { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.embeddingModel.trim() };
 }
 
 export const DEFAULT_SEARCH_USER_CONFIG: SearchUserConfig = {

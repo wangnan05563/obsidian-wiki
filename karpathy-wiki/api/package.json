@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
-    "@types/node": "^20.11.0",
+    "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^1.6.1",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",
