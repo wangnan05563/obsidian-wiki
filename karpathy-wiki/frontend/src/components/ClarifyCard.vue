@@ -103,7 +103,9 @@ function selectRecommended() {
 .clarify-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary, #f3e9ff);
+  /* 消费 --text-bright（全 8 主题定义）：--text-primary 仅 3 主题有，
+     其余主题 fallback 浅紫白在浅底上不可见 */
+  color: var(--text-bright, #111111);
 }
 .clarify-round {
   margin-left: auto;
@@ -154,13 +156,13 @@ function selectRecommended() {
   gap: 6px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #f3e9ff);
+  color: var(--text-bright, #111111);
 }
 .recommend-tag {
   font-size: 11px;
   font-weight: 400;
   color: var(--neon-cyan, #00f5ff);
-  border: 1px solid rgba(0, 245, 255, 0.35);
+  border: 1px solid var(--accent-cyan-a35, rgba(0, 245, 255, 0.35));
   border-radius: 8px;
   padding: 0 6px;
   line-height: 16px;

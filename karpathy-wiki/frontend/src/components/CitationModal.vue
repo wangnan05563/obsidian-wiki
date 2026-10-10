@@ -110,7 +110,7 @@ function openPage() {
 .citation-path {
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--text-2, #666);
+  color: var(--text-soft, #888);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -118,7 +118,7 @@ function openPage() {
 .citation-loading,
 .citation-empty {
   font-size: 12px;
-  color: var(--text-2, #666);
+  color: var(--text-soft, #888);
   padding: 12px 0;
 }
 .citation-chunk {
@@ -134,7 +134,7 @@ function openPage() {
 }
 .citation-chunk-heading {
   margin-left: 8px;
-  color: var(--text-2, #666);
+  color: var(--text-soft, #888);
   font-weight: 400;
 }
 .citation-chunk-content {
@@ -149,10 +149,11 @@ function openPage() {
   justify-content: flex-end;
   padding-top: 4px;
 }
-/* 查询词命中高亮：黄底黑字，全站通用可读 */
+/* 查询词命中高亮：黄底黑字（荧光笔语义，明暗通用）。
+   色值走 token：dark 下背景提高不透明度，避免半透明黄叠深底后黑字对比不足 */
 :deep(.cite-hit) {
-  background: rgba(255, 213, 79, 0.55);
-  color: #1a1a1a;
+  background: var(--cite-hit-bg, rgba(255, 213, 79, 0.55));
+  color: var(--cite-hit-fg, #1a1a1a);
   border-radius: 2px;
   padding: 0 1px;
 }

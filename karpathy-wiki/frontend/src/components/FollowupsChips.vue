@@ -55,15 +55,17 @@ const emit = defineEmits<{ click: [question: string] }>();
   white-space: nowrap;
   padding: 6px 14px;
   border-radius: 16px;
-  background: rgba(255, 214, 224, 0.15);
-  border: 1px solid rgba(255, 214, 224, 0.3);
+  /* 消费主题 accent token：原硬编码浅粉在暗色/浅色主题下语义漂移，
+     cyan 系与 hover 强调色同族，全主题自动适配 */
+  background: var(--accent-cyan-a06, rgba(0, 245, 255, 0.06));
+  border: 1px solid var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
   color: var(--text-soft, #888);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s;
 }
 .followup-chip:hover:not(:disabled) {
-  background: rgba(255, 214, 224, 0.25);
+  background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
   border-color: var(--neon-cyan, #00f5ff);
   color: var(--neon-cyan, #00f5ff);
 }
