@@ -767,7 +767,14 @@ async function sendQuestion(question: string, clarify?: { clarifyId: string; cho
     if ((err as Error).name !== 'AbortError') {
       const msg = (err as Error).message;
       store.handleError(msg);
-      ElMessage.warning(apiErrorMessage('问答失败', err));
+      // FR-22 BYOK 400：缺密钥/配置无效是确定性错误，重试无意义——按 CODING-BYOK 呈现
+      // 配置引导（error 级别）而非普通失败提示，且不回落服务端密钥。错误消息随
+      // handleError 落入消息体（含完整指引原文），用户配置好后可直接点消息下方"重试"。
+      if (msg.includes('配置 → AI 服务')) {
+        ElMessage.error(msg);
+      } else {
+        ElMessage.warning(apiErrorMessage('问答失败', err));
+      }
     }
   } finally {
     if (questionTimeoutId) {
@@ -1439,6 +1446,23 @@ onBeforeUnmount(() => {
                   title="重新发起问答并生成完整回答"
                   @click="handleResend(idx)"
                 >确认重发</button>
+              </div>
+              <!-- FR-22 失败重试入口：请求失败（网络/超时/5xx）的消息常驻"重试"按钮。
+                   为什么常驻而非 hover：失败态的唯一恢复动作是用户手动重试（不做后台自动重试），
+                   必须一眼可见；与超时重发共用 resendFromUserQuestion（丢弃失败答案+原问题重发）。
+                   BYOK 400 的错误文案已含「配置 → AI 服务」指引，改完配置回来直接点重试。 -->
+              <div
+                v-if="msg.role === 'assistant' && msg.status === 'error'"
+                class="timeout-resend"
+                @click.stop
+              >
+                <span class="timeout-resend-tip">回答失败，已保留错误信息，可修改后重试</span>
+                <button
+                  class="resend-btn"
+                  data-testid="error-retry"
+                  title="重新发起问答"
+                  @click="handleResend(idx)"
+                >重试</button>
               </div>
             </div>
           </div>
