@@ -5,6 +5,7 @@
 // 为什么后处理 HTML 而非改写 Markdown 源：renderMarkdown 管线全站共用（含代码块/链接），
 // 在产物上做受控替换（n 为纯数字，注入面为零）侵入最小，且代码块外的正文替换已够用。
 import { computed } from 'vue';
+import { replaceCitationMarks, resolveCiteSlot } from '../utils/citation';
 
 const props = defineProps<{
   /** renderMarkdown 产物（已转义的 HTML） */
@@ -20,22 +21,13 @@ const emit = defineEmits<{ (e: 'cite', slot: number): void }>();
 // 合法槽位判定：1 ≤ n ≤ refs.length；非法编号原样保留
 const maxSlot = computed(() => props.refs.length);
 
-const processed = computed(() => {
-  if (maxSlot.value === 0) return props.html;
-  return props.html.replace(/\[(\d{1,2})\]/g, (match, num: string) => {
-    const n = Number(num);
-    if (n < 1 || n > maxSlot.value) return match; // 非法槽位：普通文本保留
-    return `<sup class="cite-ref" data-n="${n}" role="button" title="查看引用来源">${n}</sup>`;
-  });
-});
+// 替换规则在 utils/citation.ts 纯函数中（可单测），组件只负责装配
+const processed = computed(() => replaceCitationMarks(props.html, maxSlot.value));
 
 // 事件委托：角标是动态 HTML，逐个绑定不可行；点击 sup.cite-ref 时读取 data-n 上抛
 function handleClick(ev: MouseEvent) {
-  const target = ev.target as HTMLElement;
-  const sup = target.closest('sup.cite-ref');
-  if (!sup) return;
-  const n = Number((sup as HTMLElement).dataset.n);
-  if (n >= 1 && n <= maxSlot.value) {
+  const n = resolveCiteSlot(ev.target, maxSlot.value);
+  if (n !== null) {
     ev.preventDefault();
     ev.stopPropagation();
     emit('cite', n);
