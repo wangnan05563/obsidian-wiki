@@ -72,8 +72,8 @@ defineProps<{
   font-weight: 600;
   color: var(--m-primary, #0f4c81);
   padding: 5px 12px;
-  border: 1px dashed rgba(15, 76, 129, 0.25);
+  border: 1px dashed var(--m-primary-border, rgba(15, 76, 129, 0.25));
   border-radius: 999px;
-  background: rgba(15, 76, 129, 0.06);
+  background: var(--m-primary-soft, rgba(15, 76, 129, 0.06));
 }
 </style>

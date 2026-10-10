@@ -4,6 +4,8 @@
  * 主色深蓝（仅按钮/高亮）、无渐变、无复杂阴影、无花哨动效、
  * 无衬线系统字体、B 端研发工具（Trae IDE 移动端）视觉风格。
  * 本文件仅作用于 .mobile-root.theme-light（移动外壳）子树，桌面端 aurora 主题不受影响。
+ * 暗色联动（T01765）：桌面 html[data-theme="dark"] 时通过变量覆盖整子树切换为深色，
+ * 移动主题选择器（glass/light）保持独立语义，用户无需二次切换。
  * ============================================================ */
 
 /* ---- 设计令牌：在移动子树根部覆盖 aurora 变量为浅色 ---- */
@@ -24,6 +26,17 @@
   --m-primary-press: #0f3f9e;
   --m-primary-soft: rgba(21, 84, 209, 0.08);
   --m-danger: #d93636;
+  /* 主题派生变量：组件内不允许硬编码色值（FR-24 验收 grep #fff/#111 为零），
+     深浅两套值分别定义在 light 与 dark 变量块 */
+  --m-on-primary: #ffffff;          /* 主色底上的文字 */
+  --m-code-fg: #1a2b4a;             /* 行内代码前景 */
+  --m-mask: rgba(17, 17, 17, 0.4);  /* 底部弹出面板遮罩 */
+  --m-stripe: rgba(244, 245, 247, 0.5);      /* 表格偶数行 */
+  --m-danger-border: rgba(217, 54, 54, 0.35);
+  --m-danger-soft: rgba(217, 54, 54, 0.08);
+  --m-primary-border: rgba(21, 84, 209, 0.35); /* 链接下划虚线 */
+  --m-warning-soft: rgba(249, 171, 0, 0.12);
+  --m-warning-fg: #b76e00;
   --m-radius: 10px;
   --m-radius-lg: 14px;
   --m-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
@@ -100,7 +113,7 @@
   padding: 11px 12px;
   font-size: 15px;
   color: var(--m-text);
-  background: #ffffff;
+  background: var(--m-surface);
   border: 1px solid var(--m-border-2);
   border-radius: var(--m-radius);
   outline: none;
@@ -130,7 +143,7 @@
   padding: 0 18px;
   font-size: 15px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--m-on-primary);
   background: var(--m-primary);
   border: none;
   border-radius: var(--m-radius);
@@ -144,7 +157,7 @@
 
 /* 次要按钮（白底描边） */
 .mobile-root.theme-light .m-btn-ghost {
-  background: #ffffff;
+  background: var(--m-surface);
   color: var(--m-text);
   border: 1px solid var(--m-border-2);
 }
@@ -153,10 +166,10 @@
 /* 危险按钮 */
 .mobile-root.theme-light .m-btn-danger {
   color: var(--m-danger);
-  background: #ffffff;
-  border: 1px solid rgba(217, 54, 54, 0.35);
+  background: var(--m-surface);
+  border: 1px solid var(--m-danger-border);
 }
-.mobile-root.theme-light .m-btn-danger:active:not(:disabled) { background: rgba(217, 54, 54, 0.08); }
+.mobile-root.theme-light .m-btn-danger:active:not(:disabled) { background: var(--m-danger-soft); }
 
 /* 标签 */
 .mobile-root.theme-light .m-chip {
@@ -171,7 +184,7 @@
   white-space: nowrap;
 }
 .mobile-root.theme-light .m-chip-primary {
-  color: #ffffff;
+  color: var(--m-on-primary);
   background: var(--m-primary);
 }
 .mobile-root.theme-light .m-chip-blue {
@@ -197,7 +210,7 @@
   border-radius: 50%;
   border: none;
   background: var(--m-primary);
-  color: #ffffff;
+  color: var(--m-on-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -213,14 +226,14 @@
 .mobile-root.theme-light .m-sheet-mask {
   position: fixed;
   inset: 0;
-  background: rgba(17, 17, 17, 0.4);
+  background: var(--m-mask);
   display: flex;
   align-items: flex-end;
   z-index: 50;
 }
 .mobile-root.theme-light .m-sheet {
   width: 100%;
-  background: #ffffff;
+  background: var(--m-surface);
   border-top-left-radius: 18px;
   border-top-right-radius: 18px;
   padding: 8px 14px calc(14px + env(safe-area-inset-bottom, 0));
@@ -284,7 +297,7 @@
   font-family: var(--m-font-mono);
   font-size: 13px;
   background: var(--m-fill);
-  color: #1a2b4a;
+  color: var(--m-code-fg);
   padding: 1px 5px;
   border-radius: 5px;
 }
@@ -345,7 +358,7 @@
 .mobile-root.theme-light .md-body :deep(a) {
   color: var(--m-primary);
   text-decoration: none;
-  border-bottom: 1px dashed rgba(21, 84, 209, 0.35);
+  border-bottom: 1px dashed var(--m-primary-border);
 }
 .mobile-root.theme-light .md-body :deep(a:hover) { color: var(--m-primary-press); border-bottom-color: var(--m-primary-press); }
 .mobile-root.theme-light .md-body :deep(ul),
@@ -358,7 +371,7 @@
   font-family: var(--m-font-mono);
   font-size: 0.9em;
   background: var(--m-fill);
-  color: #1a2b4a;
+  color: var(--m-code-fg);
   padding: 1px 5px;
   border-radius: 5px;
   border: 1px solid var(--m-border);
@@ -410,9 +423,40 @@
   font-weight: 700;
   color: var(--m-text);
 }
-.mobile-root.theme-light .md-body :deep(tr:nth-child(2n) td) { background: rgba(244, 245, 247, 0.5); }
+.mobile-root.theme-light .md-body :deep(tr:nth-child(2n) td) { background: var(--m-stripe); }
 .mobile-root.theme-light .md-body :deep(hr) { border: 0; border-top: 1px solid var(--m-border); margin: 1em 0; }
 .mobile-root.theme-light .md-body :deep(img) { max-width: 100%; border-radius: 8px; cursor: zoom-in; }
 
 /* 浅白主题：隐藏毛玻璃模糊源光晕层（.mg-aurora 仅毛玻璃主题显示）*/
 .mobile-root.theme-light .mg-aurora { display: none; }
+
+/* ---- 暗色视觉基准（T01765）：桌面 data-theme="dark" 时移动子树自动跟随 ----
+   只重定义 --m-* 调色板，组件规则全部引用变量故整子树生效，无需复制选择器；
+   色值与桌面 dark 基准同源（bg #0d1117 系 / text #e6edf3 系 / accent #4d8dff）。
+   选择器特异性 (0,3,1) 高于上方 light 块 (0,2,0)，浅色声明被整体覆盖 */
+html[data-theme="dark"] .mobile-root.theme-light,
+html[data-theme="dark"] .mlogin-root.theme-light {
+  --m-bg: #0d1117;
+  --m-bg-soft: #10151c;
+  --m-surface: #161b22;
+  --m-fill: #1c2128;
+  --m-fill-2: #262c34;
+  --m-border: #2d333b;
+  --m-border-2: #30363d;
+  --m-text: #e6edf3;
+  --m-text-2: #9aa4b2;
+  --m-text-3: #6e7681;
+  --m-primary: #4d8dff;
+  --m-primary-press: #3b76e0;
+  --m-primary-soft: rgba(77, 141, 255, 0.14);
+  --m-danger: #f85149;
+  --m-on-primary: #ffffff;
+  --m-code-fg: #79c0ff;
+  --m-mask: rgba(0, 0, 0, 0.6);
+  --m-stripe: rgba(255, 255, 255, 0.04);
+  --m-danger-border: rgba(248, 81, 73, 0.4);
+  --m-danger-soft: rgba(248, 81, 73, 0.12);
+  --m-primary-border: rgba(77, 141, 255, 0.4);
+  --m-warning-soft: rgba(240, 136, 62, 0.15);
+  --m-warning-fg: #f0883e;
+}
