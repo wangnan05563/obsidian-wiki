@@ -5,6 +5,20 @@
  * ============================================================ */
 
 [data-theme="portfolio"] {
+  /* ---- FR-24 token 迁移（T01761）：主题 = 浅色 token 集 ----
+     显式声明覆盖 tokens.css 的 :root 映射桥，品牌值与既有底层变量保持同源；
+     激活态配对硬规则（NFR-2）：黑金激活背景（--grad-fire #1a1a1a→#c9a961）→ 白色前景 */
+  --tk-base: #f5f2ed;
+  --tk-surface: rgba(255, 252, 247, 0.85);
+  --tk-surface-2: #ede8e0;
+  --tk-accent: #8b7355;
+  --tk-accent-fg: #ffffff;
+  --tk-text: #1a1a1a;
+  --tk-text-2: #5a5a5a;
+  --tk-border: rgba(26, 26, 26, 0.08);
+  /* T01761：别名化——新权威为 --tk-accent-fg，旧变量名保留避免消费点断裂 */
+  --menu-active-fg: var(--tk-accent-fg);
+
   /* 作品集主色：典雅黑 + 金 */
   --neon-purple: #1a1a1a;
   --neon-magenta: #c9a961;

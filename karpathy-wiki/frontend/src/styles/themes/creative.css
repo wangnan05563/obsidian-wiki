@@ -1,0 +1,23 @@
+/* ============================================================
+ * 创意品牌主题 · Creative Theme（FR-24 / T01761）
+ * ------------------------------------------------------------------
+ * creative 的品牌变量仍在 style.css 的 :root（无 data-theme 时的默认兜底），
+ * 本文件只承载 [data-theme="creative"] 的 token 迁移声明：
+ * 切换器选中 creative 时 <html> 带 data-theme="creative"，此处声明以
+ * 同特异性后导入的规则覆盖 tokens.css 的 :root 映射桥，使 token 值
+ * 与品牌底层变量显式对齐（校验脚本可静态检查）。
+ * ============================================================ */
+
+[data-theme="creative"] {
+  /* 激活态配对硬规则（NFR-2）：品红→紫激活背景（--grad-fire #ff006e→#b026ff）→ 白色前景 */
+  --tk-base: #050010;
+  --tk-surface: rgba(22, 10, 45, 0.55);
+  --tk-surface-2: #050010;
+  --tk-accent: #00f5ff;
+  --tk-accent-fg: #ffffff;
+  --tk-text: #f3e9ff;
+  --tk-text-2: #9d8ec4;
+  --tk-border: rgba(176, 38, 255, 0.35);
+  /* 别名化：新权威为 --tk-accent-fg，旧变量名保留避免消费点断裂 */
+  --menu-active-fg: var(--tk-accent-fg);
+}

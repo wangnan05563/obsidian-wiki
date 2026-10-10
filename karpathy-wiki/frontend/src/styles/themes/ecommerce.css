@@ -5,6 +5,18 @@
  * ============================================================ */
 
 [data-theme="ecommerce"] {
+  /* ---- FR-24 token 迁移（T01761）：主题 = 浅色 token 集 ----
+     显式声明覆盖 tokens.css 的 :root 映射桥，品牌值与既有底层变量保持同源；
+     激活态配对硬规则（NFR-2）：浅橙激活背景（--grad-fire）→ 深棕前景 */
+  --tk-base: #ffffff;
+  --tk-surface: rgba(255, 255, 255, 0.95);
+  --tk-surface-2: #fafbfc;
+  --tk-accent: #00a8e8;
+  --tk-accent-fg: #3a1a05;
+  --tk-text: #1a1a2e;
+  --tk-text-2: #6b6b7d;
+  --tk-border: rgba(0, 0, 0, 0.06);
+
   /* 电商主色：活力橙 + 信任蓝 */
   --neon-purple: #0066cc;
   --neon-magenta: #ff6b35;
@@ -44,8 +56,9 @@
   --grad-neon: linear-gradient(135deg, #ff6b35 0%, #ff8c42 50%, #00a8e8 100%);
   --grad-fire: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%);
   --grad-cool: linear-gradient(135deg, #00a8e8 0%, #0066cc 100%);
-  /* T01630：电商橙渐变激活背景（亮度约 0.36）压白色仅 2.6:1，改为深棕前景 → ~5.6:1 */
-  --menu-active-fg: #3a1a05;
+  /* T01630：电商橙渐变激活背景（亮度约 0.36）压白色仅 2.6:1，改为深棕前景 → ~5.6:1
+     T01761：别名化——新权威为 --tk-accent-fg，旧变量名保留引用避免消费点断裂 */
+  --menu-active-fg: var(--tk-accent-fg);
   --grad-aurora: linear-gradient(120deg, #00a8e8 0%, #6c5ce7 40%, #ff6b35 80%, #ff8c42 100%);
 
   /* 柔和阴影 */
