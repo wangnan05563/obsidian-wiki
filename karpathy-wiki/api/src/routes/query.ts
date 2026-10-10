@@ -93,6 +93,23 @@ export function registerQueryRoute(
   guards: IsolationGuards = createIsolationGuards(),
   enableResumableStream = false,
 ) {
+  // ── FR-22 用户停止端点 ──
+  // 前端「停止生成」时携带 open 事件下发的 managerRunId 调用；后端 abort 对应 run 的
+  // 请求级 controller，producer 内部逐级终止上游 LLM 连接。run 不存在/已结束时幂等返回。
+  // 仅可恢复流式模式需要此端点（内联模式下客户端断开即终止，无独立 run 生命周期）。
+  app.post('/api/query/stop', {
+    preHandler: guards.requireAuth,
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { runId?: string } | null;
+    const runId = body?.runId;
+    if (!runId || !UUID_RE.test(runId)) {
+      return void reply.code(400).send({ error: '请求体须含合法 runId' });
+    }
+    const stopped = streamRunManager.cancel(runId);
+    request.log.info({ reqId: request.id, runId, stopped, phase: 'user-stop' }, 'query-pipeline');
+    return { stopped };
+  });
+
   app.post('/api/query', {
     // 破坏性端点更严格限流：query 触发 LLM 调用，20/min 防 token 耗尽
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
@@ -199,6 +216,13 @@ export function registerQueryRoute(
       choiceIndex: typeof body.choiceIndex === 'number' ? body.choiceIndex : undefined,
     };
 
+    // ── FR-22 用户停止：请求级终止信号 ──
+    // 每请求独立 controller；signal 注入 input 后经 adapter → queryWorkflow → harness
+    // 逐级传导至 LLM fetch，用户停止/断开时上游连接立即终止（不再等下一个 chunk）。
+    // 注意 AbortSignal 是进程内对象：每次请求新建，严禁复用（复用会让后续请求秒断）。
+    const stopController = new AbortController();
+    input.signal = stopController.signal;
+
     // ── 线程隔离 + 本地记忆解析 ──────────────────────────────────────────
     // 提取为 resolveThreadContext 函数，降低 handler 认知复杂度
     let threadId: string;
@@ -259,6 +283,16 @@ export function registerQueryRoute(
     // 为什么用 createSSESender：客户端 abort 后 reply.raw 被销毁，继续 write 会抛 ERR_STREAM_DESTROYED
     // 被 Fastify 作为未捕获异常处理为 HTTP 500，污染日志并误导排障
     const { send, isAborted, safeEnd } = createSSESender(reply, request);
+
+    // FR-22 用户停止/断开：内联路径（非可恢复模式）下连接关闭即终止 run——
+    // 与既有 isAborted() break 语义一致（内联模式本无重连续传），只是从「下个 chunk 才停」
+    // 提前到「立即终止上游 LLM 连接」。正常结束时 close 后 run 已完成，abort 无副作用。
+    reply.raw.on('close', () => {
+      if (!stopController.signal.aborted) {
+        request.log.info({ reqId: request.id, threadId, phase: 'client-close-abort' }, 'query-pipeline');
+        stopController.abort(new Error('客户端断开，终止上游'));
+      }
+    });
 
     try {
       // §6.0.2 per-session Lock：同 question 的并发请求串行化，避免 LLM 重复调用浪费 token
@@ -416,6 +450,12 @@ async function handleResumableStart(ctx: {
   // 首帧：告知前端本 run 的重连 ID（前端在刷新/断网时用它调 ?resume=）
   send('open', { runId: managerRunId });
 
+  // FR-22 用户停止：run 级 controller 挂到 input.signal 并注册进 manager；
+  // 停止端点 cancel(managerRunId) 时 abort → producer 内部逐级终止上游 LLM 连接。
+  // 注意：此处「客户端断开」只 unsubscribe 不 abort（断线≠停止，run 需继续跑支持重连续传）。
+  const runStopController = new AbortController();
+  input.signal = runStopController.signal;
+
   const sink: RunSink = {
     onChunk: (chunk) => dispatchStreamChunk(chunk, send),
     onDone: (payload) => {
@@ -435,6 +475,8 @@ async function handleResumableStart(ctx: {
     producer: () => adapter.query(input),
     lockKey: input.question,
     governor: governorStats,
+    // FR-22 用户停止：manager 持有 controller，供 /api/query/stop 端点取消
+    cancelSignal: runStopController,
     onDone: async ({ chunk, answer }) => {
       const refs = (chunk.refs ?? []).map((r) => (typeof r === "string" ? r : r.path));
       const now = new Date().toISOString();

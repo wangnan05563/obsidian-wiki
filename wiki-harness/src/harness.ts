@@ -73,7 +73,9 @@ export class Harness {
     }
   }
 
-  async run(task: { task: string; context?: Record<string, unknown> }): Promise<RunResult> {
+  // FR-22：task.signal 可选——调用方（query 路由）在客户端断开/用户停止时 abort，
+  // 逐级终止上游 LLM 连接；不传时行为与旧版完全一致（零破坏）
+  async run(task: { task: string; context?: Record<string, unknown>; signal?: AbortSignal }): Promise<RunResult> {
     const runId = randomUUID();
     // 在循环开始前记录时间戳：原实现放在循环结束后会丢失整个执行时长
     const startedAt = new Date().toISOString();
@@ -108,6 +110,8 @@ export class Harness {
       hooks: this.hooks,
       compactor: this.compactor,
       compactThreshold: this.compactThreshold,
+      // FR-22 用户停止：signal 由调用方注入，逐级终止上游 LLM 连接（可选，缺省零破坏）
+      signal: task.signal,
     });
 
     await this.hooks.afterLoop(ctx, result);
@@ -173,7 +177,8 @@ export class Harness {
   //   为什么独立方法：避免 runLoop 改动回归风险，且流式与非流式生命周期管理不同
   //   不做 stateStore.save：流式场景下中断恢复由消费端基于 sessionId 自行管理
   //   消费端（queryWorkflow）需在 done/error 时自行持久化
-  async *runStream(task: { task: string; context?: Record<string, unknown> }): AsyncGenerator<StepEvent> {
+  // FR-22：task.signal 可选，用户停止时经 runLoopStream → chatStream 逐级终止上游连接
+  async *runStream(task: { task: string; context?: Record<string, unknown>; signal?: AbortSignal }): AsyncGenerator<StepEvent> {
     const runId = randomUUID();
     // §X-1 步骤级追踪：runStream 记录 startedAt，trace 投影用其计算总时长
     const startedAt = new Date().toISOString();
@@ -209,6 +214,8 @@ export class Harness {
       hooks: this.hooks,
       compactor: this.compactor,
       compactThreshold: this.compactThreshold,
+      // FR-22 用户停止：signal 由调用方注入（可选，缺省零破坏）
+      signal: task.signal,
     })) {
       if (evt.type === 'done') {
         await this.stateStore.save(runId, {

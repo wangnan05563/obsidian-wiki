@@ -60,6 +60,9 @@ export interface StartOptions {
   lockKey?: string;
   // 完成后保留时长（ms）
   ttlMs?: number;
+  // FR-22 用户停止：run 对应的请求级 AbortController（producer 工厂闭包内 input.signal 即其 signal）。
+  // cancel(runId) 时 abort → adapter.query 内部逐级终止上游 LLM 连接。
+  cancelSignal?: AbortController;
 }
 
 interface RunEntry {
@@ -75,6 +78,8 @@ interface RunEntry {
   finishedAt: number | null;
   evictTimer: ReturnType<typeof setTimeout> | null;
   ttlMs: number;
+  // FR-22 用户停止：run 对应的请求级 controller，cancel(runId) 时 abort 终止 producer
+  cancelController?: AbortController;
 }
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 完成后保留 5 分钟，足够覆盖刷新/短暂断网
@@ -95,6 +100,7 @@ class StreamRunManager {
       finishedAt: null,
       evictTimer: null,
       ttlMs,
+      cancelController: opts.cancelSignal,
     };
     this.runs.set(runId, entry);
 
@@ -212,6 +218,18 @@ class StreamRunManager {
 
   has(runId: string): boolean {
     return this.runs.has(runId);
+  }
+
+  /**
+   * FR-22 用户停止：终止指定 run 的 producer（abort 请求级 controller）。
+   * 与 unsubscribe 的区别：断线只退订、run 继续跑（支持重连续传）；取消是用户主动停止，
+   * run 必须立即终止且不进入续传。已结束/不存在的 run 返回 false（幂等，前端无需区分）。
+   */
+  cancel(runId: string): boolean {
+    const entry = this.runs.get(runId);
+    if (!entry || entry.done || entry.failed || entry.interrupted) return false;
+    entry.cancelController?.abort(new Error('已由用户停止'));
+    return true;
   }
 
   private broadcastChunk(entry: RunEntry, chunk: AnswerChunk): void {

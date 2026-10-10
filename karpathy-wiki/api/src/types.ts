@@ -132,6 +132,10 @@ export interface QueryInput {
   // - 'followups' 启用追问建议生成（默认开启，middlewares 不含时关闭）
   // - 'stream' 启用真流式（覆盖 stream=false）
   middlewares?: string[];
+  // FR-22 用户停止：请求级 AbortSignal，由路由层在客户端断开（SSE close）或调用停止端点时 abort，
+  // 经 queryWorkflow → harness.runStream → tool-loop → LLMAdapter 逐级终止上游 LLM 连接。
+  // 为什么不来自请求体：AbortSignal 是进程内对象，无法 JSON 序列化，只能由服务端自行创建注入。
+  signal?: AbortSignal;
   // ── BYOK：按用户隔离的 per-request 配置覆盖项 ──
   // 设计动机（需求：AI 服务 / 搜索引擎 / 工具配置按用户隔离，各用户独立额度、互不抢占限流）：
   //   前端在「配置」页按当前登录用户保存各自的 API 信息（存浏览器 IndexedDB，密钥不落服务端磁盘），

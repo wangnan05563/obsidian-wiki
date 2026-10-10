@@ -26,6 +26,9 @@ interface LoopConfig {
   // §P2 上下文压缩：可选，缺省不压缩
   compactor?: Compactor;
   compactThreshold?: number;
+  // FR-22 用户停止：由调用方（query 路由）在客户端断开时 abort，逐级终止上游 LLM 连接。
+  // 为什么放 LoopConfig 而非 RunContext：signal 是本次运行的外部控制参数，不属于会话状态。
+  signal?: AbortSignal;
 }
 
 // 工具结果截断阈值：防大对象（如读取大文件、爬虫结果）撑爆 token 预算
@@ -61,6 +64,19 @@ export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunR
       };
     }
 
+    // FR-22 用户停止：每步开始前检查，已停止则不再发起下一轮 LLM 调用
+    if (config.signal?.aborted) {
+      return {
+        runId: ctx.runId,
+        status: 'failed',
+        messages: ctx.log.messages(),
+        finalContent: getLastAssistantContent(ctx.log.messages()),
+        step: ctx.step,
+        tokenUsed: ctx.tokenUsed,
+        timings: ctx.timings ?? [],
+      };
+    }
+
     await hooks.beforeStep(ctx, ctx.step);
 
     // §P2 上下文压缩：在每步 LLM 调用前判断并压缩早期历史（默认不传 compactor 不触发）
@@ -85,7 +101,7 @@ export async function runLoop(ctx: RunContext, config: LoopConfig): Promise<RunR
       // §X-1 步骤级追踪：LLM 调用耗时（含重试退避）
       const llmT0 = Date.now();
       const response = await withRetry(
-        () => config.llm.chat(llmReq.messages, llmReq.tools),
+        () => config.llm.chat(llmReq.messages, llmReq.tools, config.signal),
         config.retry,
       );
       const llmMs = Date.now() - llmT0;
@@ -218,6 +234,16 @@ export async function* runLoopStream(ctx: RunContext, config: LoopConfig): Async
       return;
     }
 
+    // FR-22 用户停止：步前检查，停止后 yield error 终态并结束循环，不再发起新 LLM 调用
+    if (config.signal?.aborted) {
+      yield {
+        type: 'error',
+        message: '已由用户停止',
+        step: ctx.step,
+      };
+      return;
+    }
+
     await hooks.beforeStep(ctx, ctx.step);
 
     // §P2 上下文压缩：与非流式分支平行，每步 LLM 调用前判断并压缩早期历史
@@ -246,7 +272,7 @@ export async function* runLoopStream(ctx: RunContext, config: LoopConfig): Async
       });
       // §X-1 步骤级追踪：流式 LLM 调用耗时（从首 chunk 到末 chunk）
       const llmT0 = Date.now();
-      for await (const chunk of config.llm.chatStream(llmReq.messages, llmReq.tools)) {
+      for await (const chunk of config.llm.chatStream(llmReq.messages, llmReq.tools, config.signal)) {
         if (chunk.delta) {
           assistantContent += chunk.delta;
           yield { type: 'delta', text: chunk.delta };

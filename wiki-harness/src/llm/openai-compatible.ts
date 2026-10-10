@@ -53,9 +53,12 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
   // 为什么集中于此：本适配器是全部 LLM 请求的出口，HTTP(S) 代理（如 Clash 127.0.0.1:10808）
   // 偶发抖动会触发原生 "fetch failed"，直接抛错会让编译/问答整轮失败；加重试可自愈多数瞬时故障。
   // 每次重试重建 AbortController：复用已 abort 的 signal 会使后续请求立即失败。
+  // external signal（FR-22）：用户主动停止时立即终止上游连接，与 60s 超时 signal 合并；
+  // 注意 external 已 abort 时重试循环不生效——用户停止语义优先于网络自愈，不应再发新请求。
   private async fetchWithRetry(
     url: string,
     init: RequestInit,
+    externalSignal?: AbortSignal,
     retries = 3,
     baseDelayMs = 2000,
   ): Promise<Response> {
@@ -63,13 +66,17 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
     for (let attempt = 1; attempt <= retries; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 60000); // 单次 60s 超时
+      // AbortSignal.any 合并超时与外部停止：任一触发即终止请求（Node 20+ 原生支持）
+      const merged = externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal;
       try {
-        const response = await fetch(url, { ...init, signal: controller.signal });
+        const response = await fetch(url, { ...init, signal: merged });
         clearTimeout(timer);
         return response;
       } catch (err) {
         clearTimeout(timer);
         lastErr = err;
+        // 用户已停止：不再重试（继续重试会违背"停止即终止"语义，白白消耗用户额度）
+        if (externalSignal?.aborted) throw err;
         const retryable = this.isRetryableNetworkError(err);
         if (retryable && attempt < retries) {
           const delay = baseDelayMs * attempt; // 2s, 4s 指数退避
@@ -82,7 +89,7 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
     throw lastErr;
   }
 
-  async chat(messages: Message[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+  async chat(messages: Message[], tools?: ToolDefinition[], signal?: AbortSignal): Promise<LLMResponse> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages,
@@ -99,7 +106,7 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
-    });
+    }, signal);
 
     if (!response.ok) {
       const text = await response.text();
@@ -119,7 +126,7 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
     };
   }
 
-  async *chatStream(messages: Message[], tools?: ToolDefinition[]): AsyncIterable<LLMChunk> {
+  async *chatStream(messages: Message[], tools?: ToolDefinition[], signal?: AbortSignal): AsyncIterable<LLMChunk> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages,
@@ -137,7 +144,7 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
-    });
+    }, signal);
 
     if (!response.ok) {
       const text = await response.text();
@@ -159,6 +166,11 @@ export class OpenAICompatibleAdapter implements LLMAdapter {
 
     // SSE 解析：按行分割，data: 前缀为有效载荷，[DONE] 结束
     while (true) {
+      // 用户已停止：取消响应体读取，立即终止流（不等下一个 SSE 事件）
+      if (signal?.aborted) {
+        reader.cancel().catch(() => { /* 流已被销毁时 cancel 抛错，忽略 */ });
+        return;
+      }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });

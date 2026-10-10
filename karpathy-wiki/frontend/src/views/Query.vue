@@ -8,6 +8,7 @@ import AppModal from '../components/AppModal.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import AttachmentUploader from '../components/AttachmentUploader.vue';
 import InputToolbar from '../components/InputToolbar.vue';
+import IconActionButton from '../components/IconActionButton.vue';
 import ThinkingBlock from '../components/ThinkingBlock.vue';
 // 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续
 import ClarifyCard from '../components/ClarifyCard.vue';
@@ -787,6 +788,16 @@ function handleStop() {
   if (!abortController || !store.isLoading) return;
   abortReason = 'user';
   abortController.abort();
+  // FR-22 可恢复流式模式：后端 run 与请求解耦，仅本地 abort 不会终止上游 LLM 调用，
+  // 须显式通知后端取消该 run（内联模式无独立 run，后端随连接断开自动终止）。
+  const managerRunId = store.getSessionWriter().managerRunId;
+  if (managerRunId) {
+    void authStore.authFetch(API_BASE + '/query/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: managerRunId }),
+    }).catch(() => { /* 停止通知失败不阻断前端停止；60s LLM 超时兜底 */ });
+  }
 }
 
 // FR-RM-09 断点续答：流式过程中持续落盘中间态，使刷新/切页后状态不丢失。
@@ -1561,15 +1572,15 @@ onBeforeUnmount(() => {
             >
               <el-icon><Promotion /></el-icon>
             </el-button>
-            <el-button
+            <IconActionButton
               v-else
-              type="danger"
-              class="send-btn"
-              title="停止回答"
+              name="停止生成"
+              desc="中断当前回答"
+              aria-label="停止生成 - 中断当前回答"
+              variant="danger"
+              :icon="VideoPause"
               @click="handleStop"
-            >
-              <el-icon><VideoPause /></el-icon>
-            </el-button>
+            />
           </div>
         </div>
         <Transition name="advanced-panel">
