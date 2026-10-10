@@ -691,7 +691,7 @@ async function* queryWithHarnessStream( // NOSONAR - S107 - 函数签名需要�
   // §X-1 步骤级追踪：捕获流式 harness runId（done/error 事件透传），用于 done 时带回前端
   let queryRunId: string | undefined;
 
-  for await (const evt of harness.runStream({ task, context: { question: input.question } })) {
+  for await (const evt of harness.runStream({ task, context: { question: input.question }, signal: input.signal })) {
     const { chunks, finalAnswerDelta, error, runId } = processStreamEvent(evt, outputModes, collectedThinking);
     for (const chunk of chunks) {
       yield chunk;

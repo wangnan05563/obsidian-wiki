@@ -19,6 +19,8 @@ const props = withDefaults(
     name: string;
     /** 功能说明：tooltip 后缀 */
     desc: string;
+    /** 自定义 aria-label 覆盖：默认用 name；SRS 有完整 aria-label 硬性要求时使用 */
+    ariaLabel?: string;
     /** Element Plus 图标组件 */
     icon: Component;
     /** 尺寸（沿用 Element Plus 三档） */
@@ -47,7 +49,7 @@ const iconSize = computed(() => (props.size === 'large' ? 20 : props.size === 's
     :type="variant"
     :loading="loading"
     :disabled="disabled"
-    :aria-label="name"
+    :aria-label="ariaLabel ?? name"
     :data-tip="tip"
     @click="emit('click', $event)"
   >
