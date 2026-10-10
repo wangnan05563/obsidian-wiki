@@ -51,6 +51,27 @@
   --radius-input: 12px;
   --radius-pill: 999px;
 
+  /* 语义状态色（T01728：状态标识统一消费，浅色主题在各主题文件覆盖）。
+     Config.vue 等处的 var(--success/--danger/--warning, fallback) 自此有真实定义 */
+  --success: #4ade80;
+  --danger: #f87171;
+  --warning: #fbbf24;
+
+  /* 超时重发橙色系（Query / FloatingChat 共用） */
+  --warning-accent: #ff9f1c;
+  --warning-accent-hover: #ffb347;
+  --warning-accent-soft: rgba(255, 159, 28, 0.10);
+  --warning-accent-border: rgba(255, 159, 28, 0.35);
+  --warning-accent-ink: #1a1205;
+
+  /* URL 探测状态三色（Ingest 代理探测标签） */
+  --probe-ok: #4ade80;
+  --probe-ok-bg: rgba(74, 222, 128, 0.15);
+  --probe-warn: #fbbf24;
+  --probe-warn-bg: rgba(251, 191, 36, 0.15);
+  --probe-error: #f87171;
+  --probe-error-bg: rgba(248, 113, 113, 0.15);
+
   /* 模糊 */
   --blur: blur(16px);
 

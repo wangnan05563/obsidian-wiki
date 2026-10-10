@@ -1528,7 +1528,7 @@ function handleUrlInputChange() {
   color: var(--text-soft);
 }
 .capture-error {
-  color: #c0392b;
+  color: var(--danger, #c0392b);
 }
 .capture-result {
   display: flex;
@@ -2114,10 +2114,10 @@ function handleUrlInputChange() {
   border-radius: 4px;
   font-size: 11px;
 }
-.url-proxy-probe.probe-ok { color: #1a7f37; }
-.url-proxy-probe.probe-ok .probe-tag { background: #e6f4ea; color: #1a7f37; }
-.url-proxy-probe.probe-warn { color: #9a6700; }
-.url-proxy-probe.probe-warn .probe-tag { background: #fdf3d7; color: #9a6700; }
-.url-proxy-probe.probe-error { color: #c62828; }
-.url-proxy-probe.probe-error .probe-tag { background: #fdecea; color: #c62828; }
+.url-proxy-probe.probe-ok { color: var(--probe-ok, #1a7f37); }
+.url-proxy-probe.probe-ok .probe-tag { background: var(--probe-ok-bg, #e6f4ea); color: var(--probe-ok, #1a7f37); }
+.url-proxy-probe.probe-warn { color: var(--probe-warn, #9a6700); }
+.url-proxy-probe.probe-warn .probe-tag { background: var(--probe-warn-bg, #fdf3d7); color: var(--probe-warn, #9a6700); }
+.url-proxy-probe.probe-error { color: var(--probe-error, #c62828); }
+.url-proxy-probe.probe-error .probe-tag { background: var(--probe-error-bg, #fdecea); color: var(--probe-error, #c62828); }
 </style>

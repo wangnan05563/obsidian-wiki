@@ -263,13 +263,13 @@ function handleRemove(id: string) {
   height: 16px;
   border-radius: 50%;
   border: none;
-  background: #d32f2f;
+  background: var(--danger, #d32f2f);
   color: white;
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
 .remove-btn:hover {
-  background: #c62828;
+  background: color-mix(in srgb, var(--danger, #d32f2f) 85%, black);
 }
 </style>

@@ -27,6 +27,19 @@
   --text-soft: #475569;
   --text-dim: #94a3b8;
 
+  /* 语义状态色（T01728）：蓝灰商务适配 */
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warning: #d97706;
+
+  /* URL 探测状态三色（保持既有浅色观感） */
+  --probe-ok: #1a7f37;
+  --probe-ok-bg: #e6f4ea;
+  --probe-warn: #9a6700;
+  --probe-warn-bg: #fdf3d7;
+  --probe-error: #c62828;
+  --probe-error-bg: #fdecea;
+
   /* 蓝灰渐变 */
   --grad-neon: linear-gradient(135deg, #2563eb 0%, #3b82f6 50%, #06b6d4 100%);
   --grad-fire: linear-gradient(135deg, #2563eb 0%, #6366f1 100%);

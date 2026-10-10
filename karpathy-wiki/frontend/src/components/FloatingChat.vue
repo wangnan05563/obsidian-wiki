@@ -865,28 +865,28 @@ onBeforeUnmount(() => {
   margin-top: 6px;
   padding: 5px 9px;
   border-radius: 8px;
-  background: rgba(255, 159, 28, 0.10);
-  border: 1px solid rgba(255, 159, 28, 0.35);
+  background: var(--warning-accent-soft, rgba(255, 159, 28, 0.10));
+  border: 1px solid var(--warning-accent-border, rgba(255, 159, 28, 0.35));
 }
 .timeout-resend-tip {
   font-size: 11px;
-  color: #ffb84d;
+  color: var(--warning-accent-hover, #ffb84d);
   font-family: var(--font-mono, monospace);
 }
 .resend-btn {
   padding: 3px 12px;
   border-radius: 6px;
   border: none;
-  background: #ff9f1c;
-  color: #1a1205;
+  background: var(--warning-accent, #ff9f1c);
+  color: var(--warning-accent-ink, #1a1205);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 .resend-btn:hover {
-  background: #ffb347;
-  box-shadow: 0 0 8px rgba(255, 159, 28, 0.5);
+  background: var(--warning-accent-hover, #ffb347);
+  box-shadow: 0 0 8px var(--warning-accent-border, rgba(255, 159, 28, 0.5));
 }
 .resend-btn:active {
   transform: translateY(1px);

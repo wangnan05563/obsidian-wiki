@@ -27,6 +27,19 @@
   --text-soft: #6b6b7d;
   --text-dim: #a8a8b8;
 
+  /* 语义状态色（T01728）：明亮扁平适配 */
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warning: #d97706;
+
+  /* URL 探测状态三色（保持既有浅色观感） */
+  --probe-ok: #1a7f37;
+  --probe-ok-bg: #e6f4ea;
+  --probe-warn: #9a6700;
+  --probe-warn-bg: #fdf3d7;
+  --probe-error: #c62828;
+  --probe-error-bg: #fdecea;
+
   /* 明亮渐变 */
   --grad-neon: linear-gradient(135deg, #ff6b35 0%, #ff8c42 50%, #00a8e8 100%);
   --grad-fire: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%);

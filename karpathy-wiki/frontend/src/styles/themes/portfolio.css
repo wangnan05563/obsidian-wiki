@@ -27,6 +27,19 @@
   --text-soft: #5a5a5a;
   --text-dim: #9a9a9a;
 
+  /* 语义状态色（T01728）：米金黑优雅适配 */
+  --success: #3f7d4e;
+  --danger: #b3261e;
+  --warning: #9c6f1a;
+
+  /* URL 探测状态三色（保持既有浅色观感） */
+  --probe-ok: #1a7f37;
+  --probe-ok-bg: #e6f4ea;
+  --probe-warn: #9a6700;
+  --probe-warn-bg: #fdf3d7;
+  --probe-error: #c62828;
+  --probe-error-bg: #fdecea;
+
   /* 优雅渐变（金+黑） */
   --grad-neon: linear-gradient(135deg, #1a1a1a 0%, #c9a961 50%, #8b7355 100%);
   --grad-fire: linear-gradient(135deg, #1a1a1a 0%, #c9a961 100%);

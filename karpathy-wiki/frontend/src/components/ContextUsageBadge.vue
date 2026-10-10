@@ -122,8 +122,8 @@ async function compactContext() {
 }
 
 /* 高占用预警色：≥75% 橙、≥90% 红 */
-.ctx-ring-fg.warn { stroke: #f59e0b; }
-.ctx-ring-fg.danger { stroke: #f56c6c; }
+.ctx-ring-fg.warn { stroke: var(--warning, #f59e0b); }
+.ctx-ring-fg.danger { stroke: var(--danger, #f56c6c); }
 
 .ctx-pct {
   font-size: 10px;
@@ -133,8 +133,8 @@ async function compactContext() {
   line-height: 1;
 }
 
-.ctx-pct.warn { color: #f59e0b; }
-.ctx-pct.danger { color: #f56c6c; }
+.ctx-pct.warn { color: var(--warning, #f59e0b); }
+.ctx-pct.danger { color: var(--danger, #f56c6c); }
 
 /* 悬浮详情浮层 */
 .ctx-tip {
