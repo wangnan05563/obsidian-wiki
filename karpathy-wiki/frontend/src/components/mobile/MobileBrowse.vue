@@ -551,7 +551,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.mb-dl:active { background: rgba(21, 84, 209, 0.18); }
+.mb-dl:active { background: var(--m-primary-soft, rgba(21, 84, 209, 0.18)); }
 .mb-dl:disabled { opacity: 0.5; cursor: not-allowed; }
 .mb-dl svg { width: 16px; height: 16px; }
 .mb-detail-hero {
@@ -587,8 +587,8 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   font-size: 12px;
   color: var(--m-danger, #d93636);
-  background: rgba(217, 54, 54, 0.08);
-  border: 1px solid rgba(217, 54, 54, 0.3);
+  background: var(--m-danger-soft, rgba(217, 54, 54, 0.08));
+  border: 1px solid var(--m-danger-border, rgba(217, 54, 54, 0.3));
 }
 
 /* 快速定位 FAB */

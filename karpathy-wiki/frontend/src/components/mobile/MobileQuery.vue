@@ -1499,8 +1499,8 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   margin: 0 12px;
   padding: 8px 12px;
-  background: rgba(217, 54, 54, 0.08);
-  border: 1px solid rgba(217, 54, 54, 0.3);
+  background: var(--m-danger-soft, rgba(217, 54, 54, 0.08));
+  border: 1px solid var(--m-danger-border, rgba(217, 54, 54, 0.3));
   border-radius: 10px;
   color: var(--m-danger, #d93636);
   font-size: 13px;
@@ -1578,7 +1578,7 @@ onBeforeUnmount(() => {
 .mq-sheet-mask {
   position: fixed;
   inset: 0;
-  background: rgba(17, 17, 17, 0.4);
+  background: var(--m-mask, rgba(17, 17, 17, 0.4));
   display: flex;
   align-items: flex-end;
   z-index: 50;

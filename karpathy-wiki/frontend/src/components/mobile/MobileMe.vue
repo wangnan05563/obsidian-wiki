@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { useAuthStore } from '../../stores/auth';
 import { useModelStore } from '../../stores/model';
@@ -244,12 +244,12 @@ async function logout() {
 }
 
 .mme-role.role-admin {
-  background: rgba(15, 76, 129, 0.1);
+  background: var(--m-primary-soft, rgba(15, 76, 129, 0.1));
   color: var(--m-primary, #0f4c81);
 }
 
 .mme-role.role-user {
-  background: rgba(15, 76, 129, 0.06);
+  background: var(--m-primary-soft, rgba(15, 76, 129, 0.06));
   color: var(--m-primary, #0f4c81);
 }
 
@@ -348,13 +348,13 @@ async function logout() {
 }
 
 .mme-status.ok {
-  background: rgba(15, 76, 129, 0.1);
+  background: var(--m-primary-soft, rgba(15, 76, 129, 0.1));
   color: var(--m-primary, #0f4c81);
 }
 
 .mme-status.warn {
-  background: rgba(249, 171, 0, 0.12);
-  color: #b76e00;
+  background: var(--m-warning-soft, rgba(249, 171, 0, 0.12));
+  color: var(--m-warning-fg, #b76e00);
 }
 
 .mme-card-desc {

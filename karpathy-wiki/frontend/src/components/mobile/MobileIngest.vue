@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 // 移动端「投递采集」页（SRS FR-ING）。
 // 复用 useCompileStore 的状态机（prepareCompile + handleEvent）维护进度/时间线/生成页面，
 // 自行消费 /api/compile 的 SSE 流（经 apiFetch 注入 Bearer token，避免 useSSEStream 裸 fetch 无鉴权）。
@@ -311,7 +311,7 @@ function openPage(path: string) {
 }
 .mi-seg button.on {
   background: var(--m-primary, #0f4c81);
-  color: #ffffff;
+  color: var(--m-on-primary, #ffffff);
 }
 
 /* 表单 */
@@ -381,7 +381,7 @@ function openPage(path: string) {
   border: none;
   border-radius: 10px;
   background: var(--m-primary, #0f4c81);
-  color: #ffffff;
+  color: var(--m-on-primary, #ffffff);
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
@@ -500,13 +500,13 @@ function openPage(path: string) {
 }
 .mi-result-head.ok {
   color: var(--m-primary, #0f4c81);
-  background: rgba(15, 76, 129, 0.06);
-  border-color: rgba(15, 76, 129, 0.18);
+  background: var(--m-primary-soft, rgba(15, 76, 129, 0.06));
+  border-color: var(--m-primary-border, rgba(15, 76, 129, 0.18));
 }
 .mi-result-head.err {
-  color: #d93025;
-  background: rgba(217, 48, 37, 0.06);
-  border-color: rgba(217, 48, 37, 0.18);
+  color: var(--m-danger, #d93025);
+  background: var(--m-danger-soft, rgba(217, 48, 37, 0.06));
+  border-color: var(--m-danger-border, rgba(217, 48, 37, 0.18));
 }
 .mi-result-head.cancel {
   color: var(--m-muted, #777777);
@@ -580,7 +580,7 @@ function openPage(path: string) {
   border: none;
   border-radius: 10px;
   background: var(--m-primary, #0f4c81);
-  color: #ffffff;
+  color: var(--m-on-primary, #ffffff);
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
