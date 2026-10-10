@@ -5,7 +5,7 @@ import { searchPages } from '../search-util.js';
 import { createWebSearchTool } from '../tools/web-search.js';
 // FR-20 语义搜索：混合检索（FTS5 关键词 + BYOK 向量语义双路 RRF）与索引管理
 import { hybridSearch, rebuildIndex, listVaultPages, indexPage } from '../search/hybrid-search.js';
-import { getIndexStatus } from '../search/sqlite-index.js';
+import { getIndexDb, getIndexStatus } from '../search/sqlite-index.js';
 
 // 注册全文检索路由。
 //   GET /api/search?q=关键词&source=&status=&type=  全文检索 + frontmatter 过滤
@@ -93,6 +93,29 @@ export function registerSearchRoute(app: FastifyInstance, vault: VaultService, d
     }
     const status = getIndexStatus(dataDir);
     reply.send({ enabled: true, ...status });
+  });
+
+  // ── FR-21 引用溯源：读取某页面的全部 chunk（浮层展示 chunk 原文 + 定位）──
+  // 槽位坐标（页面路径）来自 refs；chunk 内容从 SQLite 索引读取，未索引页面返回空
+  app.get('/api/search/chunks', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!dataDir) {
+      return reply.send({ chunks: [] });
+    }
+    const q = request.query as { path?: string };
+    const rel = q.path;
+    if (!rel || rel.includes('..')) {
+      return void reply.code(400).send({ error: '缺少合法 path 参数' });
+    }
+    try {
+      const d = getIndexDb(dataDir);
+      const rows = d.prepare('SELECT chunk_index, content, heading FROM chunks WHERE page_path = ? ORDER BY chunk_index')
+        .all(rel) as Array<{ chunk_index: number; content: string; heading: string | null }>;
+      reply.send({ path: rel, chunks: rows.map((r) => ({ index: r.chunk_index, content: r.content, heading: r.heading })) });
+    } catch (err: unknown) {
+      return void reply.code(500).send({
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   // ── FR-20 单页重索引（chokidar 变更钩子复用；也供单页修复）──

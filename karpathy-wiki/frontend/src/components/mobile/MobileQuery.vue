@@ -38,6 +38,9 @@ import ThinkingBlock from '../ThinkingBlock.vue';
 // FR-23 思考过程折叠：模型 <think> 内容面板（与桌面端同组件，样式自适应）
 import ThinkFoldPanel from '../ThinkFoldPanel.vue';
 import RefsList from '../RefsList.vue';
+// FR-21 引用溯源（T01754/56）：移动端正文角标解析 + 底部抽屉浮层
+import CitationText from '../CitationText.vue';
+import CitationModal from '../CitationModal.vue';
 import FollowupsChips from '../FollowupsChips.vue';
 import SessionStatusIcon from '../SessionStatusIcon.vue';
 // 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续（复用桌面组件）
@@ -168,6 +171,52 @@ function normalizeRefs(refs: ChatMessage['refs']): Reference[] {
     }));
   }
   return refs as Reference[];
+}
+
+// FR-21 引用溯源（T01756）：浮层状态与打开逻辑，与桌面 Query.vue 同构
+// 移动端用 drawer 形态（底部抽屉语义由 AppModal variant=drawer 承载）
+const citeOpen = ref(false);
+const citeSlot = ref(0);
+const citePagePath = ref('');
+const citeQuery = ref('');
+
+function openCitation(n: number, msgIdx: number) {
+  const msg = store.messages[msgIdx];
+  if (!msg) return;
+  const paths = normalizeRefs(msg.refs).map((r) => r.path);
+  if (n < 1 || n > paths.length) return;
+  citeSlot.value = n;
+  citePagePath.value = paths[n - 1] ?? '';
+  // 高亮词取触发本次回答的 user 消息（该回答前最近一条）
+  citeQuery.value = '';
+  for (let i = msgIdx - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      citeQuery.value = store.messages[i].content;
+      break;
+    }
+  }
+  citeOpen.value = true;
+}
+
+function openLiveCitation(n: number) {
+  const paths = store.currentRefs.map((r) => r.path);
+  if (n < 1 || n > paths.length) return;
+  citeSlot.value = n;
+  citePagePath.value = paths[n - 1] ?? '';
+  citeQuery.value = '';
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      citeQuery.value = store.messages[i].content;
+      break;
+    }
+  }
+  citeOpen.value = true;
+}
+
+// 「打开页面」跳转：MobileShell 监听 karpathy:jump-vault 切到浏览页并注入 jumpPath
+function handleCitationOpenPage(path: string) {
+  sessionStorage.setItem('karpathy:jumpPath', path);
+  window.dispatchEvent(new CustomEvent('karpathy:jump-vault', { detail: { path } }));
 }
 
 function formatTime(iso?: string): string {
@@ -810,7 +859,13 @@ onBeforeUnmount(() => {
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
               <!-- FR-23 折叠面板（历史消息）：无思考时零渲染 -->
               <ThinkFoldPanel v-if="msg.modelThinking" :thinking="msg.modelThinking" :panel-key="msg.id" />
-              <div class="markdown-body mq-md" v-html="renderMarkdown(msg.content)"></div>
+              <!-- FR-21 引用溯源：正文经 CitationText 解析 [n] 角标，点击开底部抽屉 -->
+              <CitationText
+                :html="renderMarkdown(msg.content)"
+                :refs="normalizeRefs(msg.refs).map((r) => r.path ?? '')"
+                content-class="mq-md"
+                @cite="(n: number) => openCitation(n, idx)"
+              />
               <FollowupsChips
                 v-if="msg.followups && msg.followups.length > 0"
                 :followups="msg.followups"
@@ -852,11 +907,14 @@ onBeforeUnmount(() => {
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span class="mq-dots-text">正在思考…</span>
                 </div>
-                <div
+                <!-- FR-21 流式阶段同样经 CitationText 解析 [n]（refs 取 currentRefs 实时槽位） -->
+                <CitationText
                   v-else
-                  class="markdown-body mq-md streaming-content"
-                  v-html="renderMarkdown(store.streamingAnswer || '')"
-                ></div>
+                  :html="renderMarkdown(store.streamingAnswer || '')"
+                  :refs="store.currentRefs.map((r) => r.path ?? '')"
+                  content-class="mq-md streaming-content"
+                  @cite="openLiveCitation"
+                />
                 </template>
             </div>
           </div>
@@ -986,6 +1044,16 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </transition>
+
+    <!-- FR-21 引用溯源抽屉（T01756）：移动端 drawer 形态，点击正文 [n] 角标打开 -->
+    <CitationModal
+      v-model:open="citeOpen"
+      :page-path="citePagePath"
+      :slot-num="citeSlot"
+      :query="citeQuery"
+      drawer
+      @open-page="handleCitationOpenPage"
+    />
   </div>
 </template>
 

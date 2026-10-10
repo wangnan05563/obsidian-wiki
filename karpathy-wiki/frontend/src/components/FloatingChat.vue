@@ -13,6 +13,9 @@ import ClarifyCard from './ClarifyCard.vue';
 import QueryTracePanel from './QueryTracePanel.vue';
 import MessageToolbar from './MessageToolbar.vue';
 import RefsList from './RefsList.vue';
+// FR-21 引用溯源：悬浮聊天正文同样支持 [n] 角标 + 引用浮层
+import CitationText from './CitationText.vue';
+import CitationModal from './CitationModal.vue';
 import { useQueryStore } from '../stores/query';
 import { useConversationsStore, getLastActiveConversationId, setLastActiveConversationId } from '../stores/conversations';
 import { useAuthStore } from '../stores/auth';
@@ -91,6 +94,50 @@ function normalizeRefs(refs: ChatMessage['refs']): Reference[] {
     }));
   }
   return refs as Reference[];
+}
+
+// FR-21 引用溯源：浮层状态与打开逻辑（与 Query.vue 同构；悬浮窗内 dialog 形态足够）
+const citeOpen = ref(false);
+const citeSlot = ref(0);
+const citePagePath = ref('');
+const citeQuery = ref('');
+
+function openCitation(n: number, msgIdx: number) {
+  const msg = store.messages[msgIdx];
+  if (!msg) return;
+  const paths = normalizeRefs(msg.refs).map((r) => r.path);
+  if (n < 1 || n > paths.length) return;
+  citeSlot.value = n;
+  citePagePath.value = paths[n - 1] ?? '';
+  citeQuery.value = '';
+  for (let i = msgIdx - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      citeQuery.value = store.messages[i].content;
+      break;
+    }
+  }
+  citeOpen.value = true;
+}
+
+function openLiveCitation(n: number) {
+  const paths = store.currentRefs.map((r) => r.path);
+  if (n < 1 || n > paths.length) return;
+  citeSlot.value = n;
+  citePagePath.value = paths[n - 1] ?? '';
+  citeQuery.value = '';
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') {
+      citeQuery.value = store.messages[i].content;
+      break;
+    }
+  }
+  citeOpen.value = true;
+}
+
+// 「打开页面」跳转：悬浮窗在任意页面均可能打开，复用 karpathy:jump-vault 事件通道
+function handleCitationOpenPage(path: string) {
+  sessionStorage.setItem('karpathy:jumpPath', path);
+  globalThis.dispatchEvent(new CustomEvent('karpathy:jump-vault', { detail: { path } }));
 }
 
 // 时间戳格式化：仅显示 HH:MM，避免占用过多气泡空间
@@ -527,7 +574,12 @@ onBeforeUnmount(() => {
                 />
                 <!-- FR-23 模型 <think> 折叠面板（历史消息）：无思考时零渲染 -->
                 <ThinkFoldPanel v-if="msg.modelThinking" :thinking="msg.modelThinking" :panel-key="msg.id" />
-                <div class="msg-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
+                <!-- FR-21 引用溯源：正文经 CitationText 解析 [n] 角标，点击开浮层 -->
+                <CitationText
+                  :html="renderMarkdown(msg.content)"
+                  :refs="normalizeRefs(msg.refs).map((r) => r.path ?? '')"
+                  @cite="(n: number) => openCitation(n, idx)"
+                />
                 <!-- 联想追问 -->
                 <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
                   <span class="followups-label">猜猜你想问：</span>
@@ -611,11 +663,14 @@ onBeforeUnmount(() => {
                   <span class="dot"></span>
                   <span class="loading-text">正在思考…</span>
                 </div>
-                <div
+                <!-- FR-21 流式阶段同样经 CitationText 解析 [n] -->
+                <CitationText
                   v-else
-                  class="msg-content markdown-body streaming-content"
-                  v-html="renderMarkdown(store.streamingAnswer || '')"
-                ></div>
+                  :html="renderMarkdown(store.streamingAnswer || '')"
+                  :refs="store.currentRefs.map((r) => r.path ?? '')"
+                  content-class="streaming-content"
+                  @cite="openLiveCitation"
+                />
               </template>
             </div>
           </div>
@@ -676,6 +731,15 @@ onBeforeUnmount(() => {
       <RobotAvatar :size="40" :floating="false" />
     </button>
   </transition>
+
+  <!-- FR-21 引用溯源浮层：悬浮聊天内点击 [n] 角标打开（append-to-body 保证不被面板裁剪） -->
+  <CitationModal
+    v-model:open="citeOpen"
+    :page-path="citePagePath"
+    :slot-num="citeSlot"
+    :query="citeQuery"
+    @open-page="handleCitationOpenPage"
+  />
 </template>
 
 <style scoped>

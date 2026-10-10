@@ -38,15 +38,17 @@ function objSchema(properties: Record<string, unknown>, required: string[]) {
 
 // query 工作流的工具集。仅提供只读工具，query 不允许写 Vault（AC-03-2）。
 // §5.2 当 options.webSearch 为 true 时，追加 web_search 工具。
+// FR-21 引用溯源：citationSink 收集 search_pages 命中的页面（保持调用顺序）作为
+// 引用槽位——槽位编号 n 与 LLM 答案中的 [n] 内联编号一一对应（done 时并入 refs）。
 export function createQueryTools(
   vault: VaultService,
-  options: { webSearch?: boolean; webSearchConfig?: WebSearchConfig; scopeFilter?: { tags?: string[]; folder?: string } } = {},
+  options: { webSearch?: boolean; webSearchConfig?: WebSearchConfig; scopeFilter?: { tags?: string[]; folder?: string }; citationSink?: string[] } = {},
 ): ToolDefinition[] {
   const scopeFilter = options.scopeFilter;
   const tools: ToolDefinition[] = [
     {
       name: 'search_pages',
-      description: '按关键词搜索知识库页面。返回匹配的页面路径与摘要片段。',
+      description: '按关键词搜索知识库页面。返回匹配页面的槽位编号（slot）、路径与摘要片段；答案中用 [slot] 引用对应页面。',
       parameters: objSchema(
         { keywords: { type: 'string', description: '搜索关键词，多个词用空格分隔' } },
         ['keywords'],
@@ -54,7 +56,21 @@ export function createQueryTools(
       handler: async (args: unknown) => {
         const { keywords } = args as { keywords: string };
         // FR-12 scopeFilter：AI 伙伴预设的范围限定通过 search_pages 的 folder/tags 参数生效
-        return searchPages(vault, keywords, 20, scopeFilter ? { folder: scopeFilter.folder, tags: scopeFilter.tags } : undefined);
+        const hits = await searchPages(vault, keywords, 20, scopeFilter ? { folder: scopeFilter.folder, tags: scopeFilter.tags } : undefined);
+        // FR-21：命中页面按返回顺序登记为引用槽位（跨多次搜索去重），并把 slot 下发给 LLM
+        const sink = options.citationSink;
+        return hits.map((h) => {
+          let slot = -1;
+          if (sink) {
+            const existing = sink.indexOf(h.path);
+            if (existing >= 0) slot = existing + 1;
+            else {
+              sink.push(h.path);
+              slot = sink.length;
+            }
+          }
+          return { slot: slot > 0 ? slot : undefined, path: h.path, title: h.title, snippet: h.snippet };
+        });
       },
     },
     {
@@ -437,11 +453,14 @@ async function* queryWithHarness( // NOSONAR - S107 - 函数签名需要多个�
   };
 
   // 3. 构造 harness，注入工具与 afterStep hook
+  // FR-21：citationSlots 收集 search_pages 命中页面的引用槽位（顺序即 [n] 编号）
+  const citationSlots: string[] = [];
   const tools = createQueryTools(vault, {
     webSearch: webSearchAvailable,
     webSearchConfig: options.webSearchConfig,
     // FR-12 scopeFilter：AI 伙伴预设的范围限定通过 search_pages 的 folder/tags 生效
     scopeFilter: options.scopeFilter,
+    citationSink: citationSlots,
   });
 
   // 加载扩展工具（委托给 loadExtendedToolsWithFeedback 降低复杂度 S3776）
@@ -504,7 +523,9 @@ async function* queryWithHarness( // NOSONAR - S107 - 函数签名需要多个�
   }
 
   // 8. 提取引用并标记完成
-  const refs = await extractRefs(answer, vault);
+  // FR-21：引用槽位（search_pages 命中顺序）优先，[[页面名]] 链接式引用并入去重——
+  // refs 数组下标即 LLM 答案中 [n] 的槽位 n-1，前端据此解析角标与浮层
+  const refs = mergeCitationSlots(citationSlots, await extractRefs(answer, vault));
   // §5.2 联网搜索引用：collectedWebRefs 已在 afterStep 中累加。
   // 去重（同 url 多次出现时只保留首次），无数量限制，展示全部参考资料
   const seenUrls = new Set<string>();
@@ -597,12 +618,24 @@ interface EmitPostStreamParams {
   input: QueryInput;
   // §X-1 步骤级追踪：流式路径的 harness runId，随 done 事件带回前端拉取耗时分解
   runId?: string;
+  // FR-21 引用槽位：search_pages 命中页面（顺序即 [n] 编号），done 时并入 refs
+  citationSlots?: string[];
+}
+
+// FR-21：合并引用槽位与 [[页面名]] 链接式引用——槽位（搜索顺序）在前保证 [n] 对齐，
+// 链接式引用并入去重（可能指向槽位外的页面，追加在尾部不占用既有编号）
+function mergeCitationSlots(slots: string[], linkRefs: string[]): string[] {
+  const merged = [...slots];
+  for (const r of linkRefs) {
+    if (!merged.includes(r)) merged.push(r);
+  }
+  return merged;
 }
 
 async function* emitPostStreamChunks(
   params: EmitPostStreamParams,
 ): AsyncGenerator<AnswerChunk, void, unknown> {
-  const { collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, runId } = params;
+  const { collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, runId, citationSlots } = params;
   // progress 在流式分支也需推送（harness 阶段已收集）
   for (const p of collectedProgress) {
     yield { progress: p };
@@ -617,7 +650,8 @@ async function* emitPostStreamChunks(
   }
 
   const answer = finalAnswer || '知识库未覆盖此问题。';
-  const refs = await extractRefs(answer, vault);
+  // FR-21：引用槽位并入 refs（流式分支）
+  const refs = mergeCitationSlots(citationSlots ?? [], await extractRefs(answer, vault));
   const seenUrls = new Set<string>();
   const webRefs = collectedWebRefs.filter((r) => {
     if (seenUrls.has(r.url)) return false;
@@ -660,10 +694,13 @@ async function* queryWithHarnessStream( // NOSONAR - S107 - 函数签名需要�
     webSearchDowngradeNotified: false,
   };
 
+  // FR-21：流式分支同样收集引用槽位（emitPostStreamChunks 时并入 refs）
+  const citationSlots: string[] = [];
   const tools = createQueryTools(vault, {
     webSearch: webSearchAvailable,
     webSearchConfig: options.webSearchConfig,
     scopeFilter: options.scopeFilter,
+    citationSink: citationSlots,
   });
   // 中间件 'extended_tools' 控制：与 queryWithHarness 一致的判断逻辑
   if (shouldRunMiddleware(input.middlewares, 'extended_tools')) {
@@ -720,7 +757,7 @@ async function* queryWithHarnessStream( // NOSONAR - S107 - 函数签名需要�
   }
 
   // §收尾推流：通过 emitPostStreamChunks 处理 progress/thinking/refs/followups
-  yield* emitPostStreamChunks({ collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, runId: queryRunId });
+  yield* emitPostStreamChunks({ collectedProgress, collectedThinking, collectedWebRefs, outputModes, finalAnswer, vault, input, runId: queryRunId, citationSlots });
 }
 
 // 降级链第 2 级：queryWithSearchFallback
