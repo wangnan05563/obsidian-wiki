@@ -242,5 +242,40 @@
   --el-color-primary-light-8: #2f4a75;
   --el-color-primary-light-9: #1c2c48;
   --el-color-primary-dark-2: #3b76e0;
+  /* EP 功能色系列：el-tag/el-alert/el-message 等组件用 light-N 做浅底，
+     EP 默认是浅色值（如 info-light-9 #f4f4f5），dark 下必须整体换成深底；
+     基准色与 neon 族对齐（success=lime / warning=pink / danger=magenta） */
+  --el-color-info: #9aa4b2;
+  --el-color-info-light-3: #6e7681;
+  --el-color-info-light-5: #4a5058;
+  --el-color-info-light-7: #2c3138;
+  --el-color-info-light-8: #232830;
+  --el-color-info-light-9: #1c2128;
+  --el-color-info-dark-2: #b8c2cc;
+  --el-color-success: #3fb950;
+  --el-color-success-light-3: #2f8d3c;
+  --el-color-success-light-5: #206329;
+  --el-color-success-light-7: #153a1b;
+  --el-color-success-light-8: #102a14;
+  --el-color-success-light-9: #0d2010;
+  --el-color-success-dark-2: #62cd71;
+  --el-color-warning: #f0883e;
+  --el-color-warning-light-3: #b9672e;
+  --el-color-warning-light-5: #7c4520;
+  --el-color-warning-light-7: #523016;
+  --el-color-warning-light-8: #3e2411;
+  --el-color-warning-light-9: #2f1b0d;
+  --el-color-warning-dark-2: #f4a366;
+  --el-color-danger: #f85149;
+  --el-color-danger-light-3: #c23f39;
+  --el-color-danger-light-5: #812a26;
+  --el-color-danger-light-7: #561c19;
+  --el-color-danger-light-8: #401512;
+  --el-color-danger-light-9: #311010;
+  --el-color-danger-dark-2: #fa7a73;
+  --el-text-color-info: #9aa4b2;
+  --el-text-color-success: #3fb950;
+  --el-text-color-warning: #f0883e;
+  --el-text-color-danger: #f85149;
   --el-mask-color: rgba(0, 0, 0, 0.65);
 }
