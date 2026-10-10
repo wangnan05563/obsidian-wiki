@@ -2,6 +2,8 @@ import { defineStore } from 'pinia';
 import { ref, computed, watch } from 'vue';
 import type { ChatMessage, Reference, ThinkingStep, MultimodalOutput, Clarification, RefAuthority, KnowledgeStatus } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
+// FR-23 思考过程折叠：模型 <think> 标签流式解析器（增量、半开标签扣留）
+import { createThinkStreamParser, type ThinkStreamParser } from '../utils/think-parser';
 
 // v2: 多输出模式多选类型，与后端 outputModes 对齐
 // 4 个独立模式：思考过程 / 工具调用请求返回 / 主答案 / 多模态结构
@@ -75,6 +77,13 @@ export interface SessionBuffer {
   // 消息气泡右下角徽章据此展示当前上下文使用百分比；随每次问答刷新。
   contextInputTokens: number;
   contextMaxTokens: number;
+  // FR-23 思考过程折叠：模型 <think>…</think> 输出的累积文本（与 harness 工具步骤
+  // currentThinking 分离——那是工具调用事件，这是模型正文里的思考标签内容）。
+  // finalize/停止/出错时随消息持久化（modelThinking 字段），供折叠面板回看。
+  modelThinking: string;
+  // FR-23 流式解析器状态机：跨 chunk 维护 inThink/半开标签扣留，随轮次重置。
+  // 非序列化对象，仅进程内使用；null 表示尚未开始消费 answer（惰性创建）。
+  thinkParser: ThinkStreamParser | null;
 }
 
 function createEmptyBuffer(): SessionBuffer {
@@ -97,6 +106,8 @@ function createEmptyBuffer(): SessionBuffer {
     currentClarification: null,
     contextInputTokens: 0,
     contextMaxTokens: 0,
+    modelThinking: '',
+    thinkParser: null,
   };
 }
 
@@ -183,6 +194,10 @@ function bufClearCurrentRound(b: SessionBuffer) {
   // X-2 清理可恢复流式态，避免下一轮问答误用上一轮的 managerRunId / didDone
   b.currentManagerRunId = null;
   b.currentDidDone = false;
+  // FR-23 重置模型思考解析：parser 是跨 chunk 有状态机，必须随轮次重建（否则
+  // 上一轮的 inThink 状态会污染下一轮正文分区）；modelThinking 已随消息持久化，此处清零
+  b.modelThinking = '';
+  b.thinkParser = null;
 }
 
 // X-2 断线重连：清掉"已收到但未 finalize"的部分内容，等待后端回放完整响应。
@@ -198,6 +213,21 @@ function bufResetForResume(b: SessionBuffer) {
   b.currentImage = null;
   b.currentPpt = null;
   b.currentDidDone = false;
+  // FR-23：重连后后端回放完整响应（含 think 标签），解析状态机必须重建，
+  // 否则残留的 inThink/扣留缓冲会让回放内容分区错位
+  b.modelThinking = '';
+  b.thinkParser = null;
+}
+
+// FR-23：终态（完成/停止/出错）前调用——flush 解析器，把半开扣留内容归位：
+// 思考扣留并入 modelThinking，回答扣留并入 streamingAnswer，保证截断场景内容不丢失
+// （如连接中断时 <think> 未闭合，已缓冲思考仍完整进入折叠面板而非混入答案）。
+function bufFlushThinkParser(b: SessionBuffer): string {
+  if (!b.thinkParser) return b.modelThinking;
+  const tail = b.thinkParser.flush();
+  if (tail.thinking) b.modelThinking += tail.thinking;
+  if (tail.answer) b.streamingAnswer += tail.answer;
+  return b.modelThinking;
 }
 
 function bufFinalizeAnswer(
@@ -209,6 +239,7 @@ function bufFinalizeAnswer(
 ) {
   // 记录本轮问答归属的线程（与 sessionId 同源，1 线程 1 会话），供后续续接记忆与归档
   if (threadId) b.currentThreadId = threadId;
+  bufFlushThinkParser(b);
   if (b.streamingAnswer) {
     const finalFollowups = followups?.length ? followups : b.currentFollowups;
     b.messages.push({
@@ -224,6 +255,8 @@ function bufFinalizeAnswer(
       threadId,
       // FR-RM-09：正常完成标记为 complete（缺省亦视为 complete），供续答判定区分中间态
       status: 'complete',
+      // FR-23 思考过程折叠：模型 <think> 内容随消息持久化，折叠面板回看
+      modelThinking: b.modelThinking || undefined,
       // FR-09-2 多模态输出：附加 mindmap/faq/timeline 到消息，前端渲染为独立卡片
       multimodal: b.currentMultimodal ?? undefined,
       // v3 图像/PPT 生成结果附加到消息
@@ -243,15 +276,18 @@ function bufFinalizeAnswer(
 
 function bufHandleError(b: SessionBuffer, message: string) {
   b.errorMessage = message;
-  if (b.streamingAnswer) {
+  bufFlushThinkParser(b);
+  if (b.streamingAnswer || b.modelThinking) {
     b.messages.push({
       id: crypto.randomUUID(),
       role: 'assistant',
-      content: `${b.streamingAnswer}\n\n[出错: ${message}]`,
+      content: b.streamingAnswer ? `${b.streamingAnswer}\n\n[出错: ${message}]` : `[出错: ${message}]`,
       refs: b.currentRefs.length ? [...b.currentRefs] : undefined,
       createdAt: new Date().toISOString(),
       // FR-RM-09：生成出错 → error，重载后不自动续答
       status: 'error',
+      // FR-23：出错前已缓冲的思考内容不丢失
+      modelThinking: b.modelThinking || undefined,
     });
   }
   // 出错时澄清卡片一并失效（流已断，选择已无意义），解除等待态
@@ -274,16 +310,19 @@ function bufStopLoading(b: SessionBuffer, reason: 'user' | 'timeout' | 'edit') {
     return;
   }
   const suffix = reason === 'user' ? '[已停止]' : '[已超时]';
-  if (b.streamingAnswer) {
+  bufFlushThinkParser(b);
+  if (b.streamingAnswer || b.modelThinking) {
     b.messages.push({
       id: crypto.randomUUID(),
       role: 'assistant',
-      content: `${b.streamingAnswer}\n\n${suffix}`,
+      content: b.streamingAnswer ? `${b.streamingAnswer}\n\n${suffix}` : suffix,
       refs: b.currentRefs.length ? [...b.currentRefs] : undefined,
       thinking: b.currentThinking.length ? [...b.currentThinking] : undefined,
       createdAt: new Date().toISOString(),
       // FR-RM-09：用户/超时主动停止 → interrupted，重载后不自动续答
       status: 'interrupted',
+      // FR-23：停止前已缓冲的思考内容不丢失（含 <think> 半开截断场景）
+      modelThinking: b.modelThinking || undefined,
       // 超时中断：打 timedOut 标记，供前端在消息下方渲染常驻"确认重发"按钮
       timedOut: reason === 'timeout',
     });
@@ -322,7 +361,13 @@ function bufSubmitQuestion(b: SessionBuffer, question: string) {
 }
 
 function bufAppendAnswer(b: SessionBuffer, text: string) {
-  b.streamingAnswer += text;
+  // FR-23：模型正文可能携带 <think>…</think>，经状态机分流——思考内容进 modelThinking
+  // （折叠面板），正式回答进 streamingAnswer（现有 Markdown 渲染管线）。无标签时解析器
+  // 原样透传，行为与旧版一致；半开标签由解析器扣留，不污染答案区。
+  if (!b.thinkParser) b.thinkParser = createThinkStreamParser();
+  const { thinking, answer } = b.thinkParser.feed(text);
+  if (thinking) b.modelThinking += thinking;
+  b.streamingAnswer += answer;
 }
 
 function bufSetMultimodal(b: SessionBuffer, payload: MultimodalOutput) {
@@ -521,6 +566,8 @@ export const useQueryStore = defineStore('query', () => {
   // （桌面 Query/FloatingChat、移动端）零改动地读到「当前会话」的正确状态。
   const messages = computed(() => sessions.value.get(activeId.value)?.messages ?? []);
   const streamingAnswer = computed(() => sessions.value.get(activeId.value)?.streamingAnswer ?? '');
+  // FR-23：流式中的模型思考文本，折叠面板实时跟随
+  const modelThinking = computed(() => sessions.value.get(activeId.value)?.modelThinking ?? '');
   const currentRefs = computed(() => sessions.value.get(activeId.value)?.currentRefs ?? []);
   const currentFollowups = computed(() => sessions.value.get(activeId.value)?.currentFollowups ?? []);
   const currentThinking = computed(() => sessions.value.get(activeId.value)?.currentThinking ?? []);
@@ -744,6 +791,7 @@ export const useQueryStore = defineStore('query', () => {
     searchProgress,
     isLoading,
     errorMessage,
+    modelThinking,
     currentMultimodal,
     currentImage,
     currentPpt,

@@ -9,6 +9,8 @@ import ConversationSidebar from '../components/ConversationSidebar.vue';
 import AttachmentUploader from '../components/AttachmentUploader.vue';
 import InputToolbar from '../components/InputToolbar.vue';
 import IconActionButton from '../components/IconActionButton.vue';
+// FR-23 思考过程折叠：模型 <think> 内容面板（纯文本渲染，会话级展开记忆）
+import ThinkFoldPanel from '../components/ThinkFoldPanel.vue';
 import ThinkingBlock from '../components/ThinkingBlock.vue';
 // 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续
 import ClarifyCard from '../components/ClarifyCard.vue';
@@ -1355,6 +1357,8 @@ onBeforeUnmount(() => {
             <div class="msg-content-wrapper" :class="[msg.role, (msg.role === 'user' && editingIdx === idx) ? 'editing' : '']">
       <div class="msg-bubble" :class="[msg.role, msg.status === 'interrupted' ? 'status-interrupted' : '', msg.status === 'error' ? 'status-error' : '']">
               <ThinkingBlock v-if="msg.thinking && msg.thinking.length > 0" :steps="msg.thinking" />
+              <!-- FR-23 思考过程折叠：模型 <think> 内容面板置于回答顶部；无思考时 v-if 不渲染（零渲染） -->
+              <ThinkFoldPanel v-if="msg.modelThinking" :thinking="msg.modelThinking" :panel-key="msg.id" />
               <!-- 编辑态：user 消息切换为可编辑 textarea + 确认/取消（终止当前回复后重发） -->
               <div v-if="msg.role === 'user' && editingIdx === idx" class="msg-edit" @click.stop>
                 <el-input
@@ -1481,6 +1485,8 @@ onBeforeUnmount(() => {
             />
             <template v-else>
               <ThinkingBlock v-if="store.currentThinking.length > 0" :steps="store.currentThinking" :live="store.isLoading" />
+              <!-- FR-23 流式折叠面板：模型 <think> 内容实时跟随（live 呼吸点）；无思考输出时不渲染 -->
+              <ThinkFoldPanel v-if="store.modelThinking" :thinking="store.modelThinking" live />
               <div v-if="store.searchProgress" class="search-progress">
                 {{ searchProgressLabel }}
                 <span v-if="store.searchProgress.count">（{{ store.searchProgress.count }} 条）</span>

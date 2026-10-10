@@ -152,6 +152,9 @@ export interface ChatMessage {
   // 首连 open 事件携带，前端在 SSE 异常断开（刷新/断网）时凭此调 POST /api/query?resume=<id>
   // 重连继续接收同一响应。仅当后端 enableResumableStream=true 时服务端下发，否则不存在。
   managerRunId?: string;
+  // FR-23 思考过程折叠：模型正文 <think>…</think> 的内容（流式解析器分流产出）。
+  // 非空时消息顶部渲染折叠面板（纯文本+换行）；无思考输出时缺省 → 面板零渲染。
+  modelThinking?: string;
 }
 
 // ===== FR-19 引用信号（与后端 types.ts RefSignal 对齐，type-sync-rule）=====
