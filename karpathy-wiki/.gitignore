@@ -63,6 +63,9 @@ data/cpolar.exe
 # 鉴权用户存储：含 passwordHash/salt，属凭据材料。文件缺失时 user-store.ts
 # 自动 bootstrap 默认账户并告警改密；结构说明见已提交的 data/users.example.json
 data/users.json
+# 同名旧位置副本：早期以 cwd=api 启动时写下的 users.json/audit.log 残留，
+# 现运行时路径由 utils/runtime.ts 统一解析为 karpathy-wiki/data，此处仅为历史遗留
+api/data/
 # SQLite 混合检索索引库及其 WAL/SHM 伴生文件（sqlite-index.ts 在 dataDir 自建，
 # 可经 FR-20 重建端点全量重建）
 data/wiki-index.db
