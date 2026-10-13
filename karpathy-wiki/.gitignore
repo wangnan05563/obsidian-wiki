@@ -1,40 +1,22 @@
-# ---------- 环境与依赖 ----------
-.env
-node_modules/
-# config.json 含敏感字段（apiKey 等），仅本地保留；example 文件作为模板提交
+# ============================================================================
+# karpathy-wiki 项目级 .gitignore
+# 只写「本项目特有」规则；通用产物（node_modules/dist/build/coverage/
+# .scannerwork/.harness/*.log/临时脚本/IDE 与系统垃圾/凭据文件形态）
+# 已由仓库根 .gitignore 统一覆盖，此处不再重复。
+# ============================================================================
+
+# ---------- 环境与敏感配置 ----------
+# config.json 含 apiKey 等实密钥，仅本地保留；example 文件作为模板提交
 api/config.json
 !api/config.example.json
 
 # ---------- 构建产物 ----------
-dist/
-build/
-builds/
-api/dist/
-# vite 构建产物（build-web.bat 输出），完整忽略 public/ 目录
+# vite 构建产物（build-web.bat 输出）：api/public/ 为部署快照，整体忽略
+# （api/dist/、frontend/dist/ 由根规则的 dist/ 覆盖，此处不重复）
 api/public/
-# 陈旧 .js 编译产物备份（清理 src 下遮蔽 .ts 的 .js 时临时移出，非源码）
-.shadow_js_trash/
 # vite 构建/配置临时生成的 timestamp 中间文件
 *.config.mjs.timestamp-*.mjs
 *.config.ts.timestamp-*.mjs
-
-# ---------- 缓存目录（可重建） ----------
-.cache/
-.scannerwork/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-__pycache__/
-.harness/
-
-# ---------- SonarQube 调试日志 ----------
-sonar-scan-*.log
-
-# ---------- 测试截图与一次性测试脚本 ----------
-scripts/test_screenshots/
-scripts/test_*.ps1
-scripts/test_*.py
-scripts/test_report.json
 
 # ---------- TypeScript / vue-tsc 编译产物 ----------
 # vue-tsc 生成的虚拟代码文件，不应提交或扫描
@@ -42,8 +24,8 @@ scripts/test_report.json
 # TypeScript 编译产物（vue-tsc/tsc 输出），源码目录下不应存在 .js
 frontend/src/**/*.js
 
-# ---------- 运行时数据 ----------
-# vault 迁至 karpathy-wiki/data/vault/，仅保留 concepts/comparisons/SCHEMA.md 作为种子入库
+# ---------- 运行时数据（data/） ----------
+# vault 位于 karpathy-wiki/data/vault/，仅保留 concepts/comparisons/SCHEMA.md 作为种子入库
 # raw/（原始输入）、entities/queries/（运行时生成）、log.md（操作日志）、index.md（运行时追加）均忽略
 #
 # 【待人工复核】data/vault/drafts/（36 个）与 data/vault/qa/（18 个）目前仍在版本控制内，
@@ -55,11 +37,14 @@ data/vault/entities/
 data/vault/queries/
 data/vault/log.md
 data/vault/index.md
-data/vault/.harness/
 # 历史会话运行时数据（后端持久化，含用户问答内容，敏感不提交）
 data/conversations/
 # 线程隔离的本地会话/记忆运行时数据（data/threads/{id}/ 含 session.json/memory.json，同属敏感问答内容）
 data/threads/
+# 会话本地化迁移的一次性备份目录（scripts/migrate-sessions-local.mjs 产出），
+# 内容与被忽略的 data/conversations/ 同源（用户问答记录），同属敏感数据不入库；
+# 磁盘副本保留作回滚用
+data/_migrated_local_*/
 # 技能导入运行时数据（用户上传的 .skill/.md 解压后存储，含外部资源不提交）
 data/skills/
 # 5.1.3 URL 爬取增量状态文件（运行时生成，含站点 URL 与 ETag，不入版本控制）
@@ -80,34 +65,29 @@ data/wiki-index.db-shm
 data/wiki-index.db-wal
 # 审计日志：此前仅被根 .gitignore 的通配 *.log 顺带兜住，通配一旦收窄即漏防，故显式声明
 data/audit.log
-# 会话本地化迁移的一次性备份目录（scripts/migrate-sessions-local.mjs 产出），
-# 内容与被忽略的 data/conversations/ 同源（用户问答记录），同属敏感数据不入库；
-# 磁盘副本保留作回滚用
-data/_migrated_local_*/
 
-# ---------- 运行时日志与 PID 文件 ----------
-logs/*.pid
-logs/*.log
-logs/*.out
-logs/*.err
-
-# ---------- 调试脚本与构建临时文件 ----------
-.build/
-.tmp-*
-scripts/measure.py
-scripts/verify_ui.py
-
-# ---------- 测试证据与截图 ----------
-docs/test-evidence/
-# 测试运行时截图与结果（可重建，不入库）
-test_screenshots/
-
-# ---------- 清理技能自动生成规则（防复发） ----------
-# 根目录运行时日志（sprint 阶段输出）
-sprint*-stdout.log
+# ---------- 一次性脚本与测试证据 ----------
+# 测试截图与一次性测试脚本
+scripts/test_screenshots/
+scripts/test_*.ps1
+scripts/test-*.ps1
+scripts/test_*.py
+scripts/test_report.json
 # 历史验收脚本（一次性使用，不应入库）
 scripts/sprint*-acceptance.py
 # UI 验证脚本（调试用）
 scripts/ui-verify-*.py
-# 测试脚本连字符命名变体（补充 test_*.ps1 规则）
-scripts/test-*.ps1
+scripts/measure.py
+scripts/verify_ui.py
+# 测试证据与截图（本轮 UI 实测的截图/JSON 留存，体积大且可重跑）
+docs/test-evidence/
+# 前端根目录的一次性调试截图（历史误入库：graph_after_fix.png / graph_head_check.png /
+# verify-graph-fixed.png）。正式图片请放 frontend/public/images/ 或 assets/，不受此规则影响
+frontend/*.png
+
+# ---------- 根目录运行时日志 ----------
+# sprint 阶段 stdout 输出
+sprint*-stdout.log
+# 本地运行日志与 PID（logs/ 目录本体由根规则忽略，此处覆盖项目内命名变体）
+logs/*.out
+logs/*.err
