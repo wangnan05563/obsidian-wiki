@@ -20,4 +20,7 @@
   --tk-border: rgba(176, 38, 255, 0.35);
   /* 别名化：新权威为 --tk-accent-fg，旧变量名保留避免消费点断裂 */
   --menu-active-fg: var(--tk-accent-fg);
+  /* T01630：默认 --grad-fire（#ff006e→#b026ff）上白字最差仅 3.83:1，低于 AA 4.5:1；
+     菜单激活背景单独压深一档（白字 5.45:1），--grad-fire 保持原霓虹观感 */
+  --menu-active-bg: linear-gradient(135deg, #d10059 0%, #8c1fd0 100%);
 }

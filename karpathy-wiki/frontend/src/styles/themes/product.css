@@ -18,6 +18,9 @@
   --tk-border: rgba(255, 255, 255, 0.06);
   /* T01761：别名化——新权威为 --tk-accent-fg，旧变量名保留避免消费点断裂 */
   --menu-active-fg: var(--tk-accent-fg);
+  /* T01630：--grad-fire（#ff0080→#6366f1）上白字最差 3.77:1 < AA 4.5:1，
+     菜单激活背景单独压深（白字 5.36:1），霓虹渐变本体不变 */
+  --menu-active-bg: linear-gradient(135deg, #d10069 0%, #4a4fd0 100%);
 
   /* 产品主题色：霓虹绿 + 霓虹粉 + 电光蓝 */
   --neon-purple: #6366f1;

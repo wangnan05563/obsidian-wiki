@@ -28,6 +28,9 @@
   --tk-surface-2: var(--bg-scene, #f5f6f8);    /* 二级嵌入面（代码块 / 树 / 统计卡） */
   --tk-accent: var(--neon-cyan, #1554d1);      /* 强调 / 激活 / 链接 */
   --tk-accent-fg: var(--menu-active-fg, #ffffff); /* 激活背景上的前景色（NFR-2 配对硬规则） */
+  /* T01630：菜单激活背景默认沿用 --grad-fire；深色端对比度不足的主题可单独覆盖，
+     不影响 --grad-fire 的其他消费点（进度条/装饰块/用户气泡等） */
+  --menu-active-bg: var(--grad-fire);
   --tk-text: var(--text-bright, #111111);      /* 主文字 */
   --tk-text-2: var(--text-soft, #5a5f66);      /* 次要文字 */
   --tk-border: var(--border-color, #e6e8ec);   /* 分隔线 / 描边 */
@@ -141,6 +144,9 @@
   /* 激活态配对硬规则（NFR-2）：暗底激活背景（深蓝）→ 白色前景。
      --menu-active-fg 为旧变量名别名，保留避免既有消费点断裂（FR-24 规格 2） */
   --menu-active-fg: #ffffff;
+  /* T01630：暗色菜单激活背景整体压深（#4d8dff→#2f6fd4 时白字仅 3.2:1，低于 WCAG AA 4.5:1），
+     改为 #2f6fd4→#1a4fa0 后白字 4.83:1；--grad-fire 本身不动，避免影响非菜单消费点 */
+  --menu-active-bg: linear-gradient(135deg, #2f6fd4 0%, #1a4fa0 100%);
 
   /* accent 半透明梯度：由品牌蓝派生（a03~a70，消费点遍布全站） */
   --accent-purple-base: #4d8dff;

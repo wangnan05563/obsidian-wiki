@@ -12,12 +12,17 @@
   --tk-surface: rgba(255, 252, 247, 0.85);
   --tk-surface-2: #ede8e0;
   --tk-accent: #8b7355;
-  --tk-accent-fg: #ffffff;
+  /* T01630：黑金激活背景上白字最差仅 2.25:1（金端 #c9a961），远低于 AA；
+     菜单激活背景收敛为纯金渐变 + 深色前景（黑压金 6.06:1），保留品牌黑金识别 */
+  --tk-accent-fg: #1a1a1a;
   --tk-text: #1a1a1a;
   --tk-text-2: #5a5a5a;
   --tk-border: rgba(26, 26, 26, 0.08);
   /* T01761：别名化——新权威为 --tk-accent-fg，旧变量名保留避免消费点断裂 */
   --menu-active-fg: var(--tk-accent-fg);
+  /* T01630：菜单激活背景用纯金渐变（黑金渐变 #1a1a1a→#c9a961 的深端会让金色前景/白色文字失去区分）；
+     --grad-fire 保持不变，用户气泡等其他消费点仍用原黑金渐变 */
+  --menu-active-bg: linear-gradient(135deg, #c9a961 0%, #b8934a 100%);
 
   /* 作品集主色：典雅黑 + 金 */
   --neon-purple: #1a1a1a;
