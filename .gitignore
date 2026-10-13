@@ -1,11 +1,17 @@
-# 依赖
+# ============================================================================
+# 根 .gitignore —— 全仓忽略口径（子项目级规则见 karpathy-wiki/.gitignore）
+# 维护约定：新增规则前先跑
+#   git ls-files -i -c --exclude-standard
+# 确认没有把「本应入库」的已跟踪文件圈进来（该命令输出必须为空）。
+# ============================================================================
+
+# ---------- 依赖与包管理缓存 ----------
 node_modules/
 .pnpm-store/
 
-# 构建产物
+# ---------- 构建产物与发布目录 ----------
 dist/
 build/
-*.tsbuildinfo
 # 构建缓存残留目录（非标准产物，任意层级均忽略，防止误入仓）
 **/.npmcache/
 # SPA 部署产物（按时间戳的 public_live_* 与前端构建输出 builds/，仅运行时/部署用，不入仓）
@@ -14,121 +20,124 @@ build/
 **/builds/
 # 统一发布目录（所有编译/打包产物集中于此：spa/app/installer/harness/builds，不入仓）
 release/
+# TypeScript 增量编译信息
+*.tsbuildinfo
 
-# 环境变量与密钥（切勿提交）
-.env
-.env.local
-.env.*.local
+# ---------- 缓存与增量产物 ----------
+.cache/
+**/.vite/
+.turbo/
+.eslintcache
+.prettiercache
+.stylelintcache
 
-# 运行时状态（harness 执行状态文件，属本地运行产物，任意层级）
-**/.harness/state/
-
-# 日志
-*.log
-logs/
-
-# 编辑器与系统文件
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-desktop.ini
-
+# ---------- 测试与自动化产物 ----------
+# vitest / playwright / MCP 浏览器产物（可重建，体积大）
+**/coverage/
+test-results/
+playwright-report/
+blob-report/
+.playwright-mcp/
 # 测试运行时产物（截图、临时结果）
+test_screenshots/
 test_buttons_result.json
 test_result.json
+# e2e 测试 vault 备份（自动化测试每次生成的快照，体积大；2026-09-01 快照曾以 567 个文件
+# 误入版本库造成仓库膨胀，本次清理已物理删除并 git rm --cached 移出索引，此处加规则防复发）
+**/_e2e_backup_vault_*/
+# 一次性测试残留（曾以 24 个文件被误跟踪，已移出索引）
+**/test-batch*/
+**/test-sample.docx
 
-# Python 编译产物
-__pycache__/
-*.py[cod]
-*.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# ---------- 扫描与静态分析产物 ----------
+# sonar-scanner 工作目录与调试日志（任意层级）
+**/.scannerwork/
+sonar-scan-*.log
+# sonar-scanner / tsc 控制台输出去次重定向留存（历史误入库，见本次清理）
+**/sonar-scan-output*.txt
+**/tsc-out.txt
 
-# IDE 配置文件
-*.swp
-*.swo
-*~
-.vscode/settings.json
-*.code-workspace
-
-# 临时文件
+# ---------- 日志与临时文件 ----------
+*.log
+logs/
+# 调试/探针一次性脚本与冒烟脚本（下划线前缀约定 = 本地临时，非源码）
+# 例外：_smoke_inject.mjs 是文档化的可复用进程内冒烟入口（WIKI_SMOKE=1），保留入库
+**/_smoke_*
+!**/_smoke_inject.mjs
+# 通用临时文件
 *.tmp
 *.temp
 *.bak
+*.orig
+*.rej
+# 根目录临时脚本与调试文件
+temp_*.ps1
+tmp_*.ps1
+_debug_*.py
+# 根目录调试截图
+verify-help-*.png
+debug_*.png
+# 隔离/备份目录（旧 JS 编译产物临时隔离，非源码）
+_stale_js_quarantine/
+_shadow_js_trash_bak/
+_shadow_js_trash/
+_deploy_temp_quarantine/
+# 根目录调试/探针残留归档（2026-08-16 清理，非源码，可逆）
+tooling/_archive_root_debug/
+# TOC 校验调试截图（tooling/scripts/wiki-toc-verify.cjs 的输出，非源码）
+tooling/scripts/wiki-toc-verify-*.png
+# 压测结果产物（JMeter 输出 jtl/csv/html，体积大且可重建，不入仓）
+tooling/perf-tests/results/
+
+# ---------- 运行时状态 ----------
+# harness 执行状态文件，属本地运行产物（任意深度，含 wiki-harness/.harness）
+**/.harness/
+# PID 文件（运行时标识进程 ID）
+*.pid
+# 本地覆盖配置（约定 *.local 不入库）
+*.local
+
+# ---------- 环境变量与凭据（切勿提交） ----------
+.env
+.env.local
+.env.*.local
+# 密钥材料文件形态（本仓无合法用途）
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+known_hosts
+
+# ---------- Python / 原生编译产物 ----------
+__pycache__/
+*.py[cod]
+*.class
+*.o
+*.so
+
+# ---------- 编辑器与操作系统垃圾 ----------
+.vscode/
+.idea/
+*.iml
+*.code-workspace
 *.swp
 *.swo
 *~
-
-# Windows 缩略图缓存
+# Windows
 Thumbs.db
 ehthumbs.db
-Desktop.ini
-
+desktop.ini
 # macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 ._*
 
-# Linux
-*~
-
-# Lock files (保留 package-lock.json / pnpm-lock.yaml 需提交以保证可复现安装)
-# npm lock files are kept
-
-# ---------- 清理技能自动生成规则 ----------
-# 调试截图（verify-help-*.png 调试用，不应入库）
-verify-help-*.png
-# 根目录调试截图（一次性调试产物）
-debug_*.png
-# 隔离/备份目录（旧 JS 编译产物临时隔离，非源码）
-_stale_js_quarantine/
-_shadow_js_trash_bak/
-_deploy_temp_quarantine/
-test_screenshots/
-# 覆盖率与静态扫描产物（vitest coverage / sonar-scanner 工作目录，任意层级）
-**/coverage/
-**/.scannerwork/
-# 压测结果产物（JMeter 输出 jtl/csv/html，体积大且可重建，不入仓）
-tooling/perf-tests/results/
-# 根目录临时脚本与调试文件
-temp_*.ps1
-tmp_*.ps1
-_debug_*.py
-# PID 文件（运行时生成，标识进程 ID）
-*.pid
-
-.workbuddy
-.trae
-# 根目录调试/探针残留归档（2026-08-16 清理，非源码，可逆）
-tooling/_archive_root_debug/
-
-# ---------- 清理技能自动生成规则（2026-09-10 批次 #20260910-114938）----------
-# TOC 校验调试截图（tooling/scripts/wiki-toc-verify.cjs 的输出，非源码）
-tooling/scripts/wiki-toc-verify-*.png
-# e2e 测试 vault 备份（自动化测试每次生成的快照，体积大；2026-09-01 快照曾以 567 个文件
-# 误入版本库造成仓库膨胀，本次清理已物理删除并 git rm --cached 移出索引，此处加规则防复发）
-**/_e2e_backup_vault_*/
-# harness 运行状态与执行日志（本地运行产物；任意深度，含 wiki-harness/.harness）
-**/.harness/
-# 一次性测试残留（曾以 24 个文件被误跟踪，已移出索引）
-**/test-batch*/
-**/test-sample.docx
-# data 目录下的 0 字节历史残留（应用实际读取 api/config.json）
-karpathy-wiki/data/config.json
+# ---------- 本地工具/Agent 工作目录 ----------
+.workbuddy/
+.trae/
