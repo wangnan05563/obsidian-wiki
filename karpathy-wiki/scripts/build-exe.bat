@@ -9,8 +9,8 @@ echo Steps:
 echo   1. Check deps (Node.js / pnpm / pkg / esbuild)
 echo   2. Build @wiki/harness
 echo   3. Build SPA (vite build)
-echo   4. esbuild bundle (TS -> CJS)
-echo   5. pkg --sea -> exe
+echo   4. esbuild bundle (TS ^> CJS)
+echo   5. pkg --sea ^> exe
 echo   6. Copy resources (SPA + config + vault + prompts)
 echo   7. Inno Setup installer (if available)
 echo.
