@@ -45,6 +45,11 @@ frontend/src/**/*.js
 # ---------- 运行时数据 ----------
 # vault 迁至 karpathy-wiki/data/vault/，仅保留 concepts/comparisons/SCHEMA.md 作为种子入库
 # raw/（原始输入）、entities/queries/（运行时生成）、log.md（操作日志）、index.md（运行时追加）均忽略
+#
+# 【待人工复核】data/vault/drafts/（36 个）与 data/vault/qa/（18 个）目前仍在版本控制内，
+# 与上面注释「仅保留 concepts/comparisons/SCHEMA.md」的政策口径不一致：drafts/qa-* 由
+# QQ 导入工作流运行时生成（qq-extract-workflow.ts），qa/ 为已发布问答页。二者都是有价值的
+# 知识资产而非垃圾，是否出仓需知识库 owner 决定，故本文件不做单方面处理、仅在此标注。
 data/vault/raw/
 data/vault/entities/
 data/vault/queries/
