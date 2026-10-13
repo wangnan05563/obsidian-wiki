@@ -11,9 +11,14 @@ api/config.json
 !api/config.example.json
 
 # ---------- 构建产物 ----------
+# esbuild/pkg 的中间构建目录（bundle.cjs、patch-counter.json、热更就绪标记），
+# 每次构建重建；曾出现在 .build/ 与 api/.build/ 两处
+.build/
 # vite 构建产物（build-web.bat 输出）：api/public/ 为部署快照，整体忽略
 # （api/dist/、frontend/dist/ 由根规则的 dist/ 覆盖，此处不重复）
 api/public/
+# 本机构建/调试临时目录
+.tmp-*
 # vite 构建/配置临时生成的 timestamp 中间文件
 *.config.mjs.timestamp-*.mjs
 *.config.ts.timestamp-*.mjs
@@ -65,6 +70,8 @@ data/wiki-index.db-shm
 data/wiki-index.db-wal
 # 审计日志：此前仅被根 .gitignore 的通配 *.log 顺带兜住，通配一旦收窄即漏防，故显式声明
 data/audit.log
+# data 目录下的 0 字节历史残留（应用实际读取 api/config.json，此文件是无用残留）
+data/config.json
 
 # ---------- 一次性脚本与测试证据 ----------
 # 测试截图与一次性测试脚本

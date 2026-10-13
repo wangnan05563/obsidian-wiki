@@ -30,6 +30,10 @@ release/
 .eslintcache
 .prettiercache
 .stylelintcache
+# Python 工具链缓存（tooling/scripts 下的 pytest / ruff / mypy 运行产物）
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # ---------- 测试与自动化产物 ----------
 # vitest / playwright / MCP 浏览器产物（可重建，体积大）
@@ -79,15 +83,16 @@ verify-help-*.png
 debug_*.png
 # 隔离/备份目录（旧 JS 编译产物临时隔离，非源码）
 _stale_js_quarantine/
+.shadow_js_trash/
 _shadow_js_trash_bak/
-_shadow_js_trash/
 _deploy_temp_quarantine/
 # 根目录调试/探针残留归档（2026-08-16 清理，非源码，可逆）
 tooling/_archive_root_debug/
 # TOC 校验调试截图（tooling/scripts/wiki-toc-verify.cjs 的输出，非源码）
 tooling/scripts/wiki-toc-verify-*.png
 # 压测结果产物（JMeter 输出 jtl/csv/html，体积大且可重建，不入仓）
-tooling/perf-tests/results/
+# 用 **/ 覆盖任意深度：历史上进过 tooling/perf-tests/results/ 与根级 perf-tests/results/ 两处
+**/perf-tests/results/
 
 # ---------- 运行时状态 ----------
 # harness 执行状态文件，属本地运行产物（任意深度，含 wiki-harness/.harness）
@@ -119,6 +124,10 @@ __pycache__/
 *.class
 *.o
 *.so
+# 虚拟环境目录（tooling 侧若建本地 venv 属本地环境，不入库）
+.venv/
+venv/
+.Python
 
 # ---------- 编辑器与操作系统垃圾 ----------
 .vscode/
