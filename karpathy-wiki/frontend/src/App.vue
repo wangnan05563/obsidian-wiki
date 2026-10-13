@@ -477,9 +477,11 @@ onBeforeUnmount(() => {
 
 /* 激活态：渐变背景 + 左侧光条强调
    T01630：前景色改用 --menu-active-fg（默认 #fff），浅色/马卡龙等浅底主题可覆盖为深色，
-   避免「白字/白图标压在浅色渐变上」或「图标色与背景同色系」导致的不可见问题。 */
+   避免「白字/白图标压在浅色渐变上」或「图标色与背景同色系」导致的不可见问题。
+   背景改用 --menu-active-bg（默认等于 --grad-fire）：白字压不住霓虹渐变的主题（creative/product/
+   portfolio/dark）单独给一档更深的激活渐变，而不改动 --grad-fire 的其他消费点。 */
 .tab-btn.active {
-  background: var(--grad-fire);
+  background: var(--menu-active-bg, var(--grad-fire));
   color: var(--menu-active-fg, #fff);
   box-shadow: 0 4px 20px rgba(255, 0, 110, 0.4);
 }
@@ -725,7 +727,7 @@ onBeforeUnmount(() => {
 /* T01630：折叠态同样改用 --menu-active-fg，图标色随主题前景走，不再硬编码白色 */
 .icon-btn.active {
   color: var(--menu-active-fg, #fff);
-  background: var(--grad-fire);
+  background: var(--menu-active-bg, var(--grad-fire));
   box-shadow: 0 4px 16px rgba(255, 0, 110, 0.4);
 }
 
