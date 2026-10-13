@@ -62,9 +62,9 @@ describe('maskApiKey', () => {
   });
 
   it('回归：apiKeys 表兜底后 maskedKey 非空（后台有值 → 前端可返显）', () => {
-    const cfg = makeConfig({ apiKey: '', apiKeys: { agnes: '***REDACTED-SECRET***' } });
+    const cfg = makeConfig({ apiKey: '', apiKeys: { agnes: 'sk-fixture-key-for-tests-only-0123' } });
     const masked = maskApiKey(getEffectiveApiKey(cfg));
-    expect(masked).toBe('****jLgW');
+    expect(masked).toBe('****0123');
     expect(masked.length).toBeGreaterThan(0);
   });
 });
