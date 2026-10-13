@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/design/social-preview/github-social-preview.png" alt="Karpathy Wiki" width="640">
+<img src="assets/design/social-preview/github-social-preview.png" alt="Karpathy Wiki" width="640">
 
 # Karpathy Wiki
 
