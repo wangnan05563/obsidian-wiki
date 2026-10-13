@@ -1,0 +1,18 @@
+{
+  "_comment": "用户存储示例文件（仅作结构说明，不参与运行时加载）。实际文件 data/users.json 因含 passwordHash/salt 已从版本控制移除。服务启动时若 data/users.json 不存在会自动创建默认账户 admin/admin123、user/user123、guest/guest123 并告警要求改密；如需预置账户，可复制本文件为 users.json 后由 UI/接口创建真实用户，不要手写哈希。",
+  "_schema": "users[] 字段：id=UUID；username=登录名；passwordHash=PBKDF2 派生密钥的 base64（迭代次数取 config 的 auth.iterations，不可自造）；salt=16 字节随机 salt 的 base64；role=admin|user|guest；enabled=布尔；createdAt/updatedAt/lastLoginAt=ISO-8601 字符串",
+  "_warning": "passwordHash 与 salt 一旦提交到仓库即等同于泄露凭据材料。请勿把真实 data/users.json 重新 add 回版本控制。",
+  "users": [
+    {
+      "id": "00000000-0000-4000-8000-000000000000",
+      "username": "admin",
+      "passwordHash": "<由服务或注册接口生成，勿手填>",
+      "salt": "<由服务生成，勿手填>",
+      "role": "admin",
+      "enabled": true,
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z",
+      "lastLoginAt": null
+    }
+  ]
+}

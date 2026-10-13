@@ -60,6 +60,25 @@ data/skills/
 # 5.1.3 URL 爬取增量状态文件（运行时生成，含站点 URL 与 ETag，不入版本控制）
 data/url-crawl-state.json
 data/url-crawl.log
+# 隧道工具二进制：tunnel-service.ts 的 ensureBinary() 会按官方 release 三源自愈下载
+# （cloudflared 走 GitHub/ghfast/固定版本，cpolar 走 zip 下载 + tar 解压），
+# 54MB + 19MB 的可再生外部二进制不入库
+data/cloudflared.exe
+data/cpolar.exe
+# 鉴权用户存储：含 passwordHash/salt，属凭据材料。文件缺失时 user-store.ts
+# 自动 bootstrap 默认账户并告警改密；结构说明见已提交的 data/users.example.json
+data/users.json
+# SQLite 混合检索索引库及其 WAL/SHM 伴生文件（sqlite-index.ts 在 dataDir 自建，
+# 可经 FR-20 重建端点全量重建）
+data/wiki-index.db
+data/wiki-index.db-shm
+data/wiki-index.db-wal
+# 审计日志：此前仅被根 .gitignore 的通配 *.log 顺带兜住，通配一旦收窄即漏防，故显式声明
+data/audit.log
+# 会话本地化迁移的一次性备份目录（scripts/migrate-sessions-local.mjs 产出），
+# 内容与被忽略的 data/conversations/ 同源（用户问答记录），同属敏感数据不入库；
+# 磁盘副本保留作回滚用
+data/_migrated_local_*/
 
 # ---------- 运行时日志与 PID 文件 ----------
 logs/*.pid
