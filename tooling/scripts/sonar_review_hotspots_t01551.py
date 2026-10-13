@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """T01551 安全热点复核：把 70 条复核结论批量写回 SonarQube。
 
-判定依据（单一可信源）：docs/sonar-reports/sonar-hotspot-review-20261007.md
+判定依据（单一可信源）：karpathy-wiki/docs/sonar-reports/sonar-hotspot-review-20261007.md
+（T02137 文档整理：该报告随 docs 收敛到 karpathy-wiki/docs/ 下，安全复核判定的审计源不可删）
 本脚本只是那篇文档的可执行化，修改结论必须先改文档再改这里的规则表。
 
 ⚠ 本服务器的 API 契约（SonarQube Community Build 26.1.0.118079 实测，勿按旧文档写）：

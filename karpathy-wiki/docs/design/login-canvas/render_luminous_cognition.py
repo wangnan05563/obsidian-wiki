@@ -624,7 +624,7 @@ def render_icon(phase: Phase = DARK) -> Image.Image:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    out_dir = r"d:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\docs\design\login-canvas"
+    out_dir = r"d:\code\otherProjects\19_Karpathy-AI+Obsidian知识库\karpathy-wiki\assets\design\login-canvas"
 
     print("→ rendering dark phase (creative)…")
     dark = render_background(DARK, seed=7)
