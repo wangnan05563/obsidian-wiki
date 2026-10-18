@@ -37,6 +37,9 @@ export interface UserRecord {
   role: AuthRole;
   // 是否启用（禁用用户无法登录）
   enabled: boolean;
+  // T02453（PRD A1）：生产环境首登强制改密标记。
+  // 种子账号（仍用默认口令）自动置 true；改密后清除。localOnly 开发模式不强制（登录响应层门控）。
+  mustChangePassword?: boolean;
   createdAt: string;
   updatedAt: string;
   // 最后登录时间（首次为空）
@@ -78,6 +81,7 @@ export type AuditAction =
   | 'user_update'
   | 'user_delete'
   | 'user_register'
+  | 'password_change'
   | 'config_change';
 
 // 认证配置（嵌入 AppConfig.auth）

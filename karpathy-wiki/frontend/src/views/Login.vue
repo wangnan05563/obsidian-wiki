@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useAuthStore } from '../stores/auth';
 import { useTheme } from '../composables/useTheme';
+import { API_BASE } from '../utils/apiBase';
 import CognitionIcon from '../components/CognitionIcon.vue';
 
 // 登录页面：Luminous Cognition 主题自适应
@@ -19,6 +20,23 @@ const username = ref('');
 const password = ref('');
 const loading = ref(false);
 const errorMsg = ref('');
+
+// T02453（PRD A1）：默认账户提示仅在 localOnly 调试模式显示（GET /api/auth/bootstrap 门控），
+// 生产环境彻底隐藏默认口令，杜绝「guest/guest123」明文暴露带来的未授权访问风险
+const showDefaultHint = ref(false);
+onMounted(async () => {
+  try {
+    const res = await fetch(`${API_BASE}/auth/bootstrap`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json() as { ok?: boolean; showDefaultAccountHint?: boolean };
+    showDefaultHint.value = data.ok === true && data.showDefaultAccountHint === true;
+  } catch {
+    // 探测失败时保守隐藏（生产安全优先于调试便利）
+    showDefaultHint.value = false;
+  }
+});
 
 // 浅色主题清单：与 useTheme.ts 中的视觉分类保持一致
 const lightThemes = ['macaron', 'ecommerce'];
@@ -116,8 +134,9 @@ function handleKeydown(e: KeyboardEvent) {
           {{ loading ? '登录中...' : '登 录' }}
         </button>
 
-        <div class="login-hint">
-          <span>默认账户：</span>
+        <!-- T02453（PRD A1）：默认账户提示仅 localOnly 调试模式可见，且带「仅本地调试」限定语 -->
+        <div v-if="showDefaultHint" class="login-hint">
+          <span>默认账户（仅本地调试）：</span>
           <code>guest/guest123</code>
         </div>
 

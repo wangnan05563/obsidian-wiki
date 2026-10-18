@@ -124,7 +124,9 @@ export const useAuthStore = defineStore('auth', () => {
       }
       if (data.token && data.user) {
         token.value = data.token;
-        user.value = data.user;
+        // T02453：合并响应顶层的 mustChangePassword 标记（后端按 localOnly 门控）；
+        // register 新用户无默认口令问题，该标记为 false，合并无副作用
+        user.value = { ...data.user, mustChangePassword: data.mustChangePassword === true };
         saveToken(data.token);
         // FR-RM-06 主动防御：新账户登录即作废上一用户的会话作用域与聊天窗口，
         // 避免切换用户后看到上一用户的问答内容（跨账户泄漏）。resetSession 一并
@@ -176,7 +178,9 @@ export const useAuthStore = defineStore('auth', () => {
       }
       if (data.token && data.user) {
         token.value = data.token;
-        user.value = data.user;
+        // T02453：合并响应顶层的 mustChangePassword 标记（后端按 localOnly 门控）；
+        // register 新用户无默认口令问题，该标记为 false，合并无副作用
+        user.value = { ...data.user, mustChangePassword: data.mustChangePassword === true };
         saveToken(data.token);
         // FR-RM-06 主动防御：注册后自动登录，同登录流程作废上一用户会话作用域
         useConversationsStore().resetSession();
@@ -319,6 +323,13 @@ export const useAuthStore = defineStore('auth', () => {
     return res.ok;
   }
 
+  // T02453：强制改密成功后清除本地标记（后端已同步清除，此处让 UI 立即收起对话框）
+  function clearMustChangePassword(): void {
+    if (user.value) {
+      user.value = { ...user.value, mustChangePassword: false };
+    }
+  }
+
   return {
     // 状态
     token,
@@ -339,6 +350,8 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     restoreSession,
     clearAuth,
+    // T02453：强制改密成功后清除本地标记（后端已同步清除，此处让 UI 立即收起对话框）
+    clearMustChangePassword,
     // 权限判断
     hasPermission,
     hasAnyPermission,

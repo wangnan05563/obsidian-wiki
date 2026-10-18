@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
 import path from 'node:path';
 import type { AuthConfig, LoginRequest, RegisterRequest, CreateUserRequest, UpdateUserRequest, UserRecord } from '../auth/types.js';
-import { findUserByUsername, findUserById, listUsers, createUser, updateUser, deleteUser, updateLastLogin, initUserStore, validateRegistrationInput } from '../auth/user-store.js';
+import { findUserByUsername, findUserById, listUsers, createUser, updateUser, deleteUser, updateLastLogin, initUserStore, validateRegistrationInput, validateNewPassword } from '../auth/user-store.js';
 import { verifyPassword, getSessionSecret } from '../auth/password.js';
 import { createSession, destroySession, destroyUserSessions, startSessionCleanup } from '../auth/session.js';
 import { getRolePermissions } from '../auth/rbac.js';
@@ -26,13 +26,17 @@ let authConfig: AuthConfig | null = null;
 let sessionSecret = '';
 let permissionCacheTtlMs = 5 * 60 * 1000;
 let auditLogPath = '';
+// T02453（PRD A1）：localOnly 部署模式。true = 本地调试（默认口令提示可见、不强制首登改密）；
+// false = 生产（隐藏默认口令提示、首登强制改密）。
+let localOnlyMode = false;
 
 // 初始化认证模块（在 index.ts 启动时调用一次）
 // 为什么单独导出：路由注册前需要先初始化 user-store、audit-log、中间件
-export async function initAuthModule(config: AuthConfig, vaultPath: string): Promise<void> {
+export async function initAuthModule(config: AuthConfig, vaultPath: string, localOnly = false): Promise<void> {
   authConfig = config;
   sessionSecret = getSessionSecret(config.sessionSecretRef);
   permissionCacheTtlMs = config.permissionCacheTtlSec * 1000;
+  localOnlyMode = localOnly;
 
   // 解析 users.json / audit.log 的绝对路径
   // config 中路径形如 '../data/users.json'，实际文件位于 data/ 目录下
@@ -87,6 +91,13 @@ export function registerAuthRoute(app: FastifyInstance): void {
   };
 
   // ===== 公开接口 =====
+
+  // GET /api/auth/bootstrap：登录页引导信息（T02453，PRD A1）
+  // 为什么需要公开端点：默认账户提示只能在 localOnly 调试模式显示，而登录页在认证前
+  // 就需要知道该开关；仅返回布尔，不暴露 localOnly 原始值与其他配置。
+  app.get('/api/auth/bootstrap', async (_request: FastifyRequest, reply: FastifyReply) => {
+    return void reply.send({ ok: true, showDefaultAccountHint: localOnlyMode });
+  });
 
   // POST /api/auth/login：登录
   // 为什么不返回 token 在 cookie：本地优先应用，前端存储 token 更简单
@@ -192,6 +203,10 @@ export function registerAuthRoute(app: FastifyInstance): void {
     return void reply.send({
       ok: true,
       token: session.token,
+      // T02453（PRD A1）：localOnly 门控——生产环境对仍用默认口令的账户返回强制改密标记，
+      // 前端据此弹出不可跳过的改密对话框；本地调试模式放行（false）。
+      mustChangePassword: !localOnlyMode && user.mustChangePassword === true,
+      localOnly: localOnlyMode,
       user: {
         id: user.id,
         username: user.username,
@@ -321,11 +336,66 @@ export function registerAuthRoute(app: FastifyInstance): void {
       username: user.username,
       role: user.role,
       enabled: user.enabled,
+      // T02453：与 login 同口径门控，保证刷新页面后强制改密状态不丢失
+      mustChangePassword: !localOnlyMode && user.mustChangePassword === true,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
       lastLoginAt: user.lastLoginAt,
       permissions: getRolePermissions(user.role),
     });
+  });
+
+  // POST /api/auth/change-password：自助改密（T02453，PRD A1 生产首登强制改密落地）
+  // 为什么必须登录态：旧密码验证 + 会话归属，防未认证改密；改密成功即清除 mustChangePassword 标记。
+  app.post('/api/auth/change-password', { preHandler: authGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const session = request.currentUser!;
+    const body = (request.body ?? {}) as { oldPassword?: unknown; newPassword?: unknown; confirmPassword?: unknown };
+    const oldPassword = typeof body.oldPassword === 'string' ? body.oldPassword : '';
+    const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+
+    const user = await findUserById(session.userId);
+    if (!user) {
+      return void reply.code(401).send({ ok: false, message: '用户不存在' });
+    }
+    if (!oldPassword) {
+      return void reply.code(400).send({ ok: false, message: '请输入当前密码' });
+    }
+    // 旧密码校验：恒定时间比较，失败不区分用户是否存在（与 login 同策略）
+    const oldOk = await verifyPassword(oldPassword, user.salt, user.passwordHash, cfg.pbkdf2Iterations);
+    if (!oldOk) {
+      writeAuditLog(
+        createAuditEntry({
+          userId: user.id,
+          username: user.username,
+          action: 'password_change',
+          resource: '/api/auth/change-password',
+          ip: clientIpFromRequest(request),
+          result: 'fail',
+          message: '旧密码校验失败',
+        }),
+      );
+      return reply.code(401).send({ ok: false, message: '当前密码不正确' });
+    }
+    if (newPassword === oldPassword) {
+      return void reply.code(400).send({ ok: false, message: '新密码不能与当前密码相同' });
+    }
+    const validated = validateNewPassword(newPassword, body.confirmPassword);
+    if (!validated.ok) {
+      return reply.code(validated.status).send({ ok: false, message: validated.error });
+    }
+
+    await updateUser(user.id, { password: newPassword, mustChangePassword: false });
+    writeAuditLog(
+      createAuditEntry({
+        userId: user.id,
+        username: user.username,
+        action: 'password_change',
+        resource: '/api/auth/change-password',
+        ip: clientIpFromRequest(request),
+        result: 'success',
+      }),
+    );
+    return void reply.send({ ok: true, message: '密码修改成功' });
   });
 
   // POST /api/auth/logout：登出

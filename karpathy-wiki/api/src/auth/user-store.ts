@@ -3,7 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { UserRecord, AuthRole } from './types.js';
-import { generateSalt, hashPassword } from './password.js';
+import { generateSalt, hashPassword, verifyPassword } from './password.js';
 
 // 用户存储模块
 // 持久化到 JSON 文件（默认 data/users.json）
@@ -18,11 +18,20 @@ let usersFileCorrupt = false;
 
 // 默认用户列表（首次启动时自动创建）
 // 为什么明文默认密码：首次启动后必须立即修改；console 提示用户
-const DEFAULT_USERS = [
-  { username: 'admin', password: 'admin123', role: 'admin' as AuthRole },
-  { username: 'user', password: 'user123', role: 'user' as AuthRole },
-  { username: 'guest', password: 'guest123', role: 'guest' as AuthRole },
+// T02453（PRD A1）种子加固：guest 种子默认停用（enabled:false）；admin/user 种子带
+// mustChangePassword 标记（生产首登强制改密，localOnly 开发模式在登录响应层放行）。
+const DEFAULT_USERS: Array<{ username: string; password: string; role: AuthRole; enabled?: boolean; mustChangePassword?: boolean }> = [
+  { username: 'admin', password: 'admin123', role: 'admin', mustChangePassword: true },
+  { username: 'user', password: 'user123', role: 'user', mustChangePassword: true },
+  { username: 'guest', password: 'guest123', role: 'guest', enabled: false, mustChangePassword: true },
 ];
+
+// 种子用户名 → 默认口令映射（迁移时判定「仍在使用默认口令」用）
+const DEFAULT_PASSWORDS: Record<string, string> = {
+  admin: 'admin123',
+  user: 'user123',
+  guest: 'guest123',
+};
 
 // 初始化用户存储
 // 首次启动时文件不存在 → 创建默认用户 → 写入文件
@@ -40,6 +49,16 @@ export async function initUserStore(filePath: string, iterations: number): Promi
   // 文件存在 → 加载；文件不存在 → 创建默认用户
   if (fsSync.existsSync(filePath)) {
     await loadUsers();
+    // T02453（PRD A1）存量迁移：老 users.json 里的种子账号若仍用默认口令，一次性加固
+    // （guest 停用 / admin+user 打首登改密标记）；已改过口令的账户不受影响。幂等可重跑。
+    try {
+      if (await hardenSeedUsers()) {
+        await saveUsers(usersCache ?? []);
+        console.warn('[auth] 已对仍使用默认口令的种子账号执行安全加固（guest 停用 / 首登改密标记）');
+      }
+    } catch (err) {
+      console.warn('[auth] 种子账号加固失败（不影响启动）：', err instanceof Error ? err.message : String(err));
+    }
   } else {
     console.log('[auth] 用户存储文件不存在，创建默认用户...');
     const defaultUsers = await createDefaultUsers();
@@ -70,12 +89,41 @@ async function createDefaultUsers(): Promise<UserRecord[]> {
         passwordHash,
         salt,
         role: u.role,
-        enabled: true,
+        enabled: u.enabled ?? true,
+        mustChangePassword: u.mustChangePassword,
         createdAt: now,
         updatedAt: now,
       } satisfies UserRecord;
     }),
   );
+}
+
+// T02453（PRD A1）存量种子账号加固：对「种子用户名 + 仍匹配默认口令」的账户执行
+//   guest → enabled:false（停用）；admin/user → mustChangePassword:true（首登强制改密）。
+// 已修改过口令的账户与普通注册账户完全不受影响。返回是否有改动（供调用方决定是否写盘）。
+export async function hardenSeedUsers(): Promise<boolean> {
+  const users = await loadUsers();
+  let changed = false;
+  for (const user of users) {
+    const defaultPassword = DEFAULT_PASSWORDS[user.username];
+    if (!defaultPassword) continue;
+    let stillDefault = false;
+    try {
+      stillDefault = await verifyPassword(defaultPassword, user.salt, user.passwordHash, pbkdf2Iterations);
+    } catch {
+      continue; // 哈希异常时保守跳过，不误伤
+    }
+    if (!stillDefault) continue;
+    if (user.username === 'guest' && user.enabled !== false) {
+      user.enabled = false;
+      changed = true;
+    }
+    if (user.mustChangePassword !== true) {
+      user.mustChangePassword = true;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 // 从文件加载用户列表（带缓存）
@@ -154,6 +202,21 @@ export async function listUsers(): Promise<UserRecord[]> {
   return await loadUsers();
 }
 
+// 新密码格式校验（同步，不访问存储）——T02453 改密端点与注册共用同一份规则
+export function validateNewPassword(password?: unknown, confirmPassword?: unknown): { ok: true } | { ok: false; error: string; status: number } {
+  const pwd = typeof password === 'string' ? password : '';
+  const confirm = typeof confirmPassword === 'string' ? confirmPassword : '';
+  // 长度 8-64（简易机制的安全底线，与注册口径一致）
+  if (pwd.length < 8 || pwd.length > 64) {
+    return { ok: false, error: '密码长度须为 8-64 位', status: 400 };
+  }
+  // 确认密码（若提供）须一致
+  if (confirm && pwd !== confirm) {
+    return { ok: false, error: '两次输入的密码不一致', status: 400 };
+  }
+  return { ok: true };
+}
+
 // 自助注册输入校验（同步，不访问存储）
 // 仅校验格式 / 长度 / 一致性；用户名唯一性由调用方异步查库（findUserByUsername）
 // 为什么要单独导出：注册路由与单元测试都复用同一份校验规则，避免漂移
@@ -163,25 +226,16 @@ export function validateRegistrationInput(params: {
   confirmPassword?: unknown;
 }): { ok: true } | { ok: false; error: string; status: number } {
   const username = typeof params.username === 'string' ? params.username : '';
-  const password = typeof params.password === 'string' ? params.password : '';
-  const confirmPassword = typeof params.confirmPassword === 'string' ? params.confirmPassword : '';
 
-  if (!username || !password) {
+  if (!username) {
     return { ok: false, error: '用户名和密码不能为空', status: 400 };
   }
   // 用户名：3-32 位字母、数字、下划线
   if (!/^\w{3,32}$/.test(username)) {
     return { ok: false, error: '用户名须为 3-32 位字母、数字或下划线', status: 400 };
   }
-  // 密码：长度 8-64（简易机制的安全底线）
-  if (password.length < 8 || password.length > 64) {
-    return { ok: false, error: '密码长度须为 8-64 位', status: 400 };
-  }
-  // 确认密码（若提供）须一致
-  if (confirmPassword && password !== confirmPassword) {
-    return { ok: false, error: '两次输入的密码不一致', status: 400 };
-  }
-  return { ok: true };
+  // 密码规则统一走 validateNewPassword（T02453 提取，注册/改密同源）
+  return validateNewPassword(params.password, params.confirmPassword);
 }
 
 // 创建新用户
@@ -221,6 +275,7 @@ export async function updateUser(
     password?: string;
     role?: AuthRole;
     enabled?: boolean;
+    mustChangePassword?: boolean;
   },
 ): Promise<UserRecord> {
   const users = await loadUsers();
@@ -243,6 +298,7 @@ export async function updateUser(
 
   if (updates.role) user.role = updates.role;
   if (updates.enabled !== undefined) user.enabled = updates.enabled;
+  if (updates.mustChangePassword !== undefined) user.mustChangePassword = updates.mustChangePassword;
 
   user.updatedAt = new Date().toISOString();
   await saveUsers(users);

@@ -13,6 +13,8 @@ import {
   updateUser,
   deleteUser,
   updateLastLogin,
+  validateRegistrationInput,
+  validateNewPassword,
   resetUserStore,
 } from '../src/auth/user-store.js';
 import { verifyPassword } from '../src/auth/password.js';
@@ -83,12 +85,94 @@ describe('user-store 模块', () => {
       expect(guest?.role).toBe('guest');
     });
 
-    it('默认用户应启用', async () => {
+    it('默认用户应启用（T02453 起 guest 种子加固为停用）', async () => {
       await initUserStore(usersPath, 100000);
       const users = await loadUsers();
-      for (const u of users) {
-        expect(u.enabled).toBe(true);
-      }
+      const byName = Object.fromEntries(users.map((u) => [u.username, u]));
+      expect(byName.admin.enabled).toBe(true);
+      expect(byName.user.enabled).toBe(true);
+      // PRD A1：guest 种子账号默认停用，杜绝默认口令未授权访问
+      expect(byName.guest.enabled).toBe(false);
+    });
+  });
+
+  describe('T02453 种子账号安全加固（PRD A1）', () => {
+    it('新初始化：guest 停用，admin/user 带首登改密标记', async () => {
+      await initUserStore(usersPath, 100000);
+      const admin = await findUserByUsername('admin');
+      const user = await findUserByUsername('user');
+      const guest = await findUserByUsername('guest');
+      expect(guest?.enabled).toBe(false);
+      expect(admin?.mustChangePassword).toBe(true);
+      expect(user?.mustChangePassword).toBe(true);
+    });
+
+    it('存量迁移：默认口令的种子被加固，已改密与普通用户不受影响', async () => {
+      // 预写老格式 users.json（无 mustChangePassword 字段）
+      const { generateSalt, hashPassword } = await import('../src/auth/password.js');
+      const seed = async (username: string, password: string, role: 'admin' | 'user' | 'guest') => {
+        const salt = generateSalt();
+        return {
+          id: `id-${username}-${password.length}`,
+          username,
+          passwordHash: await hashPassword(password, salt, 100000),
+          salt,
+          role,
+          enabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      };
+      const legacy = {
+        users: [
+          await seed('admin', 'admin123', 'admin'), // 仍默认口令 → 打标记
+          await seed('user', 'user-new-pass', 'user'), // 已改密 → 不动
+          await seed('guest', 'guest123', 'guest'), // 仍默认口令 → 停用 + 标记
+          await seed('alice', 'alice-pass-1', 'user'), // 普通注册用户 → 不动
+        ],
+      };
+      await fs.writeFile(usersPath, JSON.stringify(legacy), 'utf8');
+
+      await initUserStore(usersPath, 100000);
+      const admin = await findUserByUsername('admin');
+      const user = await findUserByUsername('user');
+      const guest = await findUserByUsername('guest');
+      const alice = await findUserByUsername('alice');
+      expect(admin?.mustChangePassword).toBe(true);
+      expect(admin?.enabled).toBe(true);
+      expect(guest?.enabled).toBe(false);
+      expect(guest?.mustChangePassword).toBe(true);
+      expect(user?.mustChangePassword).toBeUndefined();
+      expect(alice?.mustChangePassword).toBeUndefined();
+      expect(alice?.enabled).toBe(true);
+    });
+
+    it('迁移幂等：二次初始化文件内容不变', async () => {
+      await initUserStore(usersPath, 100000);
+      const before = JSON.stringify(await loadUsers());
+      resetUserStore();
+      await initUserStore(usersPath, 100000);
+      expect(JSON.stringify(await loadUsers())).toBe(before);
+    });
+
+    it('updateUser 可清除 mustChangePassword 并重设密码（改密端点依赖）', async () => {
+      await initUserStore(usersPath, 100000);
+      const admin = await findUserByUsername('admin');
+      expect(admin?.mustChangePassword).toBe(true);
+      const updated = await updateUser(admin!.id, { password: 'brand-new-pass', mustChangePassword: false });
+      expect(updated.mustChangePassword).toBe(false);
+      expect(await verifyPassword('brand-new-pass', updated.salt, updated.passwordHash, 100000)).toBe(true);
+    });
+  });
+
+  describe('validateNewPassword（T02453）', () => {
+    it('接受 8-64 位且确认一致', () => {
+      expect(validateNewPassword('12345678', '12345678')).toEqual({ ok: true });
+    });
+    it('拒绝过短 / 过长 / 两次不一致', () => {
+      expect(validateNewPassword('1234567').ok).toBe(false);
+      expect(validateNewPassword('a'.repeat(65)).ok).toBe(false);
+      expect(validateNewPassword('12345678', '87654321').ok).toBe(false);
     });
   });
 
