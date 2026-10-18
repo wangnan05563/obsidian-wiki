@@ -47,12 +47,16 @@ interface PersistableDraftPublishState {
   progressMessage: string;
 }
 
-// 步骤展示名映射：后端用英文 step 标识，前端需要友好中文
-const STEP_LABEL: Record<CompileStep, string> = {
+// 步骤展示名映射：后端用英文 step 标识，前端需要友好中文。
+// 单一来源（PRD P4）：Progress.vue / SingleFileProgressBar 均改调 store.stepLabel，
+// 不再各自维护私有副本，消除「7 步 / 5 步 / 硬编码 8」三套不一致导致「进度 100% 但阶段名没走完」。
+const STEP_LABEL: Record<string, string> = {
   archive: '存档原始资料',
   read_schema: '读取 SCHEMA',
   extract: '提取要点',
   generate_page: '生成页面',
+  update_index: '更新索引',
+  update_log: '记录日志',
   finalize: '收尾'
 };
 
@@ -137,8 +141,8 @@ export const useCompileStore = defineStore('compile', () => {
   // §优化方案1：单文件编译模式的步骤总数估算
   // 为什么需要估算：harness 是 LLM 驱动的循环，步骤数动态，无固定上限
   //   估算策略：基于历史日志（如 SHCPE 7 步）+ 4 个核心阶段（archive/read_schema/extract/generate_page）
-  //   保守取 8 步作为进度条分母，避免百分比卡在 100% 后还有后续步骤
-  const ESTIMATED_TOTAL_STEPS = 8;
+  // P4（PRD）：估算总阶段数 = STEP_LABEL 键数（单一来源），消除硬编码 8 与标签数不一致
+  const ESTIMATED_TOTAL_STEPS = Object.keys(STEP_LABEL).length;
 
   // §优化方案1：已完成步骤数（基于 timeline 去重统计）
   // 为什么用 set 而非 timeline.length：单步可能推送多条事件（如多次 read_file），
@@ -178,9 +182,9 @@ export const useCompileStore = defineStore('compile', () => {
     return Date.now() - compileStartedAt.value;
   });
 
-  // 步骤中文名
-  const stepLabel = computed(() => (s: CompileStep | null) =>
-    s ? STEP_LABEL[s] : ''
+  // 步骤中文名（PRD P4 统一出口：所有视图经此取中文标签）
+  const stepLabel = computed(() => (s: string | null) =>
+    s ? STEP_LABEL[s] ?? s : ''
   );
 
   // 已生成页面数（来自 generate_page 事件）

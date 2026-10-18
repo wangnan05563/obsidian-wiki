@@ -8,6 +8,7 @@ import IconActionButton from '../components/IconActionButton.vue';
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
 import AppModal from '../components/AppModal.vue';
 import { useCompileStore } from '../stores/compile';
+import { stepStatusLabel } from '../utils/status';
 import { consumeSSE } from '../utils/sse';
 import BatchProgressBar from '../components/BatchProgressBar.vue';
 import SingleFileProgressBar from '../components/SingleFileProgressBar.vue';
@@ -31,6 +32,7 @@ async function loadCurrentModel() {
     currentModel.value = cfg.model ?? '';
   } catch {
     // 拉取失败保持"未知"，不阻断编译流程
+    ElMessage.warning('当前模型加载失败，请到配置中心确认模型设置');
   }
 }
 
@@ -42,6 +44,7 @@ async function loadLlmPresets() {
     llmPresets.value = Array.isArray(data) ? data : (data.presets ?? []);
   } catch {
     // 预设加载失败不阻断编译流程
+    ElMessage.warning('预设列表加载失败，可到配置中心手动切换模型');
   }
 }
 
@@ -85,16 +88,6 @@ let abortController: AbortController | null = null;
 
 const logDialogVisible = ref(false);
 const viewingRunId = ref<string>('');
-
-const STEP_LABEL: Record<string, string> = {
-  archive: '存档原始资料',
-  read_schema: '读取 SCHEMA',
-  extract: '提取要点',
-  generate_page: '生成页面',
-  update_index: '更新索引',
-  update_log: '记录日志',
-  finalize: '收尾'
-};
 
 const robotMood = computed<string>(() => {
   if (store.errorMessage) return 'sad';
@@ -248,6 +241,14 @@ async function openLogDialog(run: RunSummary) {
   await store.loadLog(run.runId);
 }
 
+// P8（PRD）：编译出错时从失败标题下方「查看日志」直达当前 runId 的日志
+function viewErrorLog() {
+  if (!store.currentRunId) return;
+  viewingRunId.value = store.currentRunId;
+  logDialogVisible.value = true;
+  store.loadLog(store.currentRunId);
+}
+
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -289,7 +290,8 @@ function handleRestart() {
 }
 
 function stepLabelOf(item: TimelineItem): string {
-  return STEP_LABEL[item.step] ?? item.step;
+  // P4：统一走 store.stepLabel（单一来源）
+  return store.stepLabel(item.step) || item.step;
 }
 
 function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
@@ -309,7 +311,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
           <h2 class="head-title">
             <span v-if="store.isCompiling" class="grad-text">机器人正在编译…</span>
             <span v-else-if="store.isDone" class="grad-text">编译完成</span>
-            <span v-else-if="store.errorMessage" class="grad-text">出错了</span>
+            <span v-else-if="store.errorMessage" class="grad-text">编译失败</span>
             <span v-else class="grad-text">准备就绪</span>
           </h2>
           <p class="head-tip">
@@ -319,12 +321,22 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             </template>
             <template v-else>{{ store.errorMessage }}</template>
           </p>
+          <div v-if="store.errorMessage" class="head-error-actions">
+            <el-button
+              v-if="store.currentRunId"
+              size="small"
+              text
+              type="primary"
+              data-tip="查看本次编译的运行日志"
+              @click="viewErrorLog"
+            >查看日志</el-button>
+          </div>
         </div>
         <!-- T00356：页面右上角常驻显示当前使用模型（编译走服务端共享 AI，即 GET /api/ai/config 返回的 model）。
              与失败态的 current-model-bar 不同，这里无论编译成败都展示，便于用户随时核对当前生效模型 -->
         <div class="head-model" data-tip="编译当前使用的模型">
           <span class="head-model-label">当前模型：</span>
-          <code>{{ currentModel || '未知' }}</code>
+          <code>{{ currentModel || '未加载' }}</code>
         </div>
       </div>
 
@@ -359,7 +371,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
                 <el-icon v-if="group.status === 'running'" class="spin-icon"><Loading /></el-icon>
                 <el-icon v-else-if="group.status === 'done'"><Check /></el-icon>
                 <el-icon v-else-if="group.status === 'error'"><Close /></el-icon>
-                <span>{{ group.status }}</span>
+                <span>{{ stepStatusLabel(group.status) }}</span>
               </span>
             </div>
             <!-- 分组内时间线（折叠态：仅显示最近一条；展开态：完整列表） -->
@@ -408,7 +420,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
                 <el-icon v-if="item.status === 'running'" class="spin-icon"><Loading /></el-icon>
                 <el-icon v-else-if="item.status === 'done'"><Check /></el-icon>
                 <el-icon v-else><Close /></el-icon>
-                <span>{{ item.status }}</span>
+                <span>{{ stepStatusLabel(item.status) }}</span>
               </span>
             </div>
       <div class="tl-message">{{ item.message }}</div>
@@ -540,7 +552,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
     <!-- 日志查看 Dialog -->
     <AppModal v-model="logDialogVisible" title="编译运行日志" width="700px" class="log-dialog">
-      <div v-if="store.loadingLog" class="section-loading">LOADING...</div>
+      <div v-if="store.loadingLog" class="section-loading">加载中…</div>
       <div v-else-if="store.logEntries.length === 0" class="runs-empty">暂无日志</div>
       <div v-else class="log-list">
         <div v-for="(entry, idx) in store.logEntries" :key="idx" class="log-line" :class="entry.event">
@@ -617,6 +629,10 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   margin: 0;
   color: var(--text-soft);
   font-size: 12px;
+}
+
+.head-error-actions {
+  margin-top: 6px;
 }
 
 /* T00356：页面右上角常驻展示当前使用模型（读写服务端共享 AI 配置期间不可用，失败显示“未知”）。 */
