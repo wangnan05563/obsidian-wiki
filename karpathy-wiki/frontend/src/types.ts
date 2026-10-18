@@ -481,6 +481,45 @@ export interface BatchDoneEvent extends FixProgressEvent {
   failCount: number;
 }
 
+// ===== T02466（PRD R-F2）批量修复后台作业 =====
+// 与 api/src/workflows/batch-fix-job.ts 的快照对应（响应里已裁掉 items 大数组）
+
+export type BatchFixJobStatus = 'running' | 'paused' | 'canceled' | 'completed';
+
+export interface BatchFixFailedItem {
+  issueKey: string;
+  message: string;
+}
+
+export interface BatchFixJobSnapshot {
+  jobId: string;
+  status: BatchFixJobStatus;
+  total: number;
+  doneCount: number;
+  successCount: number;
+  failCount: number;
+  currentIssueKey: string;
+  pauseRequested: boolean;
+  startedAt: number;
+  updatedAt: number;
+  elapsedMs: number;
+  avgMsPerIssue: number;
+  doneKeys: string[];
+  failed: BatchFixFailedItem[];
+  nextIndex: number;
+}
+
+// 启动前量化估算：basis=measured 表示基于历史实测均值，default 表示无样本兜底
+export interface BatchFixEstimate {
+  count: number;
+  llmCalls: number;
+  avgMsPerIssue: number;
+  samples: number;
+  estimatedMs: number;
+  estimatedMinutes: number;
+  basis: 'measured' | 'default';
+}
+
 // ===== 全文检索相关类型 =====
 
 // §5.1 搜索命中结果
