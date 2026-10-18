@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ChatRound } from '@element-plus/icons-vue';
+import { FOLLOWUP_LABEL } from '../utils/labels';
 const props = defineProps<{
   followups: string[];
   disabled?: boolean;
@@ -11,7 +12,7 @@ const emit = defineEmits<{ click: [question: string] }>();
   <div class="followups-chips" v-if="props.followups.length > 0">
     <span class="followups-label">
       <el-icon class="label-icon"><ChatRound /></el-icon>
-      <span>你可能想问：</span>
+      <span>{{ FOLLOWUP_LABEL }}</span>
     </span>
     <div class="chips-scroll">
       <button v-for="(f, i) in followups" :key="f"

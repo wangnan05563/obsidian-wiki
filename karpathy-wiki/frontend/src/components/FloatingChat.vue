@@ -22,6 +22,7 @@ import { useAuthStore } from '../stores/auth';
 import { useModelStore } from '../stores/model';
 import { loadAiUserConfigForPreset, loadSearchUserConfig, loadToolsUserConfig, type AiUserConfig } from '../services/userConfig';
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
+import { FOLLOWUP_LABEL } from '../utils/labels';
 import { useChatAutoScroll } from '../composables/useChatAutoScroll';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
@@ -582,7 +583,7 @@ onBeforeUnmount(() => {
                 />
                 <!-- 联想追问 -->
                 <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
-                  <span class="followups-label">猜猜你想问：</span>
+                  <span class="followups-label">{{ FOLLOWUP_LABEL }}</span>
                   <div class="followups-track">
                     <span
                       v-for="(f, i) in msg.followups"

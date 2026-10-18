@@ -384,19 +384,21 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
 }
+/* T02461（PRD Q11）：主操作「新对话」改为实心主色，避免淡蓝底+淡字被误读为禁用态 */
 .new-btn {
   padding: 8px 12px;
   border-radius: 8px;
-  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
-  background: var(--accent-cyan-a12, rgba(0, 245, 255, 0.12));
-  color: var(--text-bright, #f3e9ff);
+  border: 1px solid transparent;
+  background: var(--neon-cyan, #00f5ff);
+  color: #04121a;
+  font-weight: 600;
   cursor: pointer;
   font-size: 13px;
   transition: all 0.2s;
 }
 .new-btn:hover {
-  background: var(--accent-cyan-a20, rgba(0, 245, 255, 0.2));
-  border-color: var(--neon-cyan, #00f5ff);
+  filter: brightness(1.08);
+  box-shadow: 0 2px 10px var(--accent-cyan-a30, rgba(0, 245, 255, 0.3));
 }
 .search-input {
   padding: 6px 10px;
