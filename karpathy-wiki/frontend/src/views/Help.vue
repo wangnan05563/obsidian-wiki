@@ -19,6 +19,8 @@ interface DocBlock {
   noteType?: 'info' | 'warning';
   // code 类型：展示代码语言标记（用于顶部小徽标，如 json / shell）
   codeLang?: string;
+  // T02455（PRD D1x）：步骤块的可点击直达动作——跳到真实菜单路径（可带 tab）
+  action?: { label: string; view: string; tab?: string };
 }
 
 interface DocSection {
@@ -27,6 +29,8 @@ interface DocSection {
   icon: string; // SVG 路径字符串
   intro: string;
   blocks: DocBlock[];
+  // T02455（PRD D2x）：子功能条目（如配置中心下的 MCP 接口）缩进一级显示，不与一级菜单平级
+  sub?: boolean;
 }
 
 // ===== 15 个导航视图，本文档覆盖其全部（用户管理 / 技能管理 / 数据清洗 随迭代新增）=====
@@ -46,10 +50,12 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'steps',
         title: '操作步骤',
+        // T02455（D1x）：文档路径精确到 tab，并提供可点击直达按钮（与菜单实名一致）
+        action: { label: '前往：配置中心 → AI 服务', view: 'config', tab: 'ai' },
         content: [
-          '配置 LLM：进入「配置中心」页面，选择 LLM 预设（OpenAI/DeepSeek/GLM/Qwen 等），填入 API Key 并保存',
+          '配置 LLM：进入「配置中心 → AI 服务」标签页，选择 LLM 预设（OpenAI/DeepSeek/GLM/Qwen 等），填入 API Key 并保存',
           '投递资料：进入「投递资料」页面，拖拽 .md 文件 / 粘贴 URL / 输入纯文本，点击「开始编译」',
-          '查看进度：进入「编译进度」页面，观察 read_schema → extract → generate_page → update_index 流程',
+          '查看进度：进入「编译进度」页面，观察「读取结构 → 抽取内容 → 产出页面 → 更新索引」各阶段进度',
           '知识问答：进入「知识问答」页面，输入问题，AI 基于本地知识库回答并引用相关页面',
           '可选 - 体检：进入「体检中心」页面，检测孤立页面、断链、过期内容',
           '可选 - 远程访问：进入「内网穿透」页面，启动 Cloudflare 隧道暴露本机服务到公网',
@@ -172,7 +178,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '通过 SSE 流式推送编译进度：read_schema（读取 schema）→ extract（提取实体）→ generate_page（生成页面）→ update_index（更新索引）→ done。支持断点续传，中断后可从上次断点恢复。',
+        content: '通过 SSE 流式推送编译进度：读取结构 → 抽取内容 → 产出页面 → 更新索引 → 完成。支持断点续传，中断后可从上次断点恢复。',
       },
       {
         type: 'steps',
@@ -381,6 +387,7 @@ const DOC_SECTIONS: DocSection[] = [
   {
     id: 'mcp',
     title: 'MCP 接口',
+    sub: true, // T02455（D2x）：配置中心下的子功能，目录与标题均缩进一级
     icon: 'M18 7h-2V5a2 2 0 0 0-4 0v2H8V5a2 2 0 0 0-4 0v2H2v6h2v2a3 3 0 0 0 3 3h2v4h2v-4h2v4h2v-4h2a3 3 0 0 0 3-3v-2h2V7z',
     intro: '以 MCP（Model Context Protocol）服务器形式向外部 AI Agent 暴露知识库的查询 / 维护能力。',
     blocks: [
@@ -638,6 +645,19 @@ const filteredSections = computed(() => {
 // ===== 锚点导航 =====
 const activeAnchor = ref('');
 
+// T02455（PRD D1x）：可点击直达——经 karpathy:navigate 事件切视图（App.vue 既有监听），
+// tab 指令经 sessionStorage 传递（复用 karpathy:jumpPath 既有模式），目标视图挂载时消费并清除
+function jumpTo(action: { view: string; tab?: string }) {
+  if (action.tab) {
+    try {
+      sessionStorage.setItem('karpathy:navigate-tab', JSON.stringify({ view: action.view, tab: action.tab }));
+    } catch {
+      // 隐私模式等写入失败时静默降级：仅切视图，不定位 tab
+    }
+  }
+  globalThis.dispatchEvent(new CustomEvent('karpathy:navigate', { detail: action.view }));
+}
+
 function scrollToSection(id: string) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -836,7 +856,7 @@ onBeforeUnmount(() => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="anchor-icon">
               <path :d="section.icon" />
             </svg>
-            <span class="anchor-label">{{ section.title }}</span>
+            <span class="anchor-label" :class="{ 'anchor-sub': section.sub }">{{ section.title }}</span>
           </a>
           <div v-if="filteredSections.length === 0" class="empty-anchor">
             未找到匹配的章节
@@ -878,7 +898,7 @@ onBeforeUnmount(() => {
                 <path :d="section.icon" />
               </svg>
             </div>
-            <h3 class="section-title">{{ section.title }}</h3>
+            <h3 class="section-title" :class="{ 'section-sub': section.sub }">{{ section.title }}</h3>
           </div>
           <p class="section-intro">{{ section.intro }}</p>
           <div class="section-divider"></div>
@@ -904,9 +924,15 @@ onBeforeUnmount(() => {
               </p>
 
               <!-- steps：有序列表 -->
-              <ol v-else-if="block.type === 'steps'" class="block-steps">
-                <li v-for="(step, idx) in (block.content as string[])" :key="idx">{{ step }}</li>
-              </ol>
+              <div v-else-if="block.type === 'steps'" class="block-steps">
+                <ol class="block-steps-list">
+                  <li v-for="(step, idx) in (block.content as string[])" :key="idx">{{ step }}</li>
+                </ol>
+                <!-- T02455（D1x）：步骤配可点击直达按钮，路径与菜单实名一致 -->
+                <button v-if="block.action" class="block-jump" @click="jumpTo(block.action)">
+                  → {{ block.action.label }}
+                </button>
+              </div>
 
               <!-- config：参数表格 -->
               <div v-else-if="block.type === 'config'" class="block-config">
@@ -1365,7 +1391,12 @@ onBeforeUnmount(() => {
   border-left-color: var(--neon-magenta);
 }
 
+/* T02455：steps 块改为「列表 + 可选直达按钮」包装结构，列表样式下沉到 .block-steps-list */
 .block-steps {
+  padding-left: 0;
+}
+
+.block-steps-list {
   margin: 0;
   padding-left: 32px;
   color: var(--text-base);
@@ -1373,8 +1404,38 @@ onBeforeUnmount(() => {
   line-height: 1.7;
 }
 
-.block-steps li {
+.block-steps-list li {
   margin-bottom: 4px;
+}
+
+/* T02455（D1x）：步骤配可点击直达按钮，路径与菜单实名一致 */
+.block-jump {
+  margin-top: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--neon-cyan);
+  background: var(--accent-cyan-a08);
+  border: 1px solid var(--accent-cyan-a10);
+  border-radius: var(--radius-btn, 8px);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.block-jump:hover {
+  background: var(--accent-cyan-a10);
+}
+
+/* T02455（D2x）：子功能条目（配置中心下的 MCP 接口）缩进一级，不与一级菜单平级 */
+.anchor-sub {
+  padding-left: 16px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.section-sub {
+  padding-left: 16px;
+  font-size: 15px;
 }
 
 /* 配置表格 */

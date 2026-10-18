@@ -15,6 +15,7 @@ import { apiErrorMessage } from '../utils/apiError';
 import { consumeSSE } from '../utils/sse';
 import { useAuthStore } from '../stores/auth';
 import { useTtsStore } from '../stores/tts';
+import { useFormDraft } from '../composables/useFormDraft';
 import { useModelStore } from '../stores/model';
 import { AUTO_MODEL } from '../utils/autoModel';
 import { DEFAULT_TTS_CONFIG } from '../services/ttsConfig';
@@ -514,6 +515,31 @@ const aiModelPlaceholder = computed(() => matchedPreset.value?.model ?? '请输�
 // 当前用户 id（未登录视为 guest 命名空间）；用于按用户隔离读写本地配置。
 const currentUserId = computed(() => authStore.user?.id || 'guest');
 
+// T01833：AI 服务（BYOK）表单草稿 —— 草稿 key 按预设隔离（切换预设互不串扰），
+// apiKey 为敏感字段，仅在勾选「记住」时落盘明文。
+const rememberAiKey = ref(false);
+const aiDraftApi = useFormDraft(
+  computed(() => `karpathy-wiki:config:draft:ai:${currentUserId.value}:${selectedPresetKey.value || 'custom'}`),
+  aiForm,
+  {
+    whitelist: ['provider', 'baseUrl', 'model', 'apiKey', 'embeddingModel'],
+    sensitive: ['apiKey'],
+    remember: rememberAiKey,
+  },
+);
+// 清空当前账户全部 AI 预设草稿（恢复初始配置时调用）
+function clearAllAiDrafts(): void {
+  const prefix = `karpathy-wiki:config:draft:ai:${currentUserId.value}:`;
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix)) keys.push(k);
+    }
+    keys.forEach((k) => localStorage.removeItem(k));
+  } catch { /* 静默 */ }
+}
+
 // 本地脱敏：仅展示末 4 位，避免明文泄露（与后端 maskSensitive 行为保持一致）。
 function maskLocal(key: string): string {
   if (!key) return '';
@@ -582,6 +608,8 @@ async function loadAiConfig() {
     //   会显示"Key 已设置"，但问答按 BYOK 只认本用户真实密钥 → 出现"测试连接能通（走服务端 key）但问答失败"。
     const localRealKey = hasSavedByok && hasApiKey && !isMaskedResidue;
     aiConfig.value = { ...deriveAiSummary(cfg), apiKeySet: localRealKey };
+    // T01833：已保存配置回填完成后再恢复该预设的未提交草稿（草稿优先于快照）
+    aiDraftApi.restore();
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载 AI 配置失败', err));
   } finally {
@@ -628,6 +656,8 @@ async function applyPreset(preset: LlmPreset) {
     embeddingModel: cfg.embeddingModel ?? '', // FR-20：embedding 模型随预设独立保存
   };
   aiConfig.value = deriveAiSummary(aiForm.value);
+  // T01833：预设切换后恢复「该预设」的未提交草稿（key 随 selectedPresetKey 变化）
+  aiDraftApi.restore();
   // 清空上一预设残留的「服务商可用模型」清单：否则下拉会因模型名不匹配当前预设而显示空白，
   // 造成"模型没返显/配置丢失"的错觉（aiForm.model 文本输入框始终是真实来源）。
   modelStore.availableModels = [];
@@ -670,6 +700,8 @@ async function saveAiConfig() {
     aiConfig.value = deriveAiSummary(aiForm.value);
     const label = targetKey ? `模型 ${targetKey}` : '当前模型';
     ElMessage.success(`AI 配置已保存到本地（${label}，仅当前账户可见）`);
+    // T01833：保存成功即清除该预设的未提交草稿
+    aiDraftApi.clear();
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
@@ -700,6 +732,8 @@ async function resetAiConfig() {
     aiForm.value = { ...def, embeddingModel: def.embeddingModel ?? '' };
     aiConfig.value = deriveAiSummary(def);
     aiTestResult.value = null;
+    // T01833：本地配置已全部重置，同步清空所有预设的未提交草稿
+    clearAllAiDrafts();
     ElMessage.success('已恢复当前账户默认配置');
   } catch (err) {
     ElMessage.error(apiErrorMessage('恢复初始配置失败', err));
@@ -788,6 +822,17 @@ const webSearchForm = ref({
   apiKey: '',
   maxResults: 5,
 });
+// T01833：配置中心草稿持久化 —— 联网搜索表单启用本地草稿，API Key 仅在勾选「记住」时落盘
+const rememberSearchKey = ref(false);
+const { clear: clearWebSearchDraft, restore: restoreWebSearchDraft } = useFormDraft(
+  `karpathy-wiki:config:draft:web-search:${authStore.user?.id || 'guest'}`,
+  webSearchForm,
+  {
+    whitelist: ['provider', 'apiKey', 'maxResults'],
+    sensitive: ['apiKey'],
+    remember: rememberSearchKey,
+  },
+);
 const webSearchStatus = ref<{
   enabled: boolean;
   apiKeySet: boolean;
@@ -825,6 +870,8 @@ async function loadWebSearchConfig() {
     ElMessage.error(apiErrorMessage('加载联网搜索配置失败', err));
   } finally {
     loadingWebSearch.value = false;
+    // T01833：已保存配置回填完成后再恢复未提交草稿（草稿优先于快照）
+    restoreWebSearchDraft();
   }
 }
 
@@ -843,6 +890,7 @@ async function saveWebSearchConfig() {
       apiKeyRef: '',
     };
     ElMessage.success('联网搜索配置已保存到本地（仅当前账户可见）');
+    clearWebSearchDraft();
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
@@ -1427,6 +1475,36 @@ const savingBatch = ref(false);
 const loggingForm = ref({ level: 'info', enableRequestLog: true });
 const savingLogging = ref(false);
 
+// T01833：高级配置 4 表单草稿（服务端 config.json 加载，管理员 tab）——
+// 未提交修改按白名单持久化，保存成功后清除；无敏感字段。
+const budgetDraftApi = useFormDraft(
+  `karpathy-wiki:config:draft:budget:${authStore.user?.id || 'guest'}`,
+  budgetForm,
+  { whitelist: ['maxSteps', 'tokenBudget'] },
+);
+const healthCheckDraftApi = useFormDraft(
+  `karpathy-wiki:config:draft:health-check:${authStore.user?.id || 'guest'}`,
+  healthCheckForm,
+  { whitelist: ['staleDays'] },
+);
+const batchDraftApi = useFormDraft(
+  `karpathy-wiki:config:draft:batch:${authStore.user?.id || 'guest'}`,
+  batchForm,
+  { whitelist: ['allowedExtensionsText', 'maxBatchSize', 'maxFileSizeMb'] },
+);
+const loggingDraftApi = useFormDraft(
+  `karpathy-wiki:config:draft:logging:${authStore.user?.id || 'guest'}`,
+  loggingForm,
+  { whitelist: ['level', 'enableRequestLog'] },
+);
+// 服务端快照同步完成后恢复 4 个表单的未提交草稿
+function restoreAdvancedDrafts(): void {
+  budgetDraftApi.restore();
+  healthCheckDraftApi.restore();
+  batchDraftApi.restore();
+  loggingDraftApi.restore();
+}
+
 // 子智能体（多步 Agent）开关：与后端 config.enableSubAgents 对齐。
 // 实时切换：开关变化即 PUT /api/config/sub-agents，下次问答即可委派 researcher 子智能体。
 const subAgentsEnabled = ref(false);
@@ -1475,6 +1553,7 @@ async function saveBudget() {
         config.value.budget = data.config;
       }
       ElMessage.success('运行参数保存成功');
+      budgetDraftApi.clear();
     } else {
       throw new Error(data.error || '保存失败');
     }
@@ -1505,6 +1584,7 @@ async function saveHealthCheck() {
         config.value.healthCheck = data.config;
       }
       ElMessage.success('健康检查配置保存成功');
+      healthCheckDraftApi.clear();
     } else {
       throw new Error(data.error || '保存失败');
     }
@@ -1557,6 +1637,7 @@ async function saveBatch() {
         ? `批量编译配置保存成功（提示：${data.requireRestart.join(', ')} 需重启服务才完全生效）`
         : '批量编译配置保存成功';
       ElMessage.success(msg);
+      batchDraftApi.clear();
     } else {
       throw new Error(data.error || '保存失败');
     }
@@ -1593,6 +1674,7 @@ async function saveLogging() {
         ? `日志配置保存成功（提示：${data.requireRestart.join(', ')} 需重启服务才完全生效）`
         : '日志配置保存成功';
       ElMessage.success(msg);
+      loggingDraftApi.clear();
     } else {
       throw new Error(data.error || '保存失败');
     }
@@ -1959,6 +2041,25 @@ const qqConfig = reactive<QqConfigData>({
   extract_base_url: '',
   extract_token_budget: 50000,
 });
+// T01833：QQ 导入配置启用本地草稿（无非敏感 key，全字段白名单持久化）
+const qqConfigRef = ref(qqConfig);
+const { clear: clearQqDraft, restore: restoreQqDraft } = useFormDraft(
+  `karpathy-wiki:config:draft:qq:${authStore.user?.id || 'guest'}`,
+  qqConfigRef,
+  {
+    whitelist: ['noise_rules', 'privacy_patterns', 'max_batch_size', 'chunk_threshold', 'extract_model', 'extract_base_url', 'extract_token_budget'],
+    onRestore(draft) {
+      // reactive 对象需要逐字段赋值，避免破坏引用
+      if (draft.noise_rules) qqConfig.noise_rules = { ...draft.noise_rules };
+      if (draft.privacy_patterns) qqConfig.privacy_patterns = { ...draft.privacy_patterns };
+      if (typeof draft.max_batch_size === 'number') qqConfig.max_batch_size = draft.max_batch_size;
+      if (typeof draft.chunk_threshold === 'number') qqConfig.chunk_threshold = draft.chunk_threshold;
+      if (typeof draft.extract_model === 'string') qqConfig.extract_model = draft.extract_model;
+      if (typeof draft.extract_base_url === 'string') qqConfig.extract_base_url = draft.extract_base_url;
+      if (typeof draft.extract_token_budget === 'number') qqConfig.extract_token_budget = draft.extract_token_budget;
+    },
+  },
+);
 const loadingQqConfig = ref(false);
 const savingQqConfig = ref(false);
 const patternValidation = computed(() => {
@@ -1999,6 +2100,8 @@ async function loadQqConfig() {
   } finally {
     loadingQqConfig.value = false;
     _qqConfigInitial = JSON.stringify(qqConfig);
+    // T01833：已保存快照记入后再恢复未提交草稿（恢复值与快照的差异会正确置脏）
+    restoreQqDraft();
   }
 }
 
@@ -2042,6 +2145,7 @@ async function saveQqConfigForm() {
     ElMessage.success('QQ 配置保存成功');
     _qqConfigInitial = JSON.stringify(qqConfig);
     qqConfigDirty.value = false;
+    clearQqDraft();
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存 QQ 配置失败', err));
   } finally {
@@ -2252,6 +2356,21 @@ function clearTestResult(): void {
 }
 
 onMounted(async () => {
+  // T02455（PRD D1x）：消费帮助文档「可点击直达」的 tab 指令（sessionStorage 一次性传递，
+  // 复用 karpathy:jumpPath 既有模式）。指令带 view=config 且 tab 合法时才切，否则保持默认 tab。
+  try {
+    const raw = sessionStorage.getItem('karpathy:navigate-tab');
+    if (raw) {
+      sessionStorage.removeItem('karpathy:navigate-tab');
+      const nav = JSON.parse(raw) as { view?: string; tab?: string };
+      const validTabs = ['schema', 'config', 'ai', 'sharedAi', 'tts', 'theme', 'tools', 'qq', 'prompts', 'mcp', 'migrate'];
+      if (nav.view === 'config' && nav.tab && validTabs.includes(nav.tab)) {
+        activeTab.value = nav.tab as typeof activeTab.value;
+      }
+    }
+  } catch {
+    // 隐私模式 / 解析失败：忽略，保持默认 tab
+  }
   // 个人配置（AI 服务 / 搜索引擎 / 工具）按用户隔离存储在本地，对所有登录用户加载与展示；
   // 不再依赖服务端共享 config.json，避免越权与多余请求，且各用户配置互不可见。
   // 先加载预设列表，loadAiConfig 依赖 aiPresets 匹配当前 provider
@@ -2272,6 +2391,8 @@ onMounted(async () => {
   if (config.value) {
     syncAdvancedFormsFromConfig(config.value);
   }
+  // T01833：服务端快照同步完成后恢复高级配置未提交草稿
+  restoreAdvancedDrafts();
   loadHistory();
   loadQqConfig();
   // T00320「共享AI」：管理员全局「共享生图/视频」配置（requireAdmin），随配置页一并加载
@@ -3145,6 +3266,13 @@ async function importConfig() {
                   />
                 </div>
       <div class="form-row">
+                  <label class="form-label"></label>
+                  <!-- T01833：草稿脱敏开关 —— 勾选后 API Key 才会随本地草稿落盘明文（按预设独立记忆） -->
+                  <el-checkbox v-model="rememberAiKey" class="form-checkbox">
+                    在本地草稿中记住 API Key（未勾选时不落盘明文）
+                  </el-checkbox>
+                </div>
+      <div class="form-row">
                   <label class="form-label" for="ai-model">模型</label>
                   <div class="model-input-row">
                     <el-input
@@ -3286,6 +3414,13 @@ async function importConfig() {
                       placeholder="输入联网搜索 API Key"
                       class="form-input"
                     />
+                  </div>
+      <div class="form-row">
+                    <label class="form-label"></label>
+                    <!-- T01833：草稿脱敏开关 —— 勾选后 API Key 才会随本地草稿落盘明文 -->
+                    <el-checkbox v-model="rememberSearchKey" class="form-checkbox">
+                      在本地草稿中记住 API Key（未勾选时不落盘明文）
+                    </el-checkbox>
                   </div>
       <div class="form-row">
                     <label class="form-label" for="ws-max-results">最大结果数</label>
