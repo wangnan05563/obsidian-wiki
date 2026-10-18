@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
+import { topNGraphData } from '../utils/graphTopN';
 import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Lightning, Iphone, Link, Close, StarFilled, Document, Warning, Aim, MagicStick, Refresh, List, Share, Connection } from '@element-plus/icons-vue';
+import { Lightning, Iphone, Link, Close, StarFilled, Document, Warning, Aim, MagicStick, Refresh, List, Share, Connection, FullScreen, ScaleToOriginal } from '@element-plus/icons-vue';
 import { Network, type Options } from 'vis-network';
 import { DataSet } from 'vis-data';
 import type { GraphData, RecommendedPage } from '../types';
@@ -83,6 +84,14 @@ const listView = ref(false);
 // entityOnly: 实体子图模式，只显示 entities/ 节点及其一阶邻居（入链+出链）
 const typeFilter = ref('');
 const entityOnly = ref(false);
+
+// T02464（G1/R-C5）：默认只渲染连接度最高的 Top-N 节点，避免 245 节点挤成无标签毛球；
+// 提供「查看全图」开关在 Top-N 与全量之间切换。fullCount 记录过滤后的全量节点数（Top-N 之前），
+// 用于在精简态提示「已显示 X / 共 Y」。
+const DEFAULT_TOP_N = 70;
+const showAllGraph = ref(false);
+const fullCount = ref(0);
+let lastRaw: GraphData | null = null;
 
 // 6 目录与中文标签映射（复用图例标签，避免重复维护）
 const DIR_OPTIONS = [
@@ -165,7 +174,32 @@ function filterGraphData(data: GraphData): GraphData {
 function toggleEntityOnly() {
   entityOnly.value = !entityOnly.value;
   if (entityOnly.value) typeFilter.value = '';
-  loadGraph();
+  rerenderFromCache();
+}
+
+// T02464（G1/R-C5）：从已缓存的原始数据重新应用「类型过滤 + 实体子图 + Top-N/全图」并渲染，
+// 避免每次切换都重新拉取 /graph。首次加载或缓存缺失时回退 loadGraph()。
+function rerenderFromCache() {
+  if (!lastRaw) {
+    void loadGraph();
+    return;
+  }
+  const filtered = filterGraphData(lastRaw);
+  fullCount.value = filtered.nodes.length;
+  const data = showAllGraph.value ? filtered : topNGraphData(filtered, DEFAULT_TOP_N);
+  nodeCount.value = data.nodes.length;
+  edgeCount.value = data.edges.length;
+  if (isNarrowScreen.value || listView.value) {
+    renderList(data);
+  } else {
+    renderGraph(data);
+  }
+}
+
+// T02464（G1/R-C5）：在 Top-N 精简视图与全量视图之间切换
+function toggleShowAllGraph() {
+  showAllGraph.value = !showAllGraph.value;
+  rerenderFromCache();
 }
 
 // 加载图谱数据并渲染
@@ -175,8 +209,12 @@ async function loadGraph() {
     const res = await apiFetch(`${API_BASE}/graph`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const raw: GraphData = await res.json();
+    lastRaw = raw;
     // FR-15-5：按类型过滤 + 实体子图模式
-    const data = filterGraphData(raw);
+    const filtered = filterGraphData(raw);
+    fullCount.value = filtered.nodes.length;
+    // T02464（G1/R-C5）：默认 Top-N 高连接度，除非用户显式「查看全图」
+    const data = showAllGraph.value ? filtered : topNGraphData(filtered, DEFAULT_TOP_N);
     nodeCount.value = data.nodes.length;
     edgeCount.value = data.edges.length;
     // 窄屏或用户手动切换时用列表视图，否则用图谱
@@ -413,7 +451,8 @@ async function openRecommendations(pagePath: string) {
   recommendations.value = [];
   try {
     const url = `${API_BASE}/discover/recommend?pagePath=${encodeURIComponent(pagePath)}`;
-    const res = await fetch(url);
+    // T02464（G6/R-C5-5）：统一走 apiFetch，会话过期时由鉴权层给出可见提示，而非裸 fetch 静默失败
+    const res = await apiFetch(url);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
       throw new Error(err.error || `HTTP ${res.status}`);
@@ -632,7 +671,7 @@ function handleResize() {
 // 切换视图模式
 function toggleView() {
   listView.value = !listView.value;
-  loadGraph();
+  rerenderFromCache();
 }
 
 // 窗口大小变化时重新绘制
@@ -672,7 +711,7 @@ watch(loading, () => {
           size="small"
           clearable
           class="graph-type-select"
-          @change="loadGraph"
+          @change="rerenderFromCache"
         >
           <el-option
             v-for="opt in DIR_OPTIONS"
@@ -720,6 +759,21 @@ watch(loading, () => {
         >
           <el-icon><Connection /></el-icon>
         </el-button>
+        <!-- T02464（G1/R-C5）：Top-N 精简视图 ↔ 全量视图切换；默认精简避免 245 节点毛球 -->
+        <el-button
+          size="small"
+          class="neon-btn icon-btn"
+          :class="{ 'all-active': showAllGraph }"
+          :data-tip="showAllGraph ? '精简视图：仅显示连接度最高的前 ' + DEFAULT_TOP_N + ' 个节点' : '查看全图：显示全部 ' + fullCount + ' 个节点'"
+          @click="toggleShowAllGraph"
+        >
+          <el-icon><FullScreen v-if="!showAllGraph" /><ScaleToOriginal v-else /></el-icon>
+        </el-button>
+      </div>
+
+      <!-- T02464（G1/R-C5）：精简态提示，告知用户当前为 Top-N 而非全量 -->
+      <div v-if="!listView && !showAllGraph && fullCount > DEFAULT_TOP_N" class="graph-hint">
+        已显示连接度最高的 <b>{{ nodeCount }}</b> 个节点（共 {{ fullCount }} 个）。点击右上角「查看全图」查看全部。
       </div>
 
       <!-- 小屏提示 -->
@@ -1547,6 +1601,24 @@ watch(loading, () => {
   border-color: var(--neon-magenta) !important;
   color: var(--neon-magenta) !important;
   box-shadow: var(--glow-magenta, 0 0 12px rgba(255, 64, 129, 0.35)) !important;
+}
+
+/* T02464（G1）：查看全图激活态——青色高亮，与实体子图呼应 */
+.all-active {
+  border-color: var(--neon-cyan, #00f5ff) !important;
+  color: var(--neon-cyan, #00f5ff) !important;
+  box-shadow: var(--glow-cyan, 0 0 12px rgba(0, 245, 255, 0.35)) !important;
+}
+
+/* T02464（G1）：精简态提示条 */
+.graph-hint {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  color: var(--text-soft, #888);
+  line-height: 1.4;
+}
+.graph-hint b {
+  color: var(--neon-cyan, #00f5ff);
 }
 
 /* 面板：右侧浮层，与推荐面板同风格的毛玻璃卡片 */
