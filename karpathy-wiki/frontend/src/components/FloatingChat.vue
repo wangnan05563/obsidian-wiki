@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { API_BASE, apiFetch } from '../utils/apiBase';
+import { API_BASE } from '../utils/apiBase';
 import { ref, nextTick, watch, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Promotion, Close, Minus, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
@@ -19,6 +19,7 @@ import CitationModal from './CitationModal.vue';
 import { useQueryStore } from '../stores/query';
 import { useConversationsStore, getLastActiveConversationId, setLastActiveConversationId } from '../stores/conversations';
 import { useAuthStore } from '../stores/auth';
+import { useInputBoxSettings } from '../stores/inputBoxSettings';
 import { useModelStore } from '../stores/model';
 import { loadAiUserConfigForPreset, loadSearchUserConfig, loadToolsUserConfig, type AiUserConfig } from '../services/userConfig';
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
@@ -39,6 +40,7 @@ const store = useQueryStore();
 // 刷新后状态丢失。引入 conversationsStore 补齐「落盘 + 续答」能力，使悬浮窗也能断点续答。
 const conversationsStore = useConversationsStore();
 const authStore = useAuthStore();
+const inputBoxStore = useInputBoxSettings();
 const modelStore = useModelStore();
 const props = defineProps<{ inQueryPage?: boolean }>();
 
@@ -267,14 +269,14 @@ async function sendQuestion(question: string, clarify?: { clarifyId: string; cho
     // X-2 可恢复流式：用带重连的 SSE 消费包装（首连发完整 body，异常断开时凭 managerRunId 重连续接）
     const writer = store.getSessionWriter();
     const initialFetch = () =>
-      apiFetch(`${API_BASE}/query`, {
+      authStore.authFetch(`${API_BASE}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: ac.signal,
       });
     const resumeFetch = (runId: string, threadId: string | null) =>
-      apiFetch(`${API_BASE}/query`, {
+      authStore.authFetch(`${API_BASE}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resume: runId, threadId: threadId ?? undefined }),
@@ -311,10 +313,20 @@ function handleRemoveMessage(idx: number) {
 
 // 停止生成：标记 user 中断并调用 abortController 中断 SSE 流，
 // finally 会按 abortReason==='user' 提交部分答案（与主问答页一致，保留 [已停止] 中断点）
+// T02462（Q5）：与 Query 对齐——显式通知后端取消 run，避免上游 LLM 仍在生成
+// （内联模式随连接断开自动终止；可恢复流式模式须主动 /query/stop）。
 function handleStop() {
   if (abortController) {
     abortReason = 'user';
     abortController.abort();
+    const managerRunId = store.getSessionWriter().managerRunId;
+    if (managerRunId) {
+      void authStore.authFetch(API_BASE + '/query/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: managerRunId }),
+      }).catch(() => { /* 停止通知失败不阻断前端停止；LLM 超时兜底 */ });
+    }
   }
 }
 
@@ -362,8 +374,16 @@ function handleResend(idx: number) {
   }
 }
 
+// T02462（Q5）：与 Query 对齐——尊重用户「回车发送」偏好，而非只认 Ctrl/⌘+Enter。
+// 输入法组合态（中文拼音上屏）绝不触发发送。
 function handleKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+  if (e.isComposing) return;
+  if (inputBoxStore.settings.enterSends) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
     handleSubmit();
   }
@@ -418,10 +438,12 @@ function resumeLastAnswer() {
     }
   }
   if (!question) return;
+  // T02462（Q4/R-C4-3）：自动恢复实为整段「重新生成」而非真续写，显式告知用户并提示重新计费
+  ElMessage.info('检测到上次回答未完成，正在为你重新生成（将重新消耗一次问答额度）');
   sendQuestion(question);
 }
 
-// FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
+// FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答（重新生成）。
 // 切页后 SPA 重挂载且后台仍有活跃流（store.isLoading）时直接跳过，避免打断/重复续答。
 // 安全加固（跨账户泄漏防御）：localStorage 的 LAST_ACTIVE_CONVERSATION 是 per-origin 共享的，
 // 切换账户后可能残留上一用户的会话 ID。必须校验该会话的 ownerId 归属当前用户。

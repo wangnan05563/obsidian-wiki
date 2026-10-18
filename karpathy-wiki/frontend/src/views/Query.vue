@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { API_BASE, resolveMediaUrl } from '../utils/apiBase';
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Promotion, VideoPause, Menu, Loading } from '@element-plus/icons-vue';
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
 import AppModal from '../components/AppModal.vue';
@@ -49,6 +49,7 @@ import { renderMarkdown } from '../utils/markdown';
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
 import { FOLLOWUP_LABEL } from '../utils/labels';
 import { consumeQuerySSEResumable } from '../utils/sse';
+import { decideEnqueue, takeQueued, type ChatQueue } from '../utils/chatQueue';
 import { useChatAutoScroll } from '../composables/useChatAutoScroll';
 import type { Attachment, Reference, LlmPreset } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
@@ -242,6 +243,17 @@ const QUESTION_TIMEOUT_MS = 120_000;
 let questionTimeoutId: ReturnType<typeof setTimeout> | null = null;
 // 意图澄清：用户选择解读后正在重发确认后的问答（ClarifyCard 显示加载态，禁重复点击）
 const clarifyResending = ref(false);
+// T02462（Q2）：流式期间排队的下一问。组件内用 ref 适配纯函数 ChatQueue 接口，
+// 既保持模板响应式（显示排队提示），又把入队/出队决策交给可单测的 util。
+const queuedQuestion = ref<string | null>(null);
+const chatQueue: ChatQueue = {
+  get queued() {
+    return queuedQuestion.value;
+  },
+  set queued(v: string | null) {
+    queuedQuestion.value = v;
+  },
+};
 // 澄清选择处理：携澄清上下文重发同一问题（不重复 push user 消息）。
 // 后端会基于确认的意图继续；若仍歧义且轮次未耗尽会再次下发新卡片覆盖，否则正常产出答案。
 function handleClarifySelect(choiceIndex: number) {
@@ -841,8 +853,20 @@ async function sendQuestion(question: string, clarify?: { clarifyId: string; cho
       abortReason, store, conversationsStore,
       pendingResendQuestion, pendingResendIdx, triggerResend,
     );
+    // T02462（Q2/R-C4-1）：在 abortReason 置空前捕获「是否被用户停止」，供下方排队路由判断
+    const stoppedByUser = abortReason === 'user';
     abortReason = null;
     abortController = null;
+    // T02462（Q2）：当前回答结束，处理流式期间排队的下一问
+    const queued = takeQueued(chatQueue);
+    if (queued && !pendingResendQuestion) {
+      // R-C4-1：被用户停止的回答，排队消息不直接自动发送，需用户确认
+      if (stoppedByUser) {
+        confirmSendQueuedAfterStop(queued);
+      } else {
+        sendQuestion(queued);
+      }
+    }
   }
 }
 function handleStop() {
@@ -903,10 +927,12 @@ function resumeLastAnswer() {
     }
   }
   if (!question) return;
+  // T02462（Q4/R-C4-3）：自动恢复实为整段「重新生成」而非真续写，显式告知用户并提示重新计费
+  ElMessage.info('检测到上次回答未完成，正在为你重新生成（将重新消耗一次问答额度）');
   sendQuestion(question);
 }
 
-// FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答。
+// FR-RM-09 重载恢复：首屏（store 为空）时加载上次活跃会话；若其最后一条为 streaming 则自动续答（重新生成）。
 // 切页后 SPA 重挂载且后台仍有活跃流（store.isLoading）时直接跳过，避免打断/重复续答。
 // 安全加固（跨账户泄漏防御）：localStorage 的 LAST_ACTIVE_CONVERSATION 是 per-origin 共享的，
 // 切换账户后可能残留上一用户的会话 ID。必须校验该会话的 ownerId 归属当前用户，
@@ -933,12 +959,38 @@ async function maybeResumeOnLoad() {
 
 function handleSubmit() {
   const q = inputQuestion.value.trim();
-  if (!q || store.isLoading) return;
+  if (!q) return;
+  // T02462（Q2）：流式生成中允许排队下一问——入队后清空输入框，当前回答结束自动发送
+  if (store.isLoading) {
+    decideEnqueue(chatQueue, true, q);
+    inputQuestion.value = '';
+    ElMessage.info('已排队，将在当前回答结束后发送');
+    return;
+  }
   store.submitQuestion(q);
   // FR-RM-09：立即落盘用户问题，确保新会话在首个 token 到达前也能在刷新后恢复
   conversationsStore.persistConversation(store.messagesWithStreaming());
   inputQuestion.value = '';
   sendQuestion(q);
+}
+
+// T02462（Q2/R-C4-1）：取消排队——清空排队问题，不发送。
+function cancelQueued() {
+  const had = takeQueued(chatQueue);
+  if (had) ElMessage.info('已取消排队，问题未发送');
+}
+
+// T02462（Q2/R-C4-1）：当前回答被用户停止时，排队消息不自动发送，需用户确认后再发。
+function confirmSendQueuedAfterStop(queued: string) {
+  ElMessageBox.confirm(
+    `已停止当前回答。排队的问题「${queued}」是否现在发送？`,
+    '发送排队问题',
+    { confirmButtonText: '发送', cancelButtonText: '放弃', type: 'warning' },
+  )
+    .then(() => sendQuestion(queued))
+    .catch(() => {
+      /* 用户放弃：排队问题已不再保留，不发送 */
+    });
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -1593,9 +1645,18 @@ onBeforeUnmount(() => {
           :autosize="{ minRows: 1, maxRows: 6 }"
           :placeholder="inputPlaceholder"
           resize="none"
-          :disabled="store.isLoading"
           @keydown="handleKeydown"
         />
+        <!-- T02462（Q2）：流式生成中不再禁用输入框，提示用户可预输入并排队 -->
+        <p v-if="store.isLoading" class="queue-hint">
+          <template v-if="queuedQuestion">
+            已排队「{{ queuedQuestion }}」，将在当前回答结束后发送
+            <button type="button" class="queue-cancel" @click="cancelQueued">取消排队</button>
+          </template>
+          <template v-else>
+            回答生成中，按 Enter 可排队下一问，将在结束后自动发送
+          </template>
+        </p>
         <!-- 按钮行：左侧附件+工具栏+高级设置，右侧模型选择+发送，全部同行紧凑布局
              v3.1：v3.0 中"更多"下拉的联网/深度思考与 AI 伙伴选择器已统一挪到高级设置面板
              只保留高频操作（附件 / 工具 / 设置 / 模型 / 发送）以减少视觉负担 -->
@@ -1896,7 +1957,10 @@ onBeforeUnmount(() => {
             <span>{{ videoStatus === 'queued' ? '任务排队中…' : '视频生成中…' }}</span>
           </div>
           <el-progress :percentage="videoProgress" :stroke-width="10" :duration="1" />
-          <div class="video-tip">视频生成通常需要 1-5 分钟，请耐心等待</div>
+          <div class="video-tip">
+            {{ videoStatus === 'queued' ? '任务已提交，正在排队（通常 1-5 分钟）' : '视频生成中（通常 1-5 分钟）' }}，
+            可关闭对话框，后台继续生成
+          </div>
         </div>
         <!-- 完成状态：显示视频播放器与下载链接 -->
         <div v-else-if="videoStatus === 'completed'" class="video-result-section">
@@ -2728,6 +2792,30 @@ onBeforeUnmount(() => {
 }
 .send-btn :deep(.el-icon) {
   font-size: 14px;
+}
+/* T02462（Q2）：流式期间可预输入并排队下一问的提示 */
+.queue-hint {
+  margin: 4px 2px 0;
+  font-size: 12px;
+  color: var(--text-soft, #888);
+  line-height: 1.4;
+}
+/* T02462（Q2/R-C4-1）：排队提示中的「取消排队」轻量按钮 */
+.queue-cancel {
+  margin-left: 8px;
+  padding: 0 8px;
+  height: 20px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-soft, #888);
+  background: transparent;
+  border: 1px solid var(--border-soft, #444);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.queue-cancel:hover {
+  color: var(--neon-cyan, #00f5ff);
+  border-color: var(--neon-cyan, #00f5ff);
 }
 
 /* 高级设置齿轮按钮：与工具栏按钮视觉对齐，点击时旋转 90° 反馈展开/收起状态
