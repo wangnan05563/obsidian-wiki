@@ -1,52 +1,70 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { FixProgressEvent, BatchFixProgressEvent, BatchDoneEvent } from '../types';
+import type { FixProgressEvent, BatchFixProgressEvent, BatchDoneEvent, BatchFixJobSnapshot, BatchFixFailedItem } from '../types';
 
-// 体检中心 store：持久化批量修复与单个修复状态。
+// 修复日志上限：597 项批量会产出上千条事件，无上限时长时间停留在本页会持续吃内存。
+// 保留尾部即可满足「看最近在做什么」，完整结果以作业快照（doneKeys/failed）为准。
+const MAX_FIX_LOGS = 300;
+
+// 体检中心 store：持久化批量修复作业与单个修复状态。
 // 为什么需要 store：Health.vue 组件卸载后本地 ref 销毁，切回页面进度条丢失。
-//   迁移到 Pinia store 后状态跨视图切换保留，SSE fetch 在后台继续更新 store。
+// T02466 起批量修复改为后端作业（jobId），本 store 是作业状态的前端镜像：
+//   - 事件流只用于「直播刷新」，快照（/batch/current、/batch/:jobId）才是恢复口径；
+//   - 因此组件卸载/刷新后重进页面，可以先 GET 快照再续订事件，进度不丢。
 export const useHealthStore = defineStore('health', () => {
-  // 单个修复状态：fixingKey 标记当前正在修复的问题 key（格式：orphan:path 或 broken:idx）
+  // 单个修复状态：fixingKey 标记当前正在修复的问题 key（格式：orphan:path 或 broken:key）
   const fixingKey = ref<string>('');
 
-  // 批量修复状态
-  // - batchFixing：是否正在执行批量修复（执行中禁用所有单个修复按钮）
-  // - batchTotal：本次批量修复总问题数
-  // - batchCurrent：当前正在处理第几个（1-based，0 表示尚未开始）
-  // - batchDoneKeys：已完成的 issueKey 集合，前端据此高亮已完成项
-  const batchFixing = ref(false);
-  const batchTotal = ref(0);
-  const batchCurrent = ref(0);
+  // 批量修复作业快照（null 表示当前无作业）
+  const job = ref<BatchFixJobSnapshot | null>(null);
+  // 已完成 key 集合：由快照初始化 + 事件流增量维护，列表项据此高亮
   const batchDoneKeys = ref<Set<string>>(new Set());
+  const batchFailed = ref<BatchFixFailedItem[]>([]);
 
   // 修复进度日志（时间线展示，单个修复与批量修复共用）
   const fixLogs = ref<FixProgressEvent[]>([]);
 
-  // 批量修复进度百分比（0-100），用于 el-progress
+  const batchFixing = computed(() => job.value?.status === 'running');
+  const batchTotal = computed(() => job.value?.total ?? 0);
+  const batchCurrent = computed(() => (job.value ? Math.min(job.value.doneCount + 1, job.value.total) : 0));
+  const batchSuccessCount = computed(() => job.value?.successCount ?? 0);
+  const batchFailCount = computed(() => job.value?.failCount ?? 0);
+  const batchElapsedMs = computed(() => {
+    if (!job.value) return 0;
+    // 运行中的耗时按「快照落盘时刻 + 之后经过的墙钟时间」外推，避免面板停在旧数字
+    const base = job.value.elapsedMs;
+    if (job.value.status !== 'running') return base;
+    return base + Math.max(0, Date.now() - job.value.updatedAt);
+  });
+  const batchRemaining = computed(() => (job.value ? Math.max(0, job.value.total - job.value.doneCount) : 0));
+  const batchEtaMs = computed(() => batchRemaining.value * (job.value?.avgMsPerIssue ?? 0));
   const batchProgress = computed(() => {
-    if (batchTotal.value === 0) return 0;
-    return Math.round((batchDoneKeys.value.size / batchTotal.value) * 100);
+    if (!job.value || job.value.total === 0) return 0;
+    return Math.round((job.value.doneCount / job.value.total) * 100);
   });
 
-  // 是否禁用所有修复按钮：单个修复进行中 或 批量修复进行中
+  // 是否禁用所有修复按钮：单个修复进行中 或 批量作业进行中
   const anyFixing = computed(() => fixingKey.value !== '' || batchFixing.value);
 
-  // 开始批量修复：初始化所有批量状态
-  function startBatchFix(total: number) {
-    batchFixing.value = true;
-    batchTotal.value = total;
-    batchCurrent.value = 0;
+  // 用后端快照校准本地镜像（启动、恢复、终态后都调用）
+  function applySnapshot(snapshot: BatchFixJobSnapshot | null) {
+    job.value = snapshot;
+    if (!snapshot) {
+      batchDoneKeys.value = new Set();
+      batchFailed.value = [];
+      return;
+    }
+    batchDoneKeys.value = new Set(snapshot.doneKeys);
+    batchFailed.value = [...snapshot.failed];
+  }
+
+  function clearJob() {
+    job.value = null;
     batchDoneKeys.value = new Set();
-    fixLogs.value = [];
+    batchFailed.value = [];
   }
 
-  // 结束批量修复：保留 batchDoneKeys 和 fixLogs 供用户查看结果
-  function endBatchFix() {
-    batchFixing.value = false;
-    batchCurrent.value = 0;
-  }
-
-  // 开始/结束单个修复
+  // 开始单个修复
   function startSingleFix(key: string) {
     fixingKey.value = key;
     fixLogs.value = [];
@@ -55,99 +73,163 @@ export const useHealthStore = defineStore('health', () => {
     fixingKey.value = '';
   }
 
-  // 处理批量修复 SSE 事件：只更新状态，不含 UI 副作用（ElMessage 等）
-  // 从 Health.vue 迁移，逻辑保持一致
+  function pushFixLog(log: FixProgressEvent) {
+    fixLogs.value.push(log);
+    if (fixLogs.value.length > MAX_FIX_LOGS) {
+      fixLogs.value.splice(0, fixLogs.value.length - MAX_FIX_LOGS);
+    }
+  }
+
+  function clearLogs() {
+    fixLogs.value = [];
+  }
+
+  // 处理批量作业 SSE 事件：只更新镜像状态，不含 UI 副作用（ElMessage 等由组件负责）
   function handleBatchEvent(
     eventType: string,
-    parsed: BatchFixProgressEvent | BatchDoneEvent | { totalIssues: number },
+    parsed: BatchFixProgressEvent | BatchDoneEvent | Record<string, unknown>,
   ): void {
+    const ev = parsed as Partial<BatchFixProgressEvent> & Partial<BatchDoneEvent> & Record<string, unknown>;
     if (eventType === 'batch_start') {
-      const payload = parsed as { totalIssues: number };
-      batchTotal.value = payload.totalIssues;
-      batchCurrent.value = 0;
+      const total = Number(ev.totalIssues ?? 0);
+      job.value = {
+        jobId: String(ev.jobId ?? ''),
+        status: 'running',
+        total,
+        doneCount: 0,
+        successCount: 0,
+        failCount: 0,
+        currentIssueKey: '',
+        pauseRequested: false,
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+        elapsedMs: 0,
+        avgMsPerIssue: job.value?.avgMsPerIssue ?? 0,
+        doneKeys: [],
+        failed: [],
+        nextIndex: 0,
+      };
       batchDoneKeys.value = new Set();
+      batchFailed.value = [];
       fixLogs.value = [];
       return;
     }
+    if (eventType === 'batch_resume') {
+      if (job.value) {
+        job.value.status = 'running';
+        job.value.pauseRequested = false;
+      }
+      pushFixLog({
+        step: 'resume',
+        status: 'running',
+        message: `继续修复：从第 ${Number(ev.resumeFrom ?? 0) + 1} 项开始，剩余 ${ev.remaining ?? 0} 项`,
+      });
+      return;
+    }
+    if (eventType === 'batch_stop_requested') {
+      if (job.value) job.value.pauseRequested = true;
+      pushFixLog({
+        step: 'pause',
+        status: 'running',
+        message: ev.kind === 'cancel' ? '已请求取消：等待当前问题完成后停止' : '已请求暂停：等待当前问题完成后停下',
+      });
+      return;
+    }
     if (eventType === 'issue_start') {
-      const ev = parsed as BatchFixProgressEvent;
-      batchCurrent.value = ev.issueIndex + 1;
-      fixLogs.value.push({
-        step: ev.step,
-        status: ev.status,
-        message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
-        tool: ev.tool,
-        data: ev.data,
+      if (job.value) job.value.currentIssueKey = String(ev.issueKey ?? '');
+      pushFixLog({
+        step: 'scan',
+        status: 'running',
+        message: `[${Number(ev.issueIndex ?? 0) + 1}/${ev.totalIssues ?? 0}] 开始处理 ${ev.issueKey ?? ''}`,
       });
       return;
     }
     if (eventType === 'progress' || eventType === 'fixed') {
-      const ev = parsed as BatchFixProgressEvent;
-      fixLogs.value.push({
-        step: ev.step,
-        status: ev.status,
-        message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
+      pushFixLog({
+        step: String(ev.step ?? 'progress'),
+        status: (ev.status as FixProgressEvent['status']) ?? 'running',
+        message: `[${Number(ev.issueIndex ?? 0) + 1}/${ev.totalIssues ?? 0}] ${ev.message ?? ''}`,
         tool: ev.tool,
         data: ev.data,
       });
       return;
     }
     if (eventType === 'issue_done' || eventType === 'issue_error') {
-      const ev = parsed as BatchFixProgressEvent;
-      batchDoneKeys.value.add(ev.issueKey);
-      fixLogs.value.push({
-        step: ev.step,
-        status: ev.status,
-        message: `[${ev.issueIndex + 1}/${ev.totalIssues}] ${ev.message}`,
+      const key = String(ev.issueKey ?? '');
+      if (job.value) {
+        job.value.doneCount = Math.min(job.value.doneCount + 1, job.value.total);
+        job.value.currentIssueKey = '';
+        if (eventType === 'issue_done') job.value.successCount++;
+        else {
+          job.value.failCount++;
+          const item: BatchFixFailedItem = { issueKey: key, message: ev.message || '修复失败' };
+          batchFailed.value.push(item);
+          if (job.value) job.value.failed = [...batchFailed.value];
+        }
+        job.value.updatedAt = Date.now();
+      }
+      // doneKeys 语义与后端快照一致：只记「修复成功」的项（失败项进 batchFailed）。
+      // 若把失败项也计入，快照校准（GET /batch/:jobId）后高亮会莫名消失。
+      if (eventType === 'issue_done' && key) batchDoneKeys.value.add(key);
+      pushFixLog({
+        step: 'done',
+        status: eventType === 'issue_done' ? 'done' : 'error',
+        message: `[${Number(ev.issueIndex ?? 0) + 1}/${ev.totalIssues ?? 0}] ${ev.message ?? (eventType === 'issue_done' ? '已修复' : '修复失败')}`,
         tool: ev.tool,
         data: ev.data,
       });
       return;
     }
     if (eventType === 'batch_done') {
-      const ev = parsed as BatchDoneEvent;
-      fixLogs.value.push({
-        step: ev.step,
-        status: ev.status,
-        message: ev.message,
-      });
+      if (job.value) {
+        job.value.status = 'completed';
+        job.value.pauseRequested = false;
+        job.value.currentIssueKey = '';
+        job.value.updatedAt = Date.now();
+      }
+      pushFixLog({ step: 'done', status: 'done', message: ev.message ?? '批量修复完成' });
+      return;
+    }
+    if (eventType === 'batch_stopped') {
+      if (job.value) {
+        // batch_stopped 载荷里的 status 是作业态（paused|canceled），
+        // 与事件基类的 status（running|done|error）不同名同义，故按字符串判定
+        job.value.status = String(ev.status) === 'canceled' ? 'canceled' : 'paused';
+        job.value.pauseRequested = false;
+        job.value.currentIssueKey = '';
+        job.value.nextIndex = Number(ev.nextIndex ?? job.value.nextIndex);
+        job.value.updatedAt = Date.now();
+      }
+      pushFixLog({ step: 'pause', status: 'done', message: ev.message ?? '批量修复已停止' });
       return;
     }
     if (eventType === 'error') {
-      const ev = parsed as FixProgressEvent;
-      fixLogs.value.push({
-        step: ev.step,
-        status: 'error',
-        message: ev.message || '批量修复出错',
-      });
+      pushFixLog({ step: 'done', status: 'error', message: ev.message ? String(ev.message) : '批量修复出错' });
     }
-  }
-
-  // 添加单条修复日志
-  function pushFixLog(log: FixProgressEvent) {
-    fixLogs.value.push(log);
-  }
-
-  // 清空日志
-  function clearLogs() {
-    fixLogs.value = [];
   }
 
   return {
     fixingKey,
+    fixLogs,
+    job,
+    batchDoneKeys,
+    batchFailed,
     batchFixing,
     batchTotal,
     batchCurrent,
-    batchDoneKeys,
-    fixLogs,
+    batchSuccessCount,
+    batchFailCount,
+    batchElapsedMs,
+    batchRemaining,
+    batchEtaMs,
     batchProgress,
     anyFixing,
-    startBatchFix,
-    endBatchFix,
+    applySnapshot,
+    clearJob,
     startSingleFix,
     endSingleFix,
-    handleBatchEvent,
     pushFixLog,
     clearLogs,
+    handleBatchEvent,
   };
 });

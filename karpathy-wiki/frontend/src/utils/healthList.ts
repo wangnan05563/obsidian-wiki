@@ -1,0 +1,178 @@
+// T02466（PRD R-F1 / H1、H3、H5）体检问题列表治理纯函数。
+//
+// 为什么抽出来：Health.vue 原先把 4 类问题各写一段模板，597 项逐行渲染、无搜索、
+// 无多选、无折叠，且「过期页面」这类根本不能自动修复的问题和可修复项混在同一个
+// 总数里报警。列表建模属于纯计算，抽成 utils 后可单测、可复用（移动端后续接入）。
+import type { HealthReport } from '../types';
+
+export type IssueKind = 'orphan' | 'broken' | 'stale' | 'knowledge_stale';
+
+export interface IssueRow {
+  // 稳定 key：与批量修复 issueKeys / 单修复 loading 状态共用同一口径
+  key: string;
+  kind: IssueKind;
+  // 主展示路径（broken 为来源页）
+  path: string;
+  // broken 专用：缺失的目标链接文本
+  target?: string;
+  // 归属目录（'/' 表示根目录），用于按目录聚合与筛选
+  dir: string;
+  // 是否可自动修复（调用 LLM 补回链/修正断链）
+  fixable: boolean;
+  // 修复入参：orphan 为路径字符串，broken 为 {from,to}
+  fixTarget?: string | { from: string; to: string };
+}
+
+// 目录段：取路径去掉最后一段的目录前缀；无 '/' 视为根目录
+export function dirOf(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx < 0 ? '/' : path.slice(0, idx);
+}
+
+export function orphanKey(path: string): string {
+  return `orphan:${path}`;
+}
+
+export function brokenKey(from: string, to: string): string {
+  return `broken:${from}->${to}`;
+}
+
+// 把体检报告摊平为统一行模型：4 类问题共用筛选/聚合/折叠/多选逻辑。
+export function buildIssueRows(report: HealthReport): IssueRow[] {
+  const orphans: IssueRow[] = (report.orphans ?? []).map((p) => ({
+    key: orphanKey(p),
+    kind: 'orphan',
+    path: p,
+    dir: dirOf(p),
+    fixable: true,
+    fixTarget: p,
+  }));
+  const broken: IssueRow[] = (report.brokenLinks ?? []).map((b) => ({
+    key: brokenKey(b.from, b.to),
+    kind: 'broken',
+    path: b.from,
+    target: b.to,
+    dir: dirOf(b.from),
+    fixable: true,
+    fixTarget: { from: b.from, to: b.to },
+  }));
+  const stale: IssueRow[] = (report.stale ?? []).map((p) => ({
+    key: `stale:${p}`,
+    kind: 'stale',
+    path: p,
+    dir: dirOf(p),
+    fixable: false,
+  }));
+  const knowledgeStale: IssueRow[] = (report.knowledgeStale ?? []).map((p) => ({
+    key: `review:${p}`,
+    kind: 'knowledge_stale',
+    path: p,
+    dir: dirOf(p),
+    // 知识时效可「一键复核」（确定性 frontmatter 写），但不走 LLM 批量修复
+    fixable: false,
+  }));
+  return [...orphans, ...broken, ...stale, ...knowledgeStale];
+}
+
+// 大小写不敏感的关键字过滤（同时匹配路径与断链目标）
+export function filterRows(rows: IssueRow[], keyword: string): IssueRow[] {
+  const kw = keyword.trim().toLowerCase();
+  if (!kw) return rows;
+  return rows.filter(
+    (r) => r.path.toLowerCase().includes(kw) || (r.target ?? '').toLowerCase().includes(kw),
+  );
+}
+
+export function rowsOfKind(rows: IssueRow[], kind: IssueKind): IssueRow[] {
+  return rows.filter((r) => r.kind === kind);
+}
+
+// 按目录聚合：保持原顺序，返回 { dir, rows } 列表；不聚合时由调用方直接使用扁平 rows。
+export function groupRowsByDir(rows: IssueRow[]): Array<{ dir: string; rows: IssueRow[] }> {
+  const order: string[] = [];
+  const buckets = new Map<string, IssueRow[]>();
+  for (const row of rows) {
+    const bucket = buckets.get(row.dir);
+    if (bucket) {
+      bucket.push(row);
+    } else {
+      buckets.set(row.dir, [row]);
+      order.push(row.dir);
+    }
+  }
+  // 根目录排最后，避免它抢走首屏注意力
+  order.sort((a, b) => (a === '/' ? 1 : 0) - (b === '/' ? 1 : 0));
+  return order.map((dir) => ({ dir, rows: buckets.get(dir) ?? [] }));
+}
+
+// Top-N 折叠：默认只看前 N 条，返回可见行与被折叠数量。
+export function takeVisible(rows: IssueRow[], topN: number, expanded: boolean): { visible: IssueRow[]; hiddenCount: number } {
+  if (expanded || rows.length <= topN) return { visible: rows, hiddenCount: 0 };
+  return { visible: rows.slice(0, topN), hiddenCount: rows.length - topN };
+}
+
+// 总数拆分（H5）：可自动修复 / 需人工判断，两类分开报警，混合计数失去指导意义。
+export interface IssueSplit {
+  autoFixable: number;
+  manualReview: number;
+  total: number;
+}
+
+export function splitByActionable(rows: IssueRow[]): IssueSplit {
+  const autoFixable = rows.filter((r) => r.fixable).length;
+  const manualReview = rows.length - autoFixable;
+  return { autoFixable, manualReview, total: rows.length };
+}
+
+// 选中集 → 批量修复请求体（保持 orphan/broken 的 issueKey 口径与后端一致）
+export function buildFixPayloadFromSelection(
+  rows: IssueRow[],
+  selected: Set<string>,
+): { items: Array<{ issueType: 'broken_link' | 'orphan'; target: string | { from: string; to: string } }>; issueKeys: string[] } {
+  const items: Array<{ issueType: 'broken_link' | 'orphan'; target: string | { from: string; to: string } }> = [];
+  const issueKeys: string[] = [];
+  for (const row of rows) {
+    if (!selected.has(row.key) || !row.fixable || row.fixTarget === undefined) continue;
+    items.push({
+      issueType: row.kind === 'orphan' ? 'orphan' : 'broken_link',
+      target: row.fixTarget,
+    });
+    issueKeys.push(row.key);
+  }
+  return { items, issueKeys };
+}
+
+// 选中集按类拆分，用于汇总条文案「已选 12 项（孤立 8 · 断链 4）」
+export function selectionBreakdown(
+  rows: IssueRow[],
+  selected: Set<string>,
+): { orphan: number; broken: number; total: number } {
+  let orphan = 0;
+  let broken = 0;
+  for (const row of rows) {
+    if (!row.fixable || !selected.has(row.key)) continue;
+    if (row.kind === 'orphan') orphan++;
+    else if (row.kind === 'broken') broken++;
+  }
+  return { orphan, broken, total: orphan + broken };
+}
+
+// 毫秒 → 人话时长（用于估算文案与「预计剩余」）
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '不足 1 分钟';
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds} 秒`;
+  const minutes = Math.round(totalSeconds / 60);
+  if (minutes < 60) return `约 ${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest > 0 ? `约 ${hours} 小时 ${rest} 分` : `约 ${hours} 小时`;
+}
+
+// 已用时 mm:ss
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}

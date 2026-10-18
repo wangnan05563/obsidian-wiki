@@ -6,9 +6,18 @@
 //   - isAborted：由测试/假 adapter 翻转的标志位，确定性触发 break 分支（无毫秒级 sleep）；
 //   - safeEnd：真正 end 掉 reply.raw，保证 inject 能收到完整响应而不挂起。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerHealthCheckRoute } from '../src/routes/health-check.js';
 import type { EngineAdapter, FixProgressEvent } from '../src/types.js';
+
+// 批量作业管理器只在成功修复时写耗时统计；测试必须把它指向临时目录，
+// 否则会污染真实 data 目录下的 .harness/batch-fix。
+function tempJobsDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'batch-fix-abort-test-'));
+}
 
 const h = vi.hoisted(() => ({
   sent: [] as Array<{ event: string; data: unknown }>,
@@ -62,7 +71,7 @@ describe('fix 路由：客户端断开的短路行为', () => {
     h.abort = true;
     const { adapter } = makeAdapter(() => iterEvents([ev('scan', 'running'), ev('done', 'done')]));
     const app = Fastify({ logger: false });
-    registerHealthCheckRoute(app, adapter);
+    registerHealthCheckRoute(app, adapter, undefined, tempJobsDir());
     const res = await app.inject({
       method: 'POST',
       url: '/api/health-check/fix',
@@ -81,7 +90,7 @@ describe('fix 路由：客户端断开的短路行为', () => {
     })();
     const { adapter } = makeAdapter(() => gen);
     const app = Fastify({ logger: false });
-    registerHealthCheckRoute(app, adapter);
+    registerHealthCheckRoute(app, adapter, undefined, tempJobsDir());
     const res = await app.inject({
       method: 'POST',
       url: '/api/health-check/fix',
@@ -93,40 +102,6 @@ describe('fix 路由：客户端断开的短路行为', () => {
   });
 });
 
-describe('fix/batch 路由：客户端断开的短路行为', () => {
-  const items = [
-    { issueType: 'broken_link', target: { from: 'a', to: 'b' } },
-    { issueType: 'orphan', target: 'c.md' },
-  ];
-
-  it('进入循环前已断开 → 仅 batch_start + batch_done（0 成功 0 失败），adapter 未被调用', async () => {
-    h.abort = true;
-    const { adapter, fix } = makeAdapter(() => iterEvents([ev('done', 'done')]));
-    const app = Fastify({ logger: false });
-    registerHealthCheckRoute(app, adapter);
-    const res = await app.inject({ method: 'POST', url: '/api/health-check/fix/batch', payload: { items } });
-    expect(res.statusCode).toBe(200);
-    expect(fix).not.toHaveBeenCalled();
-    expect(h.sent.map((s) => s.event)).toEqual(['batch_start', 'batch_done']);
-    expect(h.sent[1].data).toMatchObject({ successCount: 0, failCount: 0, totalIssues: 2 });
-    await app.close();
-  });
-
-  it('第一个问题迭代中断开 → issue_start+progress 已发、issue_done 不发、第二个问题不再处理', async () => {
-    const gen = (async function* (): AsyncGenerator<FixProgressEvent> {
-      yield ev('scan', 'running');
-      h.abort = true;
-      yield ev('done', 'done');
-    })();
-    const { adapter, fix } = makeAdapter(() => gen);
-    const app = Fastify({ logger: false });
-    registerHealthCheckRoute(app, adapter);
-    const res = await app.inject({ method: 'POST', url: '/api/health-check/fix/batch', payload: { items } });
-    expect(res.statusCode).toBe(200);
-    expect(fix).toHaveBeenCalledTimes(1); // 第二项因 isAborted break，不再触发 LLM 修复
-    const names = h.sent.map((s) => s.event);
-    expect(names).toEqual(['batch_start', 'issue_start', 'progress', 'batch_done']);
-    expect(h.sent[3].data).toMatchObject({ successCount: 0, failCount: 0 });
-    await app.close();
-  });
-});
+// 批量修复自 T02466 起不再绑定在单次请求上：POST 返回 jobId 后由后台作业执行，
+// 「订阅端断开」只是退订，作业继续跑完。该性质需要真实事件流才能断言，
+// 故移至 test/health-check-route.test.ts 的「订阅端断开不杀作业」用例。
