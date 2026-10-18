@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { FixProgressEvent, BatchFixProgressEvent, BatchDoneEvent } from '../types';
 
-// 知识库体检 store：持久化批量修复与单个修复状态。
+// 体检中心 store：持久化批量修复与单个修复状态。
 // 为什么需要 store：Health.vue 组件卸载后本地 ref 销毁，切回页面进度条丢失。
 //   迁移到 Pinia store 后状态跨视图切换保留，SSE fetch 在后台继续更新 store。
 export const useHealthStore = defineStore('health', () => {

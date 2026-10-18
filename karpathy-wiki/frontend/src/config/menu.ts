@@ -62,12 +62,12 @@ export const menuItems: MenuItem[] = [
   // 运维组：体检中心 / 系统清理 / 数据清洗（清理类相邻）
   { key: 'health', icon: 'health', label: '体检中心', permission: 'health', group: 'ops' },
   { key: 'cleanup', icon: 'cleanup', label: '系统清理', permission: 'cleanup', group: 'ops' },
-  { key: 'dataclean', icon: 'cleanup', label: '数据清洗', permission: 'cleanup', group: 'ops' },
+  { key: 'dataclean', icon: 'dataclean', label: '数据清洗', permission: 'cleanup', group: 'ops' },
   // 系统组：配置 / 穿透 / 用户 / 技能 / 帮助 / 关于
   { key: 'config', icon: 'config', label: '配置中心', permission: 'dashboard', group: 'system' },
   { key: 'tunnel', icon: 'tunnel', label: '内网穿透', permission: 'tunnel', group: 'system' },
-  { key: 'users', icon: 'about', label: '用户管理', permission: 'users', group: 'system' },
-  { key: 'skill', icon: 'config', label: '技能管理', permission: 'skill', group: 'system' },
+  { key: 'users', icon: 'users', label: '用户管理', permission: 'users', group: 'system' },
+  { key: 'skill', icon: 'skill', label: '技能管理', permission: 'skill', group: 'system' },
   { key: 'help', icon: 'help', label: '帮助文档', permission: 'help', group: 'system' },
   { key: 'about', icon: 'about', label: '关于', permission: 'about', group: 'system' },
 ];

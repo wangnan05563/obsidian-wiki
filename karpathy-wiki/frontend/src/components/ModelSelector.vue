@@ -338,7 +338,7 @@ async function onKeydown(e: KeyboardEvent) {
         <span class="ms-item-model">{{ m.id }}</span>
       </li>
       <li v-if="!store.modelsLoading && store.availableModels.length === 0" class="ms-empty">
-        未获取到真实模型（请先在「配置 → AI 服务」填写 API Key 并获取列表）
+        未获取到真实模型（请先在「配置中心 → AI 服务」填写 API Key 并获取列表）
       </li>
     </ul>
   </div>

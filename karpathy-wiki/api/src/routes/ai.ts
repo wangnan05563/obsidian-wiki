@@ -280,7 +280,7 @@ export function registerAiRoute(
   // 使用 OpenAI 兼容协议发送最小化请求（max_tokens=5），超时 15s。
   // 鉴权：requireAuth（与 /api/ai/models、/api/ai/web-search/test 一致）。测试连接只做连通性自检，
   //   不写入任何配置，也不把服务端密钥返显给前端（key 仅在服务端 fetch 内使用）；
-  //   而「配置 → AI 服务」为 BYOK 每用户独立密钥，任何登录用户都需能测试自己保存的 Key，
+  //   而「配置中心 → AI 服务」为 BYOK 每用户独立密钥，任何登录用户都需能测试自己保存的 Key，
   //   故普通用户也应可用，不能用 requireAdmin 拦截（否则 user 角色会报 403「无权限访问该资源」）。
   app.post('/api/ai/test-connection', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as {
@@ -312,7 +312,7 @@ export function registerAiRoute(
         ok: false,
         detail: body.useServerKey
           ? '共享AI 未配置 API Key：请先在「共享AI」页填写并保存共享 API Key'
-          : 'API Key 未设置：测试连接按个人 BYOK 密钥校验（与问答口径一致），请在「配置 → AI 服务」填写你自己的 API Key 后再测试',
+          : 'API Key 未设置：测试连接按个人 BYOK 密钥校验（与问答口径一致），请在「配置中心 → AI 服务」填写你自己的 API Key 后再测试',
       });
     }
 

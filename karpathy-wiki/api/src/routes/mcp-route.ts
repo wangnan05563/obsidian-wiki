@@ -101,7 +101,7 @@ export function registerMcpRoute(
     // 每次请求热读最新 mcp 配置（由 /api/config/mcp 保存到 config.json），保存 token/开关后免重启生效
     const mcp = (await loadConfig()).mcp ?? { enabled: false };
     if (!mcp.enabled) {
-      return reply.code(503).send({ error: 'MCP 端点未启用，请在「配置 → MCP 接口」开启，或编辑 config.json 的 mcp.enabled' });
+      return reply.code(503).send({ error: 'MCP 端点未启用，请在「配置中心 → MCP 接口」开启，或编辑 config.json 的 mcp.enabled' });
     }
 
     let raw: unknown;

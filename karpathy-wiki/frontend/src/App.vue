@@ -276,6 +276,7 @@ onBeforeUnmount(() => {
               :key="tab.key"
               class="tab-btn hover-glow"
               :class="{ active: currentView === tab.key }"
+              :aria-current="currentView === tab.key ? 'page' : undefined"
               :data-guide="tab.key"
               @click="go(tab.key)"
             >
@@ -328,6 +329,7 @@ onBeforeUnmount(() => {
             :key="tab.key"
             class="icon-btn"
             :class="{ active: currentView === tab.key }"
+            :aria-current="currentView === tab.key ? 'page' : undefined"
             :data-guide="tab.key"
             @click="go(tab.key)"
             :aria-label="tab.label"

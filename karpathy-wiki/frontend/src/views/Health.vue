@@ -315,7 +315,7 @@ onMounted(() => {
 
       <div class="health-head">
         <div class="head-text">
-          <h2 class="head-title grad-text">知识库体检</h2>
+          <h2 class="head-title grad-text">体检中心</h2>
           <p class="head-tip">检测孤立页面、断链与过期内容</p>
         </div>
         <div class="head-actions">

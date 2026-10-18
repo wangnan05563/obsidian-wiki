@@ -27,6 +27,11 @@ describe('menuItems 完整性', () => {
     const knowledge = menuItems.filter((m) => m.group === 'knowledge').map((m) => m.key);
     expect(knowledge[0]).toBe('dashboard');
   });
+
+  it('图标互斥：15 项图标全部不同（T02451 N7 回归）', () => {
+    // 历史坑：users 复用 about、skill 复用 config、dataclean 复用 cleanup，视觉重复
+    expect(new Set(menuItems.map((m) => m.icon)).size).toBe(15);
+  });
 });
 
 describe('groupMenuItems', () => {
