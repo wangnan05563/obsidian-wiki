@@ -83,6 +83,14 @@ export const useCompileStore = defineStore('compile', () => {
   // §11.2 历史编译任务列表（空状态时展示）
   const runs = ref<RunSummary[]>([]);
   const loadingRuns = ref(false);
+  // T02458（PRD P1/X6，P0）：区分「加载中 / 加载失败 / 真空白」三态。
+  // 旧实现 catch 里 runs.value=[] 把「接口失败」伪装成「无历史」，导致 Progress 重挂载
+  // 重新 loadRuns 返空时把 Dashboard 已加载的数据清空，用户看到「历史丢了」的矛盾。
+  const runsError = ref<string | null>(null);
+  // 是否已成功加载过一次：用于区分「加载中」与「已确认空」（不依赖 runs.length，因为失败也空）
+  const runsLoaded = ref(false);
+  // 最近一次成功加载的时间戳：页脚标注「数据截至 HH:mm」（PRD X6 跨视图一致性）
+  const runsUpdatedAt = ref<string | null>(null);
   // §12.3-8 日志查看
   const logEntries = ref<RunLogEntry[]>([]);
   const loadingLog = ref(false);
@@ -701,13 +709,19 @@ export const useCompileStore = defineStore('compile', () => {
   // §11.2 加载历史编译任务列表
   async function loadRuns() {
     loadingRuns.value = true;
+    runsError.value = null;
     try {
       const res = await apiFetch(`${API_BASE}/compile/runs`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       runs.value = data.runs ?? [];
-    } catch {
-      runs.value = [];
+      runsLoaded.value = true;
+      runsUpdatedAt.value = new Date().toISOString();
+    } catch (err) {
+      // 关键：失败时【保留】已有 runs（Progress 重挂载重新 loadRuns 不应清空 Dashboard 已加载的数据），
+      // 仅记录错误，由 UI 区分「加载失败」(runsError) 与「已确认空」(runsLoaded && runs.length===0)。
+      // 这样 Progress 与 Dashboard 共享同一 store，不会再出现「一处有记录、一处说丢了」的矛盾。
+      runsError.value = err instanceof Error ? err.message : String(err);
     } finally {
       loadingRuns.value = false;
     }
@@ -741,6 +755,9 @@ export const useCompileStore = defineStore('compile', () => {
     stepLabel,
     runs,
     loadingRuns,
+    runsError,
+    runsLoaded,
+    runsUpdatedAt,
     logEntries,
     loadingLog,
     isBatchMode,
