@@ -607,11 +607,54 @@ export interface ArchiveResult {
 
 // ===== 内网穿透相关类型 =====
 
+// 隧道启动失败记录（T02469 / PRD §11 T1）
+// 后端把 boot（开机自启）与 manual（用户点启动）两路的失败都留在内存里，
+// 由 status 透出 —— 否则刷新一次页面失败原因就没了，等于没有提示。
+export interface TunnelStartError {
+  message: string;
+  /** 失败时间戳（ms）：告警条要说「几点失败的」，旧失败不能冒充刚发生的 */
+  at: number;
+  provider: string;
+  source: 'boot' | 'manual';
+}
+
 // 隧道运行状态（GET /api/tunnel/status）
 export interface TunnelStatus {
   status: 'running' | 'stopped';
   publicUrl: string | null;
   provider: string;
+  /** 最近一次启动失败；null 表示没有待处理的失败 */
+  lastStartError?: TunnelStartError | null;
+}
+
+// 前置条件自检单项（GET /api/tunnel/prerequisites，T02469 / PRD §11 T4）
+export type TunnelPrereqState = 'ok' | 'fail' | 'unknown';
+export type TunnelPrereqFocus =
+  | 'binary'
+  | 'login'
+  | 'magicDns'
+  | 'funnelAuth'
+  | 'wizard'
+  | 'authtoken'
+  | 'port';
+
+export interface TunnelPrereqItem {
+  id: string;
+  label: string;
+  state: TunnelPrereqState;
+  /** 实测到的事实（成功时也写，让用户知道「凭什么说满足」） */
+  detail: string;
+  /** 未满足/待确认时的处理指引 */
+  fix: string;
+  focus: TunnelPrereqFocus;
+  fixUrl?: string;
+}
+
+export interface TunnelPrereqResult {
+  provider: string;
+  checkedAt: number;
+  items: TunnelPrereqItem[];
+  allSatisfied: boolean;
 }
 
 // 隧道 provider 联合类型（与后端 TunnelConfig.provider 对齐）

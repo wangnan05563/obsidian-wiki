@@ -803,9 +803,31 @@ function createProcCleanup(
 
 // TunnelService：管理 provider 生命周期，薄封装委托给 provider。
 // 由 index.ts 创建单例并注入到 tunnel 路由，符合项目依赖注入模式。
+/**
+ * 最近一次启动失败记录（T02469 / PRD §11 T1）。
+ * message 直接用 provider 抛出的中文原因 —— 这些文案本来就是按「给用户看」写的
+ * （「请先打开并登录 Tailscale，然后重新启动隧道」），不需要再映射一层错误码。
+ */
+export interface TunnelStartError {
+  message: string;
+  /** 失败时间戳（ms）：界面用来写「今天 02:07 启动失败」，避免用户以为是自己刚才点坏的 */
+  at: number;
+  provider: string;
+  /** boot = 开机自启（用户根本没点过），manual = 用户在页面上点了启动 */
+  source: 'boot' | 'manual';
+}
+
 export class TunnelService {
   private provider: TunnelProvider | null = null;
   private currentConfig: TunnelConfig | null = null;
+  /**
+   * 最近一次启动失败的原因（T02469 / PRD §11 T1）。
+   * 为什么保存在服务里而不是只写日志：开机自启（index.ts 的 boot self-start）与用户点「启动隧道」
+   * 走的是同一条 start()，但自启失败时页面是空的 —— 用户只看到一个灰色「已停止」徽标，
+   * 只能猜。原因落到这里，GET /api/tunnel/status 就能把它带到界面上（含来源，区分「开机自动启动失败」
+   * 与「刚才手动启动失败」，两者的文案与紧迫感不同）。
+   */
+  private lastStartError: TunnelStartError | null = null;
 
   // 端口解析优先级：TUNNEL_PORT 环境变量 > tunnel.localPort > server.port
   // 为什么支持环境变量：命令行启动时临时覆盖隧道端口而不改 config.json
@@ -818,7 +840,12 @@ export class TunnelService {
     return tunnel.localPort > 0 ? tunnel.localPort : serverPort;
   }
 
-  async start(config: TunnelConfig, serverPort: number): Promise<void> {
+  async start(
+    config: TunnelConfig,
+    serverPort: number,
+    opts: { source?: 'boot' | 'manual' } = {},
+  ): Promise<void> {
+    const source = opts.source ?? 'manual';
     // 配置变更（provider/port/binaryPath/authtoken/named tunnel 字段任一变化）时重建 provider
     const configChanged =
       !this.currentConfig ||
@@ -839,6 +866,7 @@ export class TunnelService {
       this.provider = createProvider(config, port);
     } else if (this.status === 'running') {
       // 配置未变且已在运行，跳过重复启动
+      this.lastStartError = null;
       return;
     }
 
@@ -848,8 +876,30 @@ export class TunnelService {
       this.provider = createProvider(config, port);
     }
 
-    await this.provider.start();
+    try {
+      await this.provider.start();
+    } catch (err) {
+      // 失败原因留在服务里：开机自启没人点按钮，界面必须有东西可显示（T02469 / T1）
+      this.lastStartError = {
+        message: err instanceof Error ? err.message : String(err),
+        at: Date.now(),
+        provider: config.provider,
+        source,
+      };
+      throw err;
+    }
+    this.lastStartError = null;
     this.currentConfig = config;
+  }
+
+  /** 最近一次启动失败（无失败为 null）；成功后自动清掉，避免界面上挂着过期告警 */
+  get startError(): TunnelStartError | null {
+    return this.lastStartError;
+  }
+
+  /** 用户在界面上「知道了」：清掉记录，不再重复打扰（下次启动失败会重新出现） */
+  clearStartError(): void {
+    this.lastStartError = null;
   }
 
   stop(): void {
