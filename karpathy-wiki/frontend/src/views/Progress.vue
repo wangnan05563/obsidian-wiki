@@ -507,8 +507,12 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             @click="store.loadRuns()"
           />
         </div>
-      <div v-if="store.loadingRuns" class="section-loading">LOADING...</div>
-      <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务</div>
+      <div v-if="store.loadingRuns" class="section-loading">加载中…</div>
+      <div v-else-if="store.runsError" class="runs-error">
+        <p class="runs-error-msg">历史任务加载失败：{{ store.runsError }}</p>
+        <el-button size="small" type="primary" plain @click="store.loadRuns()">重试</el-button>
+      </div>
+      <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务，投递资料开始编译后将会在此显示</div>
       <div v-else class="runs-list">
           <div v-for="run in store.runs" :key="run.runId" class="run-item hover-glow">
             <div class="run-info" @click="openLogDialog(run)">
@@ -529,6 +533,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
               </el-button>
             </div>
           </div>
+        <p v-if="store.runsUpdatedAt" class="runs-foot">数据截至 {{ formatTime(store.runsUpdatedAt) }}</p>
         </div>
       </div>
     </div>
@@ -904,6 +909,30 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   color: var(--text-dim);
   padding: 32px 0;
   font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.runs-error {
+  text-align: center;
+  padding: 28px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.runs-error-msg {
+  color: var(--danger, #f56c6c);
+  font-size: 13px;
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+.runs-foot {
+  margin: 12px 4px 0;
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 11px;
   font-family: var(--font-mono);
 }
 

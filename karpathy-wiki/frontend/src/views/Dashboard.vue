@@ -222,8 +222,23 @@ onMounted(() => {
       <pre class="recent-log">{{ stats.recentLog }}</pre>
     </div>
 
-    <!-- FR-14-3 运行历史：Dashboard 可视化列表 -->
-    <div v-if="recentRuns.length > 0" class="glass-card section-card fade-up">
+    <!-- FR-14-3 运行历史：加载中（T02458 三态之一） -->
+    <div v-if="compileStore.loadingRuns || runsLoading" class="glass-card section-card fade-up">
+      <h3 class="section-title">
+        <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
+      </h3>
+      <div class="run-skeleton">加载中…</div>
+    </div>
+    <!-- FR-14-3 运行历史：加载失败（与「真空白」区分，避免把接口故障伪装成「历史丢了」） -->
+    <div v-else-if="compileStore.runsError" class="glass-card section-card fade-up">
+      <h3 class="section-title">
+        <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
+      </h3>
+      <p class="run-empty run-error">运行历史加载失败：{{ compileStore.runsError }}</p>
+      <el-button text size="small" data-tip="重新加载运行历史" @click="loadRuns()">重试</el-button>
+    </div>
+    <!-- FR-14-3 运行历史：有数据 -->
+    <div v-else-if="recentRuns.length > 0" class="glass-card section-card fade-up">
       <h3 class="section-title">
         <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
       </h3>
@@ -250,10 +265,10 @@ onMounted(() => {
           查看全部 {{ compileStore.runs.length }} 条记录
         </el-button>
       </div>
+      <p v-if="compileStore.runsUpdatedAt" class="runs-foot">数据截至 {{ timeAgo(compileStore.runsUpdatedAt) }}</p>
     </div>
-
-    <!-- 历史为空时不展示（仅当已加载且知识库有内容时） -->
-    <div v-else-if="hasContent && !runsLoading" class="glass-card section-card fade-up">
+    <!-- FR-14-3 运行历史：已确认空（与加载失败/加载中区分） -->
+    <div v-else class="glass-card section-card fade-up">
       <h3 class="section-title">
         <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
       </h3>
@@ -660,6 +675,26 @@ onMounted(() => {
   font-size: 13px;
   text-align: center;
   padding: 16px 0;
+}
+
+.run-skeleton {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  padding: 16px 0;
+}
+
+.run-error {
+  color: var(--danger, #ef4444);
+}
+
+.runs-foot {
+  margin: 12px 4px 0;
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
 
 @media (max-width: 900px) {
