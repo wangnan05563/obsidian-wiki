@@ -2,7 +2,6 @@
 import { computed } from 'vue';
 import { Check, Close, CircleClose, Timer } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
-import type { CompileStep } from '../types';
 
 // 单文件编译进度条组件
 // 为什么独立组件：单文件模式与批量模式进度计算逻辑差异大（单文件按阶段百分比，批量按文件数），
@@ -46,18 +45,10 @@ const statusTitle = computed(() => {
   }
 });
 
-// 当前阶段中文标签：从 store.currentStep 取，未开始时显示"等待开始"
-const STEP_LABEL: Record<CompileStep, string> = {
-  archive: '存档原始资料',
-  read_schema: '读取 SCHEMA',
-  extract: '提取要点',
-  generate_page: '生成页面',
-  finalize: '收尾'
-};
-
+// 当前阶段中文标签：统一走 store.stepLabel（PRD P4 单一来源，消除与 Progress.vue 7 步 / store 8 步的副本不一致）
 const currentStageLabel = computed(() => {
   if (!store.currentStep) return '等待开始';
-  return STEP_LABEL[store.currentStep] ?? store.currentStep;
+  return store.stepLabel(store.currentStep);
 });
 
 // el-progress 状态映射：'success' | 'exception' | 'warning' | undefined
@@ -113,7 +104,7 @@ const stageTimingList = computed(() => {
   const timings = store.stageTimings;
   const items = Object.entries(timings).map(([step, ms]) => ({
     step,
-    label: STEP_LABEL[step as CompileStep] ?? step,
+    label: store.stepLabel(step),
     ms,
     formatted: formatDuration(ms),
   }));
