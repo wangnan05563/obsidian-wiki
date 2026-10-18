@@ -1,8 +1,11 @@
 // 回归测试：真实挂载 FloatingChat.vue，验证 sendQuestion 在 BYOK 场景下正确向 /query
 // 请求体注入 llmConfig（及 searchConfig/toolsConfig 的条件注入），与 Query.vue 口径一致，
 // 杜绝「FloatingChat 不下发 llmConfig → 后端 BYOK 校验 400」。
-// 思路：vi.mock 拦截 apiBase（捕获请求体）、userConfig / autoModel（隔离 IndexedDB 依赖），
-// 触发 handleSubmit → sendQuestion，断言请求体字段。
+// T02462（Q5）同步：FloatingChat 改用 authStore.authFetch（与 Query 同一鉴权口径），
+//   停止走 /query/stop，回车发送尊重 inputBoxStore.settings.enterSends。本测试相应改为
+//    spy authStore.authFetch，并新增「回车偏好」一致性用例。
+// 思路：vi.mock 拦截 apiBase（仅取 API_BASE 常量）、userConfig / autoModel（隔离 IndexedDB 依赖），
+//   触发 handleSubmit → sendQuestion，断言请求体字段。
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -12,11 +15,12 @@ import FloatingChat from '../src/components/FloatingChat.vue';
 import { useAuthStore } from '../src/stores/auth';
 import { useConversationsStore } from '../src/stores/conversations';
 import { useModelStore } from '../src/stores/model';
-import { apiFetch } from '../src/utils/apiBase';
+import { useInputBoxSettings } from '../src/stores/inputBoxSettings';
 import { loadAiUserConfigForPreset, loadSearchUserConfig, loadToolsUserConfig } from '../src/services/userConfig';
 import { resolveAutoPresetForUser } from '../src/utils/autoModel';
 
-// 拦截依赖，隔离 IndexedDB / 真实 fetch：捕获 /query 请求体，断言 llmConfig 注入
+// 拦截依赖，隔离 IndexedDB / 真实 fetch：API_BASE 仍由本 mock 提供（用于拼 URL），
+// 但请求不再走 apiFetch（T02462 起走 authStore.authFetch）。
 vi.mock('../src/utils/apiBase', () => ({
   API_BASE: '/wiki/api',
   apiFetch: vi.fn(),
@@ -25,13 +29,25 @@ vi.mock('../src/services/userConfig', () => ({
   loadAiUserConfigForPreset: vi.fn(),
   loadSearchUserConfig: vi.fn(),
   loadToolsUserConfig: vi.fn(),
+  // useInputBoxSettings store（FloatingChat 经 Q5 引入）初始化时依赖 clone / DEFAULT
+  clone: (x: unknown) => JSON.parse(JSON.stringify(x)),
+  DEFAULT_INPUT_BOX_SETTINGS: {
+    enterSends: false,
+    fontSize: 14,
+    inputTheme: 'default',
+    compact: false,
+    quickReplies: [],
+    historyPreference: 'full',
+  } as any,
+  loadInputBoxSettings: vi.fn(),
+  saveInputBoxSettings: vi.fn(),
 }));
 vi.mock('../src/utils/autoModel', () => ({
   AUTO_MODEL: 'auto',
   resolveAutoPresetForUser: vi.fn(),
 }));
 
-// 最小可消费 SSE 响应（同 query-edit-resend-flow.test.ts）：成功结束，不依赖 happy-dom 的 Response 实现
+// 最小可消费 SSE 响应：成功结束，不依赖 happy-dom 的 Response 实现
 function fakeResponse() {
   const enc = new TextEncoder();
   const chunk =
@@ -53,9 +69,10 @@ const stubs = {
   RefsList: true,
 };
 
-// 捕获最近一次 /query 请求体
+// 捕获最近一次 /query 请求体（经 authStore.authFetch）
+let authFetchSpy: any = null;
 function lastQueryBody(): any {
-  const call = (apiFetch as any).mock.calls.find(
+  const call = authFetchSpy?.mock?.calls?.find(
     (c: any[]) => typeof c[0] === 'string' && c[0].includes('/query'),
   );
   if (!call) return null;
@@ -63,27 +80,34 @@ function lastQueryBody(): any {
   return typeof init?.body === 'string' ? JSON.parse(init.body) : null;
 }
 
-describe('FloatingChat BYOK llmConfig 注入', () => {
+describe('FloatingChat BYOK llmConfig 注入 + Q5 鉴权口径', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
-    (apiFetch as any).mockImplementation(() => Promise.resolve(fakeResponse()));
+    authFetchSpy = null;
   });
 
-  async function setupAndSend(question: string, presetKey: string) {
+  async function setupAndSend(question: string, presetKey: string, opts?: { enterSends?: boolean }) {
     const pinia = createPinia();
     setActivePinia(pinia);
     const authStore = useAuthStore();
     const convStore = useConversationsStore();
     const modelStore = useModelStore();
+    const inputBoxStore = useInputBoxSettings();
 
     convStore.loadConversations = vi.fn().mockResolvedValue(undefined);
     convStore.persistConversation = vi.fn().mockResolvedValue(undefined);
     (authStore as any).user = { id: 'u1', role: 'admin' };
+    // T02462（Q5）：FloatingChat 改用 authStore.authFetch，复用同一鉴权口径
+    (authStore as any).authFetch = vi.fn(() => Promise.resolve(fakeResponse()));
+    authFetchSpy = (authStore as any).authFetch;
     modelStore.$patch({
       presets: [{ key: 'p1', model: 'gpt-4o' }] as any,
       selectedPresetKey: presetKey,
     });
+    if (opts?.enterSends !== undefined) {
+      inputBoxStore.settings.enterSends = opts.enterSends;
+    }
 
     const wrapper = mount(FloatingChat, {
       global: { plugins: [pinia, ElementPlus], stubs },
@@ -109,7 +133,7 @@ describe('FloatingChat BYOK llmConfig 注入', () => {
 
     await setupAndSend('具体问题', 'p1');
 
-    expect(apiFetch).toHaveBeenCalled();
+    expect(authFetchSpy).toHaveBeenCalled();
     const body = lastQueryBody();
     expect(body, '请求体应存在').toBeTruthy();
     expect(body.llmConfig?.apiKey, '应下发 llmConfig.apiKey').toBe('sk-test-123');
@@ -142,5 +166,18 @@ describe('FloatingChat BYOK llmConfig 注入', () => {
 
     const body = lastQueryBody();
     expect(body.llmConfig, '无 apiKey 不应下发 llmConfig').toBeUndefined();
+  });
+
+  it('T02462 Q5：send 走 authStore.authFetch 且请求 /query（与 Query 同口径）', async () => {
+    (loadAiUserConfigForPreset as any).mockResolvedValue({ apiKey: 'sk', provider: 'openai', baseUrl: 'x', model: 'm' });
+    (loadSearchUserConfig as any).mockResolvedValue({ apiKey: '' });
+    (loadToolsUserConfig as any).mockResolvedValue({ mcpServers: [], cliTools: [], scenes: [] });
+
+    await setupAndSend('一致口径', 'p1');
+
+    expect(authFetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/query'),
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });
