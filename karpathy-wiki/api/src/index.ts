@@ -543,9 +543,11 @@ registerDataCleanRoute(app, vault, isolationGuards);
 
 
   registerTunnelRoute(app, tunnel, isolationGuards);
-  // autoStart 开启时服务启动即建立隧道，失败不阻断主服务
+  // autoStart 开启时服务启动即建立隧道，失败不阻断主服务。
+  // T02469（PRD §11 T1）：原「失败只写日志」= 前端完全静默。现把 source='boot' 传给
+  // TunnelService，失败原因记入 lastStartError，由 /api/tunnel/status 透出给前端渲染内联告警条。
   if (config.tunnel.autoStart) {
-    tunnel.start(config.tunnel, config.server.port).catch((err) => {
+    tunnel.start(config.tunnel, config.server.port, { source: 'boot' }).catch((err) => {
       app.log.error({ err }, 'Tunnel boot self-start failed');
     });
   }

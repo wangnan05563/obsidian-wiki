@@ -1,19 +1,30 @@
 <script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   CopyDocument, TopRight, VideoPlay, VideoPause, Link, RefreshRight, Close, Setting, MagicStick, Check, Key, CirclePlus, Connection,
+  View,
 } from '@element-plus/icons-vue';
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
 import AppModal from '../components/AppModal.vue';
 import IconActionButton from '../components/IconActionButton.vue';
+// T02469：失败原因 → 人话建议、自检三态灯等纯判定逻辑（有单测，见 utils/tunnelDiagnostics.ts）
+import {
+  buildStartErrorView,
+  focusTarget,
+  formatCheckedAt,
+  prereqTone,
+  summarizePrereq,
+} from '../utils/tunnelDiagnostics';
 import type {
   TunnelStatus,
   TunnelConfigData,
   TunnelConfigBody,
   TunnelDownloadError,
   TunnelAuthError,
+  TunnelPrereqItem,
+  TunnelPrereqResult,
   CloudflareLoginStartResult,
   CloudflareLoginStatusResult,
 } from '../types';
@@ -39,6 +50,12 @@ const formTunnelMode = ref<'quick' | 'named'>('quick');
 const downloadError = ref<TunnelDownloadError | null>(null);
 // Tailscale Funnel 首次授权时展示授权向导
 const authError = ref<TunnelAuthError | null>(null);
+
+// ===== 前置条件自检（T02469 / PRD §11 T4）=====
+// null = 从未检测过；checkedAt 由后端返回，界面必须显示「几点检测的」
+const prereq = ref<TunnelPrereqResult | null>(null);
+const prereqLoading = ref(false);
+const prereqError = ref('');
 
 // ===== Named Tunnel 向导状态 =====
 const wizardVisible = ref(false);
@@ -80,6 +97,84 @@ async function loadStatus() {
   }
 }
 
+// ===== 启动失败告警条（T02469 / PRD §11 T1）=====
+// 数据源是 status.lastStartError 而不是「本次点击的返回值」：
+// 开机自启失败时用户根本没点过按钮，只有常驻状态接口能告诉他「隧道其实没起来」。
+const startErrorView = computed(() => {
+  const err = status.value?.lastStartError;
+  return err ? buildStartErrorView(err) : null;
+});
+
+async function runPrereqCheck(opts: { silent?: boolean } = {}) {
+  prereqLoading.value = true;
+  if (!opts.silent) prereqError.value = '';
+  try {
+    const res = await apiFetch(`${API_BASE}/tunnel/prerequisites`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({} as Record<string, unknown>));
+      // 403 是权限而不是故障：说清「需要管理员」，不要把后端串丢给用户
+      if (res.status === 403) {
+        prereqError.value = '需要管理员权限才能检测前置条件';
+      } else {
+        prereqError.value = String(data.detail || `检测失败（HTTP ${res.status}）`);
+      }
+      return;
+    }
+    prereq.value = await res.json();
+    prereqError.value = '';
+  } catch (err) {
+    prereqError.value = '检测请求发不出去：' + (err as Error).message;
+  } finally {
+    prereqLoading.value = false;
+  }
+}
+
+const prereqSummary = computed(() => summarizePrereq(prereq.value?.items ?? []));
+const prereqCheckedAtText = computed(() => formatCheckedAt(prereq.value?.checkedAt ?? 0));
+// 自检针对「已保存配置」，用户切换下拉框后旧灯就是上一个服务商的，必须标出来
+const prereqProviderStale = computed(
+  () => Boolean(prereq.value) && prereq.value!.provider !== formProvider.value,
+);
+
+async function dismissStartError() {
+  try {
+    const res = await apiFetch(`${API_BASE}/tunnel/start-error/clear`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    status.value = await res.json();
+  } catch (err) {
+    ElMessage.error('清除失败提示失败：' + (err as Error).message);
+  }
+}
+
+// 「去处理」按钮文案（模板里不用 `!` 断言：焦点落点可能为空，取一次更稳）
+function gotoLabel(item: TunnelPrereqItem): string {
+  return focusTarget(item.focus)?.label ?? '';
+}
+
+// 「去处理」：把用户送到能解决这一项的控件上，并高亮一下（找不到控件就只滚动到配置卡片）
+async function gotoPrereqFocus(item: TunnelPrereqItem) {
+  const target = focusTarget(item.focus);
+  const card = document.getElementById('tunnel-config-card');
+  card?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!target) return;
+  await nextTick();
+  const el = document.querySelector(target.selector) as HTMLElement | null;
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // 用内联样式而不是 class：目标是 el-input 的内部 input，父组件 scoped CSS 选择器命不中它，
+  // class 写法只会「点了没反应」。内联 boxShadow 一定能生效，也不需要额外样式权限。
+  el.style.boxShadow = '0 0 0 2px var(--neon-cyan, #00f5ff)';
+  window.setTimeout(() => {
+    el.style.boxShadow = '';
+  }, 1600);
+}
+
+// 告警条上的「查看前置条件」：滚到自检卡片，没检测过就顺手检测一次
+async function gotoPrereqPanel() {
+  document.getElementById('tunnel-prereq-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!prereq.value && !prereqLoading.value) await runPrereqCheck();
+}
+
 async function loadConfig() {
   try {
     const res = await apiFetch(`${API_BASE}/tunnel/config`);
@@ -116,6 +211,11 @@ async function startTunnel() {
       if (data.errorType === 'tailscale_funnel_auth') {
         authError.value = data as TunnelAuthError;
       }
+      // T02469：失败原因同时落到 status.lastStartError，页面刷新后告警条依然在
+      if (data.lastStartError) {
+        const base: TunnelStatus = status.value ?? { status: 'stopped', publicUrl: null, provider: '' };
+        status.value = { ...base, lastStartError: data.lastStartError };
+      }
       throw new Error(data.detail || `HTTP ${res.status}`);
     }
     status.value = data as TunnelStatus;
@@ -125,6 +225,8 @@ async function startTunnel() {
     if (!downloadError.value && !authError.value) {
       ElMessage.error('启动失败：' + (err as Error).message);
     }
+    // 失败后自动跑一次自检：用户此刻最想知道「到底缺哪一步」
+    void runPrereqCheck({ silent: true });
   } finally {
     starting.value = false;
   }
@@ -164,6 +266,8 @@ async function saveConfig() {
     if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
     ElMessage.success('配置已保存');
     await loadConfig();
+    // 自检针对已保存配置：provider / 端口 / 路径任一变化都会让答案过期，重跑一次
+    void runPrereqCheck({ silent: true });
   } catch (err) {
     ElMessage.error('保存失败：' + (err as Error).message);
   } finally {
@@ -345,9 +449,11 @@ watch(() => status.value?.status, (newStatus) => {
   }
 });
 
-onMounted(() => {
-  loadStatus();
-  loadConfig();
+onMounted(async () => {
+  await Promise.all([loadStatus(), loadConfig()]);
+  // T02469：进页面即静默自检一次。PRD §11 T4 的痛点是「灯不存在，只能靠启动后的报错猜」，
+  // 所以不能等用户去点；silent 保证失败时不弹 toast 打扰，只在自检卡片里给一行原因。
+  void runPrereqCheck({ silent: true });
 });
 
 onBeforeUnmount(() => {
@@ -415,6 +521,72 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- 启动失败内联告警条（T02469 / PRD §11 T1）
+         原来只有转瞬即逝的 ElMessage，且开机自启失败时后端只写日志、前端完全静默 →
+         用户以为「公网地址一直有效」。这里把原因、建议、时间、入口四件事摆在一起，常驻到用户确认。 -->
+    <div class="glass-card start-error-card" v-if="startErrorView && status?.lastStartError" id="tunnel-start-error">
+      <el-alert type="error" :closable="false" show-icon>
+        <template #title>{{ startErrorView.title }}</template>
+        <div class="start-error-detail">{{ status.lastStartError.message }}</div>
+        <div class="start-error-advice">{{ startErrorView.advice }}</div>
+        <div class="start-error-meta">
+          {{ startErrorView.when }}
+          <template v-if="status.lastStartError.provider"> · 服务商 {{ PROVIDER_LABELS[status.lastStartError.provider] || status.lastStartError.provider }}</template>
+          <template v-if="status.lastStartError.source === 'boot'"> · 来自服务启动时的自动尝试</template>
+        </div>
+        <div class="start-error-actions">
+          <IconActionButton name="查看前置条件" desc="跳到前置条件自检，逐项看哪一步没满足" :icon="View" size="small" variant="primary" @click="gotoPrereqPanel" />
+          <IconActionButton name="重新启动" desc="再试一次启动隧道" :icon="RefreshRight" size="small" @click="startTunnel" />
+          <IconActionButton name="知道了" desc="这条提示我已经看过，先不再显示" :icon="Close" size="small" @click="dismissStartError" />
+        </div>
+      </el-alert>
+    </div>
+
+    <!-- 前置条件自检（T02469 / PRD §11 T4）
+         替掉原来 Tailscale 那 4 行「需预装 / 请登录 / 启用 MagicDNS / 完成授权」纯文字：
+         文字清单不告诉用户「现在到底满没满足」，只能启动后靠报错猜。现在每一项是实测灯 + 事实 + 处理入口。 -->
+    <div class="glass-card prereq-card" id="tunnel-prereq-card">
+      <div class="prereq-head">
+        <h2 class="card-title">前置条件自检</h2>
+        <span class="prereq-meta" v-if="prereqLoading">检测中…</span>
+        <span class="prereq-meta" v-else-if="prereqError">检测没跑成</span>
+        <span class="prereq-meta" v-else-if="prereq">
+          {{ prereqSummary.headline }} · {{ prereqCheckedAtText }}
+          <em v-if="prereqProviderStale" class="prereq-stale">（这是 {{ PROVIDER_LABELS[prereq.provider] || prereq.provider }} 的结果）</em>
+        </span>
+        <span class="prereq-meta" v-else>还没有检测</span>
+        <span class="prereq-recheck">
+          <IconActionButton name="重新检测" desc="按当前已保存配置重新跑一次前置条件检测" :icon="RefreshRight" size="small" :loading="prereqLoading" @click="runPrereqCheck()" />
+        </span>
+      </div>
+      <div class="prereq-error" v-if="prereqError">{{ prereqError }}</div>
+      <ul class="prereq-list" v-if="prereq">
+        <li v-for="item in prereq.items" :key="item.id" class="prereq-item" :class="`is-${item.state}`">
+          <el-tag :type="prereqTone(item.state).type" size="small" effect="light" :aria-label="prereqTone(item.state).ariaLabel">
+            {{ prereqTone(item.state).label }}
+          </el-tag>
+          <div class="prereq-body">
+            <div class="prereq-label">{{ item.label }}</div>
+            <div class="prereq-detail">{{ item.detail }}</div>
+            <div class="prereq-fix" v-if="item.fix">
+              {{ item.fix }}
+              <a v-if="item.fixUrl" :href="item.fixUrl" target="_blank" rel="noopener" class="prereq-link">打开页面</a>
+            </div>
+          </div>
+          <button
+            v-if="gotoLabel(item)"
+            type="button"
+            class="prereq-goto"
+            :data-tip="'去处理 - ' + gotoLabel(item)"
+            @click="gotoPrereqFocus(item)"
+          >{{ gotoLabel(item) }}</button>
+        </li>
+      </ul>
+      <div class="prereq-empty" v-else-if="!prereqLoading && !prereqError">
+        点「重新检测」即可逐项确认这台机器是否满足启动条件，不用先试着启动再猜错在哪。
+      </div>
+    </div>
+
     <!-- 下载失败指引 -->
     <div class="glass-card" v-if="downloadError">
       <el-alert type="error" :closable="false" show-icon>
@@ -449,7 +621,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 配置卡片 -->
-    <div class="glass-card">
+    <div class="glass-card" id="tunnel-config-card">
       <h2 class="card-title">穿透配置</h2>
       <div class="config-block">
         <!-- Provider 选择 -->
@@ -518,15 +690,14 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- Tailscale 前置条件 -->
+        <!-- Tailscale 前置条件：原来的 4 行纯文字清单已被上方「前置条件自检」取代（T02469），
+             这里只留一句指路，避免同一份要求在两处各说一遍、说法还不一致 -->
         <div class="config-row" v-if="formProvider === 'tailscale'">
           <span class="row-label">前置条件</span>
           <div class="row-value">
             <div class="hint">
-              1. 需预装 Tailscale：<a href="https://tailscale.com/download/windows" target="_blank">下载地址</a><br>
-              2. 打开 Tailscale 并登录账号<br>
-              3. 启用 MagicDNS（管理后台默认启用）<br>
-              4. 首次启动隧道时需在浏览器完成 Funnel 授权
+              Tailscale 需要本机安装并登录客户端，公网地址还依赖管理后台的 MagicDNS 与 Funnel 开关。
+              这几项是否已经满足，看上方「前置条件自检」的实测结果，不必先启动再靠报错猜。
             </div>
           </div>
         </div>
@@ -540,11 +711,20 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 二进制路径（Tailscale 不需要，检测系统安装）-->
-        <div class="config-row" v-if="formProvider !== 'tailscale'">
-          <label class="row-label" for="tunnel-binary-path">二进制路径</label>
+        <!-- 二进制路径：三个服务商都要能填。
+             T02469 起 Tailscale 也显示——此前它被 v-if 排除，导致自检报「配置路径已不存在」时
+             用户在页面上根本没有地方改，只能去翻 config.json（等于给了灯没给开关）。 -->
+        <div class="config-row">
+          <label class="row-label" for="tunnel-binary-path">程序路径</label>
           <div class="row-value">
-            <el-input id="tunnel-binary-path" v-model="formBinaryPath" placeholder="留空则自动下载到 data/ 目录" />
+            <el-input
+              id="tunnel-binary-path"
+              v-model="formBinaryPath"
+              :placeholder="formProvider === 'tailscale' ? '留空自动探测（PATH → C:\\Program Files\\Tailscale）' : '留空则自动下载到 data/ 目录'"
+            />
+            <div class="hint" v-if="formProvider === 'tailscale'">
+              Tailscale 由你自己安装，本程序不会替你装；探测不到时填 tailscale.exe 的完整路径
+            </div>
           </div>
         </div>
 
@@ -650,7 +830,7 @@ onBeforeUnmount(() => {
         </li>
         <li>如选 cpolar，需到官网注册获取 authtoken 并填入</li>
         <li>如选 Cloudflare Named 模式，点击"开始配置向导"完成三步配置</li>
-        <li>如选 Tailscale，确保已安装登录，首次启动需浏览器授权</li>
+        <li>如选 Tailscale：装好并登录客户端后，用上方面板「前置条件自检」确认四项（安装/登录/MagicDNS/Funnel）是否满足，首次启动还需浏览器授权一次</li>
         <li>本地端口留 0 自动继承服务端口，或指定其他端口</li>
         <li>点击"保存配置"持久化到 config.json</li>
         <li>点击"启动隧道"建立穿透，获得公网 URL</li>
@@ -929,6 +1109,171 @@ onBeforeUnmount(() => {
   color: var(--text-dim, #888);
 }
 
+/* ===== 启动失败内联告警条（T02469 / PRD §11 T1）===== */
+.start-error-card {
+  border-color: var(--accent-pink-a35, rgba(255, 0, 110, 0.35));
+}
+
+.start-error-detail {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-soft, #ccc);
+  word-break: break-word;
+}
+
+.start-error-advice {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  font-weight: 600;
+}
+
+.start-error-meta {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-dim, #888);
+}
+
+.start-error-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* ===== 前置条件自检（T02469 / PRD §11 T4）===== */
+.prereq-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.prereq-head .card-title {
+  margin-bottom: 0;
+}
+
+.prereq-meta {
+  flex: 1;
+  min-width: 160px;
+  font-size: 12px;
+  color: var(--text-dim, #888);
+}
+
+.prereq-stale {
+  color: var(--neon-pink, #ff006e);
+  font-style: normal;
+}
+
+.prereq-recheck {
+  display: inline-flex;
+}
+
+.prereq-error {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--neon-pink, #ff006e);
+}
+
+.prereq-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prereq-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* 三态不只靠颜色：标签文字（已满足/未满足/待确认）+ 左侧描边双重表达 */
+.prereq-item.is-fail {
+  border-color: var(--accent-pink-a25, rgba(255, 0, 110, 0.25));
+}
+
+.prereq-item.is-unknown {
+  border-color: rgba(217, 154, 24, 0.28);
+}
+
+.prereq-item.is-ok {
+  border-color: rgba(0, 245, 168, 0.2);
+}
+
+.prereq-item .el-tag {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.prereq-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.prereq-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color, #eee);
+}
+
+.prereq-detail {
+  font-size: 12px;
+  color: var(--text-soft, #bbb);
+  word-break: break-all;
+}
+
+.prereq-fix {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim, #999);
+}
+
+.prereq-link {
+  margin-left: 6px;
+  color: var(--neon-cyan, #00f5ff);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.prereq-link:hover {
+  text-decoration: underline;
+}
+
+.prereq-goto {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-blue-a35, rgba(21, 84, 209, 0.35));
+  background: transparent;
+  color: var(--text-soft, #ccc);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.prereq-goto:hover {
+  background: rgba(21, 84, 209, 0.12);
+  color: var(--neon-cyan, #00f5ff);
+}
+
+.prereq-empty {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-dim, #888);
+  line-height: 1.6;
+}
+
 /* 响应式：窄屏配置行堆叠 */
 @media (max-width: 700px) {
   .config-row {
@@ -937,6 +1282,9 @@ onBeforeUnmount(() => {
   }
   .config-row .row-label {
     padding-top: 0;
+  }
+  .prereq-item {
+    flex-wrap: wrap;
   }
 }
 </style>
