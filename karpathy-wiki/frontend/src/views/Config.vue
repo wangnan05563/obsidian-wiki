@@ -45,7 +45,32 @@ import {
 } from '../services/mediaConfig';
 import type { MediaImagePreset, MediaVideoPreset, MediaImageUserConfig, MediaVideoUserConfig } from '../types/media';
 
-const activeTab = ref<'schema' | 'config' | 'ai' | 'sharedAi' | 'tts' | 'theme' | 'tools' | 'qq' | 'prompts' | 'mcp' | 'migrate'>('schema');
+// T02467（PRD §10 C2/C3）：tab 清单、分组与「仅管理员」锁定判定收敛到 utils/configTabs.ts，
+// 视图只按它渲染；activeTab 的类型即那一份合法 tab 名，不再各写一遍字面量联合。
+import {
+  findTabMeta,
+  isTabLocked,
+  lockedTabLabel,
+  navGroupsFor,
+  resolveInitialTab,
+  type ConfigTabMeta,
+  type ConfigTabName,
+} from '../utils/configTabs';
+// T02467（PRD §10 C1）：字段生效徽标与「待重启清单」，数据源为 GET /api/config/effects
+import { badgeFor, indexEffectItems, EFFECT_BADGES, type ConfigEffectItem, type EffectBadge } from '../utils/configEffects';
+import {
+  loadPendingRestart,
+  mergePendingRestart,
+  pendingRestartSummary,
+  restartGuideText,
+  savePendingRestart,
+  type PendingRestartEntry,
+} from '../utils/configPendingRestart';
+import ConfigSideNav from '../components/ConfigSideNav.vue';
+import ConfigEffectTag from '../components/ConfigEffectTag.vue';
+import AppModal from '../components/AppModal.vue';
+
+const activeTab = ref<ConfigTabName>('config');
 const config = ref<ConfigData | null>(null);
 
 // ===== 朗读设置（按用户维度隔离）=====
@@ -59,6 +84,108 @@ const modelStore = useModelStore();
 // 仅管理员可见可改；「朗读设置」「界面主题」为个人偏好，对所有登录用户开放。
 // 注意：authStore.isAdmin 经 Pinia 已解包为 boolean，这里用 computed 重新包一层以便模板 v-if 与脚本 .value 统一。
 const isAdmin = computed(() => authStore.isAdmin);
+
+// ===== T02467（PRD §10 C1/C2/C3）：分组导航 · 生效标注 · 无权限 tab 保留 =====
+
+/** 左侧分组导航数据：随角色变化自动重算（登录态切换 / 权限刷新） */
+const navGroups = computed(() => navGroupsFor(isAdmin.value));
+
+// 懒挂载语义（复刻原 el-tabs，避免一进页面就渲染 SCHEMA/Prompt IDE 等重内容）：
+// 首次切入才挂载，之后用 v-show 保活，切走不丢表单草稿与编辑器状态。
+const visitedTabs = ref<ConfigTabName[]>([activeTab.value]);
+watch(activeTab, (tab) => {
+  if (!visitedTabs.value.includes(tab)) visitedTabs.value.push(tab);
+});
+
+// 面板自身的权限闸门：导航已置灰拦一次，这里兜住外部深链（帮助文档直达）与角色变化后的残留状态，
+// 避免「非管理员 URL 里带 tab=config 就渲染出系统配置面板」。
+function canOpenTab(name: ConfigTabName): boolean {
+  const meta = findTabMeta(name);
+  return !!meta && !isTabLocked(meta, isAdmin.value);
+}
+
+// 点锁定的 tab：给一句解释而不是静默不响应（PRD N6/C3 的同类问题）。
+// 不切换 activeTab，也不改用户当前位置 —— 「我刚才那个 tab 怎么没了」必须有答案。
+function onLockedTab(tab: ConfigTabMeta): void {
+  ElMessage.warning(lockedTabLabel(tab));
+}
+
+// 生效登记表来自服务端 GET /api/config/effects（唯一可信源）。
+// 拉取失败时 effectsReady 为 false，徽标整体不渲染 —— 宁可少说，也不猜一个「即时」误导用户。
+const effectItems = ref<ConfigEffectItem[]>([]);
+const effectIndex = computed(() => indexEffectItems(effectItems.value));
+const effectsReady = computed(() => effectItems.value.length > 0);
+// 图例：整页只解释一次三种标签含义，字段旁保持短词（不重复长句）。
+const effectLegend: EffectBadge[] = [EFFECT_BADGES.ui_instant, EFFECT_BADGES.file_reload, EFFECT_BADGES.ui_restart];
+function uiBadge(key: string) {
+  return badgeFor(effectIndex.value.get(key), 'ui');
+}
+function fileBadge(key: string) {
+  return badgeFor(effectIndex.value.get(key), 'file');
+}
+function effectReason(key: string): string {
+  return effectIndex.value.get(key)?.reason ?? '';
+}
+
+async function loadConfigEffects(): Promise<void> {
+  try {
+    const res = await authStore.authFetch(`${API_BASE}/config/effects`);
+    if (!res.ok) return;
+    const data = (await res.json()) as { items?: ConfigEffectItem[] };
+    effectItems.value = Array.isArray(data.items) ? data.items : [];
+  } catch (err) {
+    console.warn('[config] 生效登记表加载失败，字段徽标暂不显示', err);
+  }
+}
+
+// 待重启清单：任何一次保存返回 requireRestart 就登记，跨刷新保留，重启后由用户确认清除。
+const pendingRestart = ref<PendingRestartEntry[]>(loadPendingRestart(localStorage));
+watch(
+  pendingRestart,
+  (list) => {
+    savePendingRestart(list, localStorage);
+  },
+  { deep: true },
+);
+
+function registerRestartHints(
+  hints: ReadonlyArray<{ key?: string; label?: string; reason?: string } | string> | undefined,
+): void {
+  if (!hints || hints.length === 0) return;
+  pendingRestart.value = mergePendingRestart(pendingRestart.value, hints);
+}
+
+const pendingSummary = computed(() => pendingRestartSummary(pendingRestart.value));
+const restartGuide = computed(() => restartGuideText(pendingRestart.value));
+
+/**
+ * 保存响应里的需重启字段 → 可读中文名（toast 不再出现 'multipart.fileSize' 这类内部键名，
+ * 对齐 PRD X10「技术词进 tooltip」）。优先级：后端 restartHints > 本地登记表 label > 原始 key。
+ */
+function restartLabel(data: { restartHints?: Array<{ key?: string; label?: string }>; requireRestart?: string[] }): string {
+  const hints = data.restartHints ?? [];
+  if (hints.length > 0) {
+    return hints.map((h) => h.label || (h.key ? effectIndex.value.get(h.key)?.label ?? h.key : '')).filter(Boolean).join('、');
+  }
+  const keys = data.requireRestart ?? [];
+  return keys.map((k) => effectIndex.value.get(k)?.label ?? k).join('、');
+}
+const showRestartGuide = ref(false);
+
+// 复制重启指引：navigator.clipboard 在非安全上下文/旧内核下不可用，失败时退回选中文本让用户手动复制。
+async function copyRestartGuide(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(restartGuide.value);
+    ElMessage.success('重启指引已复制，粘贴到笔记里照着做即可');
+  } catch {
+    ElMessage.info('当前环境不允许自动复制，请长按/选下面这段文字手动复制');
+  }
+}
+
+function markRestarted(): void {
+  pendingRestart.value = [];
+  ElMessage.success('已清除待重启标记（请确认服务确实重启过，否则改动仍未落地）');
+}
 
 // Edge 神经语音可用音色列表（与后端 EDGE_TTS_VOICES 一致，与 MessageToolbar 保持一致）
 const edgeVoices = [
@@ -231,7 +358,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 // §12.3-7 热加载：重读 config.json 并即时应用到运行中的 adapter。
-// 仅 model/budget/staleDays 即时生效，adapter/vaultPath/server 需重启进程。
+// 热加载救不了的字段（需重启）由服务端登记表给出，这里只负责登记进页顶待重启清单。
 async function reloadConfig() {
   reloading.value = true;
   try {
@@ -241,7 +368,11 @@ async function reloadConfig() {
       body: '{}',
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    reloadResult.value = await res.json();
+    const data = (await res.json()) as ReloadResult;
+    reloadResult.value = data;
+    // 热加载无法判断「哪个需重启字段真的变了」（旧值已被覆盖），后端保守返回全部需重启字段，
+    // 逐条并入待重启清单由用户确认重启后清除。
+    registerRestartHints(data.restartHints ?? data.requireRestart);
     ElMessage.success('配置已热加载');
     // 刷新展示，让用户看到应用后的值
     await loadConfig();
@@ -1633,9 +1764,11 @@ async function saveBatch() {
       }
       // 同步表单的 allowedExtensionsText 为标准化后的值
       batchForm.value.allowedExtensionsText = data.config.allowedExtensions.join(', ');
-      const msg = data.requireRestart?.length
-        ? `批量编译配置保存成功（提示：${data.requireRestart.join(', ')} 需重启服务才完全生效）`
-        : '批量编译配置保存成功';
+      const hints = data.restartHints ?? data.requireRestart;
+      registerRestartHints(hints);
+      const msg = restartLabel(data)
+        ? `批量编译配置保存成功（提示：${restartLabel(data)} 需重启服务才完全生效）`
+        : '批量编译配置保存成功（扩展名与批量上限即时生效）';
       ElMessage.success(msg);
       batchDraftApi.clear();
     } else {
@@ -1670,9 +1803,11 @@ async function saveLogging() {
       if (config.value) {
         config.value.logging = data.config;
       }
-      const msg = data.requireRestart?.length
-        ? `日志配置保存成功（提示：${data.requireRestart.join(', ')} 需重启服务才完全生效）`
-        : '日志配置保存成功';
+      const hints = data.restartHints ?? data.requireRestart;
+      registerRestartHints(hints);
+      const msg = restartLabel(data)
+        ? `日志配置保存成功（提示：${restartLabel(data)} 需重启服务才完全生效）`
+        : '日志配置保存成功（请求日志开关即时生效）';
       ElMessage.success(msg);
       loggingDraftApi.clear();
     } else {
@@ -2356,20 +2491,31 @@ function clearTestResult(): void {
 }
 
 onMounted(async () => {
+  // 生效登记表与角色无关，所有用户都要看到自己那批字段的生效方式；先拉，失败只影响徽标。
+  void loadConfigEffects();
   // T02455（PRD D1x）：消费帮助文档「可点击直达」的 tab 指令（sessionStorage 一次性传递，
-  // 复用 karpathy:jumpPath 既有模式）。指令带 view=config 且 tab 合法时才切，否则保持默认 tab。
+  // 复用 karpathy:jumpPath 既有模式）。T02467：合法 tab 清单改由 configTabs 单一来源给出，
+  // 且经 resolveInitialTab 校验角色 —— 非管理员被深链到管理员 tab 时不再静默落进去。
+  let preferred: string | null = null;
   try {
     const raw = sessionStorage.getItem('karpathy:navigate-tab');
     if (raw) {
       sessionStorage.removeItem('karpathy:navigate-tab');
       const nav = JSON.parse(raw) as { view?: string; tab?: string };
-      const validTabs = ['schema', 'config', 'ai', 'sharedAi', 'tts', 'theme', 'tools', 'qq', 'prompts', 'mcp', 'migrate'];
-      if (nav.view === 'config' && nav.tab && validTabs.includes(nav.tab)) {
-        activeTab.value = nav.tab as typeof activeTab.value;
-      }
+      if (nav.view === 'config') preferred = nav.tab ?? null;
     }
   } catch {
     // 隐私模式 / 解析失败：忽略，保持默认 tab
+  }
+  const initial = resolveInitialTab(preferred, isAdmin.value);
+  activeTab.value = initial;
+  visitedTabs.value = [initial];
+  if (preferred && preferred !== initial) {
+    ElMessage.info(
+      findTabMeta(preferred)
+        ? '该配置项仅管理员可修改，已停在你可以编辑的位置'
+        : '没有对应的配置页签，已停在默认位置',
+    );
   }
   // 个人配置（AI 服务 / 搜索引擎 / 工具）按用户隔离存储在本地，对所有登录用户加载与展示；
   // 不再依赖服务端共享 config.json，避免越权与多余请求，且各用户配置互不可见。
@@ -2381,8 +2527,9 @@ onMounted(async () => {
   // 媒体生成（生图/视频）用户配置同样按用户隔离，所有登录用户可编辑，故置于管理员提前 return 之前
   loadMediaSection();
   if (!isAdmin.value) {
-    // 非管理员：跳过敏感 admin 接口（SCHEMA/系统配置/历史/QQ/Prompt），默认落到「朗读设置」tab
-    activeTab.value = 'tts';
+    // 非管理员：跳过敏感 admin 接口（SCHEMA/系统配置/历史/QQ/Prompt）。
+    // T02467：落点已由 resolveInitialTab 决定（个人偏好），此处不再改写 activeTab ——
+    // 原来那句 activeTab.value='tts' 就是「静默跳 tab」的来源，只保留 return。
     return;
   }
   loadSchema();
@@ -2517,6 +2664,9 @@ const importResult = ref<{
   skipped: number;
   failed: number;
   details: string[];
+  // T02467：导入真的覆盖到「需重启」字段时后端逐字段比对回来（不是「导入=一定得重启」）
+  requireRestart?: string[];
+  restartHints?: Array<{ key?: string; label?: string; reason?: string }>;
 } | null>(null);
 
 // 导出配置：拉取脱敏 JSON 后触发浏览器下载
@@ -2616,10 +2766,15 @@ async function importConfig() {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
     importResult.value = d;
+    // 迁移会一次覆盖多项：把其中「需重启」的字段登记进页顶待重启清单，而不是只在 toast 里一闪
+    registerRestartHints(d.restartHints ?? d.requireRestart);
+    const restartPart = d.restartHints?.length || d.requireRestart?.length
+      ? `；${restartLabel(d)} 需重启服务才完全生效`
+      : '';
     if (d.failed > 0) {
-      ElMessage.warning(`导入完成：应用 ${d.applied} 项，失败/忽略 ${d.failed} 项`);
+      ElMessage.warning(`导入完成：应用 ${d.applied} 项，失败/忽略 ${d.failed} 项${restartPart}`);
     } else {
-      ElMessage.success(`配置导入成功：应用 ${d.applied} 项`);
+      ElMessage.success(`配置导入成功：应用 ${d.applied} 项${restartPart}`);
     }
   } catch (err) {
     ElMessage.error(apiErrorMessage('导入配置失败', err));
@@ -2638,16 +2793,46 @@ async function importConfig() {
       <div class="config-head">
         <div class="head-text">
           <h2 class="head-title grad-text">配置中心</h2>
-          <p class="head-tip">编辑页面规范 SCHEMA.md 与查看系统配置</p>
+          <p class="head-tip">左侧按「个人偏好 / AI 服务 / 系统」分组；每项旁边的标签说明它保存后什么时候生效</p>
+          <!-- 生效方式图例：登记表取到才显示，取不到时不摆半成品说明 -->
+          <p v-if="effectsReady" class="effect-legend">
+            <span class="effect-legend-lead">字段旁的标签含义</span>
+            <span v-for="b in effectLegend" :key="b.label" class="effect-legend-item" :class="`effect-legend-item--${b.tone}`" :data-tip="b.tip">{{ b.label }}</span>
+          </p>
         </div>
       </div>
 
-      <el-tabs v-model="activeTab" class="config-tabs">
+      <!-- T02467（PRD §10 C1）：页顶待重启汇总——改完就走的人不会被提醒，这里常驻 -->
+      <div v-if="pendingRestart.length > 0" class="pending-restart-bar" role="status" aria-live="polite">
+        <span class="pending-icon" aria-hidden="true">!</span>
+        <div class="pending-body">
+          <div class="pending-title">{{ pendingSummary }}</div>
+          <ul class="pending-list">
+            <li v-for="item in pendingRestart" :key="item.key">
+              <button type="button" class="pending-item" :data-tip="item.reason || '点击看为什么要重启'" @click="showRestartGuide = true">{{ item.label }}</button>
+            </li>
+          </ul>
+        </div>
+        <div class="pending-actions">
+          <button type="button" class="neon-btn pending-btn" @click="showRestartGuide = true">怎么重启</button>
+          <button type="button" class="neon-btn-primary pending-btn" @click="markRestarted">我已重启，清除</button>
+        </div>
+      </div>
+      <div class="config-layout">
+        <ConfigSideNav v-model="activeTab" :groups="navGroups" @locked="onLockedTab" />
+        <div class="config-panels">
         <!-- SCHEMA 编辑器 -->
-        <el-tab-pane v-if="isAdmin" label="SCHEMA 规范" name="schema">
+        <section
+          v-if="visitedTabs.includes('schema') && canOpenTab('schema')"
+          v-show="activeTab === 'schema'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="SCHEMA 规范"
+        >
           <div class="schema-section">
             <div class="action-bar">
               <span class="section-desc">页面规范文件，控制 AI 编译时的页面结构与约束</span>
+              <ConfigEffectTag :badge="uiBadge('schema')" :reason="effectReason('schema')" compact />
               <div class="actions">
                 <IconActionButton
                   v-if="!editingSchema"
@@ -2763,14 +2948,20 @@ async function importConfig() {
               </div>
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
         <!-- 系统配置 -->
-        <el-tab-pane v-if="isAdmin" label="系统配置" name="config">
+        <section
+          v-if="visitedTabs.includes('config') && canOpenTab('config')"
+          v-show="activeTab === 'config'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="系统配置"
+        >
           <div class="config-section">
             <!-- §12.3-7 热加载操作栏 -->
             <div class="reload-bar">
-              <span class="section-desc">修改 config.json 后点击热加载，无需重启服务即可应用运行时参数</span>
+              <span class="section-desc">直接改 config.json 后点这里，运行时参数无需重启即可应用；标了「需重启服务」的字段仍要重启</span>
               <IconActionButton
                 name="热加载配置"
                 desc="热加载 config.json，无需重启服务即可应用运行时参数"
@@ -2792,7 +2983,7 @@ async function importConfig() {
                 <span class="applied-tag">staleDays: {{ reloadResult.applied.staleDays }}</span>
               </div>
       <div v-if="reloadResult.requireRestart.length > 0" class="reload-warn">
-                ? 以下字段变更需重启服务才能生效：{{ reloadResult.requireRestart.join(', ') }}
+                ? 以下字段变更需重启服务才能生效：{{ restartLabel(reloadResult) || reloadResult.requireRestart.join('、') }}
               </div>
             </div>
       <div v-if="loadingConfig" class="section-loading">// 加载中…</div>
@@ -2802,18 +2993,21 @@ async function importConfig() {
                 <h3 class="block-title"><span class="block-bracket">[</span> LLM 模型 <span class="block-bracket">]</span></h3>
                 <div class="config-row">
                   <span class="config-label">服务商</span>
-                  <span class="config-value">{{ PROVIDER_LABELS[config.llm.provider] || config.llm.provider }}</span>
+                  <span class="config-value">{{ PROVIDER_LABELS[config.llm.provider] || config.llm.provider }}
+                  <ConfigEffectTag :badge="fileBadge('llm.provider')" :reason="effectReason('llm.provider')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">模型</span>
                   <!-- 展示 AI 服务实际配置的模型名，与「AI 服务」页签保持一致；
                         userConfig 中的 BYOK 模型为权威值，config.llm.model 仅为加载空窗期兜底，
                         避免系统配置信息栏停留在 config.json 的陈旧模型版本。 -->
-                  <span class="config-value">{{ aiForm.model || config.llm.model }}</span>
+                  <span class="config-value">{{ aiForm.model || config.llm.model }}
+                  <ConfigEffectTag :badge="fileBadge('llm.model')" :reason="effectReason('llm.model')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">API 地址</span>
-                  <span class="config-value">{{ config.llm.baseUrl }}</span>
+                  <span class="config-value">{{ config.llm.baseUrl }}
+                  <ConfigEffectTag :badge="fileBadge('llm.baseUrl')" :reason="effectReason('llm.baseUrl')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">私有配置 Key</span>
@@ -2823,6 +3017,7 @@ async function importConfig() {
                     <span :class="['key-status', privateLlmKeySet ? 'set' : 'unset']">
                       {{ privateLlmKeySet ? '已设置' : '未设置' }}
                     </span>
+                    <ConfigEffectTag :badge="uiBadge('ai')" :reason="effectReason('ai')" compact />
                   </span>
                 </div>
       <div class="config-row">
@@ -2834,6 +3029,7 @@ async function importConfig() {
                       {{ config.llm.apiKeySet ? '已设置' : '未设置' }}
                     </span>
                     <code class="env-name">{{ config.llm.apiKeyRef }}</code>
+                    <ConfigEffectTag :badge="fileBadge('llm.apiKeyRef')" :reason="effectReason('llm.apiKeyRef')" compact />
                   </span>
                 </div>
               </div>
@@ -2843,19 +3039,23 @@ async function importConfig() {
                 <h3 class="block-title"><span class="block-bracket">[</span> 运行参数 <span class="block-bracket">]</span></h3>
                 <div class="config-row">
                   <span class="config-label">引擎</span>
-                  <span class="config-value">{{ config.adapter }}</span>
+                  <span class="config-value">{{ config.adapter }}
+                  <ConfigEffectTag :badge="fileBadge('adapter')" :reason="effectReason('adapter')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">最大步数</span>
-                  <span class="config-value">{{ config.budget.maxSteps }}</span>
+                  <span class="config-value">{{ config.budget.maxSteps }}
+                  <ConfigEffectTag :badge="fileBadge('budget.maxSteps')" :reason="effectReason('budget.maxSteps')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">Token 预算</span>
-                  <span class="config-value">{{ config.budget.tokenBudget }}</span>
+                  <span class="config-value">{{ config.budget.tokenBudget }}
+                  <ConfigEffectTag :badge="fileBadge('budget.tokenBudget')" :reason="effectReason('budget.tokenBudget')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">本地模式</span>
-                  <span class="config-value">{{ config.localOnly ? '开启' : '关闭' }}</span>
+                  <span class="config-value">{{ config.localOnly ? '开启' : '关闭' }}
+                  <ConfigEffectTag :badge="fileBadge('localOnly')" :reason="effectReason('localOnly')" compact /></span>
                 </div>
               </div>
 
@@ -2864,19 +3064,23 @@ async function importConfig() {
                 <h3 class="block-title"><span class="block-bracket">[</span> 服务 <span class="block-bracket">]</span></h3>
                 <div class="config-row">
                   <span class="config-label">监听地址</span>
-                  <span class="config-value">{{ config.server.host }}</span>
+                  <span class="config-value">{{ config.server.host }}
+                  <ConfigEffectTag :badge="fileBadge('server.host')" :reason="effectReason('server.host')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">端口</span>
-                  <span class="config-value">{{ config.server.port }}</span>
+                  <span class="config-value">{{ config.server.port }}
+                  <ConfigEffectTag :badge="fileBadge('server.port')" :reason="effectReason('server.port')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">Vault 路径</span>
-                  <span class="config-value">{{ config.vaultPath }}</span>
+                  <span class="config-value">{{ config.vaultPath }}
+                  <ConfigEffectTag :badge="fileBadge('vaultPath')" :reason="effectReason('vaultPath')" compact /></span>
                 </div>
       <div class="config-row">
                   <span class="config-label">过期阈值</span>
-                  <span class="config-value">{{ config.healthCheck.staleDays }} 天</span>
+                  <span class="config-value">{{ config.healthCheck.staleDays }} 天
+                  <ConfigEffectTag :badge="fileBadge('healthCheck.staleDays')" :reason="effectReason('healthCheck.staleDays')" compact /></span>
                 </div>
               </div>
 
@@ -2894,7 +3098,7 @@ async function importConfig() {
             <!-- 高级配置编辑区：补全 budget/healthCheck/batch/logging 的前端编辑入口 -->
             <div class="advanced-config">
               <div class="section-header">
-                <span class="section-desc">// 高级配置（编辑后即时生效，无需手动改 config.json）</span>
+                <span class="section-desc">// 高级配置（在这里保存会同时写入 config.json 并同步运行时；每项旁的标签说明它什么时候生效）</span>
               </div>
 
               <!-- 运行参数编辑 -->
@@ -2910,6 +3114,7 @@ async function importConfig() {
                     :max="100"
                     class="form-input"
                   />
+                  <ConfigEffectTag :badge="uiBadge('budget.maxSteps')" :reason="effectReason('budget.maxSteps')" compact />
                 </div>
                 <div class="form-row">
                   <label class="form-label" for="cfg-token-budget">Token 预算</label>
@@ -2921,6 +3126,7 @@ async function importConfig() {
                     :step="1000"
                     class="form-input"
                   />
+                  <ConfigEffectTag :badge="uiBadge('budget.tokenBudget')" :reason="effectReason('budget.tokenBudget')" compact />
                 </div>
                 <div class="ai-actions">
                   <IconActionButton
@@ -2947,6 +3153,7 @@ async function importConfig() {
                     :max="365"
                     class="form-input"
                   />
+                  <ConfigEffectTag :badge="uiBadge('healthCheck.staleDays')" :reason="effectReason('healthCheck.staleDays')" compact />
                 </div>
                 <div class="ai-actions">
                   <IconActionButton
@@ -2973,6 +3180,7 @@ async function importConfig() {
                     inactive-text="关闭"
                     @change="saveSubAgents"
                   />
+                  <ConfigEffectTag :badge="uiBadge('enableSubAgents')" :reason="effectReason('enableSubAgents')" compact />
                 </div>
                 <p class="block-hint">
                   开启后，主问答可委派 <code>spawn_researcher</code> 子智能体在隔离上下文独立检索/研读知识库，返回聚焦结论后由父智能体综合作答。
@@ -2991,6 +3199,7 @@ async function importConfig() {
                     placeholder="md, txt, pdf, html, json"
                     class="form-input"
                   />
+                  <ConfigEffectTag :badge="uiBadge('batch.allowedExtensions')" :reason="effectReason('batch.allowedExtensions')" compact />
                 </div>
                 <div class="form-row">
                   <label class="form-label" for="cfg-max-batch">最大批量数</label>
@@ -3002,6 +3211,7 @@ async function importConfig() {
                     :max="1000"
                     class="form-input"
                   />
+                  <ConfigEffectTag :badge="uiBadge('batch.maxBatchSize')" :reason="effectReason('batch.maxBatchSize')" compact />
                 </div>
                 <div class="form-row">
                   <label class="form-label" for="cfg-max-file-size">单文件上限（MB）</label>
@@ -3013,6 +3223,7 @@ async function importConfig() {
                     :max="1024"
                     class="form-input"
                   />
+                  <ConfigEffectTag :badge="uiBadge('multipart.fileSize')" :reason="effectReason('multipart.fileSize')" compact />
                 </div>
                 <div class="ai-actions">
                   <IconActionButton
@@ -3043,6 +3254,7 @@ async function importConfig() {
                       :value="lvl"
                     />
                   </el-select>
+                  <ConfigEffectTag :badge="uiBadge('logging.level')" :reason="effectReason('logging.level')" compact />
                 </div>
                 <div class="form-row">
                   <label class="form-label" for="cfg-req-log">记录请求日志</label>
@@ -3050,6 +3262,7 @@ async function importConfig() {
                     id="cfg-req-log"
                     v-model="loggingForm.enableRequestLog"
                   />
+                  <ConfigEffectTag :badge="uiBadge('logging.enableRequestLog')" :reason="effectReason('logging.enableRequestLog')" compact />
                 </div>
                 <div class="ai-actions">
                   <IconActionButton
@@ -3064,13 +3277,19 @@ async function importConfig() {
               </div>
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
         <!-- 数据迁移（仅管理员）：配置整体导出 / 导入，便于更换服务器/环境迁移。全局危险操作，仅 admin。 -->
-        <el-tab-pane v-if="isAdmin" label="数据迁移" name="migrate">
+        <section
+          v-if="visitedTabs.includes('migrate') && canOpenTab('migrate')"
+          v-show="activeTab === 'migrate'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="数据迁移"
+        >
           <div class="config-section">
             <div class="section-header">
-              <span class="section-desc">// 导出 / 导入全部配置（含完整配置项）。导出的文件已对 API Key 等密钥脱敏，不含明文密钥；导入沿用当前已配置的真实密钥。</span>
+              <span class="section-desc">// 导出 / 导入全部配置（含完整配置项）。导出的文件已对 API Key 等密钥脱敏，不含明文密钥；导入沿用当前已配置的真实密钥。导入若覆盖到需重启的字段，会逐字段列进页顶「待重启清单」。</span>
             </div>
 
             <!-- 导出功能区 -->
@@ -3149,15 +3368,22 @@ async function importConfig() {
               </div>
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
         <!-- MCP 对外接口（仅管理员）：对外的 /mcp 端点，供外部 AI Agent 接入。
              与「工具配置」区别：工具配置是本应用作为 MCP 客户端连外部服务器；这里是暴露本库给外部 Agent。 -->
-        <el-tab-pane v-if="isAdmin" label="MCP 接口" name="mcp">
+        <section
+          v-if="visitedTabs.includes('mcp') && canOpenTab('mcp')"
+          v-show="activeTab === 'mcp'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="MCP 接口"
+        >
           <div class="config-section">
             <div class="advanced-config">
               <div class="section-header">
                 <span class="section-desc">// MCP 对外接口（Bearer Token 双轨鉴权：userToken 读 / adminToken 写，供 Claude Code / Cursor / Cline 等外部 Agent 接入）</span>
+              <ConfigEffectTag :badge="uiBadge('mcp')" :reason="effectReason('mcp')" compact />
                 <el-button size="small" class="neon-btn-primary" :loading="mcpSaving" data-tip="保存 MCP 对外接口配置（保存后外部 Agent 立即生效）" @click="saveMcpConfig">
                   保存
                 </el-button>
@@ -3210,15 +3436,22 @@ async function importConfig() {
               </template>
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
         <!-- AI 服务配置：按用户维度隔离，仅当前账户可见 -->
-        <el-tab-pane label="AI 服务" name="ai">
+        <section
+          v-if="visitedTabs.includes('ai') && canOpenTab('ai')"
+          v-show="activeTab === 'ai'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="AI 服务"
+        >
           <!-- T00320 迁移说明：原「共享模型配置」（shared-ai-section）已整体迁至独立「共享AI」Tab，
                本「AI 服务」页签现为纯用户 BYOK（个人 LLM 配置），与共享配置解耦互不混用。 -->
           <div class="ai-section">
             <div class="section-header">
               <span class="section-desc">// AI 服务（LLM）</span>
+              <ConfigEffectTag :badge="uiBadge('ai')" :reason="effectReason('ai')" compact />
               <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
             </div>
             <div class="tts-note">
@@ -3646,16 +3879,23 @@ async function importConfig() {
               </div>
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
         <!-- T00320 共享AI：管理员全局配置区（共享模型 / 共享生图 / 共享视频），紧邻「AI 服务」。
              普通用户不可见、不可切换（v-if isAdmin），与 mcp/qq/prompts 等 admin Tab 权限一致。
              设计动机：全局共享配置供未配置个人（BYOK）的用户降级使用，与「共享模型」降级思路一致；
              管理员统一维护，改动对所有用户生效。 -->
-        <el-tab-pane v-if="isAdmin" label="共享AI" name="sharedAi">
+        <section
+          v-if="visitedTabs.includes('sharedAi') && canOpenTab('sharedAi')"
+          v-show="activeTab === 'sharedAi'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="共享AI"
+        >
           <div class="ai-section">
             <div class="section-header">
               <span class="section-desc">// 共享AI（管理员全局）</span>
+              <ConfigEffectTag :badge="uiBadge('sharedAi')" :reason="effectReason('sharedAi')" compact />
               <span class="user-badge">全部用户共享</span>
             </div>
             <div class="tts-note">
@@ -3923,13 +4163,20 @@ async function importConfig() {
               </div>
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
         <!-- 朗读设置：按用户维度隔离，仅当前账户可见 -->
-        <el-tab-pane label="朗读设置" name="tts">
+        <section
+          v-if="visitedTabs.includes('tts') && canOpenTab('tts')"
+          v-show="activeTab === 'tts'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="朗读设置"
+        >
           <div class="tts-config-section">
             <div class="section-header">
               <span class="section-desc">// 朗读偏好（TTS）</span>
+              <ConfigEffectTag :badge="uiBadge('tts')" :reason="effectReason('tts')" compact />
               <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
             </div>
             <div class="tts-note">
@@ -4035,13 +4282,20 @@ async function importConfig() {
               />
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
         <!-- 工具配置：MCP / CLI / 场景路由（按用户隔离） -->
-        <el-tab-pane label="工具配置" name="tools">
+        <section
+          v-if="visitedTabs.includes('tools') && canOpenTab('tools')"
+          v-show="activeTab === 'tools'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="工具配置"
+        >
           <div class="tools-section">
             <div class="section-header">
               <span class="section-desc">// 扩展工具（MCP / CLI / 场景路由）</span>
+              <ConfigEffectTag :badge="uiBadge('tools')" :reason="effectReason('tools')" compact />
               <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
             </div>
             <div class="tts-note">
@@ -4299,26 +4553,38 @@ async function importConfig() {
               </div>
             </div>
           </div>
-        </el-tab-pane>
+        </section>
 
-        <el-tab-pane label="界面主题" name="theme">
+        <section
+          v-if="visitedTabs.includes('theme') && canOpenTab('theme')"
+          v-show="activeTab === 'theme'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="界面主题"
+        >
           <section class="theme-section">
             <div class="theme-copy">
               <span class="section-tag">// APPEARANCE</span>
               <h3>选择界面主题</h3>
-              <p>主题会立即应用并自动保存，下次打开仍保持当前选择。</p>
+              <p>主题会立即应用并自动保存，下次打开仍保持当前选择。<ConfigEffectTag :badge="uiBadge('theme')" :reason="effectReason('theme')" compact /></p>
             </div>
             <ThemeSwitcher embedded />
           </section>
-        </el-tab-pane>
+        </section>
 
-        <el-tab-pane v-if="isAdmin" label="QQ 导入" name="qq">
+        <section
+          v-if="visitedTabs.includes('qq') && canOpenTab('qq')"
+          v-show="activeTab === 'qq'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="QQ 导入"
+        >
           <section v-loading="loadingQqConfig" class="qq-section">
             <div class="section-header">
               <div>
                 <span class="section-tag">// QQ INGEST</span>
                 <h3>QQ 聊天记录导入配置</h3>
-                <p>配置噪声过滤规则、PII 脱敏正则与抽取模型参数。</p>
+                <p>配置噪声过滤规则、PII 脱敏正则与抽取模型参数。<ConfigEffectTag :badge="uiBadge('qq')" :reason="effectReason('qq')" compact /></p>
               </div>
               <IconActionButton
                 name="重置默认"
@@ -4452,17 +4718,24 @@ async function importConfig() {
               />
             </div>
           </section>
-        </el-tab-pane>
+        </section>
 
         <!-- FR-14-2 Prompt IDE：编辑 prompts/*.md + 即时预览 + 试运行 -->
         <!-- AC-14-4: 编辑 prompts/compile.md 等并即时预览渲染结果 -->
         <!-- AC-14-5: 输入测试资料，执行 compile 一次，查看输出 -->
-        <el-tab-pane v-if="isAdmin" label="Prompt IDE" name="prompts">
+        <section
+          v-if="visitedTabs.includes('prompts') && canOpenTab('prompts')"
+          v-show="activeTab === 'prompts'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="Prompt IDE"
+        >
           <div class="prompt-ide-section">
             <!-- 左侧：prompt 文件列表 -->
             <div class="prompt-list-container">
               <div class="section-header">
                 <span class="section-desc">// Prompt 文件列表</span>
+              <ConfigEffectTag :badge="uiBadge('prompts')" :reason="effectReason('prompts')" compact />
               </div>
               <div v-if="loadingPrompts" class="section-loading">// 加载中…</div>
               <div v-else-if="promptFiles.length === 0" class="section-empty">
@@ -4591,9 +4864,34 @@ async function importConfig() {
               </div>
             </div>
           </div>
-        </el-tab-pane>
-      </el-tabs>
+        </section>
+        </div>
+      </div>
     </div>
+
+    <!-- T02467（PRD §10 C1）：重启指引。为什么没有「一键重启」按钮：-->
+    <!-- 服务端自杀式重启会打断正在跑的编译/批量作业，且没有外部守护进程保证一定能拉起来， -->
+    <!-- 因此这里给「照做即可」的步骤清单 + 用户确认已重启后清除标记，而不是伪造一个安全假象。 -->
+    <AppModal v-model="showRestartGuide" title="这些改动需要重启服务" width="560px">
+      <div class="restart-guide">
+        <p class="restart-guide-lead">以下改动已写入配置文件，但运行时还在用旧值：</p>
+        <ul class="restart-guide-list">
+          <li v-for="item in pendingRestart" :key="item.key">
+            <strong>{{ item.label }}</strong>
+            <span class="restart-guide-reason">{{ item.reason }}</span>
+          </li>
+        </ul>
+        <pre class="restart-guide-steps">{{ restartGuide }}</pre>
+        <p class="restart-guide-note">
+          重启前请确认没有正在进行的编译或批量任务；重启后本条清单会自动失效，无需重复操作。
+        </p>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="showRestartGuide = false">知道了</el-button>
+        <el-button size="small" @click="copyRestartGuide">复制指引</el-button>
+        <el-button size="small" type="primary" @click="markRestarted">我已重启，清除</el-button>
+      </template>
+    </AppModal>
   </div>
 </template>
 
@@ -4662,30 +4960,190 @@ async function importConfig() {
   font-size: 12px;
 }
 
-/* Tab 标签霓虹化 */
-.config-tabs {
+/* 生效方式图例（页头一次说清，字段旁只留短词） */
+.effect-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+
+.effect-legend-lead {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+}
+
+.effect-legend-item {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.effect-legend-item--instant {
+  color: #1d7a5f;
+  background: rgba(29, 122, 95, 0.08);
+  border-color: rgba(29, 122, 95, 0.28);
+}
+
+.effect-legend-item--reload {
+  color: #8a5a00;
+  background: rgba(217, 154, 24, 0.1);
+  border-color: rgba(217, 154, 24, 0.32);
+}
+
+.effect-legend-item--restart {
+  color: #b3261e;
+  background: rgba(179, 38, 30, 0.08);
+  border-color: rgba(179, 38, 30, 0.3);
+}
+
+/* T02467：左侧分组导航 + 右侧面板（替代原「11 项单行 el-tabs」，横向溢出截断问题随之消失） */
+.config-layout {
   position: relative;
   z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
 }
 
-.config-tabs :deep(.el-tabs__item) {
+.config-panels {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-panel {
+  min-width: 0;
+}
+
+/* 待重启汇总条：改完就走的人不会被提醒，这里常驻到用户确认已重启 */
+.pending-restart-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent-danger-a30, rgba(220, 76, 90, 0.35));
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--accent-danger-a10, rgba(220, 76, 90, 0.08));
+}
+
+.pending-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(220, 76, 90, 0.18);
+  color: #d84c5a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pending-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.pending-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.pending-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pending-item {
+  padding: 2px 8px;
+  border: 1px dashed rgba(220, 76, 90, 0.4);
+  border-radius: 999px;
+  background: transparent;
+  color: #c0414e;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pending-item:hover {
+  background: rgba(220, 76, 90, 0.08);
+}
+
+.pending-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+}
+
+.pending-btn {
+  font-size: 12px;
+}
+
+/* 重启指引弹窗 */
+.restart-guide-lead {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.restart-guide-list {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.restart-guide-reason {
+  display: block;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.5;
+}
+
+.restart-guide-steps {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a20);
+  color: var(--text-color);
   font-family: var(--font-mono);
-  letter-spacing: 0.05em;
-  color: var(--text-soft) !important;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  user-select: text;
 }
 
-.config-tabs :deep(.el-tabs__item.is-active) {
-  color: var(--neon-cyan) !important;
-  text-shadow: 0 0 8px var(--accent-cyan-a50);
+.restart-guide-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted, #6b7280);
 }
 
-.config-tabs :deep(.el-tabs__active-bar) {
-  background: var(--grad-neon);
-  height: 2px;
-}
-
-.config-tabs :deep(.el-tabs__nav-wrap::after) {
-  background-color: var(--accent-purple-a15);
+@media (max-width: 900px) {
+  .config-layout {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .pending-restart-bar {
+    flex-wrap: wrap;
+  }
 }
 
 .theme-section {

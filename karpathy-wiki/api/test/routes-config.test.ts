@@ -169,9 +169,54 @@ describe('routes/config.ts 配置路由', () => {
       const body = res.json();
       expect(body.applied).toEqual({ model: 'glm-4-flash', maxSteps: 8, tokenBudget: 1234, staleDays: 15 });
       expect(body.requireRestart).toContain('vaultPath');
+      // 需重启清单来自登记表：内部路径名（server.host）也要有可读中文名，前端不必再查表
+      expect(body.requireRestart).toEqual(expect.arrayContaining(['adapter', 'server.host', 'server.port', 'logging.level']));
+      expect(body.restartHints.find((h: { key: string }) => h.key === 'server.port')).toMatchObject({
+        key: 'server.port',
+        label: '服务端口',
+      });
       expect(adapter.updateConfig).toHaveBeenCalledWith({
         model: 'glm-4-flash', maxSteps: 8, tokenBudget: 1234, staleDays: 15,
       });
+    });
+  });
+
+  // ==========================================================================
+  // GET /api/config/effects（T02467 单一可信源）
+  // ==========================================================================
+  describe('GET /api/config/effects', () => {
+    it('返回登记表全量条目、需重启 key 与两条路径的取值域', async () => {
+      app = await buildApp(adapter);
+      const res = await app.inject({ method: 'GET', url: '/api/config/effects' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(Array.isArray(body.items)).toBe(true);
+      expect(body.items.length).toBeGreaterThan(10);
+      // 每条都得有 key/label/effect/viaFile/tab/reason，前端徽标与待重启清单全靠这些字段
+      for (const item of body.items) {
+        expect(item.key).toBeTruthy();
+        expect(item.label).toBeTruthy();
+        expect(['instant', 'restart']).toContain(item.effect);
+        expect(['instant', 'reload', 'restart']).toContain(item.viaFile);
+        expect(item.tab).toBeTruthy();
+        expect(item.reason).toBeTruthy();
+      }
+      expect(body.restartKeys).toEqual(expect.arrayContaining(['adapter', 'vaultPath', 'server.port', 'logging.level', 'multipart.fileSize']));
+      expect(body.restartKeys).not.toContain('budget.maxSteps');
+      expect(body.uiEffects).toEqual(['instant', 'restart']);
+      expect(body.fileEffects).toEqual(['instant', 'reload', 'restart']);
+      // 登记表只描述字段语义，不携带任何配置「现值」——密钥值因此不可能从这里流出
+      const ALLOWED = ['key', 'label', 'effect', 'viaFile', 'tab', 'reason', 'configPath'];
+      for (const item of body.items) {
+        expect(Object.keys(item).every((k) => ALLOWED.includes(k))).toBe(true);
+      }
+    });
+
+    it('key 唯一（前端按 key 建索引，重复会静默覆盖）', async () => {
+      app = await buildApp(adapter);
+      const res = await app.inject({ method: 'GET', url: '/api/config/effects' });
+      const keys = res.json().items.map((i: { key: string }) => i.key);
+      expect(new Set(keys).size).toBe(keys.length);
     });
   });
 
@@ -268,7 +313,9 @@ describe('routes/config.ts 配置路由', () => {
       expect(res.json().error).toBe('allowedExtensions 必须为非空字符串数组');
     });
 
-    it('合法值应 trim+小写后落盘，并提示 multipart 需重启', async () => {
+    it('合法值应 trim+小写后落盘，改了单文件上限才提示需重启（登记表 key）', async () => {
+      // 旧值 maxFileSizeMb=10，本次写 4 → 真的改了 → 命中登记表 multipart.fileSize
+      loadConfigMock.mockResolvedValue(baseConfig({ batch: { allowedExtensions: ['md'], maxBatchSize: 20, maxFileSizeMb: 10 } }));
       saveBatchConfigMock.mockResolvedValue(baseConfig({ batch: { allowedExtensions: ['pdf'], maxBatchSize: 9, maxFileSizeMb: 4 } }));
       app = await buildApp(adapter);
       const res = await app.inject({ method: 'PUT', url: '/api/config/batch', headers: jsonHeaders, payload: JSON.stringify({ allowedExtensions: [' PDF '], maxBatchSize: 9, maxFileSizeMb: 4 }) });
@@ -276,6 +323,17 @@ describe('routes/config.ts 配置路由', () => {
       expect(saveBatchConfigMock).toHaveBeenCalledWith({ allowedExtensions: ['pdf'], maxBatchSize: 9, maxFileSizeMb: 4 });
       expect(res.json().config.maxBatchSize).toBe(9);
       expect(res.json().requireRestart).toEqual(['multipart.fileSize']);
+      expect(res.json().restartHints).toEqual([{ key: 'multipart.fileSize', label: '单文件上限（MB）', reason: expect.any(String) }]);
+    });
+
+    it('单文件上限未变时不提示重启（扩展名/批量上限即时生效）', async () => {
+      loadConfigMock.mockResolvedValue(baseConfig({ batch: { allowedExtensions: ['md'], maxBatchSize: 20, maxFileSizeMb: 4 } }));
+      saveBatchConfigMock.mockResolvedValue(baseConfig({ batch: { allowedExtensions: ['pdf'], maxBatchSize: 9, maxFileSizeMb: 4 } }));
+      app = await buildApp(adapter);
+      const res = await app.inject({ method: 'PUT', url: '/api/config/batch', headers: jsonHeaders, payload: JSON.stringify({ allowedExtensions: [' PDF '], maxBatchSize: 9, maxFileSizeMb: 4 }) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().requireRestart).toEqual([]);
+      expect(res.json().restartHints).toEqual([]);
     });
 
     it('落盘失败应 500', async () => {
@@ -314,12 +372,23 @@ describe('routes/config.ts 配置路由', () => {
       expect(res.json().config).toEqual({ level: 'info', enableRequestLog: false });
     });
 
-    it('修改 level 时应提示 pino.level 需重启', async () => {
+    it('修改 level 时应提示 logging.level 需重启（不再吐 pino.level 内部名）', async () => {
+      loadConfigMock.mockResolvedValue(baseConfig({ logging: { level: 'info', enableRequestLog: true } }));
       saveLoggingConfigMock.mockResolvedValue(baseConfig({ logging: { level: 'debug', enableRequestLog: true } }));
       app = await buildApp(adapter);
       const res = await app.inject({ method: 'PUT', url: '/api/config/logging', headers: jsonHeaders, payload: JSON.stringify({ level: 'debug' }) });
       expect(res.statusCode).toBe(200);
-      expect(res.json().requireRestart).toEqual(['pino.level']);
+      expect(res.json().requireRestart).toEqual(['logging.level']);
+      expect(res.json().restartHints).toEqual([{ key: 'logging.level', label: '日志级别', reason: expect.any(String) }]);
+    });
+
+    it('level 未变（只回写同值）时不提示重启', async () => {
+      loadConfigMock.mockResolvedValue(baseConfig({ logging: { level: 'warn', enableRequestLog: true } }));
+      saveLoggingConfigMock.mockResolvedValue(baseConfig({ logging: { level: 'warn', enableRequestLog: false } }));
+      app = await buildApp(adapter);
+      const res = await app.inject({ method: 'PUT', url: '/api/config/logging', headers: jsonHeaders, payload: JSON.stringify({ level: 'warn' }) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().requireRestart).toEqual([]);
     });
 
     it('落盘失败应 500', async () => {
@@ -475,12 +544,45 @@ describe('routes/config.ts 配置路由', () => {
 
     it('merge 导入成功应回传统计并透传给 importConfigData', async () => {
       importConfigDataMock.mockResolvedValue({ applied: 3, skipped: 1, failed: 0, details: ['ok'] });
+      // T02467：导入前后各读一次配置，比对出「需重启」字段是否真的被覆盖。
+      // 这里前后只差 vaultPath（需重启），期望响应把它列进 requireRestart + restartHints。
+      loadConfigMock
+        .mockResolvedValueOnce(baseConfig({ vaultPath: 'C:/tmp/vault' }))
+        .mockResolvedValueOnce(baseConfig({ vaultPath: 'D:/new/vault' }));
       app = await buildApp(adapter);
       const res = await app.inject({ method: 'POST', url: '/api/config/import', headers: jsonHeaders, payload: JSON.stringify({ mode: 'merge', data: { budget: { maxSteps: 4, tokenBudget: 1 } } }) });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body).toEqual({ ok: true, mode: 'merge', applied: 3, skipped: 1, failed: 0, details: ['ok'] });
+      expect(body).toEqual({
+        ok: true,
+        mode: 'merge',
+        applied: 3,
+        skipped: 1,
+        failed: 0,
+        details: ['ok'],
+        requireRestart: ['vaultPath'],
+        restartHints: [{ key: 'vaultPath', label: 'Vault 路径', reason: expect.any(String) }],
+      });
       expect(importConfigDataMock).toHaveBeenCalledWith({ budget: { maxSteps: 4, tokenBudget: 1 } }, 'merge');
+    });
+
+    it('导入未触及需重启字段时 requireRestart 为空（不误报「得重启」）', async () => {
+      importConfigDataMock.mockResolvedValue({ applied: 1, skipped: 0, failed: 0, details: [] });
+      loadConfigMock.mockResolvedValue(baseConfig({ budget: { maxSteps: 4, tokenBudget: 1 } }));
+      app = await buildApp(adapter);
+      const res = await app.inject({ method: 'POST', url: '/api/config/import', headers: jsonHeaders, payload: JSON.stringify({ mode: 'merge', data: { budget: { maxSteps: 4 } } }) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().requireRestart).toEqual([]);
+      expect(res.json().restartHints).toEqual([]);
+    });
+
+    it('前后配置都读不到时保守列出全部需重启字段（不静默报「不用重启」）', async () => {
+      importConfigDataMock.mockResolvedValue({ applied: 1, skipped: 0, failed: 0, details: [] });
+      loadConfigMock.mockRejectedValue(new Error('config.json 损坏'));
+      app = await buildApp(adapter);
+      const res = await app.inject({ method: 'POST', url: '/api/config/import', headers: jsonHeaders, payload: JSON.stringify({ mode: 'merge', data: {} }) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().requireRestart).toEqual(expect.arrayContaining(['adapter', 'vaultPath', 'server.port', 'logging.level']));
     });
 
     it('ConfigMigrationError 应返回 400（格式问题而非内部错误）', async () => {
