@@ -91,6 +91,16 @@ const entityOnly = ref(false);
 const DEFAULT_TOP_N = 70;
 const showAllGraph = ref(false);
 const fullCount = ref(0);
+
+// T02464（G2/R-C5）：图谱操作显性化所需状态
+// selectedNode：当前选中节点（点选后驱动顶部「打开页面/找相关页面」按钮可用）
+// displayNodes：当前图谱渲染的节点（id+label），供顶部搜索定位下拉过滤
+// nodeSearchText：搜索框当前值
+// showGraphTour：首次进入的一次性操作提示（localStorage 去重）
+const selectedNode = ref<string | null>(null);
+const displayNodes = ref<Array<{ id: string; label: string }>>([]);
+const nodeSearchText = ref('');
+const showGraphTour = ref(false);
 let lastRaw: GraphData | null = null;
 
 // 6 目录与中文标签映射（复用图例标签，避免重复维护）
@@ -372,6 +382,8 @@ function renderGraph(data: GraphData) {
     return p ? { ...n, x: p.x, y: p.y } : n;
   });
   const edges = buildEdges(data, huge, large);
+  // T02464（G2/R-C5-2）：记录当前渲染节点的 id+label，供顶部搜索定位下拉过滤
+  displayNodes.value = data.nodes.map((p) => ({ id: p, label: shortName(p) }));
   const nodesDS = new DataSet(nodes);
   const edgesDS = new DataSet(edges);
   const options = buildGraphOptions(huge, large);
@@ -437,9 +449,23 @@ function renderGraph(data: GraphData) {
   network.on('click', (params) => {
     if (params.nodes.length > 0) {
       const nodeId = params.nodes[0] as string;
+      // T02464（G2/R-C5-3）：记录选中节点，驱动顶部「打开页面/找相关页面」按钮可用
+      selectedNode.value = nodeId;
       // 不弹菜单，直接打开侧边栏加载推荐
       openRecommendations(nodeId);
+    } else {
+      // 点空白处取消选中
+      selectedNode.value = null;
     }
+  });
+
+  // T02464（G2/R-C5-3）：选中/取消选中节点时同步 selectedNode，使顶部显式按钮正确启用/禁用
+  network.on('selectNode', (params: any) => {
+    const id = params?.nodes?.[0];
+    if (typeof id === 'string') selectedNode.value = id;
+  });
+  network.on('deselectNode', () => {
+    if (network && network.getSelectedNodes().length === 0) selectedNode.value = null;
   });
 }
 
@@ -645,9 +671,52 @@ function openPageInBrowse(pagePath: string) {
   contextMenu.value.visible = false;
 }
 
+// T02464（G2/R-C5-3）：选中节点后顶部「打开页面」按钮
+function openSelectedPage() {
+  if (selectedNode.value) openPageInBrowse(selectedNode.value);
+}
+
+// T02464（G2/R-C5-3）：选中节点后顶部「找相关页面」按钮（= 打开相关推荐侧栏）
+function findRelatedForSelected() {
+  if (selectedNode.value) openRecommendations(selectedNode.value);
+}
+
+// T02464（G2/R-C5-2）：适应画布——将视口缩放/平移至完整内容
+function fitToCanvas() {
+  network?.fit({ animation: true });
+}
+
+// T02464（G2/R-C5-2）：搜索并定位节点——选中并聚焦到指定节点
+function locateNode(id: string) {
+  if (!network || !id) return;
+  selectedNode.value = id;
+  network.selectNodes([id]);
+  try {
+    network.focus(id, { scale: 1.2, animation: true });
+  } catch {
+    // 节点可能不在当前子图，忽略定位异常
+  }
+}
+
+// T02464（G2/R-C5-3）：关闭首次进入的一次性操作提示（localStorage 去重）
+function dismissTour() {
+  showGraphTour.value = false;
+  try {
+    localStorage.setItem('karpathy:graph-tour-dismissed', '1');
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
+}
+
 onMounted(() => {
   checkScreenSize();
   window.addEventListener('resize', handleResize);
+  // T02464（G2/R-C5-3）：首次进入图谱页给一次性操作提示（localStorage 去重）
+  try {
+    if (!localStorage.getItem('karpathy:graph-tour-dismissed')) showGraphTour.value = true;
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
   loadGraph();
 });
 
@@ -672,6 +741,11 @@ function handleResize() {
 function toggleView() {
   listView.value = !listView.value;
   rerenderFromCache();
+}
+
+// T02464（G4/R-C5-4）：视图分段控件——显式切到图谱/列表，已是目标态则不动
+function setView(toList: boolean) {
+  if (listView.value !== toList) toggleView();
 }
 
 // 窗口大小变化时重新绘制
@@ -703,7 +777,12 @@ watch(loading, () => {
             <span class="chip-label">链接</span>
           </span>
         </div>
-        <!-- T00276：类型筛选收窄并移至刷新按钮前（仅图谱视图显示） -->
+        <!-- T02464（G4/R-C5-4）：视图切换用带文字的分段控件（图谱/列表） -->
+        <div class="seg-control" role="group" aria-label="视图切换">
+          <button type="button" :class="{ active: !listView }" @click="setView(false)">图谱</button>
+          <button type="button" :class="{ active: listView }" @click="setView(true)">列表</button>
+        </div>
+        <!-- 类型筛选（仅图谱视图） -->
         <el-select
           v-if="!listView"
           v-model="typeFilter"
@@ -720,7 +799,51 @@ watch(loading, () => {
             :value="opt.value"
           />
         </el-select>
-        <!-- T00276：操作按钮全部图标化 + 悬浮提示；顺序：刷新 → 缺口洞察 → 列表/图谱视图 → 实体子图 -->
+        <!-- T02464（G2/R-C5-2）：搜索并定位节点（仅图谱视图） -->
+        <el-select
+          v-if="!listView"
+          v-model="nodeSearchText"
+          filterable
+          clearable
+          size="small"
+          placeholder="搜索节点并定位"
+          class="graph-search-select"
+          @change="locateNode"
+        >
+          <el-option v-for="n in displayNodes" :key="n.id" :label="n.label" :value="n.id" />
+        </el-select>
+        <!-- T02464（G2/R-C5-3）：选中节点后可用——打开页面 / 找相关页面（仅图谱视图） -->
+        <el-button
+          v-if="!listView"
+          size="small"
+          class="neon-btn"
+          :disabled="!selectedNode"
+          :data-tip="selectedNode ? '在新标签打开该笔记' : '请先在图中选中一个节点'"
+          @click="openSelectedPage"
+        >
+          <el-icon><Document /></el-icon><span class="btn-text">打开页面</span>
+        </el-button>
+        <el-button
+          v-if="!listView"
+          size="small"
+          class="neon-btn"
+          :disabled="!selectedNode"
+          :data-tip="selectedNode ? '查看与该笔记相关但未连接的笔记' : '请先在图中选中一个节点'"
+          @click="findRelatedForSelected"
+        >
+          <el-icon><Link /></el-icon><span class="btn-text">找相关页面</span>
+        </el-button>
+        <!-- T02464（G2/R-C5-2）：适应画布（仅图谱视图） -->
+        <el-button
+          v-if="!listView"
+          size="small"
+          class="neon-btn icon-btn"
+          data-tip="适应画布：缩放至完整图谱"
+          @click="fitToCanvas"
+        >
+          <el-icon><FullScreen /></el-icon>
+        </el-button>
+        <!-- 刷新（图标 + tooltip） -->
         <el-button
           size="small"
           class="neon-btn icon-btn"
@@ -740,27 +863,20 @@ watch(loading, () => {
         >
           <el-icon><Warning /></el-icon>
         </el-button>
-        <!-- 列表视图 / 图谱视图 切换：同一 toggle 按钮，按当前态切换图标与提示 -->
+        <!-- 实体子图：G4 带文字（仅图谱视图） -->
         <el-button
+          v-if="!listView"
           size="small"
-          class="neon-btn icon-btn"
-          :data-tip="listView ? '图谱视图：切换为图形可视化' : '列表视图：按目录分组展示'"
-          @click="toggleView"
-        >
-          <el-icon><component :is="listView ? Share : List" /></el-icon>
-        </el-button>
-        <!-- 实体子图：图标化 + 悬浮提示；节点数≥200 时在提示中附带性能优化说明 -->
-        <el-button
-          size="small"
-          class="neon-btn icon-btn"
+          class="neon-btn"
           :class="{ 'entity-active': entityOnly }"
           :data-tip="entityTip"
           @click="toggleEntityOnly"
         >
-          <el-icon><Connection /></el-icon>
+          <el-icon><Connection /></el-icon><span class="btn-text">实体子图</span>
         </el-button>
         <!-- T02464（G1/R-C5）：Top-N 精简视图 ↔ 全量视图切换；默认精简避免 245 节点毛球 -->
         <el-button
+          v-if="!listView"
           size="small"
           class="neon-btn icon-btn"
           :class="{ 'all-active': showAllGraph }"
@@ -774,6 +890,16 @@ watch(loading, () => {
       <!-- T02464（G1/R-C5）：精简态提示，告知用户当前为 Top-N 而非全量 -->
       <div v-if="!listView && !showAllGraph && fullCount > DEFAULT_TOP_N" class="graph-hint">
         已显示连接度最高的 <b>{{ nodeCount }}</b> 个节点（共 {{ fullCount }} 个）。点击右上角「查看全图」查看全部。
+      </div>
+
+      <!-- T02464（G2/R-C5-3）：首次进入的一次性操作提示（localStorage 去重） -->
+      <div v-if="showGraphTour && !listView" class="graph-tour">
+        <el-icon class="tour-icon"><Aim /></el-icon>
+        <span class="tour-text">
+          <b>图谱操作指引：</b>点击节点可选中并查看相关笔记；选中后用顶部「打开页面 / 找相关页面」操作；
+          右上「搜索节点并定位」可快速跳转，「适应画布」一键归位。
+        </span>
+        <button type="button" class="tour-close" @click="dismissTour" aria-label="知道了">知道了</button>
       </div>
 
       <!-- 小屏提示 -->
@@ -1038,6 +1164,7 @@ watch(loading, () => {
   z-index: 1;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 14px;
 }
@@ -1878,6 +2005,102 @@ watch(loading, () => {
   border: 1px solid var(--accent-cyan-a30);
   padding: 2px 8px;
   border-radius: var(--radius-pill);
+}
+
+/* T02464（G4/R-C5-4）：视图分段控件——显式切图谱/列表 */
+.seg-control {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 3px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-purple-a30);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  transition: all 0.25s ease;
+}
+
+.seg-control button {
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  padding: 4px 14px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  letter-spacing: 0.05em;
+}
+
+.seg-control button:hover:not(.active) {
+  color: var(--neon-cyan);
+}
+
+.seg-control button.active {
+  background: var(--grad-cool, var(--accent-purple-a40));
+  color: #fff;
+  box-shadow: var(--glow-cyan);
+}
+
+/* T02464（G2/R-C5-3）：按钮内图标与文字的间距（仅带文字的按钮生效） */
+.graph-head .neon-btn .btn-text {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+/* T02464（G2/R-C5-2）：搜索并定位节点下拉——留出足够宽度便于过滤长路径名 */
+.graph-head .graph-search-select {
+  width: 220px;
+  flex-shrink: 0;
+}
+
+/* T02464（G2/R-C5-3）：首次进入的一次性操作提示横幅 */
+.graph-tour {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 2px 0;
+  padding: 10px 16px;
+  background: linear-gradient(90deg, var(--accent-cyan-a12), var(--accent-purple-a10));
+  border: 1px solid var(--accent-cyan-a30);
+  border-radius: var(--radius-input);
+  font-size: 12px;
+  color: var(--text-base);
+  line-height: 1.5;
+}
+
+.tour-icon {
+  font-size: 16px;
+  color: var(--neon-cyan);
+  flex-shrink: 0;
+}
+
+.tour-text {
+  flex: 1;
+}
+
+.tour-text b {
+  color: var(--neon-cyan);
+}
+
+.tour-close {
+  flex-shrink: 0;
+  border: 1px solid var(--accent-purple-a30);
+  background: transparent;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tour-close:hover {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  box-shadow: var(--glow-cyan);
 }
 
 /* 窄屏适配：面板占满宽度 */
