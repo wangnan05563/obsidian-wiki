@@ -820,6 +820,10 @@ export interface LoginResponse {
   token?: string;
   user?: UserInfo;
   message?: string;
+  // T02453（PRD A1）：生产环境首登强制改密标记（localOnly 调试模式恒 false）
+  mustChangePassword?: boolean;
+  // 是否本地调试部署（控制登录页默认账户提示的显隐）
+  localOnly?: boolean;
 }
 
 // 用户信息（脱敏后，不含 passwordHash/salt）
@@ -828,6 +832,8 @@ export interface UserInfo {
   username: string;
   role: AuthRole;
   enabled: boolean;
+  // T02453（PRD A1）：首登强制改密标记（login/me 同口径返回，localOnly 恒 false）
+  mustChangePassword?: boolean;
   createdAt: string;
   updatedAt: string;
   lastLoginAt?: string;

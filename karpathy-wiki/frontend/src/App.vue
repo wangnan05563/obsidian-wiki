@@ -29,6 +29,7 @@ import { useIsMobile } from './composables/useIsMobile';
 import { useHashView } from './composables/useHashView';
 import GuideOverlay from './components/GuideOverlay.vue';
 import GuideButton from './components/GuideButton.vue';
+import ForceChangePassword from './components/ForceChangePassword.vue';
 import { useGuideStore } from './stores/guide';
 import { menuItems, menuGroupDefs, groupMenuItems, type ViewName } from './config/menu';
 
@@ -386,6 +387,9 @@ onBeforeUnmount(() => {
   </template>
   </div>
 
+  <!-- T02453（PRD A1）：首登强制改密对话框。根级渲染覆盖移动/桌面两端；
+       生产环境 login/me 返回 mustChangePassword=true 时挂载，改密成功后由 store 清除标记自动卸载 -->
+  <ForceChangePassword v-if="authStore.user?.mustChangePassword" @changed="authStore.clearMustChangePassword" />
 </template>
 
 <style scoped>

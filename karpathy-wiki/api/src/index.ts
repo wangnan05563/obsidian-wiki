@@ -534,7 +534,7 @@ registerDataCleanRoute(app, vault, isolationGuards);
 
   // 必须在路由注册前调用，否则已注册的路由不会经过认证中间件
   if (config.auth) {
-    await initAuthModule(config.auth, config.vaultPath);
+    await initAuthModule(config.auth, config.vaultPath, config.localOnly);
     registerAuthRoute(app);
     console.log(`[auth] 权限控制：${config.auth.enabled ? '启用' : '禁用'}`);
   } else {

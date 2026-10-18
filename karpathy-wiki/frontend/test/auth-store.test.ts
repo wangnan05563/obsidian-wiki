@@ -76,7 +76,8 @@ describe('auth store', () => {
       const ok = await store.login({ username: 'admin', password: 'admin123' });
       expect(ok).toBe(true);
       expect(store.token).toBe('test-token');
-      expect(store.user).toEqual(mockUser);
+      // T02453：login 合并响应顶层的 mustChangePassword 标记（缺省 false），故 user 恒带该布尔字段
+      expect(store.user).toEqual({ ...mockUser, mustChangePassword: false });
       expect(store.isLoggedIn).toBe(true);
       // 验证 saveToken 用正确的 key 写入 localStorage
       expect(localStorage.getItem('authToken')).toBe('test-token');
