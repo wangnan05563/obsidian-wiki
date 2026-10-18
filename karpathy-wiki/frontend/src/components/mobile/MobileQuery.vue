@@ -502,7 +502,7 @@ async function sendQuestion(question: string, convId: string, clarify?: { clarif
   // 会话已失效（auth/me 返回 401 触发自动登出）时，直接提示重新登录/配置，
   // 避免继续打 /api/query 拿到 401/404 等晦涩错误（移动端「会话失效 → 点击发送」的典型崩溃路径）。
   if (!authStore.isLoggedIn) {
-    ElMessage.warning('会话已失效，请先登录并在「配置 → AI 服务」填写 API 配置后再提问');
+    ElMessage.warning('会话已失效，请先登录并在「配置中心 → AI 服务」填写 API 配置后再提问');
     activeAbort = null;
     return;
   }
@@ -590,7 +590,7 @@ async function sendQuestion(question: string, convId: string, clarify?: { clarif
     store.getSessionWriter(convId).handleError((err as Error).message);
     // FR-22 BYOK 400：缺配置是确定性错误，以 error 级呈现配置引导（不回落、重试无意义）
     const errMsg = (err as Error).message;
-    if (errMsg.includes('配置 → AI 服务')) {
+    if (errMsg.includes('配置中心 → AI 服务')) {
       ElMessage.error(errMsg);
     } else {
       ElMessage.warning(errMsg);

@@ -180,7 +180,7 @@ export function registerQueryRoute(
     const llmOverride = body.llmConfig;
     if (!isByokConfigValid(llmOverride)) {
       return void reply.code(400).send({
-        error: '请先在「配置 → AI 服务」中填写完整且有效的 API 配置（provider / baseUrl / model / API Key）。本应用不为用户共用服务端密钥，各用户的额度与限流相互独立。',
+        error: '请先在「配置中心 → AI 服务」中填写完整且有效的 API 配置（provider / baseUrl / model / API Key）。本应用不为用户共用服务端密钥，各用户的额度与限流相互独立。',
       });
     }
 

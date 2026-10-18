@@ -148,6 +148,27 @@ defineProps<{
       <path d="M12 9.4 L12 19" />
       <path d="M8.8 19 L15.2 19" stroke-width="1.8" />
     </template>
+
+    <!-- 用户管理：双人像（T02451 N7：原复用 about 图标，与「关于」视觉重复） -->
+    <template v-else-if="name === 'users'">
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M2.5 20.5 a6.5 6.5 0 0 1 13 0" />
+      <circle cx="17.3" cy="9.2" r="2.5" />
+      <path d="M16.2 14.8 a5 5 0 0 1 6 5.7" />
+    </template>
+
+    <!-- 技能管理：魔法杖 + 星尖（T02451 N7：原复用 config 图标，与「配置中心」视觉重复） -->
+    <template v-else-if="name === 'skill'">
+      <path d="M4 20 L13 11" />
+      <path d="M14 3 L16.6 8 L21.6 10.6 L16.6 13.2 L14 18.2 L11.4 13.2 L6.4 10.6 L11.4 8 Z" />
+      <path d="M18.5 16.8 L18.5 19" />
+    </template>
+
+    <!-- 数据清洗：漏斗（T02451 N7：原复用 cleanup 扫帚，与「系统清理」视觉重复） -->
+    <template v-else-if="name === 'dataclean'">
+      <path d="M3.5 4.5 L20.5 4.5 L14 12 L14 18.5 L10 20.5 L10 12 Z" />
+      <path d="M8 8.5 L16 8.5" />
+    </template>
   </svg>
 </template>
 

@@ -431,13 +431,13 @@ async function submitVideoTask() {
   videoTaskId.value = '';
 
   // 视频 BYOK：用户已配置个人视频服务则透传（model/key/尺寸/时长），否则后端回退服务端共享配置。
-  // 为什么每次读取不缓存：取最新配置，用户改完「配置 → 生图视频服务」后下次生成即生效。
+  // 为什么每次读取不缓存：取最新配置，用户改完「配置中心 → 生图视频服务」后下次生成即生效。
   const uid = authStore.user?.id || 'guest';
   const mediaCfg = await loadMediaUserConfig(uid);
   const videoConfig = mediaCfg.video.apiKey ? mediaCfg.video : undefined;
   if (!videoConfig && !mediaVideoHintShown) {
     mediaVideoHintShown = true;
-    ElMessage.warning('当前未配置个人视频服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置 → 生图视频服务」配置你自己的视频服务以获得更稳定的体验。');
+    ElMessage.warning('当前未配置个人视频服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置中心 → 生图视频服务」配置你自己的视频服务以获得更稳定的体验。');
   }
 
   try {
@@ -724,7 +724,7 @@ async function buildQueryBody(
     sharedAiHintShown = true;
     ElMessage.warning(
       '当前将使用管理员「共享AI」配置（共享用户较多，可能排队或调用异常）。' +
-        '建议在「配置 → AI 服务配置」配置你自己的专属 AI 服务，以获得更稳定、低延迟的体验。',
+        '建议在「配置中心 → AI 服务」配置你自己的专属 AI 服务，以获得更稳定、低延迟的体验。',
     );
   }
   if (searchCfg?.apiKey) {
@@ -745,7 +745,7 @@ async function buildQueryBody(
       body.imageConfig = mediaCfg.image;
     } else if (!mediaImageHintShown) {
       mediaImageHintShown = true;
-      ElMessage.warning('当前未配置个人生图服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置 → 生图视频服务」配置你自己的生图服务。');
+      ElMessage.warning('当前未配置个人生图服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置中心 → 生图视频服务」配置你自己的生图服务。');
     }
   }
   return body;
@@ -823,7 +823,7 @@ async function sendQuestion(question: string, clarify?: { clarifyId: string; cho
       // FR-22 BYOK 400：缺密钥/配置无效是确定性错误，重试无意义——按 CODING-BYOK 呈现
       // 配置引导（error 级别）而非普通失败提示，且不回落服务端密钥。错误消息随
       // handleError 落入消息体（含完整指引原文），用户配置好后可直接点消息下方"重试"。
-      if (msg.includes('配置 → AI 服务')) {
+      if (msg.includes('配置中心 → AI 服务')) {
         ElMessage.error(msg);
       } else {
         ElMessage.warning(apiErrorMessage('问答失败', err));
@@ -1509,7 +1509,7 @@ onBeforeUnmount(() => {
               <!-- FR-22 失败重试入口：请求失败（网络/超时/5xx）的消息常驻"重试"按钮。
                    为什么常驻而非 hover：失败态的唯一恢复动作是用户手动重试（不做后台自动重试），
                    必须一眼可见；与超时重发共用 resendFromUserQuestion（丢弃失败答案+原问题重发）。
-                   BYOK 400 的错误文案已含「配置 → AI 服务」指引，改完配置回来直接点重试。 -->
+                   BYOK 400 的错误文案已含「配置中心 → AI 服务」指引，改完配置回来直接点重试。 -->
               <div
                 v-if="msg.role === 'assistant' && msg.status === 'error'"
                 class="timeout-resend"
