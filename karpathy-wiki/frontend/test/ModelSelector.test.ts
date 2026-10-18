@@ -32,6 +32,7 @@ const hoist = vi.hoisted(() => ({
     selectedPresetKey: undefined as ReturnType<typeof ref<string>> | undefined,
     presetsRef: undefined as ReturnType<typeof ref<LlmPreset[]>> | undefined,
     loadError: undefined as ReturnType<typeof ref<string>> | undefined,
+    apiKeySet: undefined as ReturnType<typeof ref<boolean>> | undefined,
   },
 }));
 
@@ -39,15 +40,18 @@ vi.mock('../src/stores/model', () => {
   const selectedPresetKey = ref('openai');
   const presetsRef = ref<LlmPreset[]>(hoist.presets);
   const loadError = ref('');
+  const apiKeySet = ref(false);
   // 暴露给测试用例，便于按场景变更
   hoist.holder.selectedPresetKey = selectedPresetKey;
   hoist.holder.presetsRef = presetsRef;
   hoist.holder.loadError = loadError;
+  hoist.holder.apiKeySet = apiKeySet;
   return {
     useModelStore: () => reactive({
       selectedPresetKey,
       presets: presetsRef,
       loadError,
+      apiKeySet,
       // 展开面板后渲染「服务商真实模型」分组所需的字段（先前下拉框修复新增），
       // 缺失会导致 store.availableModels 为 undefined、渲染 340 行 .length 时崩溃。
       availableModels: [] as { id: string }[],
@@ -91,6 +95,25 @@ describe('ModelSelector 显示规范', () => {
     if (hoist.holder.selectedPresetKey) hoist.holder.selectedPresetKey.value = 'openai';
     if (hoist.holder.presetsRef) hoist.holder.presetsRef.value = hoist.presets;
     if (hoist.holder.loadError) hoist.holder.loadError.value = '';
+    if (hoist.holder.apiKeySet) hoist.holder.apiKeySet.value = false;
+  });
+
+  it('T02463(Q9)：未配置个人模型时触发器常驻显示来源「共享」', () => {
+    if (hoist.holder.apiKeySet) hoist.holder.apiKeySet.value = false;
+    const wrapper = mount(ModelSelector);
+    const source = wrapper.find('.ms-source');
+    expect(source.exists()).toBe(true);
+    expect(source.text()).toBe('共享');
+    expect(source.classes()).toContain('shared');
+  });
+
+  it('T02463(Q9)：已配置个人 BYOK 时触发器常驻显示来源「个人」', () => {
+    if (hoist.holder.apiKeySet) hoist.holder.apiKeySet.value = true;
+    const wrapper = mount(ModelSelector);
+    const source = wrapper.find('.ms-source');
+    expect(source.exists()).toBe(true);
+    expect(source.text()).toBe('个人');
+    expect(source.classes()).toContain('personal');
   });
 
   it('收起态触发器仅显示模型名称，不含厂商', () => {

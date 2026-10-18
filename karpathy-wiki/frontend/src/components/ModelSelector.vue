@@ -74,6 +74,13 @@ function itemProvider(preset: LlmPreset): string {
   return preset.label;
 }
 
+// T02463（Q9/R-C3-3）：当前模型来源——用户已配置个人 BYOK(API Key) 为「个人」，
+// 否则实际走管理员「共享 AI」(apiKeySet 由服务端 /api/ai/config 返回)。用于触发器常驻展示来源。
+const modelSourceType = computed<'personal' | 'shared'>(() =>
+  store.apiKeySet ? 'personal' : 'shared',
+);
+const modelSourceLabel = computed(() => (store.apiKeySet ? '个人' : '共享'));
+
 onMounted(async () => {
   try {
     await store.loadPresets();
@@ -291,6 +298,7 @@ async function onKeydown(e: KeyboardEvent) {
       @keydown="onKeydown"
     >
       <span class="ms-label">{{ collapsedLabel }}</span>
+      <span class="ms-source" :class="modelSourceType" :title="modelSourceType === 'personal' ? '你个人配置的模型（BYOK）' : '管理员共享 AI（未配置个人模型时生效）'">{{ modelSourceLabel }}</span>
       <svg class="ms-caret" viewBox="0 0 1024 1024" width="10" height="10" aria-hidden="true">
         <path fill="currentColor" d="M512 704 144 336a32 32 0 0 1 45.3-45.3L512 613.3 834.7 290.7A32 32 0 0 1 880 336z" />
       </svg>
@@ -391,6 +399,26 @@ async function onKeydown(e: KeyboardEvent) {
 }
 .model-selector-trigger.open .ms-caret {
   transform: rotate(180deg);
+}
+/* T02463（Q9）：触发器常驻来源徽标（个人/共享） */
+.ms-source {
+  flex: none;
+  margin-left: 2px;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 15px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.ms-source.personal {
+  color: var(--neon-cyan, #00f5ff);
+  border-color: var(--neon-cyan, #00f5ff);
+  background: rgba(0, 245, 255, 0.08);
+}
+.ms-source.shared {
+  color: var(--text-soft, #888);
+  border-color: var(--border-soft, #444);
+  background: rgba(128, 128, 128, 0.08);
 }
 
 .model-selector-panel {

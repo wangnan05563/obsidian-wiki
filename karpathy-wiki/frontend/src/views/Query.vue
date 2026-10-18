@@ -1620,6 +1620,11 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <!-- T02463（Q9/R-C3-3）：输入条上方常驻当前模型名与来源（个人/共享），可点击切换，与编译进度页一致 -->
+      <div class="input-model-context">
+        <ModelSelector />
+      </div>
+
       <!-- 输入区：单行 textarea + 按钮行同行，缩小垂直间距
            输入框偏好（按用户隔离）通过 CSS 变量与 class 注入：字体大小 / 主题 / 紧凑模式 -->
       <div
@@ -1712,7 +1717,6 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div class="right-buttons">
-            <ModelSelector />
             <el-button
               v-if="!store.isLoading"
               type="primary"
@@ -2474,6 +2478,15 @@ onBeforeUnmount(() => {
 .edit-btn.cancel:hover {
   color: var(--neon-cyan, #00f5ff);
   border-color: var(--neon-cyan, #00f5ff);
+}
+
+/* T02463（Q9）：输入条上方常驻模型上下文——左对齐、轻量，与输入区同宽居中 */
+.input-model-context {
+  margin: 8px auto 0;
+  max-width: 820px;
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
 }
 
 /* 输入区：居中显示 + 主题适配浅色背景 + 毛玻璃
