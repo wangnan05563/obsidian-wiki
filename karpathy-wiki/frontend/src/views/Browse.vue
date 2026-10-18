@@ -1619,6 +1619,16 @@ onMounted(async () => {
     // 以文件名为 Tab 标题；jumpPath 来自 RefsList/知识抽取跳转，可能含扩展名
     await openTab(jumpPath, jumpPath.split('/').pop()?.replace(/\.md$/i, '') || '文档');
   }
+  // T02457（PRD B4）：仪表盘统计卡跳转指令（实体页/概念页 → 类型过滤），一次性消费。
+  // typeFilter 变化不触发 @change，故显式调用 handleFilterChange() 走与手选过滤同一条搜索链路
+  const browseType = sessionStorage.getItem('karpathy:browseType');
+  if (browseType) {
+    sessionStorage.removeItem('karpathy:browseType');
+    if (browseType === 'entity' || browseType === 'concept') {
+      typeFilter.value = browseType;
+      handleFilterChange();
+    }
+  }
 });
 </script>
 

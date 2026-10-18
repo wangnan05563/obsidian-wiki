@@ -6,6 +6,7 @@ import { Aim, Connection, CaretTop, Star, Clock } from '@element-plus/icons-vue'
 import NavIcons from '../components/NavIcons.vue';
 import type { StatsData, RunSummary } from '../types';
 import { useCompileStore } from '../stores/compile';
+import { dirBarWidth } from '../utils/dirBar';
 
 // 使用函数类型写法替代类型字面量（S6598）
 const emit = defineEmits<(e: 'navigate', view: 'ingest' | 'browse' | 'query' | 'health' | 'progress' | 'graph' | 'help') => void>();
@@ -33,6 +34,29 @@ const STATUS_LABELS: Record<RunSummary['status'], string> = {
 };
 
 const hasContent = computed(() => (stats.value?.totalPages ?? 0) > 0);
+
+// T02457（PRD B1，P0）：分布条宽度 = 占组内最大值比例（原 Math.min(100, count*10) 与
+// 最大值无关，导致 166 与 44 都顶满、小类被夸大的比例失真——视觉编码必须反映真实占比）
+const dirMax = computed(() => {
+  const counts = stats.value?.dirCounts;
+  if (!counts) return 0;
+  return Math.max(0, ...Object.values(counts));
+});
+function barWidth(count: number): number {
+  return dirBarWidth(count, dirMax.value);
+}
+
+// T02457（PRD B4）：统计卡「假可点」修复——实体页/概念页卡接入真实跳转
+// （浏览页 + 类型过滤，经 sessionStorage 传指令，复用 jumpPath 既有模式）；
+// 无明确过滤目标的总页面数/双向链接卡不再声称可点（CSS 默认光标已改）
+function gotoBrowseType(type: 'entity' | 'concept') {
+  try {
+    sessionStorage.setItem('karpathy:browseType', type);
+  } catch {
+    // 隐私模式写入失败：退化为无过滤的浏览页跳转
+  }
+  globalThis.dispatchEvent(new CustomEvent('karpathy:navigate', { detail: 'browse' }));
+}
 
 async function loadStats() {
   loading.value = true;
@@ -119,16 +143,28 @@ onMounted(() => {
         v-for="(card, idx) in [
           { icon: markRaw(Aim), num: stats?.totalPages ?? 0, label: '总页面数', grad: 'grad-fire' },
           { icon: markRaw(Connection), num: stats?.totalLinks ?? 0, label: '双向链接', grad: 'grad-cool' },
-          { icon: markRaw(CaretTop), num: stats?.dirCounts?.entities ?? 0, label: '实体页', grad: 'grad-neon' },
-          { icon: markRaw(Star), num: stats?.dirCounts?.concepts ?? 0, label: '概念页', grad: 'grad-aurora' },
+          { icon: markRaw(CaretTop), num: stats?.dirCounts?.entities ?? 0, label: '实体页', grad: 'grad-neon', type: 'entity' },
+          { icon: markRaw(Star), num: stats?.dirCounts?.concepts ?? 0, label: '概念页', grad: 'grad-aurora', type: 'concept' },
         ]"
         :key="idx"
         class="glass-card stat-card hover-3d fade-up"
+        :class="{ 'stat-card--clickable': card.type }"
         :style="{ animationDelay: (idx * 0.1) + 's' }"
+        :role="card.type ? 'button' : undefined"
+        :tabindex="card.type ? 0 : undefined"
+        :title="card.type ? `查看${card.label}（带类型过滤）` : undefined"
+        @click="card.type && gotoBrowseType(card.type as 'entity' | 'concept')"
+        @keydown.enter="card.type && gotoBrowseType(card.type as 'entity' | 'concept')"
       >
         <div class="stat-icon" :class="card.grad"><el-icon><component :is="card.icon" /></el-icon></div>
-      <div class="stat-num grad-text">{{ card.num }}</div>
-      <div class="stat-label">{{ card.label }}</div>
+        <!-- T02457（B3）：统计未返回时骨架屏占位，消除「先 0 后跳变」的误导 -->
+        <el-skeleton v-if="!stats" animated class="stat-num-skeleton">
+          <template #template>
+            <el-skeleton-item variant="text" style="width: 56px; height: 30px; margin: 0 auto;" />
+          </template>
+        </el-skeleton>
+        <div v-else class="stat-num grad-text">{{ card.num }}</div>
+        <div class="stat-label">{{ card.label }}</div>
       </div>
     </div>
 
@@ -142,15 +178,18 @@ onMounted(() => {
           <div v-for="(count, dir) in stats.dirCounts" :key="dir" class="dir-item">
             <span class="dir-label">{{ DIR_LABELS[dir] || dir }}</span>
             <div class="dir-bar-bg">
+              <!-- T02457（B1）：宽度改为占组内最大值比例，修复 count*10 顶格失真 -->
               <div
                 class="dir-bar-fill"
-                :style="{ width: Math.min(100, count * 10) + '%' }"
+                :style="{ width: barWidth(count) + '%' }"
               ></div>
             </div>
             <span class="dir-count">{{ count }}</span>
           </div>
         </div>
-      <div v-else class="section-loading">LOADING...</div>
+        <!-- T02457（B3）：加载中用骨架屏替代硬编码英文 LOADING...；失败给中文反馈 -->
+        <el-skeleton v-else-if="loading" :rows="4" animated class="dir-skeleton" />
+        <div v-else class="section-loading">统计加载失败，请刷新重试</div>
       </div>
       <div class="glass-card section-card hover-glow fade-up" style="animation-delay: 0.4s">
         <h3 class="section-title">
@@ -316,7 +355,23 @@ onMounted(() => {
 .stat-card {
   padding: 24px 20px;
   text-align: center;
+  /* T02457（B4）：默认不可点；仅实体页/概念页卡（有真实跳转）经修饰类恢复 pointer */
+  cursor: default;
+}
+
+.stat-card--clickable {
   cursor: pointer;
+}
+
+/* T02457（B3）：统计卡数字骨架屏 */
+.stat-num-skeleton {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0 6px;
+}
+
+.dir-skeleton {
+  padding: 10px 4px;
 }
 
 .stat-icon {
