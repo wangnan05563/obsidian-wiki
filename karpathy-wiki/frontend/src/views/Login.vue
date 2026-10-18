@@ -21,6 +21,9 @@ const password = ref('');
 const loading = ref(false);
 const errorMsg = ref('');
 
+// T02454（PRD A3）：密码可见性切换，与配置中心/内网穿透的密钥框体验对齐
+const showPassword = ref(false);
+
 // T02453（PRD A1）：默认账户提示仅在 localOnly 调试模式显示（GET /api/auth/bootstrap 门控），
 // 生产环境彻底隐藏默认口令，杜绝「guest/guest123」明文暴露带来的未授权访问风险
 const showDefaultHint = ref(false);
@@ -113,16 +116,40 @@ function handleKeydown(e: KeyboardEvent) {
 
         <div class="form-field">
           <label class="form-label" for="login-password">密码</label>
-          <input
-            id="login-password"
-            v-model="password"
-            type="password"
-            class="form-input"
-            placeholder="请输入密码"
-            :disabled="loading"
-            @keydown="handleKeydown"
-          />
+          <div class="pwd-wrap">
+            <input
+              id="login-password"
+              v-model="password"
+              :type="showPassword ? 'text' : 'password'"
+              class="form-input pwd-input"
+              placeholder="请输入密码"
+              :disabled="loading"
+              @keydown="handleKeydown"
+            />
+            <!-- T02454（PRD A3）：密码可见性切换，与凭据输入基线（配置中心/内网穿透）对齐 -->
+            <button
+              type="button"
+              class="pwd-toggle"
+              :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+              :aria-pressed="showPassword"
+              :disabled="loading"
+              @click="showPassword = !showPassword"
+            >
+              <svg v-if="!showPassword" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+                <path d="M3 3 L21 21" />
+              </svg>
+            </button>
+          </div>
         </div>
+
+        <!-- T02454（PRD A2）：无自助找回通道，明示「联系管理员」路径，避免断头路 -->
+        <div class="login-forgot">忘记密码？请联系管理员在「用户管理」中重置</div>
 
         <div v-if="errorMsg" class="login-error">{{ errorMsg }}</div>
 
@@ -329,6 +356,48 @@ function handleKeydown(e: KeyboardEvent) {
   background: var(--accent-cyan-a08, rgba(0, 245, 255, 0.08));
   border-radius: 4px;
   color: var(--neon-cyan);
+}
+
+/* T02454（A3）：密码可见性切换容器与按钮（与配置中心密钥框体验对齐） */
+.pwd-wrap {
+  position: relative;
+}
+
+.pwd-input {
+  padding-right: 40px;
+}
+
+.pwd-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-soft);
+  border-radius: var(--radius-btn, 8px);
+  transition: color 0.2s ease;
+}
+
+.pwd-toggle:hover:not(:disabled) {
+  color: var(--neon-cyan);
+}
+
+.pwd-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* T02454（A2）：忘记密码指引——无自助找回，明示联系管理员路径 */
+.login-forgot {
+  margin-top: -4px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-soft);
 }
 
 .login-switch {

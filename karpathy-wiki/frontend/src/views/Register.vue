@@ -17,6 +17,10 @@ const loading = ref(false);
 const errorMsg = ref('');
 const fieldError = ref('');
 
+// T02454（PRD A3）：密码/确认密码各自独立切换可见性，与登录页及凭据输入基线对齐
+const showPassword = ref(false);
+const showConfirm = ref(false);
+
 // 浅色主题清单：与 useTheme.ts 中的视觉分类保持一致
 const lightThemes = ['macaron', 'ecommerce'];
 const bgImage = computed(() => {
@@ -112,28 +116,70 @@ function handleKeydown(e: KeyboardEvent) {
 
         <div class="form-field">
           <label class="form-label" for="reg-password">密码</label>
-          <input
-            id="reg-password"
-            v-model="password"
-            type="password"
-            class="form-input"
-            placeholder="8-64 位"
-            :disabled="loading"
-            @keydown="handleKeydown"
-          />
+          <div class="pwd-wrap">
+            <input
+              id="reg-password"
+              v-model="password"
+              :type="showPassword ? 'text' : 'password'"
+              class="form-input pwd-input"
+              placeholder="8-64 位"
+              :disabled="loading"
+              @keydown="handleKeydown"
+            />
+            <!-- T02454（PRD A3）：密码可见性切换 -->
+            <button
+              type="button"
+              class="pwd-toggle"
+              :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+              :aria-pressed="showPassword"
+              :disabled="loading"
+              @click="showPassword = !showPassword"
+            >
+              <svg v-if="!showPassword" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+                <path d="M3 3 L21 21" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="form-field">
           <label class="form-label" for="reg-confirm">确认密码</label>
-          <input
-            id="reg-confirm"
-            v-model="confirmPassword"
-            type="password"
-            class="form-input"
-            placeholder="再次输入密码"
-            :disabled="loading"
-            @keydown="handleKeydown"
-          />
+          <div class="pwd-wrap">
+            <input
+              id="reg-confirm"
+              v-model="confirmPassword"
+              :type="showConfirm ? 'text' : 'password'"
+              class="form-input pwd-input"
+              placeholder="再次输入密码"
+              :disabled="loading"
+              @keydown="handleKeydown"
+            />
+            <!-- T02454（PRD A3）：确认密码可见性切换（独立于密码字段） -->
+            <button
+              type="button"
+              class="pwd-toggle"
+              :aria-label="showConfirm ? '隐藏确认密码' : '显示确认密码'"
+              :aria-pressed="showConfirm"
+              :disabled="loading"
+              @click="showConfirm = !showConfirm"
+            >
+              <svg v-if="!showConfirm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+                <path d="M3 3 L21 21" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div v-if="fieldError" class="login-error">{{ fieldError }}</div>
@@ -264,6 +310,40 @@ function handleKeydown(e: KeyboardEvent) {
 
 .form-input:disabled {
   opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* T02454（A3）：密码可见性切换容器与按钮（与 Login.vue 及凭据输入基线对齐） */
+.pwd-wrap {
+  position: relative;
+}
+
+.pwd-input {
+  padding-right: 40px;
+}
+
+.pwd-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-soft);
+  border-radius: var(--radius-btn, 8px);
+  transition: color 0.2s ease;
+}
+
+.pwd-toggle:hover:not(:disabled) {
+  color: var(--neon-cyan);
+}
+
+.pwd-toggle:disabled {
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
