@@ -142,7 +142,9 @@ function handleJumpVault() {
 // Ingest.vue 抽取完成后跳Browse 草稿审核也复用此通道
 function handleNavigateEvent(e: Event) {
   const detail = (e as CustomEvent<string>).detail;
-  if (detail === 'help' || detail === 'about' || detail === 'users' || detail === 'browse') {
+  // T02455：白名单由 4 项扩为全部菜单 key（复用 hash 路由的 validViewKeys 集合），
+  // 使帮助文档等任意来源均可经 karpathy:navigate 直达任意视图（如「配置中心 → AI 服务」按钮）
+  if (typeof detail === 'string' && validViewKeys.has(detail)) {
     go(detail as ViewName);
   }
 }
