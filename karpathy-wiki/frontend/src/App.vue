@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import RobotAvatar from './components/RobotAvatar.vue';
 import NavIcons from './components/NavIcons.vue';
 import FloatingChat from './components/FloatingChat.vue';
@@ -24,15 +24,13 @@ import { useCompileStore } from './stores/compile';
 import { useAuthStore } from './stores/auth';
 import { usePermission } from './composables/usePermission';
 import { STORAGE_KEYS } from './constants/storageKeys';
-import type { AuthPermission } from './types';
 import MobileShell from './components/mobile/MobileShell.vue';
 import { useIsMobile } from './composables/useIsMobile';
 import { useHashView } from './composables/useHashView';
 import GuideOverlay from './components/GuideOverlay.vue';
 import GuideButton from './components/GuideButton.vue';
 import { useGuideStore } from './stores/guide';
-
-type ViewName = 'dashboard' | 'ingest' | 'progress' | 'browse' | 'query' | 'graph' | 'health' | 'config' | 'tunnel' | 'cleanup' | 'about' | 'help' | 'users' | 'skill' | 'dataclean';
+import { menuItems, menuGroupDefs, groupMenuItems, type ViewName } from './config/menu';
 
 const store = useCompileStore();
 const authStore = useAuthStore();
@@ -48,35 +46,43 @@ const { isMobile } = useIsMobile();
 // 注册成功后 authStore 自动写入 token + user，isLoggedIn 变 true，自动进入主应用
 const authMode = ref<'login' | 'register'>('login');
 
-// 菜单项配置：key 对应 ViewName，icon 对应 NavIcons 组件 name，label 为显示文
-// 抽取为常量避template 中两处（展开/折叠）重复硬编码
-// 新增 users 菜单：仅管理员可见（通过 filterVisibleMenus 过滤
-const menuItems: Array<{ key: ViewName; icon: string; label: string; permission: AuthPermission }> = [
-  { key: 'dashboard', icon: 'dashboard', label: '仪表盘', permission: 'dashboard' },
-  { key: 'ingest', icon: 'ingest', label: '投递资料', permission: 'ingest' },
-  { key: 'progress', icon: 'progress', label: '编译进度', permission: 'progress' },
-  { key: 'browse', icon: 'browse', label: '知识浏览', permission: 'browse' },
-  { key: 'query', icon: 'query', label: '知识问答', permission: 'query' },
-  { key: 'graph', icon: 'graph', label: '知识图谱', permission: 'graph' },
-  { key: 'health', icon: 'health', label: '体检中心', permission: 'health' },
-  // 配置菜单向所有登录用户开放：其中的「朗读设置」「界面主题」为个人偏好（按用户隔离、本地存储），
-  // 所有用户都可查看/修改；SCHEMA/系统配置/AI 服务/工具/MCP/Prompt 等敏感配置在 Config.vue 内
-  // 通过 isAdmin 二次拦截，仅管理员可见可改。菜单可见性用全员都有的 'dashboard' 权限承载。
-  { key: 'config', icon: 'config', label: '配置中心', permission: 'dashboard' },
-  { key: 'tunnel', icon: 'tunnel', label: '内网穿透', permission: 'tunnel' },
-  { key: 'cleanup', icon: 'cleanup', label: '系统清理', permission: 'cleanup' },
-  { key: 'users', icon: 'about', label: '用户管理', permission: 'users' },
-  { key: 'skill', icon: 'config', label: '技能管理', permission: 'skill' },
-  { key: 'help', icon: 'help', label: '帮助文档', permission: 'help' },
-  { key: 'dataclean', icon: 'cleanup', label: '数据清洗', permission: 'cleanup' },
-  { key: 'about', icon: 'about', label: '关于', permission: 'about' },
-];
+// 菜单项配置已移至 config/menu.ts（T02449：分组 + 清理类相邻 + 可单测），此处仅导入
 
-// 基于权限过滤后的可见菜单（响应式
+// 基于权限过滤后的可见菜单（响应式）
 // 为什computed：权限变更（登录/登出/角色切换）时自动更新
 const visibleMenuItems = computed(() => {
   return filterVisibleMenus(menuItems);
 });
+
+// T02449（PRD N1）：按 知识/生产/运维/系统 四组渲染（组内频率序，清理类相邻）
+// 先经 filterVisibleMenus 权限过滤再分组：无权限的组整体消失，不会留空分组标题
+const groupedMenus = computed(() => groupMenuItems(filterVisibleMenus(menuItems), menuGroupDefs));
+
+// T02449（PRD N2）：菜单溢出感知——容器装不下时显示「↓ 还有 N 项」提示，点击平滑下滚
+// 为什么需要：实测 1440x900 视口仅容纳 9/15 项，尾部项（数据清洗等）需滚动才能点到，
+// 且未滚动时直接点击会失败（元素不在可视交互区）；提示条 + 渐隐让「还有更多」可见可达
+const navTabsEl = ref<HTMLElement | null>(null);
+const menuOverflow = ref(false);
+const hiddenCount = ref(0);
+function updateMenuOverflow() {
+  const el = navTabsEl.value;
+  if (!el) return;
+  const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+  menuOverflow.value = remaining > 8;
+  if (menuOverflow.value) {
+    const viewBottom = el.scrollTop + el.clientHeight;
+    let hidden = 0;
+    el.querySelectorAll('.tab-btn').forEach((btn) => {
+      const b = btn as HTMLElement;
+      if (b.offsetTop + b.offsetHeight > viewBottom + 2) hidden++;
+    });
+    hiddenCount.value = hidden;
+  }
+}
+function scrollMenuDown() {
+  const el = navTabsEl.value;
+  if (el) el.scrollBy({ top: el.clientHeight * 0.8, behavior: 'smooth' });
+}
 
 // 导航栏折叠状态：折叠后隐tabs，释放垂直空间放大问答框
 // 持久化到 localStorage，刷新页面后保留用户偏好
@@ -192,6 +198,16 @@ onMounted(() => {
   });
 });
 
+// T02449（N2）：溢出感知生命周期——菜单变化（登录/权限切换）与窗口尺寸变化时重算
+onMounted(() => {
+  updateMenuOverflow();
+  window.addEventListener('resize', updateMenuOverflow);
+});
+watch(groupedMenus, async () => {
+  await nextTick();
+  updateMenuOverflow();
+});
+
 // T02394 hash 路由（PRD N4 / 技术方案 D1）：currentView ↔ URL hash 双向同步
 // 放在既有 onMounted 之后注册：保证 hash 初始化在会话恢复（restoreSession）之后执行
 // 守卫：已登录 + 有视图权限 + 非移动端（MobileShell 自有 tab 态，不参与 hash 联动）
@@ -208,6 +224,7 @@ const { syncHash, applyHashView } = useHashView(currentView, {
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleScroll);
+  window.removeEventListener('resize', updateMenuOverflow);
   globalThis.removeEventListener('karpathy:jump-vault', handleJumpVault);
   globalThis.removeEventListener('karpathy:navigate', handleNavigateEvent as EventListener);
   globalThis.removeEventListener('karpathy:auth-expired', handleAuthExpired);
@@ -250,20 +267,36 @@ onBeforeUnmount(() => {
             <span class="subtitle">KARPATHY WIKI</span>
           </div>
         </div>
-        <!-- 中部菜单列表：垂直排列，整行可点击 -->
-        <nav class="nav-tabs" aria-label="主导航">
-          <button
-            v-for="tab in visibleMenuItems"
-            :key="tab.key"
-            class="tab-btn hover-glow"
-            :class="{ active: currentView === tab.key }"
-            :data-guide="tab.key"
-            @click="go(tab.key)"
-          >
-            <NavIcons :name="tab.icon" :size="18" class="tab-icon" />
-            <span class="tab-label">{{ tab.label }}</span>
-          </button>
+        <!-- 中部菜单列表：四组（知识/生产/运维/系统）垂直排列，整行可点击；T02449 N1 -->
+        <nav class="nav-tabs" ref="navTabsEl" aria-label="主导航" @scroll="updateMenuOverflow">
+          <template v-for="grp in groupedMenus" :key="grp.key">
+            <div class="nav-group-label">{{ grp.label }}</div>
+            <button
+              v-for="tab in grp.items"
+              :key="tab.key"
+              class="tab-btn hover-glow"
+              :class="{ active: currentView === tab.key }"
+              :data-guide="tab.key"
+              @click="go(tab.key)"
+            >
+              <NavIcons :name="tab.icon" :size="18" class="tab-icon" />
+              <span class="tab-label">{{ tab.label }}</span>
+            </button>
+          </template>
         </nav>
+        <!-- T02449（N2）：溢出提示条——菜单装不下时出现，点击平滑下滚；无溢出时隐藏 -->
+        <div
+          v-if="menuOverflow"
+          class="nav-scroll-hint"
+          role="button"
+          tabindex="0"
+          title="查看其余菜单"
+          @click="scrollMenuDown"
+          @keydown.enter.prevent="scrollMenuDown"
+          @keydown.space.prevent="scrollMenuDown"
+        >
+          ↓ 还有 {{ hiddenCount }} 项
+        </div>
         <!-- 底部用户区 + 登出 + 折叠按钮：固定在侧栏底端 -->
         <div class="nav-bottom">
           <div class="nav-user">
@@ -463,6 +496,44 @@ onBeforeUnmount(() => {
 .nav-tabs::-webkit-scrollbar-thumb {
   background: var(--accent-purple-a30);
   border-radius: 2px;
+}
+
+/* T02449（N1）：分组标题——弱化存在感，仅作视觉分隔 */
+.nav-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--text-soft);
+  opacity: 0.55;
+  padding: 10px 12px 2px;
+  user-select: none;
+}
+
+.nav-tabs .nav-group-label:first-child {
+  padding-top: 2px;
+}
+
+/* T02449（N2）：溢出提示条——点击平滑下滚；渐变模拟底部渐隐，提示「下面还有」 */
+.nav-scroll-hint {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  padding: 5px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-btn);
+  background: linear-gradient(to bottom, rgba(125, 125, 145, 0.02), rgba(125, 125, 145, 0.16));
+  z-index: 1;
+  user-select: none;
+  transition: color 0.2s ease;
+}
+
+.nav-scroll-hint:hover {
+  color: var(--neon-cyan);
 }
 
 /* 单个菜单项：整行布局，左对齐图标 + 文字 */
