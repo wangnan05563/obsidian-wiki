@@ -46,6 +46,11 @@ export interface ReloadResult {
     staleDays: number;
   };
   requireRestart: string[];
+  /**
+   * T02467：与 requireRestart 同序的可读条目（中文名 + 为什么要重启），来自服务端
+   * config-effects 登记表。老后端可能不返回，消费方需回落到 requireRestart + 本地登记表查名。
+   */
+  restartHints?: Array<{ key: string; label: string; reason: string }>;
 }
 
 // §11.2 断点续传：历史编译任务摘要（GET /api/compile/runs）
