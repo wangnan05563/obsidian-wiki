@@ -33,8 +33,10 @@ function handleSelect(tool: Tool) {
 // 统一悬浮提示文本：disabled 工具提示其禁用原因（或默认文案），否则为工具名。
 // 为什么接入 data-tip 而非仅原生 title：项目统一浮层（tip.ts）优先读 data-tip，
 //   样式/定位与其他按钮一致；原生 title 在部分场景被浏览器吞掉且无法定制（T00313）
+// T02461（PRD Q1）：未完成功能此前直接写「暂未实现」摆在主路径上，改为「即将上线」
+//   明示规划状态，配合 .tool-chip.disabled 的灰显（opacity 0.4）即 Q1①「标灰 + 明示即将上线」。
 function toolTip(tool: Tool): string {
-  if (tool.disabled) return tool.disabledReason || '暂未实现';
+  if (tool.disabled) return tool.disabledReason || '即将上线';
   return tool.label;
 }
 </script>

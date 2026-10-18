@@ -47,6 +47,7 @@ import { loadMediaUserConfig } from '../services/mediaConfig';
 import { apiErrorMessage } from '../utils/apiError';
 import { renderMarkdown } from '../utils/markdown';
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
+import { FOLLOWUP_LABEL } from '../utils/labels';
 import { consumeQuerySSEResumable } from '../utils/sse';
 import { useChatAutoScroll } from '../composables/useChatAutoScroll';
 import type { Attachment, Reference, LlmPreset } from '../types';
@@ -1446,7 +1447,7 @@ onBeforeUnmount(() => {
               />
               <!-- F-3.12 联想提问位置迁移：从 refs 下方移到 refs 上方，紧贴答案末尾，符合阅读流 -->
               <div v-if="msg.followups && msg.followups.length > 0" class="msg-followups">
-                <span class="followups-label">追问：</span>
+                <span class="followups-label">{{ FOLLOWUP_LABEL }}</span>
                 <div class="followups-track">
                   <span
                     v-for="(f, i) in msg.followups"

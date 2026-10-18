@@ -6,6 +6,7 @@ import { useQueryStore } from '../stores/query';
 import { useAuthStore } from '../stores/auth';
 import { loadAiUserConfigForPreset, saveAiUserConfigForPreset } from '../services/userConfig';
 import { AUTO_MODEL } from '../utils/autoModel';
+import { openConfigTab } from '../utils/nav';
 import type { LlmPreset } from '../types';
 
 // F-3.9 模型切换 UI
@@ -338,7 +339,7 @@ async function onKeydown(e: KeyboardEvent) {
         <span class="ms-item-model">{{ m.id }}</span>
       </li>
       <li v-if="!store.modelsLoading && store.availableModels.length === 0" class="ms-empty">
-        未获取到真实模型（请先在「配置中心 → AI 服务」填写 API Key 并获取列表）
+        未获取到真实模型（请先在<span class="ms-link" @click="openConfigTab('ai')">配置中心 → AI 服务</span>填写 API Key 并获取列表）
       </li>
     </ul>
   </div>
@@ -476,5 +477,15 @@ async function onKeydown(e: KeyboardEvent) {
   cursor: default;
   white-space: normal;
   line-height: 1.5;
+}
+/* T02461（PRD Q8）：引导文案中的菜单路径做成可点击直达，避免「按提示找不到入口」 */
+.ms-link {
+  color: var(--neon-cyan, #00f5ff);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ms-link:hover {
+  filter: brightness(1.1);
 }
 </style>
