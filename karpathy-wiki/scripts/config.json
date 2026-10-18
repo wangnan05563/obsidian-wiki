@@ -67,5 +67,21 @@
       "use_path_fallback": true,
       "min_version": [18, 0]
     }
+  },
+  "publish": {
+    "build_args": ["--filter", "@karpathy-wiki/web", "build"],
+    "deploy_src": "release/spa/public",
+    "deploy_script": "api/_deploy_live.mjs",
+    "prod_start_args": ["--filter", "@karpathy-wiki/api", "exec", "--", "tsx", "src/index.ts"],
+    "prod_log_file": "logs/publish-prod.log",
+    "build_log_file": "logs/publish-build.log",
+    "health_path": "/health",
+    "spa_probe_path": "/wiki/",
+    "wait_max_tries": 90,
+    "ping_interval_seconds": 2,
+    "release_asset_glob": "../release/installer/KarpathyWiki-Setup-v*.exe",
+    "release_notes_prefix": "release-notes-",
+    "version_source": "package.json",
+    "python_candidates": ["python", "python3", "py"]
   }
 }

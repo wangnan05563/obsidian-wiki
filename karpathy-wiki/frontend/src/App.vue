@@ -27,6 +27,7 @@ import { STORAGE_KEYS } from './constants/storageKeys';
 import type { AuthPermission } from './types';
 import MobileShell from './components/mobile/MobileShell.vue';
 import { useIsMobile } from './composables/useIsMobile';
+import { useHashView } from './composables/useHashView';
 import GuideOverlay from './components/GuideOverlay.vue';
 import GuideButton from './components/GuideButton.vue';
 import { useGuideStore } from './stores/guide';
@@ -102,6 +103,7 @@ function go(view: ViewName) {
   if (!menuItem) {
     // 未在菜单中的视图（如 dashboard 默认视图），允许访问
     currentView.value = view;
+    syncHash(view);
     return;
   }
   // 权限校验：无权限时不切换
@@ -110,6 +112,8 @@ function go(view: ViewName) {
     return;
   }
   currentView.value = view;
+  // T02394 hash 路由：权限通过后同步 URL（pushState 产生可回退条目）
+  syncHash(view);
   // T00864 用户引导：首次进入该视图时自动弹出引导（已引导过的视图不再触发）
   // 为什么在权限通过后调用：避免无权限用户被引导到其无权访问的功能
   // 该函数同步返回 boolean（是否启动了引导），此处无需 void 丢弃，与 onMounted 内的调用方式一致
@@ -140,6 +144,7 @@ function handleNavigateEvent(e: Event) {
 async function handleLogout() {
   await authStore.logout();
   currentView.value = 'dashboard';
+  syncHash('dashboard');
   // 回到登录态默认展示登录页（而非注册页）
   authMode.value = 'login';
 }
@@ -181,8 +186,24 @@ onMounted(() => {
       if (currentView.value) {
         guideStore.maybeStartFirstTime(currentView.value);
       }
+      // T02394：会话恢复后应用深链 hash（非法/越权则归一化到上面选定的默认视图）
+      applyHashView();
     }
   });
+});
+
+// T02394 hash 路由（PRD N4 / 技术方案 D1）：currentView ↔ URL hash 双向同步
+// 放在既有 onMounted 之后注册：保证 hash 初始化在会话恢复（restoreSession）之后执行
+// 守卫：已登录 + 有视图权限 + 非移动端（MobileShell 自有 tab 态，不参与 hash 联动）
+const validViewKeys = new Set<string>(menuItems.map((m) => m.key));
+const { syncHash, applyHashView } = useHashView(currentView, {
+  isValid: (v) => validViewKeys.has(v),
+  guard: (v) => {
+    if (isMobile.value) return false;
+    if (!isLoggedIn.value) return false;
+    const item = menuItems.find((m) => m.key === v);
+    return item ? canView(item.permission) : false;
+  },
 });
 
 onBeforeUnmount(() => {
