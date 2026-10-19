@@ -286,7 +286,7 @@ async function archiveSelected() {
 }
 
 // ─── AI 智能清洗分析 ─────────────────────────────────────
-// 「AI分析」按钮：调用用户自有 BYOK 模型对当前文档集合做分类（冗余删除/重复去重/规范重命名），
+// 「AI分析」按钮：调用用户自有 BYOK 模型对当前页面集合做分类（冗余删除/重复去重/规范重命名），
 // 结论在下方分析区展示，并配套批量操作按钮直接执行。
 const analyzing = ref(false);
 const aiResult = ref<AiCleanAnalysisResult | null>(null);
@@ -320,7 +320,7 @@ async function runAiAnalysis() {
     return;
   }
   analyzing.value = true;
-  scanProgress.value = 'AI 正在分析文档集合（冗余 / 重复 / 重命名）...';
+  scanProgress.value = 'AI 正在分析页面集合（冗余 / 重复 / 重命名）...';
   try {
     const res = await apiFetch(`${API_BASE}/data-clean/ai-analyze`, {
       method: 'POST',
@@ -343,20 +343,20 @@ async function runAiAnalysis() {
   }
 }
 
-// 批量删除：AI 判定的冗余文档（管理员门控）
+// 批量删除：AI 判定的冗余页面（管理员门控）
 async function batchDeleteAi() {
   if (!aiResult.value || aiResult.value.redundant.length === 0) return;
   if (!isAdmin.value) { ElMessage.warning('需管理员权限才能永久删除'); return; }
   const files = aiResult.value.redundant.map((r) => r.path);
   try {
     await ElMessageBox.confirm(
-      `将永久删除 ${files.length} 个 AI 判定的冗余文档，此操作不可撤销。`,
+      `将永久删除 ${files.length} 个 AI 判定的冗余页面，此操作不可撤销。`,
       '批量删除（AI 结论）',
       { confirmButtonText: '永久删除', cancelButtonText: '取消', type: 'warning' },
     );
   } catch { return; }
   batchBusy.value = 'delete'; // 进入加载态，按钮 spinner 持续显示直到删除+重扫完成
-  scanProgress.value = '正在批量删除冗余文档...';
+  scanProgress.value = '正在批量删除冗余页面...';
   try {
     const res = await apiFetch(`${API_BASE}/data-clean/delete`, {
       method: 'DELETE',
@@ -379,7 +379,7 @@ async function batchDeleteAi() {
   }
 }
 
-// 批量去重：把重复组非代表文档合并进代表文档（管理员门控）
+// 批量去重：把重复组非代表页面合并进代表页面（管理员门控）
 async function batchDedupAi() {
   if (!aiResult.value || aiResult.value.duplicates.length === 0) return;
   if (!isAdmin.value) { ElMessage.warning('需管理员权限才能执行去重合并'); return; }
@@ -390,7 +390,7 @@ async function batchDedupAi() {
   if (groups.length === 0) return;
   try {
     await ElMessageBox.confirm(
-      `将对 ${groups.length} 组重复文档执行合并去重（保留代表文档，其余合并归档）。`,
+      `将对 ${groups.length} 组重复页面执行合并去重（保留代表页面，其余合并归档）。`,
       '批量去重（AI 结论）',
       { confirmButtonText: '执行去重', cancelButtonText: '取消', type: 'warning' },
     );
@@ -408,7 +408,7 @@ async function batchDedupAi() {
     if (result.errors && result.errors.length > 0) {
       ElMessage.warning(`去重完成但有错误：${result.errors.join('；')}`);
     } else {
-      ElMessage.success(`已合并去重 ${result.merged} 个文档`);
+      ElMessage.success(`已合并去重 ${result.merged} 个页面`);
     }
     aiResult.value = null;
     await loadPages();
@@ -427,7 +427,7 @@ async function batchRenameAi() {
   const renames: AiAnalysisRenameItem[] = aiResult.value.renames;
   try {
     await ElMessageBox.confirm(
-      `将按 AI 建议对 ${renames.length} 个文档做规范化重命名（保持原目录、标题不变，不影响 [[链接]]）。`,
+      `将按 AI 建议对 ${renames.length} 个页面做规范化重命名（保持原目录、标题不变，不影响 [[链接]]）。`,
       '批量重命名（AI 结论）',
       { confirmButtonText: '执行重命名', cancelButtonText: '取消', type: 'warning' },
     );
@@ -524,7 +524,7 @@ async function mergeDuplicatePair(match: DuplicatePair) {
       ElMessage.success(`合并完成：更新了 ${result.linkReplacements || 0} 个链接`);
     }
     duplicates.value = duplicates.value.filter(d => d !== match);
-    // 合并后重新扫描，避免"去重后仍看到重复文档"的体感
+    // 合并后重新扫描，避免"去重后仍看到重复页面"的体感
     await runDeduplication();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '合并失败');
@@ -582,7 +582,7 @@ onMounted(() => loadPages());
             <el-button class="neon-btn" :icon="Refresh" :loading="loading" data-tip="重新扫描知识库页面并刷新本页统计" @click="loadPages">重新扫描</el-button>
             <el-button class="neon-btn secondary" :icon="View" data-tip="只读检查：链接是否断裂、元信息能否解析，不改动文件" @click="runPrecheck">预检</el-button>
             <el-button class="neon-btn secondary" :icon="CopyDocument" :loading="deduping" data-tip="按内容哈希与相似度找出重复页面并聚合成分组" @click="runDeduplication">重复检测</el-button>
-            <el-button class="neon-btn secondary" :icon="MagicStick" :loading="analyzing" data-tip="让模型把文档分成冗余 / 重复 / 待重命名三类，结论出来后可直接批量执行" @click="runAiAnalysis">AI 分析</el-button>
+            <el-button class="neon-btn secondary" :icon="MagicStick" :loading="analyzing" data-tip="让模型把页面分成冗余 / 重复 / 待重命名三类，结论出来后可直接批量执行" @click="runAiAnalysis">AI 分析</el-button>
           </div>
           <p class="head-note">AI 分析会调用你在「配置 / 我的」里填写的模型，按你的额度计费。</p>
         </div>
@@ -800,7 +800,7 @@ onMounted(() => loadPages());
                 plain
                 :loading="diffingKey === pairKey(dup)"
                 :disabled="diffingKey === pairKey(dup)"
-                data-tip="逐行对比这两个重复文档的差异（A 独有 / B 独有 / 共同）"
+                data-tip="逐行对比这两个重复页面的差异（A 独有 / B 独有 / 共同）"
                 @click="viewDiff(dup)"
               >查看差异</el-button>
               <el-button
@@ -808,7 +808,7 @@ onMounted(() => loadPages());
                 type="success"
                 :loading="mergingKey === pairKey(dup)"
                 :disabled="mergingKey === pairKey(dup)"
-                data-tip="将质量较低的页面合并进代表文档，并归档被合并页"
+                data-tip="将质量较低的页面合并进代表页面，并归档被合并页"
                 @click="mergeDuplicatePair(dup)"
               >合并到 {{ dup.pageA.title }}</el-button>
               <el-button size="small" text :disabled="mergingKey === pairKey(dup) || diffingKey === pairKey(dup)" data-tip="从重复列表中移除该对（不删除文件）" @click="duplicates.splice(idx, 1)">忽略</el-button>
@@ -858,8 +858,8 @@ onMounted(() => loadPages());
             size="small"
             :loading="batchBusy === 'delete'"
             :disabled="batchBusy !== null || !isAdmin || aiResult.redundant.length === 0"
-            :title="isAdmin ? '批量删除 AI 判定的冗余文档（不可撤销）' : '需管理员权限'"
-            data-tip="按 AI 结论永久删除判定的冗余文档（不可撤销，需管理员）"
+            :title="isAdmin ? '批量删除 AI 判定的冗余页面（不可撤销）' : '需管理员权限'"
+            data-tip="按 AI 结论永久删除判定的冗余页面（不可撤销，需管理员）"
             @click="batchDeleteAi"
           >批量删除 ({{ aiResult.redundant.length }})</el-button>
           <el-button
@@ -867,8 +867,8 @@ onMounted(() => loadPages());
             size="small"
             :loading="batchBusy === 'dedup'"
             :disabled="batchBusy !== null || !isAdmin || aiResult.duplicates.length === 0"
-            :title="isAdmin ? '批量合并去重（保留代表文档）' : '需管理员权限'"
-            data-tip="按 AI 结论将重复文档合并去重，保留代表文档"
+            :title="isAdmin ? '批量合并去重（保留代表页面）' : '需管理员权限'"
+            data-tip="按 AI 结论将重复页面合并去重，保留代表页面"
             @click="batchDedupAi"
           >批量去重 ({{ aiResult.duplicates.length }})</el-button>
           <el-button
@@ -883,18 +883,18 @@ onMounted(() => loadPages());
           <el-button size="small" text :disabled="batchBusy !== null" data-tip="关闭 AI 分析结果面板" @click="aiResult = null">清除</el-button>
         </div>
 
-        <!-- ① 可删除冗余文档 -->
+        <!-- ① 可删除冗余页面 -->
         <div v-if="aiResult.redundant.length" class="ai-sub">
-          <div class="ai-sub-title" style="color: var(--neon-magenta)">① 可安全删除的冗余文档</div>
+          <div class="ai-sub-title" style="color: var(--neon-magenta)">① 可安全删除的冗余页面</div>
           <div v-for="(item, idx) in aiResult.redundant" :key="'r' + idx" class="ai-item">
             <span class="ai-item-path">{{ item.path }}</span>
             <span class="ai-item-reason">{{ item.reason }}</span>
           </div>
         </div>
 
-        <!-- ② 可合并去重文档 -->
+        <!-- ② 可合并去重页面 -->
         <div v-if="aiResult.duplicates.length" class="ai-sub">
-          <div class="ai-sub-title" style="color: var(--neon-pink)">② 可合并去重的重复文档</div>
+          <div class="ai-sub-title" style="color: var(--neon-pink)">② 可合并去重的重复页面</div>
           <div v-for="(g, idx) in aiResult.duplicates" :key="'d' + idx" class="ai-item ai-group">
             <div class="ai-item-reason">{{ g.reason }}</div>
             <ul class="ai-group-paths">
@@ -906,9 +906,9 @@ onMounted(() => loadPages());
           </div>
         </div>
 
-        <!-- ③ 建议重命名文档 -->
+        <!-- ③ 建议重命名页面 -->
         <div v-if="aiResult.renames.length" class="ai-sub">
-          <div class="ai-sub-title" style="color: var(--neon-cyan)">③ 建议重命名的文档</div>
+          <div class="ai-sub-title" style="color: var(--neon-cyan)">③ 建议重命名的页面</div>
           <div v-for="(item, idx) in aiResult.renames" :key="'n' + idx" class="ai-item">
             <span class="ai-item-path">{{ item.currentName }}</span>
             <el-icon class="ai-arrow"><Right /></el-icon>
@@ -918,7 +918,7 @@ onMounted(() => loadPages());
         </div>
 
         <div v-if="!aiResult.redundant.length && !aiResult.duplicates.length && !aiResult.renames.length" class="empty-state">
-          AI 未发现需要处理的文档，当前集合已较健康。
+          AI 未发现需要处理的页面，当前集合已较健康。
         </div>
       </div>
 

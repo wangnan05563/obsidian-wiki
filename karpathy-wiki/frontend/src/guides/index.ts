@@ -46,7 +46,7 @@ export const GUIDE_DEFINITIONS: Record<string, GuideDefinition> = {
     title: '投递资料',
     steps: [
       { target: '[data-guide="ingest"]', title: '投递资料', description: '这是知识库的内容入口，负责将外部资料导入系统。', placement: 'right' },
-      { target: '.content', title: '资料投递', description: '上传 QQ 聊天记录或文本资料，触发 LLM 抽取为结构化知识页面。', placement: 'top' },
+      { target: '.content', title: '投递资料', description: '上传 QQ 聊天记录或文本资料，触发 LLM 抽取为结构化知识页面。', placement: 'top' },
       { target: '.content', title: '抽取流程', description: '投递后可在「编译进度」中查看抽取与编译过程。', placement: 'top' },
     ],
   },
@@ -87,8 +87,8 @@ export const GUIDE_DEFINITIONS: Record<string, GuideDefinition> = {
     view: 'health',
     title: '体检中心',
     steps: [
-      { target: '[data-guide="health"]', title: '体检中心', description: '对系统服务、依赖与知识库数据做健康检查。', placement: 'right' },
-      { target: '.content', title: '健康检查', description: '检测后端各项服务与页面状态，及时发现问题。', placement: 'top' },
+      { target: '[data-guide="health"]', title: '体检中心', description: '对系统服务、依赖与知识库数据做体检。', placement: 'right' },
+      { target: '.content', title: '体检项目', description: '检测后端各项服务与页面状态，及时发现问题。', placement: 'top' },
     ],
   },
   config: {

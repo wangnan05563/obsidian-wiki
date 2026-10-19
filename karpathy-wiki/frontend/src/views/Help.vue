@@ -45,7 +45,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: 'Karpathy Wiki 是基于 LLM 的本地知识库问答系统。投递 Markdown / URL / 纯文本资料后，系统自动编译生成知识页面，支持基于引用的问答、知识图谱可视化、健康体检、内网穿透远程访问。',
+        content: 'Karpathy Wiki 是基于 LLM 的本地知识库问答系统。投递 Markdown / URL / 纯文本资料后，系统自动编译生成知识页面，支持基于引用的问答、知识图谱可视化、体检中心、内网穿透远程访问。',
       },
       {
         type: 'steps',
@@ -55,7 +55,7 @@ const DOC_SECTIONS: DocSection[] = [
         content: [
           '配置 LLM：进入「配置中心 → AI 服务」标签页，选择 LLM 预设（OpenAI/DeepSeek/GLM/Qwen 等），填入 API Key 并保存',
           '投递资料：进入「投递资料」页面，拖拽 .md 文件 / 粘贴 URL / 输入纯文本，点击「开始编译」',
-          '查看进度：进入「编译进度」页面，观察「读取结构 → 抽取内容 → 产出页面 → 更新索引」各阶段进度',
+          '查看进度：进入「编译进度」页面，观察「读取结构规范 → 抽取要点 → 生成页面 → 更新索引」各阶段进度',
           '知识问答：进入「知识问答」页面，输入问题，AI 基于本地知识库回答并引用相关页面',
           '可选 - 体检：进入「体检中心」页面，检测孤立页面、断链、过期内容',
           '可选 - 远程访问：进入「内网穿透」页面，启动 Cloudflare 隧道暴露本机服务到公网',
@@ -178,7 +178,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '通过 SSE 流式推送编译进度：读取结构 → 抽取内容 → 产出页面 → 更新索引 → 完成。支持断点续传，中断后可从上次断点恢复。',
+        content: '通过 SSE 流式推送编译进度：读取结构规范 → 抽取要点 → 生成页面 → 更新索引 → 完成。支持断点续传，中断后可从上次断点恢复。',
       },
       {
         type: 'steps',
@@ -315,7 +315,7 @@ const DOC_SECTIONS: DocSection[] = [
         title: '操作步骤',
         content: [
           '点击导航栏「体检中心」进入页面',
-          '点击「执行体检」按钮',
+          '点击「重新体检」按钮',
           '查看三类问题列表',
           '点击问题项的「一键修复」按钮',
           '观察修复进度日志，完成后自动重新体检',
@@ -343,7 +343,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '配置页入口对所有登录用户开放，按配置项性质分为「个人偏好（按用户隔离、本地存储）」与「系统级（仅管理员）」两类。个人可配置：AI 服务（LLM Provider 预设 / 自定义 baseUrl / model / apiKey，BYOK）、联网搜索（Tavily/Bing）、工具（MCP/CLI/场景路由）、朗读设置（TTS 引擎、音色、语速、语调、音量）、界面主题。仅管理员可改系统级：SCHEMA 规范、系统配置、批量编译、QQ 导入、Prompt IDE。',
+        content: '配置页入口对所有登录用户开放，按配置项性质分为「个人偏好（按用户隔离、本地存储）」与「系统级（仅管理员）」两类。个人可配置：AI 服务（LLM Provider 预设 / 自定义 baseUrl / model / apiKey，BYOK）、联网搜索（Tavily/Bing）、工具（MCP/CLI/场景路由）、朗读设置（TTS 引擎、音色、语速、语调、音量）、界面主题。仅管理员可改系统级：SCHEMA 规范、系统配置、共享 AI、QQ 导入、Prompt IDE。',
       },
       {
         type: 'config',
@@ -373,7 +373,7 @@ const DOC_SECTIONS: DocSection[] = [
           '（个人）在「AI 服务」选择 LLM 预设或自定义输入，填入本账户 API Key，点击「测试连接」后保存（仅存本机）',
           '（个人）可选在「联网搜索」配置 Tavily / Bing 的 Key 并启用',
           '（个人）在「工具」配置 MCP / CLI / 场景路由，「朗读设置」调整 TTS，「界面主题」切换外观',
-          '（管理员）在「SCHEMA 规范 / 系统配置 / 批量编译 / QQ 导入 / Prompt IDE」编辑系统级配置并保存',
+          '（管理员）在「SCHEMA 规范 / 系统配置 / 共享 AI / QQ 导入 / Prompt IDE」编辑系统级配置并保存',
         ],
       },
       {
@@ -879,9 +879,10 @@ onBeforeUnmount(() => {
               </svg>
             </div>
             <div class="intro-text">
-              <h2 class="intro-title grad-text">Karpathy Wiki 使用文档</h2>
+              <!-- T02475（X1）：条目标题与菜单实名同词，原名降为副标题 -->
+              <h2 class="intro-title grad-text">帮助文档</h2>
               <p class="intro-desc">
-                系统涵盖投递资料、编译、问答、图谱、体检、内网穿透全流程。本文档详细介绍各功能模块的使用方法，
+                Karpathy Wiki 使用文档。系统涵盖投递资料、编译、问答、图谱、体检、内网穿透全流程。本文档详细介绍各功能模块的使用方法，
                 包括核心功能、操作步骤、使用场景、参数配置和注意事项。
               </p>
             </div>

@@ -65,9 +65,9 @@ const currentStatus = computed<ProgressStatus>(() => {
 const statusTitle = computed(() => {
   switch (currentStatus.value) {
     case 'running':
-      return `正在编译 ${completedCount.value}/${totalCount.value} 篇文档`;
+      return `正在编译 ${completedCount.value}/${totalCount.value} 个页面`;
     case 'done':
-      return `已编译 ${completedCount.value}/${totalCount.value} 篇文档`;
+      return `已编译 ${completedCount.value}/${totalCount.value} 个页面`;
     case 'error':
       return '编译过程出错';
     case 'cancelled':
@@ -86,7 +86,7 @@ const statusSubtitle = computed(() => {
     case 'done':
       return errorCount.value > 0
         ? `共 ${totalCount.value} 篇 · 成功 ${successCount.value} · 失败 ${errorCount.value}`
-        : `共 ${totalCount.value} 篇文档全部编译成功`;
+        : `共 ${totalCount.value} 个页面全部编译成功`;
     case 'error':
       return store.errorMessage || '未知错误';
     case 'cancelled':
@@ -188,7 +188,7 @@ function handleCancel() {
       <div v-if="currentStatus === 'done'" key="done" class="progress-banner success-banner">
         <el-icon class="banner-icon"><Check /></el-icon>
         <span class="banner-text">
-          全部 {{ totalCount }} 篇文档编译完成
+          全部 {{ totalCount }} 个页面编译完成
           <template v-if="errorCount > 0">
             （{{ successCount }} 成功 · {{ errorCount }} 失败）
           </template>

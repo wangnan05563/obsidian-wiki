@@ -183,7 +183,7 @@ function openPage(path: string) {
       </label>
 
       <label v-else-if="mode === 'text'" class="mi-field">
-        <span class="mi-label">粘贴文字 / 笔记</span>
+        <span class="mi-label">粘贴文字 / 网页片段</span>
         <textarea
           v-model="textInput"
           class="mi-textarea"

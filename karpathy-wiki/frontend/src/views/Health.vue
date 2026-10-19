@@ -629,8 +629,8 @@ onMounted(() => {
           <span class="summary-text">
             {{
               healthStatus === 'healthy'
-                ? '系统状态良好 · ALL CLEAR'
-                : `发现 ${totalIssues} 个问题 · NEEDS ATTENTION`
+                ? '系统状态良好'
+                : `发现 ${totalIssues} 个问题 · 需要处理`
             }}
           </span>
         </div>

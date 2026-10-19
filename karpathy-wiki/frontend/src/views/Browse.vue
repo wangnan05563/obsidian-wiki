@@ -1723,7 +1723,7 @@ onMounted(async () => {
             <el-button
               size="small"
               type="primary"
-              data-tip="将全部草稿编译并发布为正式知识库文档"
+              data-tip="将全部草稿编译并发布为正式知识库页面"
               :disabled="compiling || drafts.length === 0"
               @click="publishAllDrafts"
             >批量发布</el-button>
@@ -1751,7 +1751,7 @@ onMounted(async () => {
               size="small"
               type="primary"
               text
-              data-tip="编译并发布此草稿为正式文档"
+              data-tip="编译并发布此草稿为正式页面"
               :disabled="compiling"
               @click.stop="publishDraft(d)"
             >发布</el-button>
@@ -1841,7 +1841,7 @@ onMounted(async () => {
                   v-if="!editing"
                   size="small"
                   type="primary"
-                  data-tip="编译并发布此草稿为正式文档"
+                  data-tip="编译并发布此草稿为正式页面"
                   :disabled="compiling"
                   @click="publishDraft({ path: currentDraftPath, name: currentDraftPath.split('/').pop() || '' })"
                 >发布此草稿</el-button>
@@ -2115,7 +2115,7 @@ onMounted(async () => {
               <span class="search-count">{{ searchHits.length }} 条结果</span>
               <el-button size="small" text data-tip="清空搜索关键词，返回完整目录" @click="clearSearch">返回目录</el-button>
             </div>
-            <div v-if="searching" class="search-loading">SEARCHING...</div>
+            <div v-if="searching" class="search-loading">搜索中…</div>
             <div v-else-if="searchHits.length === 0" class="search-empty">未找到匹配页面</div>
             <div
               v-for="hit in searchHits"
@@ -2385,7 +2385,7 @@ onMounted(async () => {
             <p>加载中…</p>
           </div>
           <div v-else-if="!activeTab || !activeTab.content" class="content-empty">
-            <p class="empty-tip">打开左侧目录/看板/日历中的文档以开始浏览</p>
+            <p class="empty-tip">打开左侧目录/看板/日历中的页面以开始浏览</p>
           </div>
           <div v-else class="content-show">
             <!-- T00269：文档标题与操作按钮已移至 Tab 行（下载/编辑按钮在 Tab 页签右侧），此处不再重复显示 -->

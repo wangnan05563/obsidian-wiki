@@ -176,7 +176,7 @@ const showRestartGuide = ref(false);
 async function copyRestartGuide(): Promise<void> {
   try {
     await navigator.clipboard.writeText(restartGuide.value);
-    ElMessage.success('重启指引已复制，粘贴到笔记里照着做即可');
+    ElMessage.success('重启指引已复制，粘贴到记事本里照着做即可');
   } catch {
     ElMessage.info('当前环境不允许自动复制，请长按/选下面这段文字手动复制');
   }
@@ -395,7 +395,7 @@ const aiTestResult = ref<AiTestResult | null>(null);
 
 // T00355：系统配置页「私有配置」Key 状态。判定口径与本用户「AI 服务」页一致——
 // aiConfig.apiKeySet 由 loadAiConfig 的 localRealKey 派生（本用户浏览器本地是否存了真实 BYOK 密钥），
-// 与「共享AI 配置」（config.llm.apiKeySet 服务端 config.json）相互独立，避免两处状态口径不一致。
+// 与「共享 AI 配置」（config.llm.apiKeySet 服务端 config.json）相互独立，避免两处状态口径不一致。
 const privateLlmKeySet = computed(() => Boolean(aiConfig.value?.apiKeySet));
 
 // AI 表单（可编辑，与 aiConfig 分离，保存时才同步）
@@ -443,7 +443,7 @@ async function handleRebuildIndex() {
   }
 }
 
-// ── T00315「共享AI」：管理员全局共享 LLM 配置，供未配置个人 AI 的用户降级使用 ──
+// ── T00315「共享 AI」：管理员全局共享 LLM 配置，供未配置个人 AI 的用户降级使用 ──
 // 与服务端 /api/ai/config 对应（requireAdmin，普通用户不可写）；与 aiForm（用户 BYOK）相互独立，
 // 各自持久化到不同存储（服务端 config.json 与本地 IndexedDB），互不混用。
 const sharedAiForm = ref({
@@ -455,7 +455,7 @@ const sharedAiForm = ref({
 });
 const savingSharedAi = ref(false);
 
-// ── T00319「共享AI」增强：预设快捷选择 / 获取模型 / 测试连接 ──
+// ── T00319「共享 AI」增强：预设快捷选择 / 获取模型 / 测试连接 ──
 // 这些状态均基于 sharedAiForm，独立于用户 BYOK（aiForm）相关的 testingAi/aiTestResult/fetchModelList，
 // 避免两区块状态互相干扰。模型列表存独立 sharedModels，而非 modelStore.availableModels（后者供 BYOK 下拉使用）。
 const testingSharedAi = ref(false);
@@ -470,7 +470,7 @@ const matchedSharedPreset = computed(() =>
   aiPresets.value.find(p => p.provider === sharedAiForm.value.provider)
 );
 
-// 加载管理员「共享AI」当前值（GET，Key 脱敏）。
+// 加载管理员「共享 AI」当前值（GET，Key 脱敏）。
 async function loadSharedAi(): Promise<void> {
   try {
     const res = await authStore.authFetch(`${API_BASE}/ai/config`);
@@ -488,14 +488,14 @@ async function loadSharedAi(): Promise<void> {
   }
 }
 
-// 保存管理员「共享AI」（PUT requireAdmin）。apiKey 以 **** 开头视为未修改（复用后端 sanitizeApiKey），空串清除 Key。
+// 保存管理员「共享 AI」（PUT requireAdmin）。apiKey 以 **** 开头视为未修改（复用后端 sanitizeApiKey），空串清除 Key。
 async function saveSharedAi(): Promise<void> {
   savingSharedAi.value = true;
   try {
     const cfg = sharedAiForm.value;
     // T00324：随保存补发目标 provider 的 apiKeyRef（取自当前匹配预设）。
     // 为什么必须带上：后端 saveAiConfig 仅在请求体提供 apiKeyRef 时才覆盖，否则保留旧值。
-    //   此前共享AI保存只发 provider/baseUrl/model/apiKey，切换 provider（如填选 Agnes 预设）后
+    //   此前共享 AI保存只发 provider/baseUrl/model/apiKey，切换 provider（如填选 Agnes 预设）后
     //   config.json 仍残留旧 provider 的 apiKeyRef，导致"配置看似已保存却不生效、编译用错环境变量 key"。
     const presetApiKeyRef = matchedSharedPreset.value?.apiKeyRef;
     const res = await authStore.authFetch(`${API_BASE}/ai/config`, {
@@ -511,19 +511,19 @@ async function saveSharedAi(): Promise<void> {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json() as { config?: { apiKeySet?: boolean } | undefined };
-    ElMessage.success('已保存「共享AI」配置');
+    ElMessage.success('已保存「共享 AI」配置');
     sharedAiForm.value.apiKeySet = Boolean(data.config?.apiKeySet);
     // 同步 model store 的服务端 Key 状态，保证问答页降级提示口径一致
     modelStore.apiKeySet = sharedAiForm.value.apiKeySet;
   } catch (err) {
-    ElMessage.error(apiErrorMessage('保存「共享AI」失败', err));
+    ElMessage.error(apiErrorMessage('保存「共享 AI」失败', err));
   } finally {
     savingSharedAi.value = false;
   }
 }
 
 // T00319：把预设模板的 provider/baseUrl/model 应用到共享表单（保留 apiKey/apiKeySet 不变）。
-// 与用户 BYOK 的 applyPreset 不同：共享AI的 Key 由管理员统一维护在服务端，这里不加载/覆盖本地密钥，
+// 与用户 BYOK 的 applyPreset 不同：共享 AI的 Key 由管理员统一维护在服务端，这里不加载/覆盖本地密钥，
 // 因此仅填充三个非敏感模板字段，避免把当前共享 Key 改掉或丢失脱敏回显值。
 function applySharedPreset(preset: LlmPreset): void {
   if (!aiPresets.value.length) {
@@ -537,7 +537,7 @@ function applySharedPreset(preset: LlmPreset): void {
   // 切换预设后旧 baseUrl 对应的模型清单已失效，清空列表与错误提示，避免下拉残留不匹配当前服务的模型
   sharedModels.value = [];
   sharedModelsError.value = '';
-  ElMessage.success(`已套用 ${preset.label}，请确认并保存「共享AI」配置`);
+  ElMessage.success(`已套用 ${preset.label}，请确认并保存「共享 AI」配置`);
 }
 
 // T00319：基于共享表单校验连接（复用 testConnection 的 POST /api/ai/test-connection 模式与脱敏处理）。
@@ -563,19 +563,19 @@ async function testSharedAiConnection(): Promise<void> {
     const result: AiTestResult = await res.json();
     sharedAiTestResult.value = result;
     if (result.ok) {
-      ElMessage.success('共享AI连接测试通过');
+      ElMessage.success('共享 AI连接测试通过');
     } else {
-      ElMessage.warning('共享AI连接测试失败');
+      ElMessage.warning('共享 AI连接测试失败');
     }
   } catch (err) {
     sharedAiTestResult.value = { ok: false, detail: (err as Error).message };
-    ElMessage.error(apiErrorMessage('共享AI测试失败', err));
+    ElMessage.error(apiErrorMessage('共享 AI测试失败', err));
   } finally {
     testingSharedAi.value = false;
   }
 }
 
-// 共享AI测试结果展示文本（计算属性，规避模板内 ref 类型收窄问题，与 testResultText 对称）
+// 共享 AI测试结果展示文本（计算属性，规避模板内 ref 类型收窄问题，与 testResultText 对称）
 const sharedTestResultText = computed(() => {
   const r = sharedAiTestResult.value;
   if (!r) return '';
@@ -680,7 +680,7 @@ function maskLocal(key: string): string {
 
 // 加载 AI 配置（按用户隔离的本地存储，不再读取服务端共享 config.json）
 async function loadAiConfig() {
-  // 管理员进入 AI 配置页时一并加载「共享AI」全局配置（仅 admin 可见/可写）
+  // 管理员进入 AI 配置页时一并加载「共享 AI」全局配置（仅 admin 可见/可写）
   if (isAdmin.value) void loadSharedAi();
   loadingAi.value = true;
   try {
@@ -1434,7 +1434,7 @@ const sharedVideoGenTestText = computed(() => {
   return r.ok ? '连接成功' : r.detail;
 });
 
-// ── T00320「共享AI」增强：管理员全局「共享生图 / 共享视频」配置 ──
+// ── T00320「共享 AI」增强：管理员全局「共享生图 / 共享视频」配置 ──
 // 与「共享模型」（LLM）降级思路一致：供未配置个人生图/视频（BYOK）的用户使用共享配置。
 // 存储在后端 config.json 的 media.shared.image/video，走 requireAdmin 的 /api/media/shared
 //（普通用户不可读写）；生成优先级：用户 BYOK > 管理员共享(media.shared) > media.agnes 默认兜底。
@@ -2542,7 +2542,7 @@ onMounted(async () => {
   restoreAdvancedDrafts();
   loadHistory();
   loadQqConfig();
-  // T00320「共享AI」：管理员全局「共享生图/视频」配置（requireAdmin），随配置页一并加载
+  // T00320「共享 AI」：管理员全局「共享生图/视频」配置（requireAdmin），随配置页一并加载
   loadSharedMedia();
   // FR-14-2 Prompt IDE：加载 prompt 文件列表，与其它配置并行加载
   // 为什么放在 onMounted 而非 watch activeTab：避免切换 tab 时首次加载延迟，影响用户体验
@@ -2642,7 +2642,7 @@ watch(activeTab, (tab) => {
   if (tab === 'mcp' && isAdmin.value) void loadMcpConfig();
 });
 
-// 切入「共享AI」tab 时重载管理员全局「共享生图/视频」配置（管理员可能在其它设备改了 config.json）
+// 切入「共享 AI」tab 时重载管理员全局「共享生图/视频」配置（管理员可能在其它设备改了 config.json）
 watch(activeTab, (tab) => {
   if (tab === 'sharedAi' && isAdmin.value) void loadSharedMedia();
 });
@@ -3021,9 +3021,9 @@ async function importConfig() {
                   </span>
                 </div>
       <div class="config-row">
-                  <span class="config-label">共享AI 配置 Key</span>
+                  <span class="config-label">共享 AI 配置 Key</span>
                   <span class="config-value">
-                    <!-- T00355：共享AI 配置 = 服务端 config.json 提供的 Key（env/config.json），供未配 BYOK 时降级 -->
+                    <!-- T00355：共享 AI 配置 = 服务端 config.json 提供的 Key（env/config.json），供未配 BYOK 时降级 -->
                     <span class="key-badge key-badge-shared">共享</span>
                     <span :class="['key-status', config.llm.apiKeySet ? 'set' : 'unset']">
                       {{ config.llm.apiKeySet ? '已设置' : '未设置' }}
@@ -3084,13 +3084,13 @@ async function importConfig() {
                 </div>
               </div>
 
-              <!-- API Key 提示：仅当「私有配置」与「共享AI 配置」都未设置时才告警，
+              <!-- API Key 提示：仅当「私有配置」与「共享 AI 配置」都未设置时才告警，
                    任一生效即可编译，避免仅在共享未配置时误报 -->
               <div v-if="!config.llm.apiKeySet && !privateLlmKeySet" class="key-warning">
                 <div class="warning-icon">?</div>
       <div class="warning-text">
                   <strong>LLM API Key 未设置</strong>
-                  <p>请设置环境变量 <code>{{ config.llm.apiKeyRef }}</code> 后重启服务（共享AI 配置），或在本页「AI 服务」页签填写本用户的「私有配置」Key，否则编译与问答将返回 401 错误。</p>
+                  <p>请设置环境变量 <code>{{ config.llm.apiKeyRef }}</code> 后重启服务（共享 AI 配置），或在本页「AI 服务」页签填写本用户的「私有配置」Key，否则编译与问答将返回 401 错误。</p>
                 </div>
               </div>
             </div>
@@ -3446,7 +3446,7 @@ async function importConfig() {
           role="tabpanel"
           aria-label="AI 服务"
         >
-          <!-- T00320 迁移说明：原「共享模型配置」（shared-ai-section）已整体迁至独立「共享AI」Tab，
+          <!-- T00320 迁移说明：原「共享模型配置」（shared-ai-section）已整体迁至独立「共享 AI」Tab，
                本「AI 服务」页签现为纯用户 BYOK（个人 LLM 配置），与共享配置解耦互不混用。 -->
           <div class="ai-section">
             <div class="section-header">
@@ -3881,7 +3881,7 @@ async function importConfig() {
           </div>
         </section>
 
-        <!-- T00320 共享AI：管理员全局配置区（共享模型 / 共享生图 / 共享视频），紧邻「AI 服务」。
+        <!-- T00320 共享 AI：管理员全局配置区（共享模型 / 共享生图 / 共享视频），紧邻「AI 服务」。
              普通用户不可见、不可切换（v-if isAdmin），与 mcp/qq/prompts 等 admin Tab 权限一致。
              设计动机：全局共享配置供未配置个人（BYOK）的用户降级使用，与「共享模型」降级思路一致；
              管理员统一维护，改动对所有用户生效。 -->
@@ -3890,11 +3890,11 @@ async function importConfig() {
           v-show="activeTab === 'sharedAi'"
           class="config-panel"
           role="tabpanel"
-          aria-label="共享AI"
+          aria-label="共享 AI"
         >
           <div class="ai-section">
             <div class="section-header">
-              <span class="section-desc">// 共享AI（管理员全局）</span>
+              <span class="section-desc">// 共享 AI（管理员全局）</span>
               <ConfigEffectTag :badge="uiBadge('sharedAi')" :reason="effectReason('sharedAi')" compact />
               <span class="user-badge">全部用户共享</span>
             </div>
@@ -3966,7 +3966,7 @@ async function importConfig() {
                 <el-button class="neon-btn" data-tip="用共享配置向 LLM 服务商发起连通性测试" :loading="testingSharedAi" @click="testSharedAiConnection">
                   <el-icon class="btn-icon"><Connection /></el-icon>
                 </el-button>
-                <el-button class="neon-btn-primary" data-tip="保存管理员共享AI配置（对所有用户生效）" :loading="savingSharedAi" @click="saveSharedAi">
+                <el-button class="neon-btn-primary" data-tip="保存管理员共享 AI配置（对所有用户生效）" :loading="savingSharedAi" @click="saveSharedAi">
                   <el-icon class="btn-icon"><Check /></el-icon>
                 </el-button>
               </div>
@@ -4706,7 +4706,7 @@ async function importConfig() {
             </div>
 
             <div class="qq-actions">
-              <span v-if="qqConfigDirty" class="dirty-indicator">CHANGED</span>
+              <span v-if="qqConfigDirty" class="dirty-indicator">未保存</span>
               <IconActionButton
                 name="保存 QQ 配置"
                 desc="保存 QQ 导入配置（噪声过滤 / 脱敏 / 抽取参数）"
@@ -4763,7 +4763,7 @@ async function importConfig() {
                   <p class="prompt-desc">{{ currentPromptMeta?.description || '请从左侧选择一个 prompt 文件' }}</p>
                 </div>
                 <div class="actions">
-                  <span v-if="promptDirty" class="dirty-indicator">CHANGED</span>
+                  <span v-if="promptDirty" class="dirty-indicator">未保存</span>
                   <IconActionButton
                     name="保存"
                     desc="保存当前 prompt 文件内容"
@@ -5350,7 +5350,7 @@ async function importConfig() {
   box-shadow: 0 0 10px var(--accent-pink-a30);
 }
 
-/* T00355：系统配置页区分「私有配置」与「共享AI 配置」两套 Key 状态的徽标 */
+/* T00355：系统配置页区分「私有配置」与「共享 AI 配置」两套 Key 状态的徽标 */
 .key-badge {
   padding: 1px 8px;
   border-radius: var(--radius-pill);
@@ -5719,7 +5719,7 @@ async function importConfig() {
   flex: none;
   white-space: nowrap;
 }
-/* 图标按钮：让 el-icon 在按钮内垂直水平居中（用于 T00319 共享AI 图标化按钮） */
+/* 图标按钮：让 el-icon 在按钮内垂直水平居中（用于 T00319 共享 AI 图标化按钮） */
 .btn-icon {
   display: inline-flex;
   align-items: center;
