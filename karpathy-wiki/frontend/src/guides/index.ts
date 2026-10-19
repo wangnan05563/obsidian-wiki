@@ -133,10 +133,11 @@ export const GUIDE_DEFINITIONS: Record<string, GuideDefinition> = {
   },
   dataclean: {
     view: 'dataclean',
-    title: '数据清洗',
+    title: '页面质量清洗',
     steps: [
-      { target: '[data-guide="dataclean"]', title: '数据清洗', description: '对知识库数据进行去重、规范化等清洗操作。', placement: 'right' },
-      { target: '.content', title: '清洗任务', description: '执行数据质量检查与智能清洗，提升知识库质量。', placement: 'top' },
+      { target: '[data-guide="dataclean"]', title: '页面质量清洗', description: '只处理知识库里的页面内容（查重、补元信息、归档）；临时缓存与日志在「缓存与日志清理」。', placement: 'right' },
+      { target: '.dataclean-header', title: '四个动作', description: '重新扫描取数；预检只读不改文件；重复检测找重复页；AI 分析调用你自己配置的模型。', placement: 'top' },
+      { target: '.dataclean-card', title: '问题分类与表格', description: '上方按「缺元信息 / 标题重复 / 无出链 / 字数过短 / 读取失败」分类计数并给批量动作，表格可搜索、可排序、可分页，默认问题最多的排第一页。', placement: 'top' },
     ],
   },
   help: {

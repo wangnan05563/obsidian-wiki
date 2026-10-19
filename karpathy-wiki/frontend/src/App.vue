@@ -60,7 +60,7 @@ const visibleMenuItems = computed(() => {
 const groupedMenus = computed(() => groupMenuItems(filterVisibleMenus(menuItems), menuGroupDefs));
 
 // T02449（PRD N2）：菜单溢出感知——容器装不下时显示「↓ 还有 N 项」提示，点击平滑下滚
-// 为什么需要：实测 1440x900 视口仅容纳 9/15 项，尾部项（数据清洗等）需滚动才能点到，
+// 为什么需要：实测 1440x900 视口仅容纳 9/15 项，尾部项（页面质量清洗等）需滚动才能点到，
 // 且未滚动时直接点击会失败（元素不在可视交互区）；提示条 + 渐隐让「还有更多」可见可达
 const navTabsEl = ref<HTMLElement | null>(null);
 const menuOverflow = ref(false);

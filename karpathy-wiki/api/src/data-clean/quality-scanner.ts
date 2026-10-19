@@ -2,15 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
 import type { VaultService } from "../vault/vault-service.js";
+// T02472 L1：页面口径与链接图/统计接口共用同一份定义，避免「216 vs 245」两处总数矛盾
+import { PAGE_DIRS, isPageFile } from "../vault/page-scope.js";
 import type { PageQualityScore, DuplicatePair, MergeResult, PrecheckResult } from "../types.js";
 
-const TEST_PATTERNS = [/^test-.*\.md$/, /proxy-test.*\.md$/];
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
-
-function isTestFile(name: string): boolean {
-  return TEST_PATTERNS.some((p) => p.test(name));
-}
 
 /** Retry wrapper for vault operations */
 async function vaultRetry<T>(
@@ -43,7 +40,7 @@ async function processScanFile(
   dir: string,
   file: string,
 ): Promise<{ page: PageQualityScore; content: string } | null> {
-  if (!file.endsWith(".md") || isTestFile(file)) return null;
+  if (!isPageFile(file)) return null;
   const relPath = `${dir}/${file}`;
   try {
     const content = await vaultRetry(
@@ -111,7 +108,7 @@ export async function scanVaultRaw(
   vault: VaultService
 ): Promise<Array<{ page: PageQualityScore; content: string }>> {
   const out: Array<{ page: PageQualityScore; content: string }> = [];
-  const dirs = ["entities", "concepts", "comparisons"];
+  const dirs = PAGE_DIRS;
 
   for (const dir of dirs) {
     try {
@@ -481,7 +478,7 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
   };
 
   const allPages: PageQualityScore[] = [];
-  const dirs = ["entities", "concepts", "comparisons"];
+  const dirs = PAGE_DIRS;
 
   // Scan pages first for link resolution
   for (const dir of dirs) {
@@ -489,7 +486,7 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
       const fullPath = path.join(vault.getVaultPath(), dir);
       const files = await fs.readdir(fullPath);
       for (const file of files) {
-        if (!file.endsWith(".md") || isTestFile(file)) continue;
+        if (!isPageFile(file)) continue;
         try {
           const rel = `${dir}/${file}`;
           const content = await vaultRetry(() => vault.readFile(rel), `precheck:${rel}`);

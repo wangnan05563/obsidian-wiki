@@ -95,11 +95,14 @@ function lastAnalyzeBody(): any {
 // T01628：按钮已改为「仅图标 + aria-label + data-tip」，文本不再是按钮名。
 // 查找时同时匹配可见文本 / aria-label / data-tip，保证改造后测试仍能定位到按钮。
 function findButton(wrapper: any, label: string) {
+  // T02472 L4 按钮文案改为「AI 分析」（中英之间留空格），匹配时忽略空白避免文案排版影响断言
+  const strip = (s: string) => s.replace(/\s+/g, '');
   return wrapper.findAll('button').find((b: any) => {
-    const text = b.text() || '';
-    const aria = b.attributes('aria-label') || '';
-    const tip = b.attributes('data-tip') || '';
-    return text.includes(label) || aria.includes(label) || tip.includes(label);
+    const text = strip(b.text() || '');
+    const aria = strip(b.attributes('aria-label') || '');
+    const tip = strip(b.attributes('data-tip') || '');
+    const key = strip(label);
+    return text.includes(key) || aria.includes(key) || tip.includes(key);
   });
 }
 

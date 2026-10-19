@@ -164,7 +164,7 @@ defineProps<{
       <path d="M18.5 16.8 L18.5 19" />
     </template>
 
-    <!-- 数据清洗：漏斗（T02451 N7：原复用 cleanup 扫帚，与「系统清理」视觉重复） -->
+    <!-- 页面质量清洗：漏斗（T02451 N7：原复用 cleanup 扫帚，与「系统清理」视觉重复） -->
     <template v-else-if="name === 'dataclean'">
       <path d="M3.5 4.5 L20.5 4.5 L14 12 L14 18.5 L10 20.5 L10 12 Z" />
       <path d="M8 8.5 L16 8.5" />

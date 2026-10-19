@@ -2,6 +2,8 @@
 import path from 'node:path';
 import matter from 'gray-matter';
 import { watch, type FSWatcher } from 'chokidar';
+// T02472 L1：页面口径（目录白名单 + 页面文件判定）单点定义，与数据清洗/统计接口共用
+import { PAGE_DIRS, isPageFile } from './page-scope.js';
 
 // 将底层 fs 读取错误包装为带 code 的 Error，保留准确文案（区分不存在/目录/权限/其它）。
 // 为什么需要：路由层需按 HTTP 状态码分流（目录→400、权限→403、不存在→404、其它→500），
@@ -32,12 +34,6 @@ export interface TreeNode {
 // solutions: QQ 导入子系统方案沉淀编译产物（SRS §3.2 阶段3 体系化编译）
 const WRITE_ALLOWED_DIRS = new Set(['raw', 'entities', 'concepts', 'comparisons', 'queries', 'drafts', 'qa', 'solutions']);
 const WRITE_ALLOWED_FILES = new Set(['index.md', 'log.md']);
-
-// 页面目录列表：extractRefs 解析 [[页面名]] 与 buildLinkGraph 收集节点均复用此列表
-// 为什么抽取为常量：避免 resolvePageName 与 buildLinkGraph 两处硬编码不一致
-// qa/solutions 加入：QQ 导入子系统编译产物需参与双向链接图（SRS §3.2 建立双向链接）
-// drafts 不加入：draft 是中间状态，不应参与正式页面的链接图
-const PAGE_DIRS = ['entities', 'concepts', 'comparisons', 'queries', 'qa', 'solutions'];
 
 // title 规范化：返回主名称 + 括号内英文别名，用于跨命名变体去重
 // 解决 LLM 每次编译自选 slug 导致同实体重复（中英文混合 title 需提取括号内英文做二次匹配）
@@ -618,7 +614,7 @@ export class VaultService {
       return;
     }
     for (const f of entries) {
-      if (!f.endsWith('.md')) continue;
+      if (!isPageFile(f)) continue;
       const pageName = f.slice(0, -3);
       const rel = `${dir}/${f}`;
       nodes.push(rel);

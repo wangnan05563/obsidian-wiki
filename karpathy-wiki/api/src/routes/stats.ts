@@ -2,6 +2,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { VaultService } from '../vault/vault-service.js';
+// T02472 L1：目录分布与总页数必须同一口径，否则「目录合计 227 / 总页面 245」在一页内自相矛盾
+import { PAGE_DIRS, isPageFile } from '../vault/page-scope.js';
 
 // 注册统计路由。
 //   GET /api/stats   返回仪表盘汇总数据（页数、目录分布、最近编译记录）
@@ -18,14 +20,14 @@ export function registerStatsRoute(app: FastifyInstance, vault: VaultService) {
       const vaultPath = vault.getVaultPath();
 
       // 按目录统计页数：Promise.all 并行 readdir，避免串行 IO 等待
-      const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
+      const pageDirs = PAGE_DIRS;
       const dirCounts: Record<string, number> = {};
       const dirResults = await Promise.all(
         pageDirs.map(async (d) => {
           const dirFull = path.join(vaultPath, d);
           try {
             const entries = await fs.readdir(dirFull);
-            return [d, entries.filter((f) => f.endsWith('.md')).length] as const;
+            return [d, entries.filter((f) => isPageFile(f)).length] as const;
           } catch {
             return [d, 0] as const;
           }
