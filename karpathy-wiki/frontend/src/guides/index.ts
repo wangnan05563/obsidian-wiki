@@ -109,10 +109,10 @@ export const GUIDE_DEFINITIONS: Record<string, GuideDefinition> = {
   },
   cleanup: {
     view: 'cleanup',
-    title: '系统清理',
+    title: '缓存与日志清理',
     steps: [
-      { target: '[data-guide="cleanup"]', title: '系统清理', description: '清理系统运行产生的临时与冗余文件。', placement: 'right' },
-      { target: '.content', title: '清理任务', description: '按配置清理临时文件、日志与缓存，释放磁盘空间。', placement: 'top' },
+      { target: '[data-guide="cleanup"]', title: '缓存与日志清理', description: '只删运行产生的缓存与日志，不改动知识库内容。', placement: 'right' },
+      { target: '.content', title: '清理任务', description: '默认「仅预览」只列出会删哪些文件；关掉开关才会真实删除，且每次都会先二次确认。', placement: 'top' },
     ],
   },
   users: {
