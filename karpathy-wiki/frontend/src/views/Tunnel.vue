@@ -9,6 +9,8 @@ import {
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
 import AppModal from '../components/AppModal.vue';
 import IconActionButton from '../components/IconActionButton.vue';
+// T02476（PRD X8）：自检未跑 / 尚未配置这类空态用统一模板（现状 + 原因 + 一个主按钮）
+import StateBlock from '../components/StateBlock.vue';
 // T02469：失败原因 → 人话建议、自检三态灯等纯判定逻辑（有单测，见 utils/tunnelDiagnostics.ts）
 import {
   buildStartErrorView,
@@ -582,9 +584,16 @@ onBeforeUnmount(() => {
           >{{ gotoLabel(item) }}</button>
         </li>
       </ul>
-      <div class="prereq-empty" v-else-if="!prereqLoading && !prereqError">
-        点「重新检测」即可逐项确认这台机器是否满足启动条件，不用先试着启动再猜错在哪。
-      </div>
+      <StateBlock
+        v-else-if="!prereqLoading && !prereqError"
+        state="empty"
+        empty-title="还没有检测过"
+        empty-desc="先跑一次自检，就能逐项看清这台机器缺哪一步，不用启动后靠报错猜"
+      >
+        <template #action>
+          <el-button class="neon-btn" size="small" @click="runPrereqCheck()">现在检测</el-button>
+        </template>
+      </StateBlock>
     </div>
 
     <!-- 下载失败指引 -->
@@ -669,10 +678,16 @@ onBeforeUnmount(() => {
               </div>
               <IconActionButton name="重新配置" desc="重新运行 Cloudflare Named 隧道配置向导" :icon="Setting" size="small" variant="primary" @click="openWizard" />
             </div>
-            <div v-else class="named-config-empty">
-              <IconActionButton name="配置向导" desc="打开 Cloudflare Named 隧道三步配置向导（授权→创建→绑定域名）" :icon="MagicStick" size="small" variant="primary" @click="openWizard" />
-              <span class="hint">三步配置：授权登录 → 创建隧道 → 绑定域名</span>
-            </div>
+            <StateBlock
+              v-else
+              state="empty"
+              empty-title="尚未配置固定域名隧道"
+              empty-desc="三步即可完成：授权登录 → 创建隧道 → 绑定域名，之后地址不会每次重启都变"
+            >
+              <template #action>
+                <IconActionButton name="配置向导" desc="打开 Cloudflare Named 隧道三步配置向导（授权→创建→绑定域名）" :icon="MagicStick" size="small" variant="primary" @click="openWizard" />
+              </template>
+            </StateBlock>
           </div>
         </div>
 
@@ -781,7 +796,7 @@ onBeforeUnmount(() => {
         <div class="wizard-login-status" v-if="loginStatus && loginPolling">
           <el-alert type="info" :closable="false" show-icon>
             <template #title>{{ loginStatus.message }}</template>
-            <div class="polling-hint">正在等待授权完成...</div>
+            <StateBlock state="loading" compact loading-text="正在等待授权完成…" />
           </el-alert>
         </div>
       </div>
@@ -1053,13 +1068,6 @@ onBeforeUnmount(() => {
   word-break: break-all;
 }
 
-.named-config-empty {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
 /* 向导对话框内容 */
 .wizard-step-content {
   padding: 20px 0;
@@ -1101,12 +1109,6 @@ onBeforeUnmount(() => {
   word-break: break-all;
   max-height: 120px;
   overflow-y: auto;
-}
-
-.polling-hint {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-dim, #888);
 }
 
 /* ===== 启动失败内联告警条（T02469 / PRD §11 T1）===== */
@@ -1265,13 +1267,6 @@ onBeforeUnmount(() => {
 .prereq-goto:hover {
   background: rgba(21, 84, 209, 0.12);
   color: var(--neon-cyan, #00f5ff);
-}
-
-.prereq-empty {
-  margin-top: 12px;
-  font-size: 12px;
-  color: var(--text-dim, #888);
-  line-height: 1.6;
 }
 
 /* 响应式：窄屏配置行堆叠 */

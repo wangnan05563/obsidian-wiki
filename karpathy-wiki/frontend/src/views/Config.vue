@@ -8,6 +8,7 @@ import {
 } from '@element-plus/icons-vue';
 // T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
 import IconActionButton from '../components/IconActionButton.vue';
+import StateBlock from '../components/StateBlock.vue';
 import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import MarkdownRenderer from '../components/MarkdownRenderer.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData, PromptFile, PromptTestRunEvent } from '../types';
@@ -2864,7 +2865,7 @@ async function importConfig() {
                 </template>
               </div>
             </div>
-      <div v-if="loadingSchema" class="section-loading">// 加载中…</div>
+      <StateBlock v-if="loadingSchema" state="loading" loading-text="正在读取结构规范…" />
 
             <el-input
               v-else-if="editingSchema"
@@ -2895,7 +2896,8 @@ async function importConfig() {
       <div v-if="!gitEnabled" class="history-disabled">
                 Vault 未启用 Git，无法查看版本历史。在 Vault 目录执行 <code>git init</code> 即可启用。
               </div>
-      <div v-else-if="commits.length === 0" class="history-empty">? 暂无提交记录</div>
+      <StateBlock v-else-if="commits.length === 0" state="empty" compact empty-title="暂无提交记录"
+                empty-desc="Vault 还没有 Git 提交，结构规范改动不会留历史。" />
       <div v-else class="commit-list">
                 <div
                   v-for="c in commits"
@@ -2930,7 +2932,8 @@ async function importConfig() {
                   />
                 </div>
       <div v-if="showDiff && !loadingDiff" class="diff-result">
-                  <div v-if="diffLines.length === 0" class="diff-empty">? 无差异</div>
+                  <StateBlock v-if="diffLines.length === 0" state="empty" compact empty-title="无差异"
+                empty-desc="这次提交与上一版内容相同。" />
       <div v-else class="diff-lines">
                     <div
                       v-for="(line, idx) in diffLines"
@@ -2986,7 +2989,7 @@ async function importConfig() {
                 ? 以下字段变更需重启服务才能生效：{{ restartLabel(reloadResult) || reloadResult.requireRestart.join('、') }}
               </div>
             </div>
-      <div v-if="loadingConfig" class="section-loading">// 加载中…</div>
+      <StateBlock v-if="loadingConfig" state="loading" loading-text="正在读取系统配置…" />
       <div v-else-if="config" class="config-grid">
               <!-- LLM 配置 -->
               <div class="config-block hover-glow">
@@ -3388,7 +3391,7 @@ async function importConfig() {
                   保存
                 </el-button>
               </div>
-              <div v-if="mcpLoading" class="section-loading">// 加载中…</div>
+              <StateBlock v-if="mcpLoading" state="loading" loading-text="正在读取 MCP 接口配置…" />
               <template v-else>
                 <div class="config-block hover-glow">
                   <h3 class="block-title"><span class="block-bracket">[</span> 开关 <span class="block-bracket">]</span></h3>
@@ -3473,7 +3476,7 @@ async function importConfig() {
                 </span>
               </div>
             </div>
-      <div v-if="loadingAi" class="section-loading">// 加载中…</div>
+      <StateBlock v-if="loadingAi" state="loading" loading-text="正在读取 AI 服务配置…" />
       <div v-else class="ai-form">
               <!-- 配置表单 -->
               <div class="config-block hover-glow">
@@ -3621,7 +3624,7 @@ async function importConfig() {
                   {{ webSearchStatus.apiKeySet ? '已启用' : '未配置 Key' }}
                 </span>
               </div>
-      <div v-if="loadingWebSearch" class="section-loading">// 加载中…</div>
+      <StateBlock v-if="loadingWebSearch" state="loading" loading-text="正在读取联网搜索配置…" />
       <div v-else class="ai-form">
                 <div class="config-block hover-glow">
                   <h3 class="block-title"><span class="block-bracket">[</span> 搜索引擎 <span class="block-bracket">]</span></h3>
@@ -4302,7 +4305,7 @@ async function importConfig() {
               以下工具配置仅对当前登录账户生效，按用户独立存储在本地并相互隔离；切换账户后此处显示各自独立的设置，互不可见。
             </div>
 
-            <div v-if="loadingTools" class="section-loading">// 加载中…</div>
+            <StateBlock v-if="loadingTools" state="loading" loading-text="正在读取工具配置…" />
             <div v-else class="tools-form">
               <!-- 路由模式 -->
               <div class="config-block hover-glow">
@@ -4737,10 +4740,17 @@ async function importConfig() {
                 <span class="section-desc">// Prompt 文件列表</span>
               <ConfigEffectTag :badge="uiBadge('prompts')" :reason="effectReason('prompts')" compact />
               </div>
-              <div v-if="loadingPrompts" class="section-loading">// 加载中…</div>
-              <div v-else-if="promptFiles.length === 0" class="section-empty">
-                暂无可用 prompt 文件
-              </div>
+              <StateBlock v-if="loadingPrompts" state="loading" loading-text="正在读取 Prompt 文件列表…" />
+              <StateBlock
+                v-else-if="promptFiles.length === 0"
+                state="empty"
+                empty-title="暂无可用 Prompt 文件"
+                empty-desc="这里列出知识库中可编辑的提示词文件；为空说明还没有这类文件"
+              >
+                <template #action>
+                  <el-button class="neon-btn" size="small" @click="loadPromptList()">重新读取</el-button>
+                </template>
+              </StateBlock>
               <div v-else class="prompt-list">
                 <div
                   v-for="file in promptFiles"
@@ -4840,7 +4850,7 @@ async function importConfig() {
 
               <div class="test-results">
                 <div v-if="testError" class="test-error">{{ testError }}</div>
-                <div v-else-if="testRunning" class="test-running">运行中...</div>
+                <div v-else-if="testRunning" class="test-running">正在运行…</div>
                 <div v-else-if="testEvents.length === 0 && testPages.length === 0" class="test-empty">
                   试运行结果将显示在这里
                 </div>
@@ -5232,14 +5242,6 @@ async function importConfig() {
 .neon-btn-primary:hover:not(.is-disabled) {
   box-shadow: var(--glow-magenta) !important;
   transform: translateY(-1px);
-}
-
-.section-loading {
-  text-align: center;
-  color: var(--neon-cyan);
-  font-family: var(--font-mono);
-  padding: 60px 0;
-  letter-spacing: 0.1em;
 }
 
 /* SCHEMA 编辑器：暗色背景 + 霓虹边框 */
@@ -6370,14 +6372,6 @@ async function importConfig() {
   backdrop-filter: var(--blur);
 }
 
-
-.section-loading,
-.section-empty {
-  padding: 24px 8px;
-  color: var(--text-soft);
-  font-size: 13px;
-  text-align: center;
-}
 
 .prompt-list {
   display: flex;

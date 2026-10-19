@@ -69,7 +69,7 @@ watch(
     <div class="trace-header" @click="toggle">
       <el-icon class="trace-icon"><Timer /></el-icon>
       <span class="trace-summary">{{ summary }}</span>
-      <span v-if="loading" class="trace-loading">加载中…</span>
+      <span v-if="loading" class="trace-loading">正在加载耗时明细…</span>
       <el-icon class="toggle"><component :is="expanded ? ArrowDown : ArrowRight" /></el-icon>
     </div>
     <div class="trace-body" v-show="expanded">

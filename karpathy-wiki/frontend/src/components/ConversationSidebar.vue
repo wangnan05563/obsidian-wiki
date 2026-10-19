@@ -256,7 +256,7 @@ onBeforeUnmount(() => {
         <span>新对话</span>
       </button>
       <input class="search-input" v-model="store.searchKeyword"
-        placeholder="搜索对话..." />
+        placeholder="搜索对话…" />
     </div>
     <div class="conversation-list" v-if="state === 'expanded'">
       <div v-for="conv in sortedConversations" :key="conv.id"

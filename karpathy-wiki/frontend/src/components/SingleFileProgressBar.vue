@@ -2,6 +2,9 @@
 import { computed } from 'vue';
 import { Check, Close, CircleClose, Timer } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
+// T02476（PRD X8）：空闲态不再是三点动画死胡同，统一空态模板 + 直达投递页
+import StateBlock from './StateBlock.vue';
+import { gotoView } from '../utils/nav';
 
 // 单文件编译进度条组件
 // 为什么独立组件：单文件模式与批量模式进度计算逻辑差异大（单文件按阶段百分比，批量按文件数），
@@ -158,11 +161,17 @@ const hasTotalElapsed = computed(() => store.totalElapsedMs > 0);
       class="progress-bar"
     />
 
-    <!-- 空状态：尚未开始编译 -->
-    <div v-else class="progress-empty">
-      <span class="empty-dots">● ● ●</span>
-      <p>等待编译开始…</p>
-    </div>
+    <!-- 空状态：尚未开始编译（T02476 / PRD X8：原来是 250px 三点动画死胡同，现在给现状 + 原因 + 主按钮） -->
+    <StateBlock
+      v-else
+      state="empty"
+      empty-title="等待编译开始"
+      empty-desc="在「投递资料」提交后会立刻进入这里，逐步显示每个阶段"
+    >
+      <template #action>
+        <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+      </template>
+    </StateBlock>
 
     <!-- 当前阶段提示：running 态展示当前阶段 + 已完成步骤数 -->
     <div v-if="currentStatus === 'running'" class="progress-subtitle">
@@ -381,23 +390,6 @@ const hasTotalElapsed = computed(() => store.totalElapsedMs > 0);
   color: var(--text-soft);
   letter-spacing: 0.5px;
   word-break: break-all;
-}
-
-.progress-empty {
-  text-align: center;
-  color: var(--text-dim);
-  padding: 28px 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.empty-dots {
-  display: block;
-  color: var(--neon-purple);
-  letter-spacing: 8px;
-  font-size: 18px;
-  margin-bottom: 8px;
-  animation: neon-pulse 1.5s ease-in-out infinite;
 }
 
 /* banner：语义色弱化背景 + 左侧 3px 色条 + 圆角 */

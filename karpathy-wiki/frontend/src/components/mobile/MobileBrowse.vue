@@ -270,7 +270,8 @@ onBeforeUnmount(() => {
 
     <!-- 列表视图：全部页面 -->
     <div v-if="view === 'list'" class="mb-list">
-      <div v-if="listLoading" class="mb-hint">加载中…</div>
+      <!-- T02476（PRD X2）：加载态文案说清在加载什么，不再用笼统「加载中…」 -->
+      <div v-if="listLoading" class="mb-hint">正在加载页面列表…</div>
       <div v-else-if="!pages.length" class="mb-hint">暂无已入库内容</div>
       <button v-for="p in pages" :key="p.path" class="mb-card" @click="openPage(p)">
         <div class="mb-card-top">

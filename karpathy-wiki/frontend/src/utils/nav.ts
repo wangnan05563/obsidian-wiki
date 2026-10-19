@@ -14,3 +14,9 @@ export function openConfigTab(tab: string): void {
     new CustomEvent('karpathy:navigate', { detail: 'config' }),
   );
 }
+
+// T02476（PRD X8）：空态里的「下一步」主按钮统一走这条通道跳视图。
+// App.vue 的 handleNavigateEvent 已按全部菜单 key 白名单校验，视图侧无需再各自拼 CustomEvent。
+export function gotoView(view: string): void {
+  globalThis.dispatchEvent(new CustomEvent('karpathy:navigate', { detail: view }));
+}

@@ -134,7 +134,7 @@ const SECTIONS: SectionMeta[] = [
     title: '孤立页面',
     icon: '◈',
     iconClass: 'icon-orphan',
-    desc: '没有任何页面通过 [[链接]] 指向它们 · 可自动补回链',
+    desc: '没有任何页面通过双向链接指向它们 · 可自动补回链',
     emptyText: '▸ 无孤立页面',
   },
   {
@@ -736,7 +736,7 @@ onMounted(() => {
 
       <!-- 加载中：骨架屏模拟体检报告的布局结构 -->
       <div v-if="loading" class="health-loading">
-        <p class="loading-text">// 扫描中…</p>
+        <p class="loading-text">正在体检…</p>
         <el-skeleton :rows="1" animated class="health-skeleton-summary" />
         <div class="health-skeleton-body">
           <el-skeleton :rows="2" animated class="health-skeleton-section" />

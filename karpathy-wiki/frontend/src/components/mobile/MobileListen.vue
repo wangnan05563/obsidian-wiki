@@ -24,6 +24,9 @@ interface QueueItem {
 }
 
 const pages = ref<PageItem[]>([]);
+// T02476（PRD X2 / R4 同类缺陷）：原来用 `pages.length === 0` 冒充「加载中」，
+// 知识库真为空时会永远停在「加载中…」，故为列表加载单独加一个状态位。
+const pagesLoading = ref(false);
 const queue = ref<QueueItem[]>([]);
 const currentIndex = ref(-1);
 const isPlaying = ref(false);
@@ -116,6 +119,7 @@ function titleOf(p: PageItem): string {
 }
 
 async function loadPages() {
+  pagesLoading.value = true;
   try {
     const res = await apiFetch(`${API_BASE}/files/pages`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -123,6 +127,8 @@ async function loadPages() {
     pages.value = data.pages ?? [];
   } catch (e) {
     errorMsg.value = '加载可朗读列表失败：' + (e as Error).message;
+  } finally {
+    pagesLoading.value = false;
   }
 }
 
@@ -616,7 +622,9 @@ onBeforeUnmount(() => {
       <!-- 知识库内容（无搜索时显示全部） -->
       <section v-else class="ml-section" data-catalog>
         <h3 class="ml-h3">知识库内容</h3>
-        <div v-if="pages.length === 0 && !errorMsg" class="ml-hint">加载中…</div>
+        <!-- T02476（PRD X2）：加载与「真的没有页面」分开说，不再共用一句「加载中…」 -->
+        <div v-if="pagesLoading" class="ml-hint">正在加载可朗读列表…</div>
+        <div v-else-if="pages.length === 0" class="ml-hint">知识库里还没有页面，编译完成后这里会列出可朗读内容</div>
         <div
           v-for="p in pages"
           :key="p.path"

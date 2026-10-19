@@ -12,6 +12,9 @@ import { stepStatusLabel } from '../utils/status';
 import { consumeSSE } from '../utils/sse';
 import BatchProgressBar from '../components/BatchProgressBar.vue';
 import SingleFileProgressBar from '../components/SingleFileProgressBar.vue';
+// T02476（PRD X2/X8）：三态统一走 StateBlock，空态主按钮经 gotoView 直达投递页
+import StateBlock from '../components/StateBlock.vue';
+import { gotoView } from '../utils/nav';
 import type { IngestPayload, TimelineItem, RunSummary, LlmPreset } from '../types';
 
 // LLM Provider 快捷切换：编译失败时无需跳转 Config 页面即可切换
@@ -526,12 +529,28 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             @click="store.loadRuns()"
           />
         </div>
-      <div v-if="store.loadingRuns" class="section-loading">加载中…</div>
-      <div v-else-if="store.runsError" class="runs-error">
-        <p class="runs-error-msg">历史任务加载失败：{{ store.runsError }}</p>
-        <el-button size="small" type="primary" plain @click="store.loadRuns()">重试</el-button>
-      </div>
-      <div v-else-if="store.runs.length === 0" class="runs-empty">暂无历史任务，投递资料开始编译后将会在此显示</div>
+      <StateBlock
+        v-if="store.loadingRuns"
+        state="loading"
+        :skeleton-rows="3"
+        loading-text="正在加载历史任务…"
+      />
+      <StateBlock
+        v-else-if="store.runsError"
+        state="error"
+        :error-text="`历史任务加载失败：${store.runsError}`"
+        @retry="store.loadRuns()"
+      />
+      <StateBlock
+        v-else-if="store.runs.length === 0"
+        state="empty"
+        empty-title="暂无历史任务"
+        empty-desc="投递资料并触发编译后，这里会列出每一次运行"
+      >
+        <template #action>
+          <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+        </template>
+      </StateBlock>
       <div v-else class="runs-list">
           <div v-for="run in store.runs" :key="run.runId" class="run-item hover-glow">
             <div class="run-info" @click="openLogDialog(run)">
@@ -559,8 +578,14 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 
     <!-- 日志查看 Dialog -->
     <AppModal v-model="logDialogVisible" title="编译运行日志" width="700px" class="log-dialog">
-      <div v-if="store.loadingLog" class="section-loading">加载中…</div>
-      <div v-else-if="store.logEntries.length === 0" class="runs-empty">暂无日志</div>
+      <StateBlock v-if="store.loadingLog" state="loading" compact loading-text="正在加载日志…" />
+      <StateBlock
+        v-else-if="store.logEntries.length === 0"
+        state="empty"
+        compact
+        empty-title="这次运行没有日志"
+        empty-desc="任务开始执行后才会写入日志"
+      />
       <div v-else class="log-list">
         <div v-for="(entry, idx) in store.logEntries" :key="idx" class="log-line" :class="entry.event">
           <span class="log-ts">{{ formatTime(entry.ts) }}</span>
@@ -780,22 +805,6 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   color: var(--neon-purple);
 }
 
-.empty-progress {
-  text-align: center;
-  color: var(--text-dim);
-  padding: 48px 0;
-  font-family: var(--font-mono);
-}
-
-.empty-dots {
-  display: block;
-  color: var(--neon-purple);
-  letter-spacing: 8px;
-  font-size: 20px;
-  margin-bottom: 12px;
-  animation: neon-pulse 1.5s ease-in-out infinite;
-}
-
 /* §优化方案1：单文件模式容器，包裹进度条 + 时间线 */
 .single-view {
   margin-top: 12px;
@@ -956,30 +965,6 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   font-weight: 400;
 }
 
-.runs-empty {
-  text-align: center;
-  color: var(--text-dim);
-  padding: 32px 0;
-  font-size: 13px;
-  font-family: var(--font-mono);
-}
-
-.runs-error {
-  text-align: center;
-  padding: 28px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.runs-error-msg {
-  color: var(--danger, #f56c6c);
-  font-size: 13px;
-  margin: 0;
-  font-family: var(--font-mono);
-}
-
 .runs-foot {
   margin: 12px 4px 0;
   text-align: right;
@@ -1109,15 +1094,6 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   padding: 10px 14px;
   background: rgba(255, 255, 255, 0.04);
   border-radius: 8px;
-}
-
-.section-loading {
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 24px 0;
-  text-align: center;
-  letter-spacing: 2px;
 }
 
 /* ===== 批量编译模式样式 ===== */
