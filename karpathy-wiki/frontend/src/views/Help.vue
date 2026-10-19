@@ -840,7 +840,7 @@ onBeforeUnmount(() => {
         </div>
         <el-input
           v-model="search"
-          placeholder="搜索章节..."
+          placeholder="搜索章节…"
           :prefix-icon="Search"
           size="small"
           clearable

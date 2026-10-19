@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useSkillStore } from '../stores/skill';
+// T02476（PRD X2/X8）：加载/空态统一走 StateBlock，加载文案一律中文省略号
+import StateBlock from '../components/StateBlock.vue';
 import { apiErrorMessage } from '../utils/apiError';
 import type { SkillMeta } from '../types';
 
@@ -238,7 +240,7 @@ onMounted(() => {
               v-model="searchKeyword"
               type="text"
               class="search-input"
-              placeholder="搜索技能名称、ID 或描述..."
+              placeholder="搜索技能名称、ID 或描述…"
             />
             <div class="format-filter">
               <button
@@ -274,13 +276,32 @@ onMounted(() => {
 
         <!-- 技能列表 -->
         <div class="skills-list">
-          <div v-if="store.loading && store.skills.length === 0" class="empty-state">
-            正在加载技能列表...
-          </div>
-          <div v-else-if="filteredSkills.length === 0" class="empty-state">
-            <span v-if="store.skills.length === 0">暂无技能，请上传 .skill 或 .md 文件</span>
-            <span v-else>未找到匹配的技能</span>
-          </div>
+          <StateBlock
+            v-if="store.loading && store.skills.length === 0"
+            state="loading"
+            :skeleton-rows="4"
+            loading-text="正在加载技能列表…"
+          />
+          <StateBlock
+            v-else-if="filteredSkills.length === 0 && store.skills.length === 0"
+            state="empty"
+            empty-title="还没有导入技能"
+            empty-desc="技能是 .skill 或 .md 文件，导入后即可在这里查看和调用"
+          >
+            <template #action>
+              <el-button class="neon-btn" size="small" @click="triggerFileSelect">导入技能</el-button>
+            </template>
+          </StateBlock>
+          <StateBlock
+            v-else-if="filteredSkills.length === 0"
+            state="empty"
+            empty-title="未找到匹配的技能"
+            empty-desc="换个关键词，或清空搜索查看全部技能"
+          >
+            <template #action>
+              <el-button class="neon-btn" size="small" @click="searchKeyword = ''">清空搜索</el-button>
+            </template>
+          </StateBlock>
           <div
             v-for="skill in filteredSkills"
             :key="skill.id"
@@ -331,7 +352,7 @@ onMounted(() => {
           </button>
         </div>
 
-        <div v-if="!store.currentDetail" class="empty-state">加载中...</div>
+        <StateBlock v-if="!store.currentDetail" state="loading" :skeleton-rows="3" loading-text="正在加载技能详情…" />
         <div v-else class="detail-content">
           <div class="detail-title-row">
             <h3 class="detail-title">{{ store.currentDetail.name }}</h3>

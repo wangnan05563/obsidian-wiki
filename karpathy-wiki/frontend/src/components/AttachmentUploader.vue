@@ -159,7 +159,7 @@ function handleRemove(id: string) {
       :class="{ 'drag-over': dragOver }">
       <div v-for="id in props.attachments" :key="id" class="attachment-item">
         <img v-if="thumbUrls.get(id)" :src="thumbUrls.get(id)" class="thumb-img" alt="附件缩略图" />
-        <div v-else class="thumb-placeholder">...</div>
+        <div v-else class="thumb-placeholder" title="该附件没有可预览的缩略图">无预览</div>
         <button class="remove-btn" title="移除附件" @click="handleRemove(id)">×</button>
       </div>
     </div>

@@ -3,6 +3,8 @@ import { ref, computed, watch, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Check, Close, Edit, Delete, Search, Refresh } from '@element-plus/icons-vue';
 import AppModal from '../components/AppModal.vue';
+// T02476（PRD X2/X8）：加载/失败态统一走 StateBlock，失败可原地重试
+import StateBlock from '../components/StateBlock.vue';
 import { useAuthStore } from '../stores/auth';
 import type { UserInfo, AuthRole, CreateUserRequest } from '../types';
 import {
@@ -411,8 +413,14 @@ onMounted(loadUsers);
         >一键停用可停用的出厂账号</el-button>
       </el-alert>
 
-      <div v-if="loading" class="loading-text">加载中...</div>
-      <div v-else-if="loadError" class="error-banner">{{ loadError }}</div>
+      <StateBlock v-if="loading" state="loading" :skeleton-rows="4" loading-text="正在加载账户列表…" />
+      <StateBlock
+        v-else-if="loadError"
+        state="error"
+        :error-text="loadError"
+        retry-label="重新加载"
+        @retry="loadUsers()"
+      />
       <template v-else>
         <!-- U8：搜索 + 命中数（原来 216 行量级同类问题在用户列表上同样存在：无任何筛选手段） -->
         <div v-if="users.length > 0" class="table-tools">
@@ -492,7 +500,9 @@ onMounted(loadUsers);
             </template>
           </el-table-column>
           <template #empty>
-            <span class="table-empty">没有匹配「{{ query.keyword }}」的账户</span>
+            <!-- T02476（PRD X8）：区分「筛空」与「真空」——原来没有账户时也提示「没有匹配 xxx 的账户」，把空库说成搜索问题 -->
+            <span v-if="users.length === 0" class="table-empty">还没有账户，点上方「新建用户」创建第一个账户</span>
+            <span v-else class="table-empty">没有匹配「{{ query.keyword }}」的账户，换个关键词或清空筛选</span>
           </template>
         </el-table>
 

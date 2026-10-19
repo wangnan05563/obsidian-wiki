@@ -4,6 +4,8 @@ import { ref, onMounted, computed, markRaw } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Aim, Connection, CaretTop, Star, Clock } from '@element-plus/icons-vue';
 import NavIcons from '../components/NavIcons.vue';
+// T02476（PRD X2/X8）：加载/失败/空态统一走 StateBlock，失败态自带重试
+import StateBlock from '../components/StateBlock.vue';
 import type { StatsData, RunSummary } from '../types';
 import { useCompileStore } from '../stores/compile';
 import { dirBarWidth } from '../utils/dirBar';
@@ -189,7 +191,13 @@ onMounted(() => {
         </div>
         <!-- T02457（B3）：加载中用骨架屏替代硬编码英文 LOADING...；失败给中文反馈 -->
         <el-skeleton v-else-if="loading" :rows="4" animated class="dir-skeleton" />
-        <div v-else class="section-loading">统计加载失败，请刷新重试</div>
+        <StateBlock
+          v-else
+          state="error"
+          error-text="统计数据加载失败"
+          retry-label="重新加载"
+          @retry="loadStats"
+        />
       </div>
       <div class="glass-card section-card hover-glow fade-up" style="animation-delay: 0.4s">
         <h3 class="section-title">
@@ -227,15 +235,19 @@ onMounted(() => {
       <h3 class="section-title">
         <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
       </h3>
-      <div class="run-skeleton">加载中…</div>
+      <StateBlock state="loading" :skeleton-rows="3" loading-text="正在加载运行历史…" />
     </div>
     <!-- FR-14-3 运行历史：加载失败（与「真空白」区分，避免把接口故障伪装成「历史丢了」） -->
     <div v-else-if="compileStore.runsError" class="glass-card section-card fade-up">
       <h3 class="section-title">
         <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
       </h3>
-      <p class="run-empty run-error">运行历史加载失败：{{ compileStore.runsError }}</p>
-      <el-button text size="small" data-tip="重新加载运行历史" @click="loadRuns()">重试</el-button>
+      <StateBlock
+        state="error"
+        :error-text="`运行历史加载失败：${compileStore.runsError}`"
+        retry-label="重新加载"
+        @retry="loadRuns()"
+      />
     </div>
     <!-- FR-14-3 运行历史：有数据 -->
     <div v-else-if="recentRuns.length > 0" class="glass-card section-card fade-up">
@@ -272,7 +284,15 @@ onMounted(() => {
       <h3 class="section-title">
         <span class="title-bracket">[</span> 运行历史 <span class="title-bracket">]</span>
       </h3>
-      <p class="run-empty">暂无运行记录，投递资料开始编译后将会在此显示</p>
+      <StateBlock
+        state="empty"
+        empty-title="暂无运行记录"
+        empty-desc="投递资料并触发编译后，运行历史会在此累积"
+      >
+        <template #action>
+          <el-button class="neon-btn" size="small" @click="emit('navigate', 'ingest')">去投递资料</el-button>
+        </template>
+      </StateBlock>
     </div>
 
     <!-- 空状态引导 -->
@@ -442,15 +462,6 @@ onMounted(() => {
 .title-bracket {
   color: var(--neon-magenta);
   font-weight: 400;
-}
-
-.section-loading {
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 20px 0;
-  text-align: center;
-  letter-spacing: 2px;
 }
 
 .dir-list {
@@ -667,26 +678,6 @@ onMounted(() => {
 .run-more {
   margin-top: 12px;
   text-align: center;
-}
-
-.run-empty {
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 13px;
-  text-align: center;
-  padding: 16px 0;
-}
-
-.run-skeleton {
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 13px;
-  font-family: var(--font-mono);
-  padding: 16px 0;
-}
-
-.run-error {
-  color: var(--danger, #ef4444);
 }
 
 .runs-foot {

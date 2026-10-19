@@ -8,6 +8,9 @@ import { Network, type Options } from 'vis-network';
 import { DataSet } from 'vis-data';
 import type { GraphData, RecommendedPage } from '../types';
 import { computeRadialLayout, computeStretch } from '../composables/graphLayout';
+// T02476（PRD X2/X8）：三态与空态统一走 StateBlock，空态主按钮经 gotoView 直达投递页
+import StateBlock from '../components/StateBlock.vue';
+import { gotoView } from '../utils/nav';
 
 const containerRef = ref<HTMLDivElement | null>(null);
 const loading = ref(false);
@@ -933,23 +936,33 @@ watch(loading, () => {
 
       <!-- 图谱画布 -->
       <div v-if="!listView" class="graph-canvas-wrapper">
-        <div v-if="loading" class="graph-loading">
-<p class="loading-text">// 构建图谱中…</p>
-        </div>
-      <div v-else-if="nodeCount === 0" class="graph-empty">
-<p class="empty-tip">知识库还是空的，没有图谱数据</p>
-        </div>
+        <StateBlock v-if="loading" state="loading" loading-text="正在构建图谱…" />
+        <StateBlock
+          v-else-if="nodeCount === 0"
+          state="empty"
+          empty-title="还没有图谱数据"
+          empty-desc="图谱由页面之间的双向链接生成；知识库还没有页面时，这里自然是空的。"
+        >
+          <template #action>
+            <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+          </template>
+        </StateBlock>
       <div ref="containerRef" class="graph-canvas" v-show="!loading && nodeCount > 0"></div>
       </div>
 
       <!-- §12.3-3 列表视图（小屏降级 / 手动切换） -->
       <div v-else class="list-view-wrapper">
-        <div v-if="loading" class="graph-loading">
-<p class="loading-text">// 加载中…</p>
-        </div>
-      <div v-else-if="listData.length === 0" class="graph-empty">
-<p class="empty-tip">知识库还是空的，没有图谱数据</p>
-        </div>
+        <StateBlock v-if="loading" state="loading" loading-text="正在加载页面列表…" />
+        <StateBlock
+          v-else-if="listData.length === 0"
+          state="empty"
+          empty-title="还没有页面"
+          empty-desc="列表视图展示知识库里的页面；库为空时这里没有内容。"
+        >
+          <template #action>
+            <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+          </template>
+        </StateBlock>
       <div v-else class="list-groups">
           <div v-for="group in listData" :key="group.dir" class="list-group hover-glow">
             <div class="group-head">
@@ -1003,12 +1016,14 @@ watch(loading, () => {
           <span class="source-label">源页面：</span>
           <code class="source-path">{{ selectedPage }}</code>
         </div>
-        <div v-if="recommendLoading" class="recommend-loading">
-          <p>// 寻找相关页面中…</p>
-        </div>
-        <div v-else-if="recommendations.length === 0" class="recommend-empty">
-          <p>未找到相关但未连接的页面</p>
-        </div>
+        <StateBlock v-if="recommendLoading" state="loading" compact loading-text="正在寻找相关页面…" />
+        <StateBlock
+          v-else-if="recommendations.length === 0"
+          state="empty"
+          compact
+          empty-title="没有找到相关页面"
+          empty-desc="推荐依据双链拓扑找「邻近但还没连接」的页面；这个页面暂时没有可推荐的候选。"
+        />
         <div v-else class="recommend-list">
           <div
             v-for="rec in recommendations"
@@ -1048,7 +1063,7 @@ watch(loading, () => {
           </button>
         </div>
 
-        <div v-if="gapLoading" class="gap-status"><p>// 分析拓扑中…</p></div>
+        <StateBlock v-if="gapLoading" state="loading" compact loading-text="正在分析页面拓扑…" />
         <div v-else-if="gapInsufficient" class="gap-status">
           <p>页面样本不足（{{ gapInsufficient.pageCount }} 页），暂不足以挖掘结构缺口。</p>
         </div>

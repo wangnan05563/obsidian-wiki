@@ -11,6 +11,9 @@ import DocumentTabs from '../components/DocumentTabs.vue';
 import IconActionButton from '../components/IconActionButton.vue';
 import TocTree from '../components/TocTree.vue';
 import type { TocNode } from '../components/TocTree.vue';
+// T02476（PRD X2/X8）：三态与空态统一走 StateBlock，空态主按钮经 gotoView 直达对应功能
+import StateBlock from '../components/StateBlock.vue';
+import { gotoView } from '../utils/nav';
 // FR-20 语义搜索：embedding BYOK 配置读取（随搜索请求下发，不落盘）
 import { loadEmbeddingConfigForSearch } from '../services/userConfig';
 import { useAuthStore } from '../stores/auth';
@@ -260,6 +263,10 @@ async function loadAllPages() {
 }
 
 const treeData = ref<TreeNode[]>([]);
+// T02476（PRD X2）：目录树此前没有加载/失败态，首帧 treeData 仍为空时会闪一下「知识库还是空的」，
+// 空态升级成带主按钮的卡片后这个闪烁更容易误导，故补 treeLoading / treeError 三态。
+const treeLoading = ref(false);
+const treeError = ref('');
 const currentNode = ref<string>('');
 // 目录树组件实例：用于跨入口打开文档后自动展开/高亮树中对应节点（如从问答页参考跳转）
 const treeRef = ref<TreeInstance | null>(null);
@@ -882,13 +889,18 @@ const tagOperating = ref(false);
 const tagRegenerating = ref(false);
 
 async function loadTree() {
+  treeLoading.value = true;
+  treeError.value = '';
   try {
     const res = await apiFetch(`${API_BASE}/files/tree`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     treeData.value = data.tree ?? [];
   } catch (err) {
+    treeError.value = (err as Error).message;
     ElMessage.error('加载目录树失败：' + (err as Error).message);
+  } finally {
+    treeLoading.value = false;
   }
 }
 
@@ -1729,9 +1741,16 @@ onMounted(async () => {
             >批量发布</el-button>
           </div>
 
-          <div v-if="drafts.length === 0" class="tree-empty">
-            暂无草稿。请先在「投递资料」上传 QQ 聊天记录并触发抽取
-          </div>
+          <StateBlock
+            v-if="drafts.length === 0"
+            state="empty"
+            empty-title="暂无草稿"
+            empty-desc="草稿在「投递资料」上传聊天记录并触发抽取后生成"
+          >
+            <template #action>
+              <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+            </template>
+          </StateBlock>
 
           <!-- 草稿列表项 -->
           <div
@@ -1816,12 +1835,13 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div v-if="loading" class="content-loading">
-            <p>加载中…</p>
-          </div>
-          <div v-else-if="!fileContent" class="content-empty">
-            <p class="empty-tip">选择左侧草稿查看内容</p>
-          </div>
+          <StateBlock v-if="loading" state="loading" loading-text="正在加载草稿内容…" />
+          <StateBlock
+            v-else-if="!fileContent"
+            state="empty"
+            empty-title="尚未选择草稿"
+            empty-desc="选择左侧草稿后可查看内容并单个发布"
+          />
           <div v-else class="content-show">
             <!-- frontmatter 元信息 -->
             <div
@@ -1877,9 +1897,16 @@ onMounted(async () => {
             <span class="draft-count">{{ pendingTagPages.length }} 个待审核</span>
           </div>
 
-          <div v-if="pendingTagPages.length === 0" class="tree-empty">
-            暂无待审核的 AI 标签建议。编译新页面后将自动生成标签建议
-          </div>
+          <StateBlock
+            v-if="pendingTagPages.length === 0"
+            state="empty"
+            empty-title="暂无待审核的 AI 标签建议"
+            empty-desc="编译新页面后会自动生成标签建议"
+          >
+            <template #action>
+              <el-button class="neon-btn" size="small" @click="gotoView('progress')">去编译页面</el-button>
+            </template>
+          </StateBlock>
 
           <div
             v-for="p in pendingTagPages"
@@ -1899,12 +1926,13 @@ onMounted(async () => {
 
         <!-- 右侧：页面内容 + 标签审核操作 -->
         <div class="content-panel">
-          <div v-if="loading" class="content-loading">
-            <p>加载中…</p>
-          </div>
-          <div v-else-if="!fileContent" class="content-empty">
-            <p class="empty-tip">选择左侧页面查看内容与 AI 标签建议</p>
-          </div>
+          <StateBlock v-if="loading" state="loading" loading-text="正在加载页面内容…" />
+          <StateBlock
+            v-else-if="!fileContent"
+            state="empty"
+            empty-title="尚未选择页面"
+            empty-desc="选择左侧页面后可查看内容并审核 AI 标签建议"
+          />
           <div v-else class="content-show">
             <!-- frontmatter 元信息 -->
             <div
@@ -2115,8 +2143,14 @@ onMounted(async () => {
               <span class="search-count">{{ searchHits.length }} 条结果</span>
               <el-button size="small" text data-tip="清空搜索关键词，返回完整目录" @click="clearSearch">返回目录</el-button>
             </div>
-            <div v-if="searching" class="search-loading">搜索中…</div>
-            <div v-else-if="searchHits.length === 0" class="search-empty">未找到匹配页面</div>
+            <StateBlock v-if="searching" state="loading" compact loading-text="正在搜索…" />
+            <StateBlock
+              v-else-if="searchHits.length === 0"
+              state="empty"
+              compact
+              empty-title="未找到匹配页面"
+              empty-desc="换个关键词，或点上方「返回目录」查看全部页面"
+            />
             <div
               v-for="hit in searchHits"
               :key="hit.path"
@@ -2176,14 +2210,40 @@ onMounted(async () => {
                 </div>
               </template>
             </el-tree>
-            <div v-if="treeData.length === 0" class="tree-empty">
-              知识库还是空的，先去投递资料吧
-            </div>
+            <StateBlock v-if="treeLoading" state="loading" loading-text="正在加载目录树…" />
+            <StateBlock
+              v-else-if="treeError"
+              state="error"
+              :error-text="`目录树加载失败：${treeError}`"
+              retry-label="重新加载"
+              @retry="loadTree()"
+            />
+            <StateBlock
+              v-else-if="treeData.length === 0"
+              state="empty"
+              empty-title="知识库还是空的"
+              empty-desc="投递资料并编译后，页面会出现在这里"
+            >
+              <template #action>
+                <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+              </template>
+            </StateBlock>
           </template>
 
           <!-- 章节视图：按文件分组的章节树，点击文件行打开文档并自动展开其章节 -->
           <template v-else-if="knowledgeView === 'toc'">
-            <div v-if="allPages.length === 0" class="tree-empty">加载中…</div>
+            <!-- 章节视图：原来用 allPages.length === 0 冒充「加载中」，页面真是空时会永远停在「加载中…」 -->
+            <StateBlock v-if="pagesLoading" state="loading" loading-text="正在加载页面列表…" />
+            <StateBlock
+              v-else-if="allPages.length === 0"
+              state="empty"
+              empty-title="暂无页面"
+              empty-desc="投递资料并编译后，这里会按页面列出章节"
+            >
+              <template #action>
+                <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+              </template>
+            </StateBlock>
             <div v-else class="toc-file-list">
               <div
                 v-for="p in allPages"
@@ -2205,7 +2265,7 @@ onMounted(async () => {
                   :data-toc-path="p.path"
                   @click.stop
                 >
-                  <div v-if="fileTocLoading.has(p.path)" class="file-toc-loading">加载章节…</div>
+                  <StateBlock v-if="fileTocLoading.has(p.path)" state="loading" compact loading-text="正在加载章节…" />
                   <template v-else-if="(fileTocCache.get(p.path) ?? []).length > 0">
                     <TocTree
                       :nodes="fileTocCache.get(p.path) ?? []"
@@ -2213,7 +2273,13 @@ onMounted(async () => {
                       @navigate="(id: string) => navigateFileToc(p.path, id)"
                     />
                   </template>
-                  <div v-else class="file-toc-loading">无章节</div>
+                  <StateBlock
+                    v-else
+                    state="empty"
+                    compact
+                    empty-title="这个页面没有标题层级"
+                    empty-desc="页面里添加标题后，章节会在此列出"
+                  />
                 </div>
               </div>
             </div>
@@ -2221,10 +2287,17 @@ onMounted(async () => {
 
           <!-- 看板视图（FR-11 AC-11-2）：按 type 分列 -->
           <template v-else-if="knowledgeView === 'kanban'">
-            <div v-if="pagesLoading" class="tree-empty">加载中…</div>
-            <div v-else-if="allPages.length === 0" class="tree-empty">
-              暂无页面。先去投递资料并编译
-            </div>
+            <StateBlock v-if="pagesLoading" state="loading" loading-text="正在加载页面列表…" />
+            <StateBlock
+              v-else-if="allPages.length === 0"
+              state="empty"
+              empty-title="暂无页面"
+              empty-desc="投递资料并编译后，页面会按类型分布在列里"
+            >
+              <template #action>
+                <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+              </template>
+            </StateBlock>
             <div v-else class="kanban-scroll">
               <div
                 v-for="col in KANBAN_COLUMNS"
@@ -2276,10 +2349,17 @@ onMounted(async () => {
 
           <!-- 日历视图（FR-11 AC-11-3）：按 created 分组，点击日期折叠/展开 -->
           <template v-else-if="knowledgeView === 'calendar'">
-            <div v-if="pagesLoading" class="tree-empty">加载中…</div>
-            <div v-else-if="calendarGroups.length === 0" class="tree-empty">
-              暂无带 created 字段的页面
-            </div>
+            <StateBlock v-if="pagesLoading" state="loading" loading-text="正在加载页面列表…" />
+            <StateBlock
+              v-else-if="calendarGroups.length === 0"
+              state="empty"
+              empty-title="暂无带创建日期的页面"
+              empty-desc="页面编译时会记录创建日期，缺少创建日期的页面不会出现在日历里"
+            >
+              <template #action>
+                <el-button class="neon-btn" size="small" @click="knowledgeView = 'tree'">改用目录视图浏览</el-button>
+              </template>
+            </StateBlock>
             <div v-else class="calendar-list">
               <div
                 v-for="group in calendarGroups"
@@ -2381,12 +2461,13 @@ onMounted(async () => {
               </template>
             </template>
           </DocumentTabs>
-          <div v-if="activeTab?.loading" class="content-loading">
-            <p>加载中…</p>
-          </div>
-          <div v-else-if="!activeTab || !activeTab.content" class="content-empty">
-            <p class="empty-tip">打开左侧目录/看板/日历中的页面以开始浏览</p>
-          </div>
+          <StateBlock v-if="activeTab?.loading" state="loading" loading-text="正在加载页面内容…" />
+          <StateBlock
+            v-else-if="!activeTab || !activeTab.content"
+            state="empty"
+            empty-title="还没有打开页面"
+            empty-desc="在左侧目录、看板或日历里点一个页面即可开始浏览"
+          />
           <div v-else class="content-show">
             <!-- T00269：文档标题与操作按钮已移至 Tab 行（下载/编辑按钮在 Tab 页签右侧），此处不再重复显示 -->
 
@@ -3029,16 +3110,6 @@ onMounted(async () => {
   letter-spacing: 1px;
 }
 
-.search-loading,
-.search-empty {
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-dim);
-  padding: 24px 0;
-  font-family: var(--font-mono);
-  letter-spacing: 1px;
-}
-
 .search-hit-item {
   padding: 10px 12px;
   background: var(--accent-purple-a05);
@@ -3127,14 +3198,6 @@ onMounted(async () => {
   scrollbar-width: thin;
 }
 
-.file-toc-loading {
-  font-size: 11px;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  letter-spacing: 1px;
-  padding: 4px 0;
-}
-
 .file-icon {
   color: var(--neon-cyan);
 }
@@ -3215,14 +3278,6 @@ onMounted(async () => {
   box-shadow: 0 0 8px var(--accent-cyan-a40);
 }
 
-.tree-empty {
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 12px;
-  padding: 24px 8px;
-  font-family: var(--font-mono);
-}
-
 /* 右侧内容区 */
 .content-panel {
   flex: 1;
@@ -3233,22 +3288,11 @@ onMounted(async () => {
   border-radius: var(--radius-card);
 }
 
-.content-loading,
-.content-empty {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  color: var(--text-soft);
-  font-family: var(--font-mono);
+/* T02476（PRD X2/X8）：加载态与空态统一交给 StateBlock，这里只负责在内容区里居中撑满 */
+.content-panel > .state-block {
+  min-height: 60%;
 }
 
-.empty-tip {
-  margin: 0;
-  font-size: 14px;
-}
 
 .content-show {
   display: flex;

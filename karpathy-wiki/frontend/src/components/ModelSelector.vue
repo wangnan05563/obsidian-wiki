@@ -333,7 +333,7 @@ async function onKeydown(e: KeyboardEvent) {
       <li class="ms-divider" role="separator"></li>
       <li class="ms-group-header">
         服务商真实模型
-        <span v-if="store.modelsLoading" class="ms-loading">加载中…</span>
+        <span v-if="store.modelsLoading" class="ms-loading">正在加载模型…</span>
       </li>
       <li
         v-for="m in store.availableModels"

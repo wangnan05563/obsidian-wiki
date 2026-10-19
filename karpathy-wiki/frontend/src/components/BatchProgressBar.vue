@@ -2,6 +2,9 @@
 import { computed } from 'vue';
 import { Check, Close, CircleClose } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
+// T02476（PRD X8）：空闲态改用统一空态模板，主按钮直达投递页
+import StateBlock from './StateBlock.vue';
+import { gotoView } from '../utils/nav';
 
 // 批量编译进度条组件
 // 为什么独立组件：Progress.vue 已包含时间线/分组卡片/历史任务等多块逻辑，
@@ -171,11 +174,17 @@ function handleCancel() {
       class="progress-bar"
     />
 
-    <!-- 空状态：batchGroups 还未初始化 -->
-    <div v-else class="progress-empty">
-      <span class="empty-dots">● ● ●</span>
-      <p>等待批量编译开始…</p>
-    </div>
+    <!-- 空状态：batchGroups 还未初始化（T02476 / PRD X8：三点动画死胡同改为现状 + 原因 + 主按钮） -->
+    <StateBlock
+      v-else
+      state="empty"
+      empty-title="等待批量编译开始"
+      empty-desc="在「投递资料」选好多份资料后提交，这里会逐份显示进度"
+    >
+      <template #action>
+        <el-button class="neon-btn" size="small" @click="gotoView('ingest')">去投递资料</el-button>
+      </template>
+    </StateBlock>
 
     <!-- 副文案：详细统计 -->
     <div v-if="totalCount > 0" class="progress-subtitle">
@@ -348,23 +357,6 @@ function handleCancel() {
   color: var(--text-soft);
   letter-spacing: 0.5px;
   word-break: break-all;
-}
-
-.progress-empty {
-  text-align: center;
-  color: var(--text-dim);
-  padding: 28px 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.empty-dots {
-  display: block;
-  color: var(--neon-purple);
-  letter-spacing: 8px;
-  font-size: 18px;
-  margin-bottom: 8px;
-  animation: neon-pulse 1.5s ease-in-out infinite;
 }
 
 /* banner：语义色弱化背景 + 左侧 3px 色条 + 圆角 */
