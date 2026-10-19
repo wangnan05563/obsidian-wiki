@@ -8,7 +8,7 @@ import AppModal from '../components/AppModal.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import AttachmentUploader from '../components/AttachmentUploader.vue';
 import InputToolbar from '../components/InputToolbar.vue';
-import IconActionButton from '../components/IconActionButton.vue';
+// T02478（PRD X7）：发送/停止这对主 CTA 改为「图标 + 文字」，不再走纯图标按钮组件
 // FR-23 思考过程折叠：模型 <think> 内容面板（纯文本渲染，会话级展开记忆）
 import ThinkFoldPanel from '../components/ThinkFoldPanel.vue';
 // FR-21 引用溯源：[n] 角标解析 + 引用浮层（chunk 原文/高亮/打开页面）
@@ -1717,6 +1717,8 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div class="right-buttons">
+            <!-- T02478（PRD X7 回归）：输入提交是本页主 CTA，规则要求「主 CTA 必须带文字，
+                 纯图标仅限高频工具栏」。此前只有纸飞机图标 + tooltip，补「发送」文字（图标保留） -->
             <el-button
               v-if="!store.isLoading"
               type="primary"
@@ -1727,16 +1729,21 @@ onBeforeUnmount(() => {
               @click="handleSubmit"
             >
               <el-icon><Promotion /></el-icon>
+              <span>发送</span>
             </el-button>
-            <IconActionButton
+            <!-- 停止与发送是同一 CTA 的另一状态，同样带文字 -->
+            <el-button
               v-else
-              name="停止生成"
-              desc="中断当前回答"
+              type="danger"
+              class="stop-btn"
+              title="停止生成"
+              data-tip="中断当前回答"
               aria-label="停止生成 - 中断当前回答"
-              variant="danger"
-              :icon="VideoPause"
               @click="handleStop"
-            />
+            >
+              <el-icon><VideoPause /></el-icon>
+              <span>停止</span>
+            </el-button>
           </div>
         </div>
         <Transition name="advanced-panel">
@@ -2792,19 +2799,27 @@ onBeforeUnmount(() => {
   letter-spacing: 0.5px;
 }
 
-/* 发送按钮：v3.1 缩小尺寸（从原 large 38px 收到 30px 高），避免视觉抢占输入区
-   为什么用 padding 而非 size 属性：el-button 的 size="large" 会同时改文字大小，
-   当前按钮内只有 el-icon，文字大小无关，仅需控制外边距 + 内边距即可
-   为什么要 flex-shrink:0：在右栏 flex 容器中避免被压缩成 0 宽 */
-.send-btn {
+/* 发送/停止按钮：v3.1 缩小尺寸（从原 large 38px 收到 30px 高），避免视觉抢占输入区
+   为什么用 padding 而非 size 属性：仅需控制外边距 + 内边距
+   为什么要 flex-shrink:0：在右栏 flex 容器中避免被压缩成 0 宽
+   T02478（PRD X7 回归）：这对主 CTA 由纯图标改为「图标 + 文字」，
+   停止沿用同一组尺寸，切换状态时按钮位置与高度不跳变 */
+.send-btn,
+.stop-btn {
   flex-shrink: 0;
   padding: 6px 12px;
   border-radius: 10px;
   min-height: 30px;
   height: 30px;
 }
-.send-btn :deep(.el-icon) {
+.send-btn :deep(.el-icon),
+.stop-btn :deep(.el-icon) {
   font-size: 14px;
+}
+/* 图标 + 文字成对后，与 Element Plus 默认 6px 间隙对齐（el-button 内两个子元素自带 margin） */
+.send-btn span,
+.stop-btn span {
+  font-size: 13px;
 }
 /* T02462（Q2）：流式期间可预输入并排队下一问的提示 */
 .queue-hint {

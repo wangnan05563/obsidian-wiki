@@ -2,6 +2,7 @@
 // 与 mock 版（test/pptx-renderer.test.ts）互补——这里不 mock 任何模块，
 // 验证渲染器对 pptxgenjs 真实 API 面的使用是正确的：产出可下载的 .pptx 二进制（ZIP/PK 头）。
 // 为什么确定性：pptxgenjs write({outputType:'nodebuffer'}) 纯内存生成，无网络/文件系统依赖。
+// ⚠ 结果确定，但耗时有个冷启动台阶（见下方 RENDER_TIMEOUT_MS 注释）——不要按默认 5s 超时判断它「坏了」。
 import { describe, it, expect, vi } from 'vitest';
 import { parseMarpSlides, renderPptx, generatePptxFile } from '../src/workflows/pptx-renderer.js';
 import type { VaultService } from '../src/vault/vault-service.js';
@@ -12,6 +13,13 @@ function expectPptxZip(buf: Buffer): void {
   // OOXML .pptx 是 ZIP 容器：本地文件头 'PK\x03\x04'
   expect(buf.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
 }
+
+// 本文件不 mock pptxgenjs，第一次 renderPptx 承担库冷启动（模块初始化 + 主题/字体表装载）。
+// 2026-10-20 T02478 单独跑（--testTimeout=120000 --reporter=verbose）实测：
+//   五类页用例 28636ms（其余 3 个用例合计约 250ms，说明耗时几乎全在冷启动），
+//   单文件总耗时 119s（其中 prepare 56s）。vitest 默认 testTimeout 5000ms 必然假失败，
+//   且在全量并发下波动更大——60000ms 取实测值的 2 倍余量，只放宽本文件，不动全局配置。
+const RENDER_TIMEOUT_MS = 60_000;
 
 describe('renderPptx（真实 pptxgenjs 产物）', () => {
   it('完整五类页（封面/目录/内容/总结/结语）产出合法 .pptx ZIP', async () => {
@@ -52,7 +60,7 @@ describe('renderPptx（真实 pptxgenjs 产物）', () => {
     const slides = parseMarpSlides(md);
     expect(slides).toHaveLength(5);
     expectPptxZip(await renderPptx(slides, '知识库季度回顾'));
-  });
+  }, RENDER_TIMEOUT_MS);
 
   it('空页数组也产出非空 .pptx（占位封面防御）', async () => {
     expectPptxZip(await renderPptx([], '占位标题'));
