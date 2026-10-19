@@ -285,11 +285,29 @@ export const useAuthStore = defineStore('auth', () => {
 
   // ===== 用户管理方法（仅管理员可用）=====
 
+  // U7（T02473）：后端 {error} 原文透传给管理页。
+  // 为什么单独一个 ref 而不复用 error：error 是登录/注册通道的，用户管理里的失败不该让登录态误报。
+  const adminError = ref('');
+
+  // 失败时读取响应里的 {error}（后端 400 一律带原文，如「用户名已存在: foo」）
+  async function readAdminError(res: Response, fallback: string): Promise<string> {
+    try {
+      const data = (await res.json()) as { error?: string };
+      return data?.error || fallback;
+    } catch {
+      return `${fallback}（HTTP ${res.status}）`;
+    }
+  }
+
   // 获取用户列表
   async function listUsers(): Promise<UserInfo[] | null> {
     if (!isAdmin.value) return null;
+    adminError.value = '';
     const res = await authFetch(`${API_BASE}/auth/users`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      adminError.value = await readAdminError(res, '加载用户列表失败');
+      return null;
+    }
     const data = await res.json() as { users: UserInfo[] };
     return data.users;
   }
@@ -297,30 +315,48 @@ export const useAuthStore = defineStore('auth', () => {
   // 创建用户
   async function createUser(params: CreateUserRequest): Promise<UserInfo | null> {
     if (!isAdmin.value) return null;
+    adminError.value = '';
     const res = await authFetch(`${API_BASE}/auth/users`, {
       method: 'POST',
       body: JSON.stringify(params),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      adminError.value = await readAdminError(res, '创建用户失败');
+      return null;
+    }
     return res.json() as unknown as UserInfo;
   }
 
   // 更新用户
   async function updateUser(id: string, params: UpdateUserRequest): Promise<UserInfo | null> {
     if (!isAdmin.value) return null;
+    adminError.value = '';
     const res = await authFetch(`${API_BASE}/auth/users/${id}`, {
       method: 'PUT',
       body: JSON.stringify(params),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      adminError.value = await readAdminError(res, '更新用户失败');
+      return null;
+    }
     return res.json() as unknown as UserInfo;
   }
 
   // 删除用户
   async function deleteUser(id: string): Promise<boolean> {
     if (!isAdmin.value) return false;
+    adminError.value = '';
     const res = await authFetch(`${API_BASE}/auth/users/${id}`, { method: 'DELETE' });
-    return res.ok;
+    if (!res.ok) {
+      adminError.value = await readAdminError(res, '删除用户失败');
+      return false;
+    }
+    return true;
+  }
+
+  // U7（T02473）：管理页切页/重试前显式清掉上一次的失败原文
+  function clearAdminError(): void {
+    adminError.value = '';
   }
 
   // T02453：强制改密成功后清除本地标记（后端已同步清除，此处让 UI 立即收起对话框）
@@ -357,6 +393,8 @@ export const useAuthStore = defineStore('auth', () => {
     hasAnyPermission,
     hasAllPermissions,
     // 用户管理
+    adminError,
+    clearAdminError,
     listUsers,
     createUser,
     updateUser,

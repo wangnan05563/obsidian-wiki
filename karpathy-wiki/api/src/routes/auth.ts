@@ -445,12 +445,20 @@ export function registerAuthRoute(app: FastifyInstance): void {
   // POST /api/auth/users：创建用户
   app.post('/api/auth/users', { preHandler: adminGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as CreateUserRequest;
-    // 可选链合并 body nullish 守卫与字段访问（S6582）
+    // T02473（PRD U2）：这些 400 分支原先缺 return，Fastify 不会中断 handler，
+    // 于是校验失败的请求照样落到下面的 createUser() —— 形同「报了错但还是建了号」。守卫必须真的 return。
     if (!body?.username || !body?.password || !body?.role) {
-      reply.code(400).send({ error: '用户名、密码和角色不能为空' });
+      return void reply.code(400).send({ error: '用户名、密码和角色不能为空' });
     }
     if (!['admin', 'user', 'guest'].includes(body.role)) {
-      reply.code(400).send({ error: '无效的角色' });
+      return void reply.code(400).send({ error: '无效的角色' });
+    }
+    if (!/^\w{3,32}$/.test(body.username)) {
+      return void reply.code(400).send({ error: '用户名须为 3-32 位字母、数字或下划线' });
+    }
+    const pwdCheck = validateNewPassword(body.password);
+    if (!pwdCheck.ok) {
+      return void reply.code(pwdCheck.status).send({ error: pwdCheck.error });
     }
     try {
       const user = await createUser({
@@ -490,7 +498,32 @@ export function registerAuthRoute(app: FastifyInstance): void {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateUserRequest;
     if (!body) {
-      reply.code(400).send({ error: '请求体为空' });
+      return void reply.code(400).send({ error: '请求体为空' });
+    }
+    if (body.role && !['admin', 'user', 'guest'].includes(body.role)) {
+      return void reply.code(400).send({ error: '无效的角色' });
+    }
+    const target = await findUserById(id);
+    if (!target) {
+      return void reply.code(404).send({ error: `用户不存在: ${id}` });
+    }
+    // 禁止停用/改角色搞死当前登录账户自身（停用会销毁自己的会话 → 立刻被踢出）
+    if (target.id === request.currentUser?.userId && (body.enabled === false || (body.role && body.role !== 'admin'))) {
+      return void reply.code(400).send({ error: '不能停用或降级当前登录账户' });
+    }
+    // T02473（PRD U2）：禁止把最后一个可用管理员改角色或停用 —— 与删除同一条锁死红线
+    if (target.role === 'admin' && ((body.role && body.role !== 'admin') || body.enabled === false)) {
+      const all = await listUsers();
+      const otherActiveAdmins = all.filter((u) => u.id !== target.id && u.role === 'admin' && u.enabled).length;
+      if (otherActiveAdmins === 0) {
+        return void reply.code(400).send({ error: '系统至少保留一个启用的管理员账户' });
+      }
+    }
+    if (body.password) {
+      const pwdCheck = validateNewPassword(body.password);
+      if (!pwdCheck.ok) {
+        return void reply.code(pwdCheck.status).send({ error: pwdCheck.error });
+      }
     }
     try {
       const updated = await updateUser(id, {
@@ -539,13 +572,16 @@ export function registerAuthRoute(app: FastifyInstance): void {
   app.delete('/api/auth/users/:id', { preHandler: adminGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     // 禁止删除自己
+    // T02473（PRD U2）：原先缺 return，400 只是「回执」—— handler 继续往下跑，
+    // 结果照样 destroyUserSessions + deleteUser，把当前登录账户真的删掉。守卫必须真的 return。
     if (request.currentUser?.userId === id) {
-      reply.code(400).send({ error: '不能删除当前登录用户' });
+      return void reply.code(400).send({ error: '不能删除当前登录用户' });
     }
     try {
-      // 先销毁被删用户的会话
-      destroyUserSessions(id);
       await deleteUser(id);
+      // 会话销毁挪到删除成功之后：原先在 deleteUser 之前执行，
+      // 「最后一个管理员」等失败场景会留下「人已删不掉、会话却全没了」的半截状态
+      destroyUserSessions(id);
       audit({
         request,
         action: 'user_delete',
