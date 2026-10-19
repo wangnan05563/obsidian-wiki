@@ -1,5 +1,5 @@
 // wiki三期 T02449（PRD N1）：侧栏菜单分组配置与纯分组函数
-// 4 组：知识 / 生产 / 运维 / 系统；组内按使用频率排序，同权限点的清理类相邻摆放（系统清理+数据清洗）
+// 4 组：知识 / 生产 / 运维 / 系统；组内按使用频率排序，同权限点的清理类相邻摆放（缓存与日志清理+数据清洗）
 // 为什么抽成独立模块：分组逻辑可单测（纯函数），App.vue 只消费；新增菜单只改此处
 import type { AuthPermission } from '../types';
 
@@ -59,9 +59,11 @@ export const menuItems: MenuItem[] = [
   // 生产组：投递资料 / 编译进度
   { key: 'ingest', icon: 'ingest', label: '投递资料', permission: 'ingest', group: 'produce' },
   { key: 'progress', icon: 'progress', label: '编译进度', permission: 'progress', group: 'produce' },
-  // 运维组：体检中心 / 系统清理 / 数据清洗（清理类相邻）
+  // 运维组：体检中心 / 缓存与日志清理 / 数据清洗（清理类相邻）
+  // T02470 S5：原名「系统清理」与「数据清洗」职责不可辨（两页共用 cleanup 权限、名称近似），
+  // 改成说清删的是什么的「缓存与日志清理」；菜单名 = 页标题 = 帮助文档条目名。
   { key: 'health', icon: 'health', label: '体检中心', permission: 'health', group: 'ops' },
-  { key: 'cleanup', icon: 'cleanup', label: '系统清理', permission: 'cleanup', group: 'ops' },
+  { key: 'cleanup', icon: 'cleanup', label: '缓存与日志清理', permission: 'cleanup', group: 'ops' },
   { key: 'dataclean', icon: 'dataclean', label: '数据清洗', permission: 'cleanup', group: 'ops' },
   // 系统组：配置 / 穿透 / 用户 / 技能 / 帮助 / 关于
   { key: 'config', icon: 'config', label: '配置中心', permission: 'dashboard', group: 'system' },

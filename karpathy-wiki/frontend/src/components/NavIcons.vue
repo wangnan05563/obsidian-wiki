@@ -95,7 +95,7 @@ defineProps<{
       <path d="M16 8 L20 4 M20 4 L17 4 M20 4 L20 7" stroke-width="1.6" />
     </template>
 
-    <!-- 系统清理：扫帚 -->
+    <!-- 缓存与日志清理（原「系统清理」，T02470 S5 改名）：扫帚 -->
     <template v-else-if="name === 'cleanup'">
       <path d="M14 3 L18 7 L13 12 L9 8 Z" />
       <path d="M9 8 L4 18 L13 12" />
