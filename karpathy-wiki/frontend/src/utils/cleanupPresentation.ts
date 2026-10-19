@@ -9,7 +9,7 @@ import type { CleanupStorageStatus, CleanupTarget } from '../types';
 /** S5：菜单名 = 页标题 = 帮助文档条目名，不再叫含糊的「系统清理」 */
 export const CLEANUP_PAGE_TITLE = '缓存与日志清理';
 
-/** S5：一句划清与「数据清洗」的职责边界——本页只删临时文件 */
+/** S5：一句划清与「页面质量清洗」（原名「数据清洗」）的职责边界——本页只删临时文件 */
 export const CLEANUP_PAGE_TIP = '只删临时文件，不改动知识库内容';
 
 export type CleanupCardKey = 'compileCache' | 'runState' | 'runLogs' | 'rawArchive';

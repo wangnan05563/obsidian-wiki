@@ -1,10 +1,11 @@
 ﻿<script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, reactive, watch, nextTick, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Sort, MagicStick, Right, Loading, Refresh, View, CopyDocument } from '@element-plus/icons-vue';
-// T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
-import IconActionButton from '../components/IconActionButton.vue';
+import type { TableInstance } from 'element-plus';
+import { Sort, MagicStick, Right, Refresh, View, CopyDocument, Search } from '@element-plus/icons-vue';
+// wiki三期 T02472 L4（PRD §16）：本页顶部操作原为 4 个纯图标按钮（仅悬浮提示），
+// 破坏性/耗时动作看不出是什么 → 改回带文字按钮，AI 分析旁注明「调用你的模型」。
 // T01629：统一弹窗（抽屉形态沿用同一套遮罩/动效/容器规格）
 import AppModal from '../components/AppModal.vue';
 import { usePermission } from '../composables/usePermission';
@@ -12,6 +13,26 @@ import { useAuthStore } from '../stores/auth';
 import { useModelStore } from '../stores/model';
 import { loadAiUserConfigForPreset, type AiUserConfig } from '../services/userConfig';
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
+import {
+  ISSUE_CATEGORIES,
+  PAGE_SIZE_OPTIONS,
+  PAGE_TOTAL_HINT,
+  buildIssueContext,
+  categoryCounts,
+  categoryMeta,
+  categoryPaths,
+  defaultTableQuery,
+  filterPages,
+  mergeSelection,
+  pageIssueKeys,
+  problemCount,
+  selectionSummary,
+  slicePage,
+  sortPages,
+  totalPageCount,
+  type IssueKey,
+  type TableQuery,
+} from '../utils/dataCleanPresentation';
 import type { PageQualityScore, DeduplicateResult, DuplicatePair, MergeResult, PrecheckResult, DiffResult, AiCleanAnalysisResult, AiAnalysisRenameItem } from '../types';
 
 const pages = ref<PageQualityScore[]>([]);
@@ -67,25 +88,113 @@ const MOCK_DUPLICATE_EXAMPLE = {
   reason: 'Similar page name'
 };
 
-// Quality stats
-const qualityStats = computed(() => {
-  const scores = pages.value.map(p => p.qualityScore);
-  if (scores.length === 0) return null;
-  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-  return {
-    total: scores.length,
-    avg: avg.toFixed(1),
-    excellent: scores.filter(s => s >= 80).length,
-    good: scores.filter(s => s >= 60 && s < 80).length,
-    needsWork: scores.filter(s => s < 40).length
-  };
-});
+// L2（PRD §16）：原来 5 张卡是「平均分 / 优秀 / 良好 / 需改进」的质量均分。
+// 实测平均 98.3、优秀 205、需改进(<40) 0 —— 5 张卡里 4 张在说「一切正常」，
+// 用户看完不知道该做什么。改成按「可操作的问题分类」计数，每类直接给批量动作。
+const issueCtx = computed(() => buildIssueContext(pages.value));
+const issueCounts = computed(() => categoryCounts(pages.value, issueCtx.value));
+const healthy = computed(() => ISSUE_CATEGORIES.every((c) => issueCounts.value[c.key] === 0));
 
-function scoreClass(score: number): string {
-  if (score >= 80) return 'score-excellent';
-  if (score >= 60) return 'score-good';
-  if (score >= 40) return 'score-needs-work';
-  return 'score-critical';
+// L3（PRD §16）：216 行固定 height=600、无搜索/排序/分页 → 问题页永远翻不到。
+// 现由纯函数 filterPages/sortPages/slicePage 驱动，页面只持状态。
+const tableQuery = reactive<TableQuery>(defaultTableQuery());
+const pageNum = ref(1);
+const pageSize = ref(50);
+const tableRef = ref<TableInstance>();
+
+const filteredPages = computed(() => filterPages(pages.value, issueCtx.value, tableQuery));
+const sortedPages = computed(() => sortPages(filteredPages.value, issueCtx.value, tableQuery.sortProp, tableQuery.sortOrder));
+const pagedRows = computed(() => slicePage(sortedPages.value, pageNum.value, pageSize.value));
+const totalPages = computed(() => totalPageCount(sortedPages.value.length, pageSize.value));
+const dirOptions = computed(() => Array.from(new Set(pages.value.map((p) => p.metadata.directory))).sort());
+const pageRowPaths = computed(() => pagedRows.value.map((p) => p.path));
+const selectedSummary = computed(() => selectionSummary(selectedPages.value.length));
+const problemPages = computed(() => pages.value.filter((p) => problemCount(p, issueCtx.value) > 0).length);
+
+function resetPage(): void {
+  pageNum.value = 1;
+}
+
+watch(() => [tableQuery.keyword, tableQuery.issue, tableQuery.dir, pageSize.value], resetPage);
+
+/** 点分类卡 = 只看这一类；再点同一张卡 = 取消筛选 */
+function toggleIssueFilter(key: IssueKey): void {
+  tableQuery.issue = tableQuery.issue === key ? 'all' : key;
+  resetPage();
+}
+
+function onSortChange(payload: { prop?: string | null; order?: string | null }): void {
+  if (!payload.prop || !payload.order) {
+    const d = defaultTableQuery();
+    tableQuery.sortProp = d.sortProp;
+    tableQuery.sortOrder = d.sortOrder;
+  } else {
+    tableQuery.sortProp = payload.prop as TableQuery['sortProp'];
+    tableQuery.sortOrder = payload.order as TableQuery['sortOrder'];
+  }
+  resetPage();
+}
+
+function resetFilters(): void {
+  tableQuery.keyword = '';
+  tableQuery.issue = 'all';
+  tableQuery.dir = 'all';
+  resetPage();
+}
+
+const hasFilter = computed(() => tableQuery.keyword !== '' || tableQuery.issue !== 'all' || tableQuery.dir !== 'all');
+
+// el-table 的 selection-change 只带当前页的行；直接赋值会让翻页丢掉其他页的勾选。
+function onRowChange(selection: PageQualityScore[]) {
+  selectedPages.value = mergeSelection(selectedPages.value, pageRowPaths.value, selection.map((s) => s.path));
+}
+
+/** 分类批量动作的落点：先把该分类全部页面置为已选，再把表格勾选状态同步到当前页 */
+async function selectCategory(key: IssueKey): Promise<void> {
+  const paths = categoryPaths(pages.value, issueCtx.value, key);
+  if (paths.length === 0) return;
+  selectedPages.value = paths;
+  tableQuery.issue = key;
+  resetPage();
+  await nextTick();
+  const t = tableRef.value;
+  if (!t) return;
+  t.clearSelection();
+  pagedRows.value.filter((p) => paths.includes(p.path)).forEach((p) => t.toggleRowSelection(p, true));
+}
+
+function clearSelection(): void {
+  tableRef.value?.clearSelection();
+  selectedPages.value = [];
+}
+
+/**
+ * 分类卡批量动作（PRD §16 L2「每类直接给批量动作」）：
+ * 能自动修的当场修（补元信息），判定型的先跑检测（标题重复→去重），
+ * 其余（无出链/字数过短/读取失败）后端没有自动修法，落到「选中这批」让用户用工具栏归档或删除。
+ */
+async function runCategoryAction(key: IssueKey): Promise<void> {
+  const paths = categoryPaths(pages.value, issueCtx.value, key);
+  if (paths.length === 0) return;
+  if (key === 'missingFrontmatter') {
+    if (!isAdmin.value) {
+      ElMessage.warning('补齐元信息会写入页面文件，需要管理员权限');
+      return;
+    }
+    await fixFrontmatterFor(paths);
+    return;
+  }
+  await selectCategory(key);
+  if (key === 'duplicateTitle') await runDeduplication();
+}
+
+/** 分类批量按钮的悬浮说明：能自动修的写明「会写入文件」，其余写明下一步落在哪个工具 */
+function categoryActionTip(key: IssueKey): string {
+  if (key === 'missingFrontmatter') {
+    return isAdmin.value ? '给这类页面补上缺失的 type 与 title，会写入文件' : '这一步会写入文件，需要管理员账户';
+  }
+  if (key === 'duplicateTitle') return '选中这类页面并重跑重复检测，找出可以合并的分组';
+  return '先把这类页面全部选中，再用下方工具栏归档或删除';
 }
 
 // 重复类型 → 标签颜色：exact 红、near-duplicate 橙、semantic-similar 蓝
@@ -108,7 +217,7 @@ async function loadPages() {
     const res = await apiFetch(`${API_BASE}/data-clean/pages`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     pages.value = await res.json();
-    scanProgress.value = `已加载 ${pages.value.length} 个页面，平均质量 ${qualityStats.value?.avg || 0}/100`;
+    scanProgress.value = `已加载 ${pages.value.length} 个页面，其中 ${problemPages.value} 个有可处理的问题`;
     ElMessage.success('页面数据加载成功');
   } catch (err) {
     scanProgress.value = '加载失败 — 将自动重试';
@@ -452,10 +561,6 @@ function findPageTitle(pagePath: string): string {
   return pages.value.find(p => p.path === pagePath)?.title ?? pagePath;
 }
 
-function onRowChange(selection: PageQualityScore[]) {
-  selectedPages.value = selection.map(s => s.path);
-}
-
 onMounted(() => loadPages());
 </script>
 
@@ -466,42 +571,21 @@ onMounted(() => loadPages());
       
       <div class="dataclean-header">
         <div class="head-text">
-          <h2 class="head-title grad-text">数据清洗</h2>
-          <p class="head-tip">扫描 · 去重 · 合并 · 报告 · 归档 · 修复</p>
+          <!-- T02472 L7（PRD §16）：原名「数据清洗」与「缓存与日志清理」职责不可辨（两页共用 cleanup 权限），
+               页头第一句先划清边界 -->
+          <h2 class="head-title grad-text">页面质量清洗</h2>
+          <p class="head-tip">只处理知识库里的页面内容（查重、补元信息、归档）；临时缓存与日志在「缓存与日志清理」</p>
         </div>
-        <el-button-group style="display:flex;gap:8px">
-          <IconActionButton
-            name="刷新"
-            desc="重新扫描 vault 并加载全部页面数据"
-            :icon="Refresh"
-            class="neon-btn"
-            :loading="loading"
-            @click="loadPages"
-          />
-          <IconActionButton
-            name="预检"
-            desc="执行 Vault 预检，检查链接、frontmatter、重复等潜在问题"
-            :icon="View"
-            class="neon-btn secondary"
-            @click="runPrecheck"
-          />
-          <IconActionButton
-            name="去重"
-            desc="基于内容哈希与相似度检测重复页面并聚合为重复组"
-            :icon="CopyDocument"
-            class="neon-btn secondary"
-            :loading="deduping"
-            @click="runDeduplication"
-          />
-          <IconActionButton
-            name="AI分析"
-            desc="调用你自己的模型（BYOK）智能分析：识别冗余、重复与待重命名文档"
-            :icon="MagicStick"
-            class="neon-btn secondary"
-            :loading="analyzing"
-            @click="runAiAnalysis"
-          />
-        </el-button-group>
+        <!-- T02472 L4：原 4 个纯图标按钮只有悬浮提示，看不出点了会做什么 → 改带文字按钮 -->
+        <div class="head-actions">
+          <div class="head-actions-row">
+            <el-button class="neon-btn" :icon="Refresh" :loading="loading" data-tip="重新扫描知识库页面并刷新本页统计" @click="loadPages">重新扫描</el-button>
+            <el-button class="neon-btn secondary" :icon="View" data-tip="只读检查：链接是否断裂、元信息能否解析，不改动文件" @click="runPrecheck">预检</el-button>
+            <el-button class="neon-btn secondary" :icon="CopyDocument" :loading="deduping" data-tip="按内容哈希与相似度找出重复页面并聚合成分组" @click="runDeduplication">重复检测</el-button>
+            <el-button class="neon-btn secondary" :icon="MagicStick" :loading="analyzing" data-tip="让模型把文档分成冗余 / 重复 / 待重命名三类，结论出来后可直接批量执行" @click="runAiAnalysis">AI 分析</el-button>
+          </div>
+          <p class="head-note">AI 分析会调用你在「配置 / 我的」里填写的模型，按你的额度计费。</p>
+        </div>
       </div>
       
       <!-- Mock data example (B-2) -->
@@ -511,34 +595,43 @@ onMounted(() => loadPages());
         <pre>{{ JSON.stringify(MOCK_DUPLICATE_EXAMPLE, null, 2) }}</pre>
       </div>
       
-      <!-- 质量统计：与系统清理页 status-grid 一致的 5 列卡片 -->
-      <div v-if="qualityStats" class="stats-grid">
-        <div class="status-block hover-glow">
-          <div class="status-title">总页数</div>
-          <div class="status-value">{{ qualityStats.total }}</div>
-          <div class="status-meta">已扫描页面</div>
+      <!-- 页面总数 + 可操作问题分类（T02472 L1/L2）：
+           总数与仪表盘同源并写明口径；原来的「平均分/优秀/良好/需改进」四张恒为正常的卡换成能直接批量处理的分类 -->
+      <div v-if="pages.length > 0" class="stats-grid issue-grid">
+        <div class="status-block total-block">
+          <div class="status-title">页面总数</div>
+          <div class="status-value">{{ pages.length }}</div>
+          <div class="status-meta">{{ PAGE_TOTAL_HINT }}</div>
         </div>
-        <div class="status-block hover-glow">
-          <div class="status-title">平均分</div>
-          <div class="status-value">{{ qualityStats.avg }} <span class="unit">/100</span></div>
-          <div class="status-meta">质量均值</div>
-        </div>
-        <div class="status-block hover-glow">
-          <div class="status-title">优秀 (≥80)</div>
-          <div class="status-value">{{ qualityStats.excellent }}</div>
-          <div class="status-meta">高质量页面</div>
-        </div>
-        <div class="status-block hover-glow">
-          <div class="status-title">良好 (60-79)</div>
-          <div class="status-value">{{ qualityStats.good }}</div>
-          <div class="status-meta">中等质量</div>
-        </div>
-        <div class="status-block hover-glow">
-          <div class="status-title">需改进 (&lt;40)</div>
-          <div class="status-value">{{ qualityStats.needsWork }}</div>
-          <div class="status-meta">低质量页面</div>
+        <div
+          v-for="c in ISSUE_CATEGORIES"
+          :key="c.key"
+          class="status-block issue-card"
+          :class="{ 'is-active': tableQuery.issue === c.key, 'is-clean': issueCounts[c.key] === 0 }"
+        >
+          <div class="status-title">{{ c.label }}</div>
+          <div class="status-value">{{ issueCounts[c.key] }}<span class="unit"> 个</span></div>
+          <div class="status-meta">{{ issueCounts[c.key] === 0 ? categoryMeta(0) : c.desc }}</div>
+          <div v-if="issueCounts[c.key] > 0" class="issue-actions">
+            <el-button
+              size="small"
+              :type="tableQuery.issue === c.key ? 'primary' : 'info'"
+              plain
+              data-tip="只在这一类页面里筛表格，翻完再点一次取消"
+              @click="toggleIssueFilter(c.key)"
+            >{{ tableQuery.issue === c.key ? '取消筛选' : '只看这类' }}</el-button>
+            <el-button
+              size="small"
+              type="warning"
+              plain
+              :disabled="(c.key === 'missingFrontmatter' && !isAdmin) || batchBusy !== null"
+              :data-tip="categoryActionTip(c.key)"
+              @click="runCategoryAction(c.key)"
+            >{{ c.action }} ({{ issueCounts[c.key] }})</el-button>
+          </div>
         </div>
       </div>
+      <p v-if="pages.length > 0 && healthy" class="healthy-note">这一批页面没有上面五类问题，无需批量处理。</p>
       
       <!-- 预检结果 -->
       <el-alert v-if="precheckResult"
@@ -549,47 +642,124 @@ onMounted(() => loadPages());
       
       <div v-if="scanProgress" class="progress-bar" :class="{ success: !loading && !scanProgress.includes('failed') && !scanProgress.includes('Failed') }">{{ scanProgress }}</div>
       
-      <!-- 操作工具栏 -->
-      <div class="toolbar" v-if="selectedPages.length > 0">
-        <el-button-group>
-          <el-button
-            type="danger"
-            size="small"
-            :loading="batchBusy === 'delete-selected'"
-            :disabled="batchBusy !== null || !isAdmin"
-            :title="isAdmin ? '永久删除选中页面（不可撤销）' : '需管理员权限'"
-            data-tip="永久删除选中的页面，操作不可撤销（需管理员权限）"
-            @click="deleteSelected"
-          >永久删除 ({{ selectedPages.length }})</el-button>
-          <el-button type="danger" size="small" data-tip="将选中的页面归档备份，便于后续恢复" @click="archiveSelected">归档 ({{ selectedPages.length }})</el-button>
-          <el-button type="warning" size="small" data-tip="修复选中页面的 frontmatter 格式（如缺失字段、错误缩进）" @click="fixFrontmatterFor(selectedPages)">修复 Frontmatter</el-button>
-          <el-button size="small" data-tip="清空当前已勾选的页面" @click="selectedPages=[]">清除选择</el-button>
-        </el-button-group>
+      <!-- 搜索 / 目录筛选 / 排序状态（T02472 L3）：216 行以前无搜索、无排序、无分页，问题页翻不到 -->
+      <div v-if="pages.length > 0" class="table-tools">
+        <el-input
+          v-model="tableQuery.keyword"
+          class="search-input"
+          :prefix-icon="Search"
+          placeholder="搜索文件路径或标题"
+          clearable
+          aria-label="搜索页面"
+          data-tip="在当前筛选结果里按路径 / 标题 / 目录过滤"
+        />
+        <el-select v-model="tableQuery.dir" class="dir-select" aria-label="按目录筛选" data-tip="只统计某个页面目录下的结果">
+          <el-option label="全部目录" value="all" />
+          <el-option v-for="d in dirOptions" :key="d" :label="d" :value="d" />
+        </el-select>
+        <span class="filter-count">筛出 {{ sortedPages.length }} / {{ pages.length }} 个页面</span>
+        <el-button v-if="hasFilter" size="small" text data-tip="清空搜索、目录与分类筛选" @click="resetFilters">清空筛选</el-button>
       </div>
-      
-      <!-- 页面表格 -->
-      <el-table :data="pages" style="width: 100%" stripe @selection-change="onRowChange" height="600">
+
+      <!-- 操作工具栏（T02472 L6）：已选数量常驻显示；非管理员整组置灰并当场说明原因，
+           原来是点下去才弹一条 warning，用户以为是按钮坏了 -->
+      <div class="toolbar" :class="{ 'is-locked': !isAdmin }">
+        <div class="toolbar-row">
+          <span class="sel-summary">{{ selectedSummary }}</span>
+          <el-button-group v-if="selectedPages.length > 0">
+            <el-button
+              type="danger"
+              size="small"
+              :loading="batchBusy === 'delete-selected'"
+              :disabled="batchBusy !== null || !isAdmin"
+              :data-tip="isAdmin ? '永久删除选中的页面，操作不可撤销' : '需要管理员权限'"
+              @click="deleteSelected"
+            >永久删除 ({{ selectedPages.length }})</el-button>
+            <el-button
+              type="danger"
+              size="small"
+              plain
+              :disabled="!isAdmin"
+              :data-tip="isAdmin ? '移动到 archive/日期/ 目录，后续可恢复' : '需要管理员权限'"
+              @click="archiveSelected"
+            >归档 ({{ selectedPages.length }})</el-button>
+            <el-button
+              type="warning"
+              size="small"
+              :disabled="!isAdmin"
+              :data-tip="isAdmin ? '给选中页面补上缺失的 type/title（会写入文件）' : '需要管理员权限'"
+              @click="fixFrontmatterFor(selectedPages)"
+            >补齐元信息</el-button>
+            <el-button size="small" text data-tip="清空当前已选，不动文件" @click="clearSelection">清除选择</el-button>
+          </el-button-group>
+        </div>
+        <p v-if="!isAdmin" class="perm-note">永久删除、归档与补齐元信息会改动知识库文件，需要管理员账户；当前账户只能查看和筛选。</p>
+      </div>
+
+      <!-- 页面表格：默认按「问题数」倒序，最该处理的排在第一页 -->
+      <el-table
+        ref="tableRef"
+        :data="pagedRows"
+        row-key="path"
+        style="width: 100%"
+        stripe
+        height="520"
+        :default-sort="{ prop: 'problems', order: 'descending' }"
+        @selection-change="onRowChange"
+        @sort-change="onSortChange"
+      >
         <el-table-column type="selection" width="55" align="center" />
-        <el-table-column prop="path" label="文件路径" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="title" label="标题" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="qualityScore" label="评分" width="100" align="center">
+        <el-table-column prop="path" label="文件路径" min-width="200" sortable="custom" show-overflow-tooltip />
+        <el-table-column prop="title" label="标题" min-width="150" sortable="custom" show-overflow-tooltip />
+        <el-table-column prop="problems" label="问题数" width="100" align="center" sortable="custom">
+          <template #default="{ row }">
+            <el-tag :type="pageIssueKeys(row, issueCtx).length > 0 ? 'warning' : 'info'" size="small" effect="plain">
+              {{ pageIssueKeys(row, issueCtx).length }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="qualityScore" label="评分" width="90" align="center" sortable="custom">
           <template #default="{ row }">
             <el-tag :type="row.qualityScore>=80?'success':row.qualityScore>=60?'':row.qualityScore>=40?'warning':'danger'" size="small">
               {{ row.qualityScore }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="字数" width="80" align="right"><template #default="{ row }">{{ row.metadata.wordCount }}</template></el-table-column>
-        <el-table-column label="链接" width="80" align="right"><template #default="{ row }">{{ row.metadata.internalLinks }}</template></el-table-column>
-        <el-table-column label="目录" width="100"><template #default="{ row }">{{ row.metadata.directory }}</template></el-table-column>
-        <el-table-column label="状态" width="110"><template #default="{ row }">
-          <el-tag v-if="row.metadata.hasFrontmatter" type="success" size="small" effect="plain">有 FM</el-tag>
-          <el-tag v-else type="danger" size="small" effect="plain">无 FM</el-tag>
+        <el-table-column prop="wordCount" label="字数" width="90" align="right" sortable="custom">
+          <template #default="{ row }">{{ row.metadata.wordCount }}</template>
+        </el-table-column>
+        <el-table-column prop="internalLinks" label="出链" width="90" align="right" sortable="custom">
+          <template #default="{ row }">{{ row.metadata.internalLinks }}</template>
+        </el-table-column>
+        <el-table-column label="目录" width="110"><template #default="{ row }">{{ row.metadata.directory }}</template></el-table-column>
+        <!-- T02472 L5：原「有 FM / 无 FM」是缩写，用户读不出 FM 指什么 -->
+        <el-table-column label="元信息" width="110"><template #default="{ row }">
+          <el-tag v-if="row.metadata.hasFrontmatter" type="success" size="small" effect="plain">元信息完整</el-tag>
+          <el-tag v-else type="danger" size="small" effect="plain">缺元信息</el-tag>
         </template></el-table-column>
-        <el-table-column label="问题" width="200"><template #default="{ row }">
-          <el-tag v-if="row.issues" v-for="(issue, idx) in row.issues" :key="idx" type="warning" size="small" style="margin-right:4px">{{ issue }}</el-tag>
+        <el-table-column label="问题分类" min-width="190"><template #default="{ row }">
+          <el-tag
+            v-for="k in pageIssueKeys(row, issueCtx)"
+            :key="k"
+            type="warning"
+            size="small"
+            effect="plain"
+            class="issue-tag"
+          >{{ ISSUE_CATEGORIES.find((c) => c.key === k)?.label }}</el-tag>
+          <span v-if="pageIssueKeys(row, issueCtx).length === 0" class="no-issue">—</span>
         </template></el-table-column>
       </el-table>
+
+      <div v-if="pages.length > 0" class="table-foot">
+        <el-pagination
+          v-model:current-page="pageNum"
+          v-model:page-size="pageSize"
+          :page-sizes="PAGE_SIZE_OPTIONS"
+          :total="sortedPages.length"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+        />
+      </div>
       
       <!-- 疑似重复对（含合并操作 + 差异对比） -->
       <div v-if="duplicates.length > 0 || duplicateGroups.length > 0" class="duplicates-section">
@@ -783,7 +953,7 @@ onMounted(() => loadPages());
       
       <!-- 空状态 -->
       <div v-if="!loading && pages.length === 0 && !scanProgress.includes('Failed')" class="empty-state">
-        <p>未找到页面。点击"刷新"扫描 vault。</p>
+        <p>还没有加载到页面。点上方「重新扫描」读取知识库。</p>
       </div>
     </div>
   </div>
@@ -856,11 +1026,141 @@ onMounted(() => loadPages());
   font-family: var(--font-mono);
 }
 
+/* T02472 L4：带文字的主操作 + 下方一行费用说明（AI 分析要调用用户自己的模型） */
+.head-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.head-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.head-note {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .toolbar {
   position: relative;
   z-index: 1;
   margin-bottom: 16px;
   text-align: left;
+}
+
+/* T02472 L6：已选数量常驻；权限不足时整组置灰并把原因写在按钮旁边 */
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sel-summary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--neon-cyan);
+}
+
+.perm-note {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-scene);
+  border-left: 2px solid var(--neon-pink);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.toolbar.is-locked .sel-summary {
+  color: var(--text-dim);
+}
+
+/* T02472 L3：搜索 / 目录筛选 / 命中计数 / 分页 */
+.table-tools {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.search-input {
+  width: 260px;
+}
+
+.dir-select {
+  width: 150px;
+}
+
+.filter-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.table-foot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+/* T02472 L2：分类卡（总数 + 5 类 = 3 列两行，问题数 >0 才给批量按钮） */
+.stats-grid.issue-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.issue-card .status-meta,
+.total-block .status-meta {
+  line-height: 1.5;
+}
+
+.issue-card:not(.is-clean) .status-value {
+  color: var(--neon-pink);
+  text-shadow: 0 0 12px var(--accent-pink-a10, rgba(255, 100, 180, 0.3));
+}
+
+.issue-card.is-clean .status-value {
+  color: var(--text-dim);
+  text-shadow: none;
+}
+
+.issue-card.is-active {
+  border-color: var(--neon-cyan);
+}
+
+.issue-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.issue-tag {
+  margin: 0 4px 2px 0;
+}
+
+.no-issue {
+  color: var(--text-dim);
+}
+
+.healthy-note {
+  position: relative;
+  z-index: 1;
+  margin: -10px 0 18px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-soft);
 }
 
 /* 质量统计 5 列：与系统清理页 status-grid 共用同一套样式 token */
@@ -1282,13 +1582,15 @@ onMounted(() => loadPages());
 
 /* 响应式：小屏改为 2 列 / 1 列，与系统清理页一致 */
 @media (max-width: 1100px) {
-  .stats-grid {
+  .stats-grid,
+  .stats-grid.issue-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 600px) {
-  .stats-grid {
+  .stats-grid,
+  .stats-grid.issue-grid {
     grid-template-columns: 1fr;
   }
 }

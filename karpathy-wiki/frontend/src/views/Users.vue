@@ -298,7 +298,7 @@ onMounted(loadUsers);
   flex-direction: column;
 }
 
-/* 卡片右下角装饰光晕：与系统清理/数据清洗页一致 */
+/* 卡片右下角装饰光晕：与缓存与日志清理/页面质量清洗页一致 */
 .card-deco {
   position: absolute;
   bottom: -50px;
@@ -327,7 +327,7 @@ onMounted(loadUsers);
   flex: 1;
 }
 
-/* 头部标题：与系统清理/数据清洗页统一字号/字重/字距 */
+/* 头部标题：与缓存与日志清理/页面质量清洗页统一字号/字重/字距 */
 .head-title {
   margin: 0 0 2px;
   font-family: var(--font-display);
@@ -453,7 +453,7 @@ onMounted(loadUsers);
   margin-top: 14px;
 }
 
-/* 霓虹按钮：与系统清理/数据清洗页统一风格 */
+/* 霓虹按钮：与缓存与日志清理/页面质量清洗页统一风格 */
 .neon-btn {
   padding: 8px 16px;
   font-size: 13px;
