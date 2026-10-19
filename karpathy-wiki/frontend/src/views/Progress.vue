@@ -97,6 +97,15 @@ const robotMood = computed<string>(() => {
 
 const showRunsList = computed(() => !store.isCompiling && !store.isDone && !store.errorMessage && !store.isCancelled);
 
+// T02475（PRD X1/N5）：菜单名 = 页标题。原来 h2 整个是运行态四态文案（「准备就绪」/「编译完成」…），
+// 用户在页头读不到自己所在的功能名；状态降为标题右侧徽标，四态信息量不减。
+const headStatus = computed<{ text: string; tone: string }>(() => {
+  if (store.isCompiling) return { text: '机器人正在编译…', tone: 'running' };
+  if (store.isDone) return { text: '编译完成', tone: 'success' };
+  if (store.errorMessage) return { text: '编译失败', tone: 'danger' };
+  return { text: '准备就绪', tone: 'idle' };
+});
+
 async function startCompile(payload: IngestPayload) {
   const isFormData = payload instanceof FormData;
   abortController = new AbortController();
@@ -309,10 +318,8 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
       <div class="progress-head">
 <div class="head-text">
           <h2 class="head-title">
-            <span v-if="store.isCompiling" class="grad-text">机器人正在编译…</span>
-            <span v-else-if="store.isDone" class="grad-text">编译完成</span>
-            <span v-else-if="store.errorMessage" class="grad-text">编译失败</span>
-            <span v-else class="grad-text">准备就绪</span>
+            <span class="grad-text">编译进度</span>
+            <span class="head-status" :class="`is-${headStatus.tone}`">{{ headStatus.text }}</span>
           </h2>
           <p class="head-tip">
             <template v-if="robotMood === 'thinking'">小提示：编译过程是流式的，可实时查看每一步</template>
@@ -623,6 +630,35 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   font-weight: 900;
   color: var(--text-bright);
   letter-spacing: 1px;
+}
+
+/* 运行态徽标：从标题正文降级为附属状态，避免页头只剩状态词 */
+.head-status {
+  margin-left: 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  vertical-align: 2px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+}
+.head-status.is-running {
+  color: #00f5ff;
+  background: rgba(0, 245, 255, 0.1);
+}
+.head-status.is-success {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+}
+.head-status.is-danger {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+.head-status.is-idle {
+  color: var(--text-muted, #9aa4b2);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .head-tip {

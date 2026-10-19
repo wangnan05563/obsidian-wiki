@@ -14,8 +14,8 @@ describe('compile store - stepLabel 单一来源 (T02459 / PRD P4)', () => {
     const store = useCompileStore();
     const expected: Record<string, string> = {
       archive: '存档原始资料',
-      read_schema: '读取 SCHEMA',
-      extract: '提取要点',
+      read_schema: '读取结构规范',
+      extract: '抽取要点',
       generate_page: '生成页面',
       update_index: '更新索引',
       update_log: '记录日志',

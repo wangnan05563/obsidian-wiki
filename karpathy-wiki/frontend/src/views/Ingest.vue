@@ -844,9 +844,10 @@ function handleUrlInputChange() {
     <div class="hero-section fade-up">
       <div class="hero-orb"></div>
       <div class="hero-right">
-        <h2 class="hero-title grad-text">投递第一篇资料</h2>
+        <!-- T02475（X1/I2）：页头主标题与菜单实名同词；原文案「投递第一篇资料」在已有页面的库里也是失实的 -->
+        <h2 class="hero-title grad-text">投递资料</h2>
         <p class="hero-tip">
-          上传文件、粘贴 URL 或直接贴文本，机器人会按 SCHEMA 编译为知识库页面
+          上传文件、粘贴 URL 或直接贴文本，机器人会按结构规范编译为知识库页面
         </p>
       </div>
     </div>
@@ -945,7 +946,7 @@ function handleUrlInputChange() {
                 :disabled="urlStage === 'crawling'"
                 @input="handleUrlInputChange"
               >
-                <template #prepend>URI</template>
+                <template #prepend>URL</template>
               </el-input>
               <!-- 5.1.4 高级参数：留空则使用后端 config 默认值（maxPages=50、maxHops=3） -->
               <div class="url-params-row">
@@ -1088,7 +1089,7 @@ function handleUrlInputChange() {
               <div class="url-action-row">
                 <IconActionButton
                   name="开始编译"
-                  :desc="`将勾选的 ${selectedPageCount}/${urlCrawlResult.pages.length} 个页面与附件编译为知识库文档`"
+                  :desc="`将勾选的 ${selectedPageCount}/${urlCrawlResult.pages.length} 个页面与附件编译为知识库页面`"
                   :icon="VideoPlay"
                   variant="primary"
                   :disabled="!urlCombinedMarkdown || store.isCompiling || submitting || selectedPageCount === 0"
@@ -1131,7 +1132,7 @@ function handleUrlInputChange() {
             placeholder="在此粘贴要编译为知识库页面的文本内容…"
             resize="none"
           />
-          <p class="input-hint">文本将作为原始资料直接进入提取流程</p>
+          <p class="input-hint">文本将作为原始资料直接进入抽取流程</p>
         </el-tab-pane>
 
         <!-- FR-16-2 浏览器书签导入 -->
@@ -1158,7 +1159,7 @@ function handleUrlInputChange() {
               />
               <IconActionButton
                 name="开始编译"
-                desc="将解析出的书签与文件夹编译为知识库文档"
+                desc="将解析出的书签与文件夹编译为知识库页面"
                 :icon="VideoPlay"
                 variant="primary"
                 :loading="bookmarkCompiling"
@@ -1194,7 +1195,7 @@ function handleUrlInputChange() {
                 来源：{{ captured.url || '（未提供）' }}<br />
                 正文长度：{{ captured.contentLength }} 字符
               </p>
-              <el-button type="primary" :loading="store.isCompiling" data-tip="将本机浏览器捕获的页面内容编译并投递为知识库文档" @click="compileCaptured">
+              <el-button type="primary" :loading="store.isCompiling" data-tip="将本机浏览器捕获的页面内容编译并投递为知识库页面" @click="compileCaptured">
                 编译投递
               </el-button>
             </div>
@@ -1340,7 +1341,7 @@ function handleUrlInputChange() {
       <div v-if="activeTab !== 'qq' && activeTab !== 'url' && activeTab !== 'capture'" class="submit-bar">
         <IconActionButton
           name="开始编译"
-          desc="将当前已配置的来源（文件/文件夹/文本）编译为知识库文档"
+          desc="将当前已配置的来源（文件/文件夹/文本）编译为知识库页面"
           :icon="VideoPlay"
           size="large"
           variant="primary"

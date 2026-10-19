@@ -83,7 +83,7 @@ function parseDispositionName(disposition: string): string | null {
 }
 
 // 下载默认超时（避免慢网/大文件下 await res.blob() 长时间挂起，评审发现 #3）。
-// 知识库文档多为 KB~MB 级，120s 足够；超时会抛 AbortError 由调用方提示。
+// 知识库页面多为 KB~MB 级，120s 足够；超时会抛 AbortError 由调用方提示。
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 // 下载知识库文件到本地设备（PC / 移动端复用）。

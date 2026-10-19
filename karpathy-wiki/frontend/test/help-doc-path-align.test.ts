@@ -67,6 +67,6 @@ describe('Help.vue 路径对齐（T02455）', () => {
     expect(text).not.toContain('update_index');
     // 用户化表述已就位
     expect(text).toContain('读取结构');
-    expect(text).toContain('产出页面');
+    expect(text).toContain('生成页面');
   });
 });

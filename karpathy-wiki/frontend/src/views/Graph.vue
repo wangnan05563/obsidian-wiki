@@ -486,7 +486,7 @@ async function openRecommendations(pagePath: string) {
     const data = (await res.json()) as { recommendations: RecommendedPage[] };
     recommendations.value = data.recommendations;
     if (data.recommendations.length === 0) {
-      ElMessage.info('未找到相关但未连接的笔记');
+      ElMessage.info('未找到相关但未连接的页面');
     }
   } catch (err) {
     ElMessage.error('加载推荐失败：' + (err as Error).message);
@@ -662,7 +662,7 @@ function focusGap(paths: string[]) {
   }
 }
 
-// FR-15-5（AC-15-7）：打开笔记到 Browse 视图
+// FR-15-5（AC-15-7）：打开页面到 Browse 视图
 // 复用 RefsList.vue 的 karpathy:jump-vault 事件机制，App.vue 监听后切换到 browse 视图，
 // Browse.vue onMounted 读取 sessionStorage.karpathy:jumpPath 自动定位到对应文件
 function openPageInBrowse(pagePath: string) {
@@ -818,7 +818,7 @@ watch(loading, () => {
           size="small"
           class="neon-btn"
           :disabled="!selectedNode"
-          :data-tip="selectedNode ? '在新标签打开该笔记' : '请先在图中选中一个节点'"
+          :data-tip="selectedNode ? '在新标签打开该页面' : '请先在图中选中一个节点'"
           @click="openSelectedPage"
         >
           <el-icon><Document /></el-icon><span class="btn-text">打开页面</span>
@@ -828,7 +828,7 @@ watch(loading, () => {
           size="small"
           class="neon-btn"
           :disabled="!selectedNode"
-          :data-tip="selectedNode ? '查看与该笔记相关但未连接的笔记' : '请先在图中选中一个节点'"
+          :data-tip="selectedNode ? '查看与该页面相关但未连接的页面' : '请先在图中选中一个节点'"
           @click="findRelatedForSelected"
         >
           <el-icon><Link /></el-icon><span class="btn-text">找相关页面</span>
@@ -896,7 +896,7 @@ watch(loading, () => {
       <div v-if="showGraphTour && !listView" class="graph-tour">
         <el-icon class="tour-icon"><Aim /></el-icon>
         <span class="tour-text">
-          <b>图谱操作指引：</b>点击节点可选中并查看相关笔记；选中后用顶部「打开页面 / 找相关页面」操作；
+          <b>图谱操作指引：</b>点击节点可选中并查看相关页面；选中后用顶部「打开页面 / 找相关页面」操作；
           右上「搜索节点并定位」可快速跳转，「适应画布」一键归位。
         </span>
         <button type="button" class="tour-close" @click="dismissTour" aria-label="知道了">知道了</button>
@@ -976,11 +976,11 @@ watch(loading, () => {
       >
         <div class="ctx-item" @click="openPageInBrowse(contextMenu.pagePath)">
           <el-icon class="ctx-icon"><Document /></el-icon>
-          <span>打开笔记</span>
+          <span>打开页面</span>
         </div>
         <div class="ctx-item" @click="openRecommendations(contextMenu.pagePath)">
           <el-icon class="ctx-icon"><Link /></el-icon>
-          <span>查看推荐笔记</span>
+          <span>查看推荐页面</span>
         </div>
         <div class="ctx-item ctx-close" @click="closeContextMenu">
           <el-icon class="ctx-icon"><Close /></el-icon>
@@ -993,7 +993,7 @@ watch(loading, () => {
         <div class="recommend-head">
           <div class="recommend-title">
             <el-icon class="recommend-icon"><Lightning /></el-icon>
-            <span>推荐笔记</span>
+            <span>推荐页面</span>
           </div>
           <button class="recommend-close" @click="closeRecommendations" aria-label="关闭">
             <el-icon><Close /></el-icon>
@@ -1004,10 +1004,10 @@ watch(loading, () => {
           <code class="source-path">{{ selectedPage }}</code>
         </div>
         <div v-if="recommendLoading" class="recommend-loading">
-          <p>// 寻找相关笔记中…</p>
+          <p>// 寻找相关页面中…</p>
         </div>
         <div v-else-if="recommendations.length === 0" class="recommend-empty">
-          <p>未找到相关但未连接的笔记</p>
+          <p>未找到相关但未连接的页面</p>
         </div>
         <div v-else class="recommend-list">
           <div

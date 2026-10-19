@@ -428,7 +428,7 @@ let videoPollTimer: ReturnType<typeof setInterval> | null = null;
 let mediaVideoHintShown = false;
 // 生图一次性提示 flag：仅当用户未配置个人生图服务时提示一次，避免每次生图都打扰
 let mediaImageHintShown = false;
-// LLM「共享AI」一次性提示 flag（T00315）：用户未配置个人 AI、且服务端共享AI已配置时，
+// LLM「共享 AI」一次性提示 flag（T00315）：用户未配置个人 AI、且服务端共享 AI已配置时，
 // 本次问答会降级使用管理员共享配置；仅提示一次避免每次问答都打扰
 let sharedAiHintShown = false;
 async function submitVideoTask() {
@@ -444,13 +444,13 @@ async function submitVideoTask() {
   videoTaskId.value = '';
 
   // 视频 BYOK：用户已配置个人视频服务则透传（model/key/尺寸/时长），否则后端回退服务端共享配置。
-  // 为什么每次读取不缓存：取最新配置，用户改完「配置中心 → 生图视频服务」后下次生成即生效。
+  // 为什么每次读取不缓存：取最新配置，用户改完「配置中心 → AI 服务」后下次生成即生效。
   const uid = authStore.user?.id || 'guest';
   const mediaCfg = await loadMediaUserConfig(uid);
   const videoConfig = mediaCfg.video.apiKey ? mediaCfg.video : undefined;
   if (!videoConfig && !mediaVideoHintShown) {
     mediaVideoHintShown = true;
-    ElMessage.warning('当前未配置个人视频服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置中心 → 生图视频服务」配置你自己的视频服务以获得更稳定的体验。');
+    ElMessage.warning('当前未配置个人视频服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置中心 → AI 服务」配置你自己的视频服务以获得更稳定的体验。');
   }
 
   try {
@@ -729,14 +729,14 @@ async function buildQueryBody(
   if (aiCfg?.apiKey) {
     body.llmConfig = aiCfg;
   }
-  // LLM「共享AI」降级提示（T00315）：用户未配置个人 AI（无 aiCfg.apiKey），且服务端共享AI
+  // LLM「共享 AI」降级提示（T00315）：用户未配置个人 AI（无 aiCfg.apiKey），且服务端共享 AI
   // 已配置 key（modelStore.apiKeySet）时，本次实际会降级使用管理员共享配置。
   // 与生图共享提示同款一次性策略，温和引导用户配置个人 AI，避免每个人辑发前都弹。
   const sharedAiSet = Boolean(modelStore.apiKeySet);
   if (!aiCfg?.apiKey && sharedAiSet && !sharedAiHintShown) {
     sharedAiHintShown = true;
     ElMessage.warning(
-      '当前将使用管理员「共享AI」配置（共享用户较多，可能排队或调用异常）。' +
+      '当前将使用管理员「共享 AI」配置（共享用户较多，可能排队或调用异常）。' +
         '建议在「配置中心 → AI 服务」配置你自己的专属 AI 服务，以获得更稳定、低延迟的体验。',
     );
   }
@@ -758,7 +758,7 @@ async function buildQueryBody(
       body.imageConfig = mediaCfg.image;
     } else if (!mediaImageHintShown) {
       mediaImageHintShown = true;
-      ElMessage.warning('当前未配置个人生图服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置中心 → 生图视频服务」配置你自己的生图服务。');
+      ElMessage.warning('当前未配置个人生图服务，将使用系统共享配置（可能有排队或调用限制）。建议在「配置中心 → AI 服务」配置你自己的生图服务。');
     }
   }
   return body;
