@@ -15,6 +15,11 @@ const hoisted = vi.hoisted(() => {
   return { getDir: () => dir, setDir: (d: string) => { dir = d; } };
 });
 
+// 单次注册要走 PBKDF2 10 万次迭代，11 次串下来本身就要数秒；整套件并行跑时 CPU 争用会把
+// 默认 5s 超时打穿（T02478 全量回归实测：单跑 3.6s 通过、全套并跑超时）。
+// 断言不变，只把这类「真计算量」用例的时限放宽到 30s，避免把环境抖动误报成功能回归。
+const HEAVY_TIMEOUT_MS = 30_000;
+
 vi.mock('../src/utils/runtime.js', () => ({
   getDataDir: () => hoisted.getDir(),
 }));
@@ -85,7 +90,7 @@ describe('auth 路由 - 注册限流 /api/auth/register（FR-RM-10）', () => {
     expect(body.ok).toBe(false);
     expect(body.error).toContain('过于频繁');
     expect(body.retryAfterSec).toBeGreaterThanOrEqual(1);
-  });
+  }, HEAVY_TIMEOUT_MS);
 
   it('不同用户名在同一 IP 下受 IP 维度 10 次/分钟约束', async () => {
     // 10 个不同用户名，耗尽 IP 维度
@@ -103,5 +108,5 @@ describe('auth 路由 - 注册限流 /api/auth/register（FR-RM-10）', () => {
       payload: { username: 'ipcapX', password: 'Str0ng#Pass', confirmPassword: 'Str0ng#Pass' },
     });
     expect(blocked.statusCode).toBe(429);
-  });
+  }, HEAVY_TIMEOUT_MS);
 });

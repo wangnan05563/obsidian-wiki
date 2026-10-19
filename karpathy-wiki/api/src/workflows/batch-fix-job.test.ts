@@ -45,7 +45,15 @@ async function waitFor(
   throw new Error('waitFor 超时：作业未达预期状态');
 }
 
-describe('BatchFixJobManager', () => {
+// 本文件每条用例都要 mkdtemp + 真实落盘 + rm 清场，耗时由 FS 延迟主导，不是逻辑慢。
+// 2026-10-20 T02478 单独跑（无任何并发任务）实测 8 条用例：
+//   3316 / 4951 / 4526 / 1734 / 1165 / 1840 / 13171 / 2337 ms
+// 默认 testTimeout 5000ms 下，「暂停…」「取消…」两条常年贴顶（4.9s / 4.5s），全量并发时必然被
+// FS 排队顶爆——本轮就是这样先误判成回归的。按最慢实测值（13.2s）取约 4 倍余量设整文件超时，
+// 只影响本文件，不动全局 testTimeout（放宽全局会掩盖真实的慢）。
+const FS_HEAVY_TIMEOUT_MS = 60_000;
+
+describe('BatchFixJobManager', { timeout: FS_HEAVY_TIMEOUT_MS }, () => {
   let dir = '';
 
   beforeEach(async () => {
@@ -53,7 +61,19 @@ describe('BatchFixJobManager', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
+    // Windows 下 rm 会撞上一个刚 rename 完、句柄尚未释放的文件（ENOTEMPTY）——
+    // 与生产无关，属测试清场竞态，重试即可。
+    let lastErr: unknown;
+    for (let i = 0; i < 5; i++) {
+      try {
+        await fs.rm(dir, { recursive: true, force: true });
+        return;
+      } catch (err) {
+        lastErr = err;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    throw lastErr;
   });
 
   it('跑完全部问题后落 completed，doneKeys 与快照文件一致', async () => {
@@ -63,6 +83,7 @@ describe('BatchFixJobManager', () => {
     expect(started.total).toBe(3);
 
     const done = await waitFor(() => manager.getSnapshot(started.jobId), (s) => s.status === 'completed');
+    await manager.flush(); // 内存终态早于磁盘可见，读文件前必须收口落盘队列
     expect(done.doneCount).toBe(3);
     expect(done.successCount).toBe(3);
     expect(done.failCount).toBe(0);
@@ -154,6 +175,7 @@ describe('BatchFixJobManager', () => {
     const started = await first.start(itemsOf(['a.md']));
     // 先等后台作业真正落终态，再改写磁盘快照，避免与收尾落盘竞争
     await waitFor(() => first.getSnapshot(started.jobId), (s) => s.status === 'completed');
+    await first.flush();
     const file = path.join(dir, `${started.jobId}.json`);
     const raw = JSON.parse(await fs.readFile(file, 'utf8')) as BatchFixSnapshot;
     raw.status = 'running';
@@ -166,5 +188,54 @@ describe('BatchFixJobManager', () => {
     const snap = await reopened.getSnapshot(started.jobId);
     expect(snap?.status).toBe('paused');
     expect(snap?.pauseRequested).toBe(false);
+  });
+
+  // T02478（P0 H2 断线恢复链）回归发现的缺陷守护：
+  // 快照原先就地截断重写，读侧（重启恢复 / 页面重进）有概率拿到半截 JSON → parse 抛错被
+  // catch 吞成「快照不存在」，可恢复的作业被判成丢历史。改为「临时文件 + rename」原子落盘后，
+  // 读侧只会看到上一份或下一份完整快照。
+  it('落盘原子性：作业进行中反复直读快照文件，永不出现半截 JSON', async () => {
+    const paths = Array.from({ length: 16 }, (_, i) => `p${i}.md`);
+    const manager = new BatchFixJobManager(dir, slowAdapter([], 8));
+    const started = await manager.start(itemsOf(paths));
+    const file = path.join(dir, `${started.jobId}.json`);
+
+    // 采样窗口按「次数」而不是墙钟时长驱动：本机临时目录上一次读盘约 0.4s、每项原子落盘（.tmp +
+    // rename）同量级，16 项作业实际要跑 8~13s，采样会自然覆盖整段写入期。早期版本写死 4000ms 轮询
+    // 窗口 + 默认 5000ms 用例超时，只剩 1s 余量，全量并发时被 IO 排队一顶就假失败
+    // （T02478 实测：空载单跑 5.4s、并发跑 >5s 直接红）。
+    let parsed = 0;
+    let partial = 0;
+    for (let i = 0; i < 40; i++) {
+      try {
+        const raw = await fs.readFile(file, 'utf8');
+        JSON.parse(raw) as BatchFixSnapshot;
+        parsed++;
+      } catch (err) {
+        // 首帧还没落盘（ENOENT）属正常；JSON 语法错误（半截文件）即回归
+        const name = (err as { code?: string; name?: string }) ?? {};
+        if (name.code === 'ENOENT') continue;
+        if (name.name !== 'SyntaxError') throw err;
+        partial++;
+      }
+      if (manager.get(started.jobId)?.status !== 'running') break;
+    }
+    expect(partial).toBe(0);
+    expect(parsed).toBeGreaterThan(0);
+    // 收口前等作业真正落终态：残留的 rename 会和 afterEach 的 rm 抢目录（ENOTEMPTY 假失败）
+    await waitFor(() => manager.getSnapshot(started.jobId), (s) => s.status !== 'running', 15_000);
+    await manager.flush();
+  });
+
+  // 耗时样本同样走原子落盘：读到半截 stats.json 会被 catch 归零，ETA 莫名退回兜底值
+  it('耗时统计连续写入不丢样本、读取恒为完整 JSON', async () => {
+    const manager = new BatchFixJobManager(dir, fakeAdapter(() => [{ step: 'done', status: 'done', message: 'ok' }]));
+    await Promise.all([1000, 2000, 3000, 4000].map((ms) => manager.recordDuration(ms)));
+    await manager.flush();
+    const statsFile = path.join(dir, 'stats.json');
+    const stats = JSON.parse(await fs.readFile(statsFile, 'utf8')) as { samples: number; totalMs: number; avgMs: number };
+    expect(stats.samples).toBe(4);
+    expect(stats.totalMs).toBe(10_000);
+    expect(stats.avgMs).toBe(2500);
   });
 });

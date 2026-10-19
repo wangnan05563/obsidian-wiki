@@ -239,16 +239,20 @@ export class BatchFixJobManager {
   /** 记录一次真实耗时（单个修复与批量修复共用），供下一次估算使用。 */
   async recordDuration(ms: number): Promise<void> {
     if (!Number.isFinite(ms) || ms <= 0) return;
-    const stats = await this.readStats();
-    const samples = stats.samples + 1;
-    const totalMs = stats.totalMs + ms;
-    const next: DurationStats = { samples, totalMs, avgMs: Math.round(totalMs / samples) };
-    try {
-      await fs.mkdir(this.jobsDir, { recursive: true });
-      await fs.writeFile(this.statsFile, JSON.stringify(next), 'utf8');
-    } catch {
-      // 统计写失败不影响业务，仅失去更准的估算
-    }
+    // 与快照共用落盘队列：stats.json 是「读-改-写」，并发写会互相吞样本；
+    // 原子 rename 另保证 readStats 不会读到半截 JSON（读到即样本清零，ETA 会莫名退回兜底值）。
+    this.writeChain = this.writeChain.then(async () => {
+      try {
+        const stats = await this.readStats();
+        const samples = stats.samples + 1;
+        const totalMs = stats.totalMs + ms;
+        const next: DurationStats = { samples, totalMs, avgMs: Math.round(totalMs / samples) };
+        await this.writeAtomic(this.statsFile, JSON.stringify(next));
+      } catch {
+        // 统计写失败不影响业务，仅失去更准的估算
+      }
+    });
+    await this.writeChain;
   }
 
   /**
@@ -434,14 +438,36 @@ export class BatchFixJobManager {
     entry.subscribers.clear();
   }
 
+  /**
+   * 等待排队中的落盘全部完成。
+   * 内存快照会先于磁盘可见（runLoop 里先改状态再 await persist），外部要「读文件」的调用方
+   * （重启恢复、单测、优雅退出）必须先 flush，否则会读到上一份完整快照——本方法就是这个门。
+   */
+  async flush(): Promise<void> {
+    await this.writeChain;
+  }
+
+  /**
+   * 原子落盘：先写同目录临时文件再 rename。
+   * T02478 P0 回归发现的缺陷：原先直接 fs.writeFile 就地截断重写，读取侧
+   * （ensureLoaded / 单测直读快照文件）有概率拿到半截 JSON → JSON.parse 抛错，
+   * 恢复链路会把「本可恢复的作业」误判为「快照不存在」，P0 H2「断线恢复」失真。
+   * 临时文件名带 pid 且不以 .json 结尾，因此不会被 listSnapshotFiles 当成快照收进来。
+   */
+  private async writeAtomic(filePath: string, payload: string): Promise<void> {
+    const tmp = `${filePath}.${process.pid}.tmp`;
+    await fs.mkdir(this.jobsDir, { recursive: true });
+    await fs.writeFile(tmp, payload, 'utf8');
+    await fs.rename(tmp, filePath);
+  }
+
   private async persist(entry: JobEntry): Promise<void> {
     entry.snapshot.updatedAt = Date.now();
     const filePath = path.join(this.jobsDir, `${entry.snapshot.jobId}.json`);
     const payload = JSON.stringify(entry.snapshot);
     this.writeChain = this.writeChain.then(async () => {
       try {
-        await fs.mkdir(this.jobsDir, { recursive: true });
-        await fs.writeFile(filePath, payload, 'utf8');
+        await this.writeAtomic(filePath, payload);
       } catch {
         // 落盘失败仅失去「重启后恢复」能力，不影响本次修复
       }
@@ -507,6 +533,24 @@ export class BatchFixJobManager {
       } catch {
         /* 删除失败下次再试 */
       }
+    }
+    // 原子写留下的临时文件（rename 前进程被杀才会残留）：同样按 TTL 回收，
+    // 它们不参与 listSnapshotFiles（名字不以 .json 结尾），留着只会越攒越多。
+    try {
+      const names = await fs.readdir(this.jobsDir);
+      for (const name of names) {
+        if (!name.includes('.tmp')) continue;
+        const file = path.join(this.jobsDir, name);
+        try {
+          const stat = await fs.stat(file);
+          if (now - stat.mtimeMs <= SNAPSHOT_TTL_MS) continue;
+          await fs.rm(file, { force: true });
+        } catch {
+          /* 忽略无法访问或已被 rename 的文件 */
+        }
+      }
+    } catch {
+      /* 目录尚不存在 */
     }
   }
 
