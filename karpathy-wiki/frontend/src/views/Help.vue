@@ -451,7 +451,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '支持 3 种内网穿透方案：Cloudflare Tunnel（quick 临时域名 / named 固定域名）、cpolar（国内高速）、tailscale（P2P 直连）。可配置开机自启，启动后获取公网访问 URL。',
+        content: '支持 3 种内网穿透方案：Cloudflare Tunnel（quick 临时域名 / named 固定域名）、cpolar（国内高速）、tailscale（P2P 直连）。可配置开机自启，启动后获取公网访问 URL。页面上方有「前置条件自检」卡片，按「已满足 / 未满足 / 待确认」三态逐项列出条件（隧道程序、授权证书、命名隧道与配置文件、域名指向等），点「重新检测」按当前配置复跑；启动失败时后端原因会翻译成一句人话直接显示在页面上，不必再翻日志。',
       },
       {
         type: 'config',
@@ -471,10 +471,12 @@ const DOC_SECTIONS: DocSection[] = [
         content: [
           '点击导航栏「内网穿透」进入页面',
           '选择 Provider（推荐 Cloudflare quick 模式）',
+          '看「前置条件自检」卡片，标红/标黄的项按它给的入口处理，处理完点「重新检测」',
           '点击「启动隧道」',
           '等待 5-15 秒获取公网 URL',
           '点击 URL 在新窗口打开访问',
           '可选：点击「停止」关闭隧道',
+          '启动失败时读页面顶部内联告警条（原因 + 建议动作），修好再重试',
         ],
       },
       {

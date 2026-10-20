@@ -1,8 +1,10 @@
 # 快速上手指南
 
-Karpathy-AI + Obsidian 知识库 —— 15 分钟从零搭建到问答闭环。
+Karpathy-AI + Obsidian 知识库 —— 从安装到跑通第一次问答，以及管理员日常维护。
 
-> 本指南面向 Windows 用户（PowerShell）。macOS/Linux 用户可参照 `install.ps1` 逻辑手动执行。
+> 本指南面向 Windows 用户（PowerShell）。macOS/Linux 可参照 `scripts/install.ps1` 的逻辑手动执行。
+> 界面用词以《[术语表](术语表.md)》为准：**菜单名 = 页标题 = 帮助文档条目名**。
+> 三期变更总览见《[wiki三期 发布说明](wiki三期/06-发布说明.md)》。
 
 ---
 
@@ -10,237 +12,146 @@ Karpathy-AI + Obsidian 知识库 —— 15 分钟从零搭建到问答闭环。
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| Node.js | >= 18 | 下载 https://nodejs.org |
-| pnpm | 任意（可选） | 未安装则自动回退 npm，建议安装：`npm install -g pnpm` |
-| LLM API Key | — | 智谱 GLM / 通义千问 / DeepSeek 任选其一 |
+| Node.js | >= 18 | https://nodejs.org ；发布脚本会用 `scripts/config.json` 里配置的 node 路径 |
+| 包管理器 | pnpm 或 npm | 未装 pnpm 时脚本自动回退 npm |
+| LLM API Key | — | DeepSeek / 智谱 GLM / 通义千问 等任选其一，按模型厂商要求填写 |
 
-无 TRAE CLI 依赖（V1.3 起默认使用自研 `@wiki/harness` 引擎）。
+引擎为内置 `@wiki/harness`（LLM + 工具循环 + 预算 + 重试 + 状态持久化），无需外部 CLI。
 
----
-
-## 2. 一键安装（3 步）
-
-### 步骤 1：打开终端
-
-在 `karpathy-wiki` 目录下打开 PowerShell（右键 →「在终端中打开」）。
-
-### 步骤 2：运行安装脚本
+## 2. 安装与初始化
 
 ```powershell
+cd karpathy-wiki
 .\scripts\install.ps1
 ```
 
-脚本会自动完成：
-1. 检查 Node.js 版本
-2. 安装根目录 + `@wiki/harness` + 前后端依赖
-3. 初始化 Vault 目录结构（`entities/`、`concepts/`、`comparisons/`、`queries/`、`raw/`）
-4. 启动**向导式初始化**（4 步交互）
+脚本依次完成：检查 Node 版本 → 安装根目录 / `@wiki/harness` / 前后端依赖 → 初始化知识库目录 → 向导式配置。
 
-### 步骤 3：向导式初始化（跟随提示）
+向导结束后落两份文件，职责不同（这是本项目的安全基线，见 §6）：
+
+| 文件 | 存什么 |
+| --- | --- |
+| `api/config.json` | 模型、知识库路径、预算、端口等配置（**不含** API Key 明文） |
+| `api/.env` | 实际的 API Key（已被 `.gitignore` 忽略，不入仓库） |
+
+知识库目录在 **`data/vault/`**（相对 `api/` 为 `../data/vault`）：
 
 ```
-步骤 1/4：确认 Vault 路径（默认 ./vault，回车即可）
-步骤 2/4：选择模型（1=GLM / 2=Qwen / 3=DeepSeek）+ 输入 API Key
-步骤 3/4：SCHEMA.md 将在首次启动时自动生成
-步骤 4/4：完成
+data/vault/
+├── entities/  concepts/  comparisons/  queries/  qa/  solutions/   ← 计入「页面总数」的 6 个目录
+├── drafts/     编译产出但尚未发布的中间状态（不计入页面总数）
+├── raw/        投递进来的原始资料备份（不是页面）
+├── SCHEMA.md   结构规范，编译时按它抽取
+├── index.md    索引   log.md  操作日志
 ```
 
-向导结束后：
-- `karpathy-wiki/api/config.json` —— 模型与路径配置（**不含** API Key）
-- `karpathy-wiki/api/.env` —— API Key（已排除 git 跟踪，M-7 安全要求）
+> 只有上面 6 个目录里的 `.md` 算「页面」；`test-*.md`、`proxy-test*.md` 这类联调遗留文件会被自动排除。
+> 页面质量清洗、仪表盘、知识图谱三处的数字都来自这一份口径。
 
-> 若跳过了 API Key 输入，可稍后手动编辑 `karpathy-wiki/api/.env`，添加一行：
-> `GLM_KEY=你的实际Key`
+## 3. 启动
 
----
-
-## 3. 启动服务
-
-### 方式 A：一键启动（推荐）
+### 开发模式
 
 ```powershell
-.\scripts\start.ps1
+.\scripts\start.ps1        # 前后端各开一个终端
+# 或分开：pnpm dev:api  /  pnpm dev:web   （未装 pnpm 用 npm run dev:api / npm run dev:web）
 ```
-
-会自动弹出两个终端窗口分别运行前后端，并加载 `.env` 环境变量。
-
-### 方式 B：分终端启动
-
-```powershell
-# 终端 1 — 后端
-pnpm dev:api
-
-# 终端 2 — 前端
-pnpm dev:web
-```
-
-> 未安装 pnpm 时用 `npm run dev:api` / `npm run dev:web`。
-
-### 访问地址
 
 | 服务 | 地址 |
 | --- | --- |
-| 前端 Web | http://localhost:5173 |
+| 前端 | **http://localhost:5173/wiki/** （注意带 `/wiki/` 前缀，直接开 5173 根路径是空的） |
 | 后端 API | http://localhost:3000 |
 | 健康检查 | http://localhost:3000/health |
 
----
+### 生产/发布模式
 
-## 4. 核心使用流程
-
-打开 http://localhost:5173 ，顶部导航栏提供 8 个功能模块：
-
-```
-仪表盘 → 投递资料 → 编译进度 → 知识浏览 → 知识问答 → 图谱 → 体检 → 配置
-```
-
-### 4.1 首次闭环：投递 → 编译 → 问答
-
-**① 仪表盘**（默认首页）
-- 显示页面总数、链接数、目录分布
-- 4 个快捷入口：投递 / 浏览 / 问答 / 体检
-
-**② 投递资料**
-- 粘贴 Markdown 文本（或上传 `.md` 文件）
-- 点击「开始编译」→ 自动跳转「编译进度」
-
-**③ 编译进度**
-- 实时 SSE 流式显示 AI 编译过程
-- 完成后展示生成的页面列表
-
-**④ 知识浏览**
-- 左侧目录树，右侧 Markdown 预览
-- 支持在线编辑页面内容并保存
-
-**⑤ 知识问答**
-- 输入问题，AI 检索知识库后流式回答
-- 回答中含 `[[页面名]]` 双向链接引用
-- 支持 Ctrl+Enter 快速发送
-
-### 4.2 辅助模块
-
-**⑥ 图谱**：vis-network 可视化双向链接网络，按目录着色
-**⑦ 体检**：检测孤儿页面、断链、过期页面
-**⑧ 配置**：
-  - SCHEMA 编辑器（直接修改 `SCHEMA.md`）
-  - 系统配置展示（模型、预算、端口等）
-  - API Key 状态检查
-
----
-
-## 5. API Key 配置说明
-
-### 安全模型（M-7）
-
-```
-config.json   →  仅存 apiKeyRef（环境变量名，如 "GLM_KEY"）
-.env           →  存实际 Key（已 .gitignore）
-运行时         →  process.env[apiKeyRef] 读取
-```
-
-### 切换模型
-
-编辑 `karpathy-wiki/api/config.json`：
-
-```json
-{
-  "llm": {
-    "provider": "qwen",
-    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "model": "qwen-plus",
-    "apiKeyRef": "QWEN_KEY"
-  }
-}
-```
-
-同时在 `karpathy-wiki/api/.env` 添加对应 Key：
-
-```
-QWEN_KEY=你的千问Key
-```
-
-重启后端生效。
-
-### 支持的模型
-
-| provider | baseUrl | model | apiKeyRef |
-| --- | --- | --- | --- |
-| glm | https://open.bigmodel.cn/api/paas/v4 | glm-4-plus | GLM_KEY |
-| qwen | https://dashscope.aliyuncs.com/compatible-mode/v1 | qwen-plus | QWEN_KEY |
-| deepseek | https://api.deepseek.com | deepseek-chat | DEEPSEEK_KEY |
-
----
-
-## 6. 常见问题（FAQ）
-
-### Q1：启动后问答报 401 / API Key 错误
-
-**原因**：`.env` 中 API Key 未配置或错误。
-
-**解决**：
-```powershell
-# 检查 .env
-Get-Content services\api\.env
-# 应包含：GLM_KEY=你的实际Key
-```
-若无，手动创建或重跑 `.\scripts\install.ps1`。
-
-### Q2：前端打开空白 / 连接超时
-
-**原因**：后端未启动。
-
-**解决**：确认 `http://localhost:3000/health` 返回 `{"ok":true}`。
-
-### Q3：端口被占用
-
-修改 `karpathy-wiki/api/config.json` 中 `server.port`，前端 `vite.config.ts` 中代理目标同步修改。
-
-### Q4：编译后没有生成页面
-
-**原因**：API Key 无效或 LLM 调用失败。
-
-**解决**：查看后端终端日志，确认 LLM 返回正常。可在「体检」页检查知识库状态。
-
-### Q5：如何重置知识库
-
-删除 `vault/` 目录后重启后端，`VaultService.init()` 会重建空目录与默认 SCHEMA.md。
-
-### Q6：install.ps1 执行被策略阻止
+前端构建成 SPA、部署后由后端一并在 **http://localhost:3000/wiki/** 提供。
 
 ```powershell
-# 临时放开执行策略（当前会话）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-wiki.ps1 -DryRun   # 先看要执行什么
+scripts\一键发布.bat                                                                    # 构建 → 部署 → 重启 → 健康检查
+```
+
+发布前后的核对项（含「重启后页面总数两处一致」）见《[验收报告与发布检查清单](wiki三期/05-验收报告与发布检查清单.md)》。
+
+## 4. 界面导航
+
+左侧菜单分 4 组、共 15 项。没有权限的项不会显示，因此普通用户看到的组会更少。
+
+| 组 | 菜单 |
+| --- | --- |
+| 知识 | 仪表盘 · 知识浏览 · 知识问答 · 知识图谱 |
+| 生产 | 投递资料 · 编译进度 |
+| 运维 | 体检中心 · 缓存与日志清理 · 页面质量清洗 |
+| 系统 | 配置中心 · 内网穿透 · 用户管理 · 技能管理 · 帮助文档 · 关于 |
+
+登录口令由部署时预置的管理员账号提供，**首次登录会被强制修改**；未改密前页面顶部会持续显示告警。
+忘记密码没有自助重置入口，请联系管理员在「用户管理」里重置。
+
+## 5. 第一次跑通（约 15 分钟）
+
+1. **配置模型**：配置中心 → `AI 服务`，选预设、填 API Key、保存。该页会标出这一项是「即时生效 / 热加载 / 需重启」，需重启时按页顶提示处理。
+2. **投递资料**：投递资料页，拖入 `.md` 或粘贴 URL / 纯文本 → 点「开始编译」（悬停说明会写清这次编译哪些内容、多少个页面）。
+3. **看进度**：编译进度页按中文阶段显示：存档原始资料 → 读取结构规范 → 抽取要点 → 生成页面 → 更新索引 → 记录日志 → 收尾。
+4. **提问**：知识问答页输入问题，回答基于本地页面并带 `[[页面名]]` 引用；输入框上方常驻显示当前使用的模型。
+5. **回看结构**：知识浏览看页面树，知识图谱看关联网络（默认取连接度最高的若干页面，可搜索定位）。
+
+## 6. 管理员日常
+
+| 要做的事 | 去哪 | 注意 |
+| --- | --- | --- |
+| 查知识库结构问题并批量修 | 体检中心 | 问题可搜索/多选/分页；批量修复是后台作业，能暂停、继续、取消，中断不丢进度 |
+| 清运行产生的缓存与日志 | 缓存与日志清理 | 页顶「仅预览（不实际执行）」默认开启；关掉才会真删，且仍会二次确认 |
+| 处理页面质量（缺元信息、标题重复、无出链、字数过短、读取失败） | 页面质量清洗 | 只动知识库页面内容，与上面那页职责不同 |
+| 管账户 | 用户管理 | 不能删除自己、不能禁用最后一个管理员 |
+| 让外部访问本机 | 内网穿透 | 先跑「前置条件自检」，按「已满足 / 未满足 / 待确认」处理后再启动；失败原因直接显示在页面上 |
+
+## 7. 常见问题
+
+**Q1：改了代码/配置，页面却还是老样子？**
+后端进程不会热载已启动实例里的模块改动。重启服务后再看——尤其是页面总数、口径类改动。
+
+**Q2：仪表盘和页面质量清洗显示的页面数不一样？**
+两边同源，正常情况下必然一致。若不一致，先按 Q1 重启；重启后仍不同请附上截图与版本号提交问题。
+
+**Q3：打开 http://localhost:5173 是空白？**
+少了 `/wiki/` 前缀，正确地址是 http://localhost:5173/wiki/ 。
+
+**Q4：问答报 401 / Key 无效？**
+检查 `api/.env` 里对应变量名的 Key（`api/config.json` 的 `llm.apiKeyRef` 指定变量名），改完重启后端。
+
+**Q5：编译完成但没生成页面？**
+多为 LLM 调用失败。看后端日志与编译进度页的错误摘要，确认 Key 有效、有配额。
+
+**Q6：想重置知识库？**
+先备份 `data/vault/`，删除后重启后端，`VaultService.init()` 会重建目录与默认 `SCHEMA.md`。
+
+**Q7：PowerShell 拦住了脚本？**
+```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\install.ps1
 ```
 
----
-
-## 7. 项目结构速览
+## 8. 项目结构
 
 ```
 karpathy-wiki/
-├── karpathy-wiki/frontend/          前端（Vue 3 + Vite + Element Plus）
-├── karpathy-wiki/api/          后端（Fastify + @wiki/harness）
-│   ├── src/
-│   │   ├── routes/        REST 路由（8 个）
-│   │   ├── workflows/     compile / query 工作流
-│   │   ├── vault/         Vault 文件服务
-│   │   └── prompts/       prompt 单点存储
-│   ├── vault/             知识库内容（运行时生成）
-│   ├── config.json        配置（模型/路径/预算）
+├── frontend/          前端（Vue 3 + Vite + Element Plus），base = /wiki/
+├── api/               后端（Fastify）
+│   ├── src/routes/        REST 路由
+│   ├── src/workflows/     编译 / 问答 / 批量修复作业
+│   ├── src/vault/         知识库文件服务（page-scope.ts 是页面口径的单一来源）
+│   ├── src/auth/          账户与权限
+│   ├── config.json        配置（不含 Key）
 │   └── .env               API Key（不入仓库）
-├── scripts/
-│   ├── install.ps1        一键安装 + 向导
-│   └── start.ps1          一键启动
-└── GETTING_STARTED.md     本文件
+├── data/vault/        知识库内容（页面、草稿、原始资料）
+├── release/spa/       前端构建产物（发布时部署）
+├── scripts/           安装 / 启动 / 构建 / 发布 / 版本号
+└── docs/              交付文档、术语表、帮助与验收材料
 ```
 
----
+## 9. 延伸阅读
 
-## 8. 下一步
-
-- 阅读《Karpathy-AI+Obsidian知识库概要设计说明书》了解架构设计
-- 在「配置」页定制 SCHEMA.md 规范
-- 持续投递资料，让知识库自动生长
-
-如有问题，先查「体检」模块的诊断报告。
+- 每个菜单能做什么、怎么用：应用内「帮助文档」（与页面逐项对照，比本文更细）
+- 术语与命名口径：《[术语表](术语表.md)》
+- 三期改了什么：《[发布说明](wiki三期/06-发布说明.md)》
+- 交付与架构：《[DELIVERY.md](DELIVERY.md)》
