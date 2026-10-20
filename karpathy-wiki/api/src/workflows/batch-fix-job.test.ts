@@ -31,26 +31,33 @@ function itemsOf(paths: string[]): BatchFixItem[] {
   return paths.map((p) => ({ issueKey: `orphan:${p}`, input: { issueType: 'orphan' as const, target: p } }));
 }
 
+// 作业状态推进靠真实落盘驱动，等待预算必须按「FS 延迟」而不是「逻辑耗时」标定。
+// 3000ms 是历史值，本机空载时就只剩几百 ms 余量，一旦有并发（跑第二条 vitest、build）同一条
+// 用例会从 3.3s 涨到 12.7s，直接抛「waitFor 超时：作业未达预期状态」——这是 T02478 全量里
+// 那两条红色的真因，与被测逻辑无关。放宽到 30s，并把最后快照打进错误信息，避免下次又靠猜。
 async function waitFor(
   fn: () => Promise<BatchFixSnapshot | null>,
   predicate: (s: BatchFixSnapshot) => boolean,
-  timeoutMs = 3000,
+  timeoutMs = 30_000,
 ): Promise<BatchFixSnapshot> {
   const started = Date.now();
+  let last: BatchFixSnapshot | null = null;
   while (Date.now() - started < timeoutMs) {
-    const snap = await fn();
-    if (snap && predicate(snap)) return snap;
+    last = await fn();
+    if (last && predicate(last)) return last;
     await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error('waitFor 超时：作业未达预期状态');
+  const digest = last
+    ? JSON.stringify({ status: last.status, nextIndex: last.nextIndex, doneCount: last.doneCount })
+    : 'null';
+  throw new Error(`waitFor 超时（${timeoutMs}ms）：作业未达预期状态，最后快照=${digest}`);
 }
 
 // 本文件每条用例都要 mkdtemp + 真实落盘 + rm 清场，耗时由 FS 延迟主导，不是逻辑慢。
-// 2026-10-20 T02478 单独跑（无任何并发任务）实测 8 条用例：
-//   3316 / 4951 / 4526 / 1734 / 1165 / 1840 / 13171 / 2337 ms
-// 默认 testTimeout 5000ms 下，「暂停…」「取消…」两条常年贴顶（4.9s / 4.5s），全量并发时必然被
-// FS 排队顶爆——本轮就是这样先误判成回归的。按最慢实测值（13.2s）取约 4 倍余量设整文件超时，
-// 只影响本文件，不动全局 testTimeout（放宽全局会掩盖真实的慢）。
+// 2026-10-20 T02478 实测：空载单跑 8 条用例 1.1~13.2s；与另一条 vitest 并发时同一条「跑完全部问题」
+// 从 3.3s 涨到 12.7s。默认 testTimeout 5000ms 下多条贴顶，全量并发必然假失败。
+// 取 waitFor 预算（30s）+ FS 清场余量设整文件超时，只影响本文件，不动全局 testTimeout
+// （放宽全局会掩盖真实的慢）。
 const FS_HEAVY_TIMEOUT_MS = 60_000;
 
 describe('BatchFixJobManager', { timeout: FS_HEAVY_TIMEOUT_MS }, () => {
