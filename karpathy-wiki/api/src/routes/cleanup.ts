@@ -5,9 +5,11 @@ import type {
   CleanupRequest,
   CleanupResult,
   CleanupStorageStatus,
+  CleanupBlockedResponse,
 } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
+import { currentActiveState, evaluateCleanupGuard, guardErrorMessage } from '../cleanup-guard.js';
 
 // 系统清理路由。
 //   GET  /api/cleanup/status   查询 4 类对象存储状态
@@ -24,6 +26,9 @@ import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.
 //   - 路由层不强制二次确认（前端 globalThis.confirm 已实现），后端按请求执行
 //   - 单子项失败不影响其他子项（独立 try/except，errors[] 收集）
 //   - days 下限保护：max(1, days) 防止误删全表
+//   - T02655：真实删除（dry_run=false）前查活跃编译/问答任务，命中直接 409 不执行。
+//     拦截口径（拦哪两类、为什么不拦另两类）在 cleanup-guard.ts，status 与 POST 共用，
+//     避免「前端置灰规则」与「后端放行规则」漂移。
 
 const DEFAULT_DAYS = 30;
 const BYTES_PER_MB = 1024 * 1024;
@@ -118,6 +123,8 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
       const rawStat = await statDir(rawDir, /^(wiki-batch-|wiki-compile-|input-).*/);
 
       const status: CleanupStorageStatus = {
+        // T02655：活跃任务快照。前端据此逐卡置灰；口径与 POST 守卫同源（cleanup-guard）
+        active: currentActiveState(),
         compileCache: {
           exists: compileCacheExists,
           sizeMb: bytesToMb(compileCacheSize),
@@ -155,6 +162,39 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
     // 后端钳制 days 下限，防止 0 或负值导致删除全部
     const days = Math.max(1, typeof body.days === 'number' ? body.days : DEFAULT_DAYS);
     const dryRun = body.dry_run !== false; // 默认预览，强制用户主动关闭
+
+    // T02655 活跃任务硬拦截：仅在真实删除模式下判定。
+    // 为什么不拦预览：预览不删任何文件，拦它反而让用户看不到「会删哪些」，
+    // 阻碍他做「要不要真删」的判断。
+    // 残留窗口（如实记录）：GET status 与本守卫之间、以及本守卫与删除动作之间，
+    // 任务仍可能刚起跑（毫秒级窗口）。此前是「整场编译期间都可能误删」，
+    // 现在收窄为「恰好在删除窗口内起跑的任务」；彻底闭环需要清理与编译互斥，
+    // 已建派生单跟进，不在本单扩大改动面。
+    if (!dryRun) {
+      const verdict = evaluateCleanupGuard(target);
+      if (verdict.blocked.length > 0) {
+        const active = currentActiveState();
+        const blocked: CleanupBlockedResponse = {
+          error: guardErrorMessage(target, verdict),
+          code: 'cleanup_blocked_by_active_task',
+          target,
+          blocked: verdict.blocked,
+          reasons: verdict.reasons,
+          active,
+        };
+        // 被拦也必须落审计：这是「用户在有活跃任务时试图真实删除」的唯一留痕
+        await writeAudit({
+          ts: new Date().toISOString(),
+          target,
+          days,
+          dry_run: false,
+          blocked_by_active_task: true,
+          blocked: verdict.blocked,
+          active,
+        });
+        return void reply.code(409).send(blocked);
+      }
+    }
 
     const result: CleanupResult = {
       target,

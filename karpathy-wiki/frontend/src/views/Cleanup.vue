@@ -2,7 +2,7 @@
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { computed, ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import type { CleanupBody, CleanupResult, CleanupStorageStatus } from '../types';
+import type { CleanupBody, CleanupBlockedResponse, CleanupResult, CleanupStorageStatus } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
 import {
   CLEANUP_CARDS,
@@ -44,6 +44,20 @@ const cards = CLEANUP_CARDS;
 const bannerText = computed(() => buildPreviewBanner(preview.value));
 const chip = computed(() => modeChip(preview.value));
 const advanced = computed(() => advancedRows());
+
+// T02655：把「现在到底有没有任务在跑」摆在页顶。
+// 为什么还要额外摆一行：卡面置灰只在「有文件可删」时才生效，用户容易把
+// 「无需清理」和「有任务进行中」两种禁用态混看；页顶这一行是唯一的活体指示。
+// 数据只在 loadStatus 时刷新，可能滞后——滞后不会造成误删，因为真实删除由后端
+// 当场再判一次（409），前端这一行只是让原因可见。
+const activeHint = computed(() => {
+  const active = status.value?.active;
+  if (!active) return '';
+  const parts: string[] = [];
+  if (active.compile > 0) parts.push(`编译 ${active.compile}`);
+  if (active.query > 0) parts.push(`问答 ${active.query}`);
+  return parts.length > 0 ? `进行中任务：${parts.join(' · ')}` : '';
+});
 
 // 4 类独立 loading + result
 const loadings = reactive<Record<string, boolean>>({
@@ -106,6 +120,26 @@ async function handleCleanup(key: CleanupCardKey) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    // T02655：409 = 后端硬拦截（有活跃任务时禁止真实删除）。
+    // 不能走下面的通用「清理失败：HTTP 409」分支——那种文案既不说明拦了什么，
+    // 也不告诉用户要等什么，只会让人再点一次。
+    if (res.status === 409) {
+      const blocked = (await res.json().catch(() => null)) as CleanupBlockedResponse | null;
+      const headline = blocked?.error ?? '后端检测到进行中的任务，已拦截这次真实删除。';
+      const details = (blocked?.reasons ?? []).filter((r) => r !== headline);
+      ElMessage.warning(headline);
+      results.value[key] = {
+        target: meta.target,
+        days: forms[key].days,
+        dry_run: false,
+        cleaned: [],
+        errors: [headline, ...details],
+        count: 0,
+      };
+      // 立刻刷新：让页顶的「进行中任务」和卡面置灰跟上后端事实
+      await loadStatus();
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: CleanupResult = await res.json();
     results.value[key] = data;
@@ -160,6 +194,13 @@ onMounted(() => {
           <span class="switch-label">仅预览（不实际执行）</span>
           <span class="preview-hint">{{ previewSwitchHint(preview) }}</span>
           <span :class="['mode-tag', chip.danger ? 'mode-danger' : 'mode-safe']">{{ chip.label }}</span>
+          <!-- T02655：活体指示——有任务在跑时才出现，说明为什么有的卡被置灰 -->
+          <span
+            v-if="activeHint"
+            id="cleanup-active-hint"
+            class="mode-tag mode-danger"
+            data-tip="后端统计的进行中任务；有任务时「运行状态/原始资料」的真实删除会被拒绝"
+          >{{ activeHint }}</span>
         </div>
         <a class="advanced-toggle" href="#" role="button" :aria-expanded="showAdvanced" @click.prevent="showAdvanced = !showAdvanced">
           {{ showAdvanced ? '收起技术细节' : '高级：查看实际路径与技术说明' }}

@@ -1,0 +1,117 @@
+// 清理拦截策略（T02655：真实删除前的活跃任务硬拦截）。
+//
+// 背景：POST /api/cleanup 在真实删除（dry_run=false）模式下会删 `.harness/state/*.json`
+// 与 `vault/raw/` 下的原始资料存档，而这两类正是**正在跑的编译/问答任务**当下依赖的东西。
+// 此前只有二次确认框里一句「建议先确认无活跃编译/问答任务」的软提示——用户把「仅预览」
+// 开关一关、看都不看就点确认，正在跑的编译会被当场打断。本模块把提示升级成硬拦截口径。
+//
+// 判定依据来自 activity.ts 的进程内计数（由任务自己在确定的起止点登记），
+// 不读 .harness/state 文件里的 status 字段：那个字段全仓从未写入过 'running'，
+// 按文件判活跃既会误判历史残留、也会漏掉刚起跑的任务（详见 activity.ts 头注释）。
+//
+// 为什么只拦 run_state 与 raw_archive 两类：
+//  - compile_cache：删了只是「下次编译全量重跑」，属可自愈的代价，且正在执行的编译
+//    已把缓存读进内存，删除不会让它失败（最坏是它结束时把文件又写回来，白占一次空间）。
+//  - run_logs：按 days 过滤，正在写的日志 mtime 必然新于 cutoff，天然删不到；
+//    真删到了被占用的旧日志也只会落进 errors[]，不影响任务本身。
+//  - run_state：清理**不带 days 过滤**，会把目录里所有 json 无差别删掉，
+//    其中就包括进行中任务的续传基准 → 必须拦。
+//  - raw_archive：进行中/排队中的编译要读原件，删了这次编译拿不到输入 → 必须拦。
+import { activeActivities } from './activity.js';
+import type { CleanupActiveState } from './types.js';
+
+// 'all' 展开后的具体目标（与路由分发保持一致）
+export const ALL_CLEANUP_TARGETS = ['compile_cache', 'run_state', 'run_logs', 'raw_archive'] as const;
+
+interface BlockRule {
+  target: string;
+  kind: 'compile' | 'query';
+  reason: string;
+}
+
+const BLOCK_RULES: BlockRule[] = [
+  {
+    target: 'run_state',
+    kind: 'compile',
+    reason: '有编译任务正在进行：清理会删掉它的断点续传基准，这次编译会直接失败或从头重跑。',
+  },
+  {
+    target: 'raw_archive',
+    kind: 'compile',
+    reason: '有编译任务正在进行：它要读的原始资料存档可能在这次清理里被删掉。',
+  },
+  {
+    target: 'run_state',
+    kind: 'query',
+    reason: '有问答任务正在进行：它的运行状态文件会被无差别删除，这次问答会中断。',
+  },
+];
+
+/** 读取当前活跃任务快照，并算出被拦目标（前端置灰与后端守卫共用同一口径）。 */
+export function currentActiveState(): CleanupActiveState {
+  const counts = activeActivities();
+  const blockedReasons = BLOCK_RULES.filter((rule) =>
+    rule.kind === 'compile' ? counts.compile > 0 : counts.query > 0,
+  ).map((rule) => ({ target: rule.target, reason: rule.reason }));
+  return {
+    compile: counts.compile,
+    query: counts.query,
+    // 去重后的目标清单（同一目标可能同时被 compile/query 规则命中）
+    blockedTargets: ALL_CLEANUP_TARGETS.filter((t) => blockedReasons.some((r) => r.target === t)),
+    // 原文原因：前端置灰提示直接引用，不再各写一份措辞（避免两套口径漂移）
+    blockedReasons,
+  };
+}
+
+export interface CleanupGuardVerdict {
+  /** 命中的被拦目标（请求 target 为 'all' 时列出其中被拦的子目标） */
+  blocked: string[];
+  /** 人话原因，与 blocked 一一对应（可能同一目标多条原因） */
+  reasons: string[];
+}
+
+/** 纯函数判定：便于单测穷举，也便于路由与状态接口共用。 */
+export function evaluateCleanupGuard(
+  target: string,
+  active: CleanupActiveState = currentActiveState(),
+): CleanupGuardVerdict {
+  const targets = target === 'all' ? [...ALL_CLEANUP_TARGETS] : [target];
+  const blocked = new Set<string>();
+  const reasons: string[] = [];
+  for (const rule of BLOCK_RULES) {
+    const busy = rule.kind === 'compile' ? active.compile > 0 : active.query > 0;
+    if (!busy || !targets.includes(rule.target)) continue;
+    blocked.add(rule.target);
+    if (!reasons.includes(rule.reason)) reasons.push(rule.reason);
+  }
+  return {
+    blocked: ALL_CLEANUP_TARGETS.filter((t) => blocked.has(t)),
+    reasons,
+  };
+}
+
+/** 供 409 响应体使用的一句话摘要（error 字段）：前端直接展示，不再拼字符串。 */
+export function guardErrorMessage(target: string, verdict: CleanupGuardVerdict): string {
+  const busy: string[] = [];
+  const snapshot = currentActiveState();
+  if (snapshot.compile > 0) busy.push(`${snapshot.compile} 个编译`);
+  if (snapshot.query > 0) busy.push(`${snapshot.query} 个问答`);
+  return `存在进行中任务（${busy.join('、') || '活跃任务'}），已拦截真实删除：${verdict.blocked
+    .map((t) => targetLabel(t))
+    .join('、')}。请先停止或等待任务结束，或改用「仅预览」。`;
+}
+
+function targetLabel(target: string): string {
+  switch (target) {
+    case 'run_state':
+      return '运行状态';
+    case 'raw_archive':
+      return '原始资料';
+    case 'compile_cache':
+      return '编译缓存';
+    case 'run_logs':
+      return '运行日志';
+    default:
+      return target;
+  }
+}

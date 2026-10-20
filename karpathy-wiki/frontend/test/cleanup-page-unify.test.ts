@@ -21,6 +21,8 @@ import { menuItems } from '../src/config/menu';
 
 function statusOf(over: Partial<CleanupStorageStatus> = {}): CleanupStorageStatus {
   return {
+    // T02655：默认「无活跃任务」；被拦分支的用例在 cleanup-active-guard.test.ts 里显式覆盖
+    active: { compile: 0, query: 0, blockedTargets: [], blockedReasons: [] },
     compileCache: { exists: true, sizeMb: 1.2, entryCount: 42 },
     runState: { fileCount: 3, sizeMb: 0.1, oldest: '2026-09-01' },
     runLogs: { fileCount: 12, sizeMb: 4.5, oldest: '2026-08-11' },

@@ -17,6 +17,8 @@ import type { ContextGovernorConfig, GovernorStats } from '../engine/context-gov
 import { withSessionLock } from '../session-lock.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
+// T02655：问答执行期登记「活跃任务」，供系统清理真实删除前的硬拦截
+import { beginActivity } from '../activity.js';
 
 // 解析线程上下文：校验 threadId + 加载历史记忆 + 上下文治理
 // 提取为独立函数降低 S3776 认知复杂度
@@ -297,6 +299,10 @@ export function registerQueryRoute(
       }
     });
 
+    // T02655：内联（非可恢复）路径的活跃登记——可恢复路径由 StreamRunManager 在 run 终态登记/释放，
+    // 两条路径必须各自覆盖，否则 enableResumableStream=false 时清理接口看不到在跑的问答。
+    const releaseInlineQuery = beginActivity('query');
+
     try {
       // §6.0.2 per-session Lock：同 question 的并发请求串行化，避免 LLM 重复调用浪费 token
       // 为什么包裹整个 SSE 流而非只包裹 LLM 调用：
@@ -403,6 +409,9 @@ export function registerQueryRoute(
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
+      // T02655：内联流落定（正常 done / 异常 / 客户端断开后 break）即释放活跃登记，
+      // 与 safeEnd 同处 finally 保证任何出口都不泄漏计数
+      releaseInlineQuery();
       safeEnd();
     }
   });
