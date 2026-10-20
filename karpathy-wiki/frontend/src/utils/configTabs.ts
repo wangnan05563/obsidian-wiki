@@ -22,6 +22,7 @@ export type ConfigTabName =
   | 'tts'
   | 'tools'
   | 'theme'
+  | 'backup'
   | 'qq'
   | 'prompts';
 
@@ -51,6 +52,9 @@ export const CONFIG_TAB_GROUPS: readonly ConfigTabGroup[] = [
     tabs: [
       { name: 'tts', label: '朗读设置', adminOnly: false, desc: '音色、语速与朗读行为，保存在本机' },
       { name: 'theme', label: '界面主题', adminOnly: false, desc: '配色与主题切换，只影响当前浏览器' },
+      // T02482（PRD D4x）：原内嵌在帮助文档「本地数据保护」章节的解锁/导出/导入表单迁到这里。
+      // 归入「个人偏好」组：数据在本机浏览器 IndexedDB，不涉服务端，也无需管理员。
+      { name: 'backup', label: '数据备份', adminOnly: false, desc: '本地问答会话的加密解锁与备份导入导出' },
     ],
   },
   {

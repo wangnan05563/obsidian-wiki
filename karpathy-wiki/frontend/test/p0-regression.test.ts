@@ -407,8 +407,9 @@ describe('P0-10 [C1+C2/REQ-032+REQ-033] 配置中心分组与生效路径标注'
     ).toEqual(['x']);
   });
 
-  it('11 个 tab 收成 3 组，生效方式唯一可信源在服务端登记表', () => {
-    expect(allConfigTabs()).toHaveLength(11);
+  it('12 个 tab 收成 3 组，生效方式唯一可信源在服务端登记表', () => {
+    // T02482（PRD D4x）：「数据备份」页签承接原帮助文档的本地数据保护表单，11 → 12（仍 3 组）
+    expect(allConfigTabs()).toHaveLength(12);
     expect(CONFIG_TAB_GROUPS.map((g) => g.key)).toEqual(['personal', 'ai', 'system']);
     const registry = readApi('src/utils/config-effects.ts');
     expect(registry).toMatch(/instant/);
