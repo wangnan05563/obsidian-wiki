@@ -6,6 +6,16 @@ import { useConversationsStore } from '../stores/conversations';
 import { useAuthStore } from '../stores/auth';
 import { isUnlocked } from '../services/localVault';
 import { createBackup, restoreBackup, downloadBackup, readBackupFile } from '../services/backup';
+// T02698：用户管理章节的规则不再各写一份——口令 / 用户名规则、出厂账号告警语、
+// 三条锁死红线的提示原文全部取自 userManagePresentation（与页面上实际显示的文案同源）。
+import {
+  PASSWORD_RULE,
+  SEED_ACCOUNT_HINT,
+  SEED_ACCOUNT_NAMES,
+  USERNAME_RULE,
+  deleteGuard,
+  disableGuard,
+} from '../utils/userManagePresentation';
 
 // ===== 类型定义 =====
 // 内容抽象为数据，渲染逻辑与内容分离，便于维护
@@ -34,6 +44,25 @@ interface DocSection {
 }
 
 // ===== 15 个导航视图，本文档覆盖其全部（用户管理 / 技能管理 / 页面质量清洗 随迭代新增）=====
+// 用户管理章节引用的规则原文（T02698）：不抄第二份，直接从守卫函数用「必然被拦」的上下文算出来。
+// 这样页面上的 data-tip 改了而文档没改时，文档里的句子也跟着变——两者不可能各说一套。
+const GUARD_DELETE_SELF = deleteGuard(
+  { id: 'someone', role: 'user' },
+  { currentUserId: 'someone', adminCount: 2, activeAdminCount: 2 },
+).reason;
+const GUARD_DELETE_LAST_ADMIN = deleteGuard(
+  { id: 'admin1', role: 'admin' },
+  { currentUserId: 'someone', adminCount: 1, activeAdminCount: 1 },
+).reason;
+const GUARD_DISABLE_SELF = disableGuard(
+  { id: 'someone', role: 'user', enabled: true },
+  { currentUserId: 'someone', adminCount: 2, activeAdminCount: 2 },
+).reason;
+const GUARD_DISABLE_LAST_ADMIN = disableGuard(
+  { id: 'admin1', role: 'admin', enabled: true },
+  { currentUserId: 'someone', adminCount: 2, activeAdminCount: 1 },
+).reason;
+const SEED_ACCOUNT_LIST = SEED_ACCOUNT_NAMES.join(' / ');
 // 章节顺序：快速开始 → 关于 → 各功能模块 → 配置类 → 维护类
 const DOC_SECTIONS: DocSection[] = [
   {
@@ -541,33 +570,54 @@ const DOC_SECTIONS: DocSection[] = [
     id: 'users',
     title: '用户管理',
     icon: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
-    intro: '管理系统账户，仅管理员可见。',
+    intro: '管理系统账户、角色与启停状态，仅管理员可见；对随代码公开的出厂账号给出风险告警。',
     blocks: [
       {
         type: 'feature',
         title: '核心功能',
-        content: '仅管理员可访问。展示用户总数 / 管理员数 / 普通用户数 / 已启用数统计；维护用户列表（用户名、角色、状态、创建时间、最后登录）。支持创建用户、编辑（修改角色、启用 / 禁用、重置密码）、删除用户。',
+        content: '统计卡片给出账户总数 / 管理员数 / 普通用户数 / 已启用数；表格列用户名、角色、状态、创建时间、最后登录，支持按用户名搜索、按这四列排序与分页，筛空时可「清空筛选」。行内操作是「编辑」和「停用 / 启用」，表头是「新建用户」与「刷新」。仍启用的出厂账号会打「出厂账号」标记，并在页顶给一条告警与「一键停用可停用的出厂账号」。',
+      },
+      {
+        type: 'config',
+        title: '输入规则（与后端校验同源，报错原文一致）',
+        content: [
+          ['用户名', 'wiki_admin', USERNAME_RULE],
+          ['密码', '不显示明文', PASSWORD_RULE],
+          ['角色', '管理员 / 普通用户 / 游客', '只有本页能指定角色；公开的注册接口会强制按普通用户创建，请求体里带的角色被忽略（防权限提升）'],
+          ['出厂账号', SEED_ACCOUNT_LIST, SEED_ACCOUNT_HINT],
+        ],
+      },
+      {
+        type: 'feature',
+        title: '四条改不动的红线',
+        content: `按钮置灰时把鼠标停在上面就是这句原因，文档与它逐字一致：${GUARD_DELETE_SELF}；${GUARD_DELETE_LAST_ADMIN}；${GUARD_DISABLE_SELF}；${GUARD_DISABLE_LAST_ADMIN}。前两条管删除，后两条管停用与降级——目的是不让任何人把自己或整个系统锁在管理页之外。`,
+      },
+      {
+        type: 'feature',
+        title: '停用和删除有什么不同',
+        content: '停用：该账户已登录的会话立即失效、无法再登录，但随时可以「启用」恢复，账户记录与历史都留着。删除：同样立即销毁其会话，且不可撤销。两者都不影响该账户此前产生的页面与操作记录。另外「编辑」里给账户重置口令不会把对方踢下线——已登录的会话继续有效，需要它立刻下线请改用「停用」。',
       },
       {
         type: 'steps',
         title: '操作步骤',
         content: [
           '以管理员身份点击导航栏「用户管理」进入页面',
-          '点击「＋ 新建用户」填写用户名、密码、角色（管理员 / 普通用户 / 游客）后创建',
-          '在列表中点击某用户的「编辑」，可修改角色、启用 / 禁用开关、设置新密码（留空不修改）',
-          '点击「删除」移除用户（不能删除当前登录账户，操作需二次确认）',
-          '查看统计卡片与列表实时反映变更',
+          '点「新建用户」，填用户名与密码（规则见上表），选角色后点「创建」',
+          '在搜索框（占位提示「搜索用户名」）定位账户，点表头可按用户名 / 角色 / 创建时间 / 最后登录排序；筛空后点「清空筛选」',
+          '点某行的「编辑」可改角色、启停状态，或在「新密码（留空表示不修改）」里填新口令，改完点「保存」',
+          '「停用」和「删除」都在行内，都会先弹二次确认；被红线保护的按钮直接置灰并写明原因，不会点了才告诉你不行',
+          '页顶出现出厂账号告警时，点「一键停用可停用的出厂账号」批量处理（当前登录账户与唯一启用管理员不会被波及）',
         ],
       },
       {
         type: 'scenario',
         title: '使用场景',
-        content: '多用户部署时分配账户与角色，回收离职人员访问权限，审计账户启用状态。',
+        content: '多用户部署时分配账户与角色；回收离职人员访问权限用「停用」（保留记录、可恢复），确认不再需要该账户才用「删除」。',
       },
       {
         type: 'note',
         title: '注意事项',
-        content: '角色分三级：管理员（全部功能）、普通用户（仪表盘 + 知识浏览 / 图谱 / 问答 + 公共辅助页）、游客（同普通用户）。删除当前登录账户被禁止，避免锁死管理员。',
+        content: '角色分三级：管理员（全部功能）、普通用户（仪表盘 + 知识浏览 / 图谱 / 问答 + 公共辅助页）、游客（当前与普通用户同权）。出厂账号若仍在使用默认口令，会在首次登录时被要求强制改密（本地调试模式除外），文档不记录默认口令本身。登录有防爆破限流：单 IP 每分钟 10 次、单用户名每分钟 5 次，超限返回 429。登录、登出、越权与用户管理操作都会追加写入审计日志，只追加不自动清理；应用内暂无审计页面，管理员可通过 GET /api/auth/audit-log 取最近 1000 条。',
         noteType: 'warning',
       },
     ],
