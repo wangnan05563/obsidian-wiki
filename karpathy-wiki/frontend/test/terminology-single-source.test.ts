@@ -6,43 +6,36 @@ import path from 'node:path';
 // docs/术语表.md 是单一可信源，本用例把「禁用别名」变成可执行规则——
 // 任何新文案把「页面」写回「笔记/文档」、把「共享 AI」写成「共享AI」、
 // 或把内部枚举/英文 loading 词直接端给用户，都在这里失败，而不是等下一轮 UX 评审重新发现。
+//
+// T02705：禁用词清单不再硬编码在本文件里，改为与后端守护用例共用
+// docs/terminology-bans.json。原因是清单一旦在两处各写一份，前后端就会出现
+// 「前端改了后端不守」的静默分叉——后端 toast 直接端给用户，同样在术语表管辖范围内。
+// 两侧扫描根目录与文件类型不同（前端 src 含 .vue，后端只有 .ts），所以扫描器各自留在本地，
+// 共享的是「哪些词禁用、为什么禁、谁可以豁免」这部分真正会分叉的数据。
 
 const SRC_DIR = path.resolve(__dirname, '../src');
 const DOC_PATH = path.resolve(__dirname, '../../docs/术语表.md');
+const BANS_PATH = path.resolve(__dirname, '../../docs/terminology-bans.json');
 
 interface Ban {
   term: string;
   why: string;
-  // 允许出现的文件（相对 src，正斜杠）——外部语境豁免，见术语表 §2
-  exemptFiles?: string[];
+  // 允许出现的文件（相对各自 src，正斜杠）——外部语境豁免，见术语表 §2；按扫描侧分组
+  exempt?: Record<string, string[]>;
 }
 
-const BANS: Ban[] = [
-  { term: '知识库文档', why: '知识库产物是「页面」（§2）' },
-  { term: '正式文档', why: '发布后是「正式页面」（§2）' },
-  { term: '冗余文档', why: '同上，页面质量清洗的对象是「页面」（§2）' },
-  { term: '重复文档', why: '同上' },
-  { term: '代表文档', why: '同上' },
-  { term: '文档集合', why: '同上' },
-  { term: '笔记', why: '「笔记」只允许出现在外部语境（Obsidian 笔记 / 记事本）', exemptFiles: ['views/Help.vue'] },
-  { term: '>URI<', why: '一律 URL（§5）' },
-  { term: 'SEARCHING...', why: '加载态用中文（§6）' },
-  { term: 'LOADING...', why: '加载态用中文（§6）' },
-  { term: 'ALL CLEAR', why: '体检总态用中文（§6）' },
-  { term: 'NEEDS ATTENTION', why: '体检总态用中文（§6）' },
-  { term: '>CHANGED<', why: '未保存标记用中文（§6）' },
-  { term: '共享AI', why: 'tab 实名是「共享 AI」，带空格（§4）' },
-  { term: '生图视频服务', why: '该 tab 不存在，个人密钥在「AI 服务」（§3/§4）' },
-  { term: '提取要点', why: '编译阶段动词锁定「抽取」（§5）' },
-  { term: '产出页面', why: '阶段名是「生成页面」（§5）' },
-  { term: '抽取内容', why: '阶段名是「抽取要点」（§5）' },
-  { term: '资料投递', why: '菜单实名是「投递资料」（§3）' },
-  { term: '知识库体检', why: '功能名是「体检中心」（§3）' },
-  { term: '执行体检', why: '按钮实名是「重新体检」（§3）' },
-  { term: '健康体检', why: '功能名是「体检中心」（§3）' },
-  { term: '「配置 →', why: '提示语路径必须是「配置中心 → <tab 实名>」（§3）' },
-  { term: '猜猜你想问', why: '追问引导全站统一「你可能想问：」（§6）' },
-];
+interface BansFile {
+  bans: Ban[];
+}
+
+function loadSharedBans(): Ban[] {
+  expect(fs.existsSync(BANS_PATH), `共享禁用词清单缺失：${BANS_PATH}`).toBe(true);
+  const parsed = JSON.parse(fs.readFileSync(BANS_PATH, 'utf8')) as BansFile;
+  expect(Array.isArray(parsed.bans) && parsed.bans.length > 0, '共享清单 bans 为空').toBe(true);
+  return parsed.bans;
+}
+
+const BANS: Ban[] = loadSharedBans();
 
 function collectSourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -71,7 +64,7 @@ function scanLine(rel: string, raw: string, line: number): Hit[] {
   if (text.startsWith('//') || text.startsWith('/*') || text.startsWith('*') || text.startsWith('<!--')) return [];
   const hits: Hit[] = [];
   for (const ban of BANS) {
-    if (ban.exemptFiles?.includes(rel)) continue;
+    if (ban.exempt?.frontend?.includes(rel)) continue;
     if (text.includes(ban.term)) {
       hits.push({ file: rel, line, term: ban.term, why: ban.why, text: text.slice(0, 90) });
     }
@@ -118,6 +111,34 @@ describe('T02475 术语表守护（PRD X1）', () => {
     expect(scanLine('views/Demo.vue', `label="共享AI"`, 1).map((h) => h.term)).toContain('共享AI');
     // 同一句写在注释里则豁免——修复说明要点名旧词
     expect(scanLine('views/Demo.vue', `// 已把「知识库文档」改为「知识库页面」`, 1)).toEqual([]);
+  });
+
+  it('清单来自共享 JSON，两个守护用例都不再本地硬编码禁用词（T02705 防分叉）', () => {
+    const shared = (JSON.parse(fs.readFileSync(BANS_PATH, 'utf8')) as BansFile).bans;
+    expect(BANS.length, '本用例加载的条数必须等于共享清单条数').toBe(shared.length);
+    expect(shared.length).toBeGreaterThanOrEqual(20);
+
+    const sides: Array<[string, string]> = [
+      ['frontend/test/terminology-single-source.test.ts', __dirname],
+      ['api/test/terminology-bans.test.ts', path.resolve(__dirname, '../../api/test')],
+    ];
+    for (const [rel, dir] of sides) {
+      const file = path.resolve(dir, path.basename(rel));
+      expect(fs.existsSync(file), `缺少守护用例：${rel}`).toBe(true);
+      const src = fs.readFileSync(file, 'utf8');
+      expect(src, `${rel} 必须从 docs/terminology-bans.json 取清单`).toContain('terminology-bans.json');
+      // 守护口径与扫描源码时一致：整行注释豁免，只看真正生效的代码行——
+      // 否则本条会被「说明分叉长什么样」的注释自己触发
+      const codeLines = src
+        .split(/\r?\n/)
+        .filter((line) => {
+          const t = line.trim();
+          return t !== '' && !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+        })
+        .join('\n');
+      // 本地再写一份禁用词数组就是分叉的开始
+      expect(/const BANS[^=]*=\s*\[/.test(codeLines), `${rel} 不应再本地硬编码禁用词数组`).toBe(false);
+    }
   });
 
   it('菜单实名与帮助条目名同词（§3 一致性）', () => {
