@@ -869,6 +869,10 @@ const treeProps = {
 // ===== 草稿审核状态 =====
 // draft 列表与当前选中 draft 复用 fileContent（结构一致：frontmatter+body）
 const drafts = ref<DraftItem[]>([]);
+// T02719（PRD X2/X8 收尾）：草稿列表此前没有加载/失败标志位，首帧 drafts 仍为空时会先闪一次
+// 「暂无草稿 + 去投递资料」的空态卡片——与 T02476 修掉的目录树闪烁同一形态，只是这两处当时刻意在单外。
+const draftsLoading = ref(false);
+const draftsError = ref('');
 const currentDraftPath = ref<string>('');
 // 批量编译进度：每项对应一个 draft 的编译状态
 // §全部走 store：batchItems/compiling/progressMessage 从 compileStore 读取，
@@ -882,6 +886,9 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 // ===== FR-10-1 AI 标签审核状态 =====
 // 待审核 tag 页面列表（GET /api/tags/pending 返回）
 const pendingTagPages = ref<PendingTagPage[]>([]);
+// T02719：同上，标签待审核列表补加载/失败门
+const tagsLoading = ref(false);
+const tagsError = ref('');
 const currentTagPagePath = ref<string>('');
 // 单页面 tag 操作进行中标志（禁用按钮防重复点击）
 const tagOperating = ref(false);
@@ -905,6 +912,8 @@ async function loadTree() {
 }
 
 async function loadDrafts() {
+  draftsLoading.value = true;
+  draftsError.value = '';
   try {
     const res = await apiFetch(`${API_BASE}/qq-ingest/drafts`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -913,12 +922,17 @@ async function loadDrafts() {
   } catch (err) {
     ElMessage.error('加载草稿列表失败：' + (err as Error).message);
     drafts.value = [];
+    draftsError.value = (err as Error).message;
+  } finally {
+    draftsLoading.value = false;
   }
 }
 
 // FR-10-1: 加载待审核 tag 页面列表
 // 为什么独立函数：与 loadDrafts 解耦，tags 模式切换时单独触发
 async function loadPendingTags() {
+  tagsLoading.value = true;
+  tagsError.value = '';
   try {
     const res = await apiFetch(`${API_BASE}/tags/pending`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -927,6 +941,9 @@ async function loadPendingTags() {
   } catch (err) {
     ElMessage.error('加载待审核标签失败：' + (err as Error).message);
     pendingTagPages.value = [];
+    tagsError.value = (err as Error).message;
+  } finally {
+    tagsLoading.value = false;
   }
 }
 
@@ -1741,8 +1758,16 @@ onMounted(async () => {
             >批量发布</el-button>
           </div>
 
+          <StateBlock v-if="draftsLoading" state="loading" loading-text="正在加载草稿列表…" />
           <StateBlock
-            v-if="drafts.length === 0"
+            v-else-if="draftsError"
+            state="error"
+            :error-text="`草稿列表加载失败：${draftsError}`"
+            retry-label="重新加载"
+            @retry="loadDrafts()"
+          />
+          <StateBlock
+            v-else-if="drafts.length === 0"
             state="empty"
             empty-title="暂无草稿"
             empty-desc="草稿在「投递资料」上传聊天记录并触发抽取后生成"
@@ -1897,8 +1922,16 @@ onMounted(async () => {
             <span class="draft-count">{{ pendingTagPages.length }} 个待审核</span>
           </div>
 
+          <StateBlock v-if="tagsLoading" state="loading" loading-text="正在加载标签建议…" />
           <StateBlock
-            v-if="pendingTagPages.length === 0"
+            v-else-if="tagsError"
+            state="error"
+            :error-text="`标签建议加载失败：${tagsError}`"
+            retry-label="重新加载"
+            @retry="loadPendingTags()"
+          />
+          <StateBlock
+            v-else-if="pendingTagPages.length === 0"
             state="empty"
             empty-title="暂无待审核的 AI 标签建议"
             empty-desc="编译新页面后会自动生成标签建议"

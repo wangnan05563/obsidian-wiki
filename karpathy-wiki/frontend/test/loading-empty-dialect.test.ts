@@ -132,6 +132,11 @@ describe('T02476 加载态/空态方言守护（PRD X2 / X8）', () => {
       'empty-dots',
       'search-loading',
       'search-empty',
+      // T02719：桌面端最后三处自写空态/加载方言并入 StateBlock 后置之名下，
+      // 否则「换个类名再写一个裸 div」就能绕过整条守护。
+      'empty-state',
+      'result-empty',
+      'diff-loading',
     ];
     const hits: string[] = [];
     for (const file of FILES) {
@@ -173,6 +178,56 @@ describe('T02476 加载态/空态方言守护（PRD X2 / X8）', () => {
       });
     }
     expect(hits, `「加载中…」应从 StateBlock 出口，不要散落：\n${hits.join('\n')}`).toEqual([]);
+  });
+
+  it('主从选择型空态白名单只减不增，且每条都仍在被使用', () => {
+    // 白名单是「既不给主按钮也不标 compact」的唯一合法出口，加一条就等于承认一处死胡同空态。
+    // 因此这里同时钉两件事：条目数不许超过已立据的 3 条；每条必须真的还能在源码里找到对应 empty-title
+    // （防止白名单变成越攒越多的历史垃圾槽）。
+    const MASTER_DETAIL = ['尚未选择草稿', '尚未选择页面', '还没有打开页面'];
+    expect(MASTER_DETAIL).toHaveLength(3);
+    const titles = FILES.flatMap((file) =>
+      stateBlockUsages(fs.readFileSync(file, 'utf8'))
+        .filter((u) => /\sstate="empty"/.test(u))
+        .map((u) => u.match(/empty-title="([^"]+)"/)?.[1] ?? ''),
+    );
+    for (const w of MASTER_DETAIL) {
+      expect(titles, `白名单条目「${w}」已无人使用，应直接从白名单删除`).toContain(w);
+    }
+  });
+
+  it('T02719 桌面端残留三处已并入 StateBlock（加载门 + 行内空态）', () => {
+    const read = (rel: string) => fs.readFileSync(path.join(SRC_DIR, rel), 'utf8');
+
+    // 1) 草稿列表：必须 loading → error → empty 三态齐备，否则首帧仍闪空态卡片
+    const browse = read('views/Browse.vue');
+    const panels = [
+      { loading: 'draftsLoading', error: 'draftsError', empty: 'drafts.length === 0', loader: 'loadDrafts()', label: '正在加载草稿列表…' },
+      { loading: 'tagsLoading', error: 'tagsError', empty: 'pendingTagPages.length === 0', loader: 'loadPendingTags()', label: '正在加载标签建议…' },
+    ];
+    for (const p of panels) {
+      expect(browse, `${p.loading} 标志位缺失`).toContain(`const ${p.loading} = ref(false);`);
+      expect(browse, `${p.error} 标志位缺失`).toContain(`const ${p.error} = ref('');`);
+      expect(browse, `${p.loading} 没有对应的 loading 分支`).toContain(`v-if="${p.loading}" state="loading" loading-text="${p.label}"`);
+      expect(browse, `${p.error} 没有对应的 error 分支`).toContain(`v-else-if="${p.error}"`);
+      expect(browse, `${p.error} 的重试必须回到同一个加载函数`).toContain(`@retry="${p.loader}"`);
+      // 空态只能在三态链的最后一支：写成独立 v-if 就会在接口返回前先渲染一次空态卡片
+      expect(browse, `${p.empty} 的空态未接在三态链末尾`).toContain(`v-else-if="${p.empty}"`);
+    }
+
+    // 2) DataClean：5 处分区空态 + 差异抽屉 spinner 全走 StateBlock，页面级空态带主按钮
+    const clean = read('views/DataClean.vue');
+    expect(clean).toMatch(/import\s+StateBlock\s+from\s+'[^']*StateBlock\.vue'/);
+    expect(clean).toContain('<StateBlock v-if="diffLoading" state="loading" loading-text="正在加载差异…" />');
+    expect(clean).toContain('empty-title="还没有加载到页面"');
+    // 5 处分区空态 + 差异抽屉加载态：并入后本页共 6 个 StateBlock 出口
+    expect(stateBlockUsages(clean)).toHaveLength(6);
+    expect(clean, '页面级空态必须给主按钮（X8）').toContain('<template #action>');
+
+    // 3) Cleanup：卡片结果区小块空态并入行内 compact 形态
+    const cleanup = read('views/Cleanup.vue');
+    expect(cleanup).toMatch(/import\s+StateBlock\s+from\s+'[^']*StateBlock\.vue'/);
+    expect(cleanup).toContain('empty-title="这一项没有需要清理的内容"');
   });
 
   it('反向用例：旧方言写法必须被抓到（守护不是空跑）', () => {

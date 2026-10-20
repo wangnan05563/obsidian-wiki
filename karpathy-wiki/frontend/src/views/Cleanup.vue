@@ -4,6 +4,9 @@ import { computed, ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CleanupBody, CleanupBlockedResponse, CleanupResult, CleanupStorageStatus } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
+// T02719（PRD X2/X8 收尾）：卡片结果区的「无操作」小块是残留的自写空态方言（.result-empty），
+// 与 T02476 已收敛的三态出口并存会让同一页两套空态措辞——并入 StateBlock 的行内 compact 形态。
+import StateBlock from '../components/StateBlock.vue';
 import {
   CLEANUP_CARDS,
   CLEANUP_PAGE_TIP,
@@ -325,12 +328,12 @@ onMounted(() => {
                 {{ err }}
               </div>
             </div>
-            <div
+            <StateBlock
               v-if="results[card.key]!.cleaned.length === 0 && results[card.key]!.errors.length === 0"
-              class="result-empty"
-            >
-              无操作
-            </div>
+              state="empty"
+              compact
+              empty-title="这一项没有需要清理的内容"
+            />
           </div>
         </div>
       </div>
@@ -748,12 +751,6 @@ onMounted(() => {
 .error-item {
   line-height: 1.6;
   word-break: break-all;
-}
-
-.result-empty {
-  color: var(--text-dim);
-  text-align: center;
-  padding: 8px 0;
 }
 
 /* 响应式：小屏改为单列 */
