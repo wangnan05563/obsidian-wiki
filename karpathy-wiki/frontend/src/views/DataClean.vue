@@ -8,6 +8,9 @@ import { Sort, MagicStick, Right, Refresh, View, CopyDocument, Search } from '@e
 // 破坏性/耗时动作看不出是什么 → 改回带文字按钮，AI 分析旁注明「调用你的模型」。
 // T01629：统一弹窗（抽屉形态沿用同一套遮罩/动效/容器规格）
 import AppModal from '../components/AppModal.vue';
+// T02719（PRD X2/X8 收尾）：本页分区内的小块空态与差异抽屉的自写 spinner，
+// 此前是全站三态组件化（T02476）刻意留在单外的两处之一，现统一走 StateBlock 唯一出口。
+import StateBlock from '../components/StateBlock.vue';
 import { usePermission } from '../composables/usePermission';
 import { useAuthStore } from '../stores/auth';
 import { useModelStore } from '../stores/model';
@@ -814,7 +817,7 @@ onMounted(() => loadPages());
               <el-button size="small" text :disabled="mergingKey === pairKey(dup) || diffingKey === pairKey(dup)" data-tip="从重复列表中移除该对（不删除文件）" @click="duplicates.splice(idx, 1)">忽略</el-button>
             </div>
           </div>
-          <div v-if="duplicates.length === 0" class="empty-state">无配对视图数据</div>
+          <StateBlock v-if="duplicates.length === 0" state="empty" compact empty-title="没有配对的重复页面" />
         </div>
 
         <!-- 分组视图：等价类聚合，显示每组文件清单 + 代表 -->
@@ -834,7 +837,7 @@ onMounted(() => loadPages());
               </li>
             </ul>
           </div>
-          <div v-if="duplicateGroups.length === 0" class="empty-state">无分组视图数据</div>
+          <StateBlock v-if="duplicateGroups.length === 0" state="empty" compact empty-title="没有分组的重复页面" />
         </div>
       </div>
 
@@ -917,17 +920,18 @@ onMounted(() => loadPages());
           </div>
         </div>
 
-        <div v-if="!aiResult.redundant.length && !aiResult.duplicates.length && !aiResult.renames.length" class="empty-state">
-          AI 未发现需要处理的页面，当前集合已较健康。
-        </div>
+        <StateBlock
+          v-if="!aiResult.redundant.length && !aiResult.duplicates.length && !aiResult.renames.length"
+          state="empty"
+          compact
+          empty-title="AI 未发现需要处理的页面"
+          empty-desc="当前页面集合已较健康"
+        />
       </div>
 
       <!-- 差异对比抽屉：行级 diff，红绿对照 -->
       <AppModal v-model="diffDrawerVisible" variant="drawer" :title="`差异对比：${diffPairLabel}`" size="60%">
-        <div v-if="diffLoading" class="diff-loading" role="status" aria-live="polite">
-          <span class="diff-spinner" aria-hidden="true"></span>
-          <span class="diff-loading-text">正在加载差异…</span>
-        </div>
+        <StateBlock v-if="diffLoading" state="loading" loading-text="正在加载差异…" />
         <div v-else-if="diffResult" class="diff-content">
           <div class="diff-summary">
             <el-tag type="success" size="small">共同 {{ diffResult.summary.unchanged }} 行</el-tag>
@@ -948,13 +952,21 @@ onMounted(() => loadPages());
             </div>
           </div>
         </div>
-        <div v-else class="empty-state">无差异数据</div>
+        <StateBlock v-else state="empty" compact empty-title="没有取到差异内容" />
       </AppModal>
       
       <!-- 空状态 -->
-      <div v-if="!loading && pages.length === 0 && !scanProgress.includes('Failed')" class="empty-state">
-        <p>还没有加载到页面。点上方「重新扫描」读取知识库。</p>
-      </div>
+      <!-- 页面级空态（X8：一句现状 + 一句原因 + 一个主按钮，主按钮就是页顶那个「重新扫描」动作） -->
+      <StateBlock
+        v-if="!loading && pages.length === 0 && !scanProgress.includes('Failed')"
+        state="empty"
+        empty-title="还没有加载到页面"
+        empty-desc="本页按已扫描到的页面统计质量问题，知识库尚未扫描时没有可清洗的对象"
+      >
+        <template #action>
+          <el-button class="neon-btn" size="small" :icon="Refresh" @click="loadPages">重新扫描</el-button>
+        </template>
+      </StateBlock>
     </div>
   </div>
 </template>
@@ -1402,39 +1414,7 @@ onMounted(() => loadPages());
   color: var(--text-soft);
 }
 
-/* 差异对比抽屉：行级 diff 样式 */
-.diff-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 48px 16px;
-  color: var(--text-soft);
-  font-family: var(--font-mono);
-}
-
-/* 轻量等待动画：纯 CSS 旋转（由合成器线程驱动），不阻塞主线程 */
-.diff-spinner {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 3px solid var(--accent-purple-a15, rgba(120, 120, 255, 0.18));
-  border-top-color: var(--neon-cyan, #2bd1ff);
-  animation: diff-spin 0.8s linear infinite;
-  will-change: transform;
-}
-
-@keyframes diff-spin {
-  to { transform: rotate(360deg); }
-}
-
-.diff-loading-text {
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-}
-
+/* 差异对比抽屉：行级 diff 样式（加载态与空态已并入 StateBlock，T02719） */
 .diff-content {
   display: flex;
   flex-direction: column;
@@ -1551,14 +1531,6 @@ onMounted(() => loadPages());
 .score-critical {
   color: var(--neon-magenta);
   font-weight: 700;
-}
-
-.empty-state {
-  position: relative;
-  z-index: 1;
-  text-align: center;
-  padding: 40px;
-  color: var(--text-soft);
 }
 
 .mock-section {

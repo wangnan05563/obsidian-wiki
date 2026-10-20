@@ -647,13 +647,6 @@ onMounted(() => {
   min-height: 0;
 }
 
-.empty-state {
-  text-align: center;
-  padding: 40px 20px;
-  color: var(--text-dim);
-  font-size: 13px;
-}
-
 .skill-item {
   display: flex;
   align-items: center;
