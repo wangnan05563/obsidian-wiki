@@ -41,6 +41,7 @@ import RefsList from '../RefsList.vue';
 // FR-21 引用溯源（T01754/56）：移动端正文角标解析 + 底部抽屉浮层
 import CitationText from '../CitationText.vue';
 import CitationModal from '../CitationModal.vue';
+import StateBlock from '../StateBlock.vue';
 import FollowupsChips from '../FollowupsChips.vue';
 import SessionStatusIcon from '../SessionStatusIcon.vue';
 // 意图澄清卡片：问题有歧义时后端中断提问，列出解读选项供用户确认后继续（复用桌面组件）
@@ -142,6 +143,22 @@ const visibleConversations = computed(() => {
     return true;
   });
 });
+
+// 列表空态（T02720）：区分「被筛选/搜索筛空」与「真的还没有会话」，
+// 两种情况给不同的一句话原因 + 不同主按钮，不再是一句「点击右下角按钮」的指路文案。
+const hasConversationFilter = computed(() => !!searchText.value.trim() || filter.value !== 'all');
+const conversationsEmptyTitle = computed(() =>
+  hasConversationFilter.value ? '没有匹配的会话' : '还没有会话',
+);
+const conversationsEmptyDesc = computed(() =>
+  hasConversationFilter.value
+    ? '换个关键词，或者把筛选条件切回「全部任务」再看看'
+    : '提出第一个问题后，这里会积累你的历史会话',
+);
+function resetConversationFilter() {
+  searchText.value = '';
+  filter.value = 'all';
+}
 
 // 当前会话标题（用于聊天头部）
 const currentTitle = computed(() => {
@@ -766,11 +783,15 @@ onBeforeUnmount(() => {
         <button class="mq-search-clear" @click="searchText = ''"><el-icon><Close /></el-icon></button>
       </div>
 
-      <!-- 任务列表（分割条目） -->
-      <div v-if="!visibleConversations.length" class="mq-empty-list">
-        <el-icon class="mq-empty-icon"><ChatLineRound /></el-icon>
-        <p>{{ searchText || filter !== 'all' ? '没有匹配的会话' : '还没有会话，点击右下角按钮开始提问' }}</p>
-      </div>
+      <!-- 任务列表空态：T02720 并入 StateBlock（mobile 皮肤）。
+           窄屏没有侧边导航，所以「下一步」必须是本页可自足的动作：
+           筛选/搜索导致的空 → 清除筛选；真的没有历史 → 直接开一个新会话（与右下 FAB 同一条路径）。 -->
+      <StateBlock v-if="!visibleConversations.length" variant="mobile" state="empty" :empty-title="conversationsEmptyTitle" :empty-desc="conversationsEmptyDesc">
+        <template #action>
+          <button v-if="hasConversationFilter" class="mq-empty-cta" @click="resetConversationFilter">清除筛选条件</button>
+          <button v-else class="mq-empty-cta" @click="newSession">开始新会话</button>
+        </template>
+      </StateBlock>
 
       <ul v-else class="mq-tasks">
         <li
@@ -1216,17 +1237,21 @@ onBeforeUnmount(() => {
   -webkit-overflow-scrolling: touch;
   padding-bottom: 80px;
 }
-.mq-empty-list {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 60px 24px;
-  color: var(--m-text-2, #777777);
-  text-align: center;
+/* T02720：`.mq-empty-list` 方言退役，历史会话空态改走 StateBlock（mobile 皮肤）。
+   注意 `.mq-empty`（首屏招呼态）不在退役范围——它是带建议问题按钮的功能性起始界面，不是数据空态。 */
+.mq-empty-cta {
+  border: 1px solid var(--m-primary, #1554d1);
+  border-radius: 999px;
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  color: var(--m-primary, #1554d1);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 20px;
+  cursor: pointer;
 }
-.mq-empty-icon { font-size: 36px; opacity: 0.5; }
+.mq-empty-cta:active {
+  background: var(--m-fill, #f4f5f7);
+}
 
 .mq-tasks { list-style: none; margin: 0; padding: 0; }
 .mq-task {

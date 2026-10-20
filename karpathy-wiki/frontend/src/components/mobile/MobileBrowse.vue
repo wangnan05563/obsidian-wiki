@@ -6,9 +6,13 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { apiFetch, API_BASE, downloadVaultFile } from '../../utils/apiBase';
 import MarkdownRenderer from '../MarkdownRenderer.vue';
+import StateBlock from '../StateBlock.vue';
 import type { PageItem, FileContent, SearchHit, SearchResponse } from '../../types';
 
 const props = defineProps<{ jumpPath?: string }>();
+// T02720：空态的「下一步」在窄屏里靠切 Tab 给出（MobileShell 已有 open-me 同款先例）。
+// 知识库为空时用户能做的只有一件事——去「投递」页放内容，所以这里给主按钮而不是死胡同文案。
+const emit = defineEmits<{ (e: 'open-ingest'): void }>();
 
 type ViewMode = 'list' | 'search' | 'detail';
 
@@ -19,10 +23,15 @@ const searchQuery = ref('');
 const listLoading = ref(false);
 const searching = ref(false);
 const detailLoading = ref(false);
+// T02720：错误按视图分槽。原来三个加载函数共写一个 errorMsg，
+// 而它的展示条件是 `view !== 'detail'`——详情读失败时错误根本看不见，
+// 列表/搜索失败时又会互相串（搜索报错会让列表空态显示成上一条搜索的错误）。
 const errorMsg = ref('');
+const listError = ref('');
+const searchError = ref('');
 
 // 下载态：dlLoading 防重复点击；dlError 在详情视图内展示下载失败反馈
-// （不再复用 errorMsg —— 其展示条件为 view !== 'detail'，会导致详情页下载失败被隐藏，评审发现 #2）
+// （不复用 errorMsg —— 下载失败只是内联提示，不应把正文换成失败态）
 const dlLoading = ref(false);
 const dlError = ref('');
 
@@ -65,14 +74,14 @@ const currentTags = computed(() => tagsOf(current.value?.frontmatter));
 // ---------- 加载全部页面列表 ----------
 async function loadPages() {
   listLoading.value = true;
-  errorMsg.value = '';
+  listError.value = '';
   try {
     const res = await apiFetch(`${API_BASE}/files/pages`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as { pages?: PageItem[] };
     pages.value = data.pages ?? [];
   } catch (err) {
-    errorMsg.value = '加载知识库列表失败：' + (err as Error).message;
+    listError.value = '加载知识库列表失败：' + (err as Error).message;
     pages.value = [];
   } finally {
     listLoading.value = false;
@@ -95,7 +104,7 @@ function onSearchInput() {
 }
 async function doSearch(q: string) {
   searching.value = true;
-  errorMsg.value = '';
+  searchError.value = '';
   try {
     const res = await apiFetch(`${API_BASE}/search?q=${encodeURIComponent(q)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -103,7 +112,7 @@ async function doSearch(q: string) {
     searchHits.value = data.hits ?? [];
     view.value = 'search';
   } catch (err) {
-    errorMsg.value = '搜索失败：' + (err as Error).message;
+    searchError.value = '搜索失败：' + (err as Error).message;
     searchHits.value = [];
   } finally {
     searching.value = false;
@@ -270,9 +279,28 @@ onBeforeUnmount(() => {
 
     <!-- 列表视图：全部页面 -->
     <div v-if="view === 'list'" class="mb-list">
-      <!-- T02476（PRD X2）：加载态文案说清在加载什么，不再用笼统「加载中…」 -->
-      <div v-if="listLoading" class="mb-hint">正在加载页面列表…</div>
-      <div v-else-if="!pages.length" class="mb-hint">暂无已入库内容</div>
+      <!-- T02476（PRD X2）文案口径 + T02720（X8 窄屏落地）：三态一律走 StateBlock 的 mobile 皮肤。
+           空知识库不再是死胡同短句，而是「现状 + 原因 + 去投递」主按钮。 -->
+      <StateBlock v-if="listLoading" variant="mobile" state="loading" loading-text="正在加载页面列表…" />
+      <StateBlock
+        v-else-if="listError"
+        variant="mobile"
+        state="error"
+        :error-text="listError"
+        retry-label="重新加载"
+        @retry="loadPages()"
+      />
+      <StateBlock
+        v-else-if="!pages.length"
+        variant="mobile"
+        state="empty"
+        empty-title="知识库还没有内容"
+        empty-desc="先把资料放进知识库并编译，这里会列出可浏览的页面"
+      >
+        <template #action>
+          <button class="mb-empty-cta" @click="emit('open-ingest')">去投递资料</button>
+        </template>
+      </StateBlock>
       <button v-for="p in pages" :key="p.path" class="mb-card" @click="openPage(p)">
         <div class="mb-card-top">
           <span class="mb-card-title">{{ titleOf(p) }}</span>
@@ -290,8 +318,23 @@ onBeforeUnmount(() => {
 
     <!-- 搜索结果视图 -->
     <div v-else-if="view === 'search'" class="mb-list">
-      <div v-if="searching" class="mb-hint">搜索中…</div>
-      <div v-else-if="!searchHits.length" class="mb-hint">未找到与「{{ searchQuery }}」相关的内容</div>
+      <!-- T02720：搜索无结果是行内二级空态（输入框还在，改词即可），按 X8 用 compact 表明不是断头路 -->
+      <StateBlock v-if="searching" variant="mobile" state="loading" loading-text="正在搜索知识库…" />
+      <StateBlock
+        v-else-if="searchError"
+        variant="mobile"
+        state="error"
+        :error-text="searchError"
+        retry-label="重新搜索"
+        @retry="doSearch(searchQuery.trim())"
+      />
+      <StateBlock
+        v-else-if="!searchHits.length"
+        variant="mobile"
+        state="empty"
+        compact
+        :empty-title="`未找到与「${searchQuery}」相关的页面`"
+      />
       <button v-for="h in searchHits" :key="h.path" class="mb-card" @click="openHit(h)">
         <div class="mb-card-top">
           <span class="mb-card-title">{{ titleOfHit(h) }}</span>
@@ -325,8 +368,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div v-if="detailLoading" class="mb-hint">读取内容中…</div>
-      <div v-if="dlError" class="mb-error">{{ dlError }}</div>
+      <StateBlock v-if="detailLoading" variant="mobile" state="loading" loading-text="正在读取页面内容…" />
       <template v-else-if="current">
         <div class="mb-detail-hero">
           <h2 class="mb-detail-title">{{ currentTitle }}</h2>
@@ -340,10 +382,15 @@ onBeforeUnmount(() => {
           <MarkdownRenderer :content="detailContent" />
         </div>
       </template>
-      <div v-else class="mb-hint">{{ errorMsg || '内容为空' }}</div>
+      <StateBlock v-else-if="errorMsg" variant="mobile" state="error" :error-text="errorMsg" retry-label="重新读取" @retry="openPath(currentPath)" />
+      <StateBlock v-else variant="mobile" state="empty" compact empty-title="这一页没有正文内容" />
+      <!-- T02720：下载失败改成独立内联提示。
+           原来写成 `v-if="dlError"` + `v-else-if="current"`，等于「下载一失败就把正文整段藏掉」，
+           用户看到的是错误条 + 空白，正文其实早已读到位。 -->
+      <div v-if="dlError" class="mb-error">{{ dlError }}</div>
     </div>
 
-    <div v-if="errorMsg && view !== 'detail'" class="mb-error">{{ errorMsg }}</div>
+    <!-- T02720：列表/搜索/详情三处失败各自的错误态由上面的 StateBlock 出口给出，不再共用一条页尾红条 -->
 
     <!-- 快速定位：悬浮常驻 -->
     <button v-if="listScrollable" class="mb-scroll-fab mb-scroll-top" :class="{ 'is-scrolling': isScrolling }" title="回到顶部" aria-label="回到顶部" @click="scrollListTo('top')">
@@ -414,11 +461,20 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 10px;
 }
-.mb-hint {
-  text-align: center;
-  color: var(--m-text-2, #777777);
+/* T02720：`.mb-hint` 方言退役，三态改走 StateBlock（variant="mobile"）。
+   这里只留空态主按钮的窄屏胶囊样式（slot 内容归本组件作用域，scoped 下必须本地定义）。 */
+.mb-empty-cta {
+  border: 1px solid var(--m-primary, #1554d1);
+  border-radius: 999px;
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  color: var(--m-primary, #1554d1);
   font-size: 13px;
-  padding: 28px 16px;
+  font-weight: 600;
+  padding: 8px 20px;
+  cursor: pointer;
+}
+.mb-empty-cta:active {
+  background: var(--m-fill, #f4f5f7);
 }
 .mb-card {
   display: block;
