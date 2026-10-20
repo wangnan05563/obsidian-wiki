@@ -119,8 +119,10 @@ export const GUIDE_DEFINITIONS: Record<string, GuideDefinition> = {
     view: 'users',
     title: '用户管理',
     steps: [
-      { target: '[data-guide="users"]', title: '用户管理', description: '管理系统用户、角色与权限分配。', placement: 'right' },
-      { target: '.content', title: '账号管理', description: '创建/编辑/删除用户，配置角色与权限点。', placement: 'top' },
+      { target: '[data-guide="users"]', title: '用户管理', description: '仅管理员可见：管理系统账户、角色与启停状态。', placement: 'right' },
+      { target: '.content', title: '账号管理', description: '新建、编辑、停用、删除账户并分配角色。', placement: 'top' },
+      { target: '.content', title: '哪些按钮是灰的', description: '当前登录账户不能删除也不能停用降级，唯一启用的管理员同样受保护——按钮会先置灰并写明原因，不会点了才知道不行。', placement: 'top' },
+      { target: '.content', title: '出厂账号', description: '随代码公开的出厂账号若仍是启用状态，页顶会给出告警，可一键停用（不波及您自己和唯一启用的管理员）。', placement: 'top' },
     ],
   },
   skill: {
