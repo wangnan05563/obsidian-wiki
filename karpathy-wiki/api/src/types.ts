@@ -953,9 +953,26 @@ export interface CleanupResult {
   totalFreedMb?: number;
 }
 
+// 活跃任务快照（T02655）：真实删除模式下的硬拦截依据。
+// - compile / query：当前**已在执行**的任务数（队列中排队的编译不计入）
+// - blockedTargets：按当前活跃状态判定「不允许真实删除」的具体清理目标
+//   为什么由后端算而不是前端判：前端只能拿到计数，拦截口径必须与 POST 守卫同源，
+//   否则置灰规则和 409 规则会漂移（置灰了却还能从别的入口打进来）。
+export interface CleanupActiveState {
+  compile: number;
+  query: number;
+  // 只列具体目标，不列 'all'：'all' 由「任一子目标被拦」在前端隐式推出，
+  // 避免两套判定入口
+  blockedTargets: string[];
+  // 与 blockedTargets 对应的原文原因（前端置灰提示直接引用，措辞不各写一份）
+  blockedReasons: { target: string; reason: string }[];
+}
+
 // 存储状态总览（GET /api/cleanup/status 返回结构）
 // 统计范围必须与实际清理范围严格一致，避免「显示 0MB 但清理 271 项」歧义
 export interface CleanupStorageStatus {
+  // 活跃任务快照（T02655：前端据此把被拦的卡按钮置灰并说明原因）
+  active: CleanupActiveState;
   // 编译缓存：.harness/compile-cache.json
   compileCache: {
     exists: boolean;
@@ -980,6 +997,18 @@ export interface CleanupStorageStatus {
     sizeMb: number;
     oldest: string | null;
   };
+}
+
+// 真实删除被活跃任务拦截时的 409 响应体（T02655）。
+// 为什么用结构化原因而不是只回一句 error：前端要把「谁在跑、为什么拦、我该等什么」
+// 分开呈现（error 给人看，blocked[] 给判定用，reasons[] 按目标逐条说明代价）。
+export interface CleanupBlockedResponse {
+  error: string;
+  code: 'cleanup_blocked_by_active_task';
+  target: string;
+  blocked: string[];
+  reasons: string[];
+  active: CleanupActiveState;
 }
 
 // ============================================================================

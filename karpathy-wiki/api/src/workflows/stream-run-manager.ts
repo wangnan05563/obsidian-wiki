@@ -12,6 +12,8 @@
 
 import type { AnswerChunk } from '../types.js';
 import { withSessionLock } from '../session-lock.js';
+// T02655：run 生命周期登记活跃任务，供系统清理（POST /api/cleanup）真实删除前的硬拦截判定
+import { beginActivity } from '../activity.js';
 
 // 联网搜索引用结构（与 query.ts 中 webRefs 字段同构）
 export interface WebRef {
@@ -80,6 +82,8 @@ interface RunEntry {
   ttlMs: number;
   // FR-22 用户停止：run 对应的请求级 controller，cancel(runId) 时 abort 终止 producer
   cancelController?: AbortController;
+  // T02655：本 run 的活跃登记释放函数（终态统一在 finishRun 释放；幂等，重复调用只减一次）
+  releaseActivity?: () => void;
 }
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 完成后保留 5 分钟，足够覆盖刷新/短暂断网
@@ -101,6 +105,7 @@ class StreamRunManager {
       evictTimer: null,
       ttlMs,
       cancelController: opts.cancelSignal,
+      releaseActivity: beginActivity('query'),
     };
     this.runs.set(runId, entry);
 
@@ -311,6 +316,10 @@ class StreamRunManager {
   }
 
   private finishRun(entry: RunEntry): void {
+    // T02655：run 到终态（done / failed / interrupted 均汇入此处）即释放「问答活跃」登记。
+    // 放在这里而不是各广播函数：三处终态路径共用同一收口，避免漏释放导致计数泄漏（永久 409）。
+    entry.releaseActivity?.();
+    entry.releaseActivity = undefined;
     entry.finishedAt = Date.now();
     if (entry.evictTimer) clearTimeout(entry.evictTimer);
     entry.evictTimer = setTimeout(() => {

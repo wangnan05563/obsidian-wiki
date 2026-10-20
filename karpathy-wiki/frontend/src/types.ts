@@ -842,8 +842,30 @@ export interface CleanupResult {
   total_freed_mb?: number;
 }
 
+// 活跃任务快照（T02655，与 api/src/types.ts 的 CleanupActiveState 对齐）
+// 拦截口径由后端算：前端只按 blockedTargets/blockedReasons 逐卡置灰，不再自己数任务，
+// 否则「置灰规则」和「后端 409 规则」会各自演化。
+export interface CleanupActiveState {
+  compile: number;
+  query: number;
+  blockedTargets: CleanupTarget[];
+  blockedReasons: { target: CleanupTarget; reason: string }[];
+}
+
+// 真实删除被活跃任务拦截时的 409 响应体（T02655，与后端 CleanupBlockedResponse 对齐）
+export interface CleanupBlockedResponse {
+  error: string;
+  code: 'cleanup_blocked_by_active_task';
+  target: string;
+  blocked: string[];
+  reasons: string[];
+  active: CleanupActiveState;
+}
+
 // 存储状态（GET /api/cleanup/status）
 export interface CleanupStorageStatus {
+  // T02655：活跃任务快照，必填（与后端同步发布，不设可选以免掩盖漏返回）
+  active: CleanupActiveState;
   compileCache: {
     exists: boolean;
     sizeMb: number;
