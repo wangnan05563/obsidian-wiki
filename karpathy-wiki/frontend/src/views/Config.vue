@@ -70,6 +70,8 @@ import {
 import ConfigSideNav from '../components/ConfigSideNav.vue';
 import ConfigEffectTag from '../components/ConfigEffectTag.vue';
 import AppModal from '../components/AppModal.vue';
+// T02482（PRD D4x）：本地数据保护面板（原内嵌于帮助文档），挂载到「数据备份」页签
+import LocalDataBackupPanel from '../components/LocalDataBackupPanel.vue';
 
 const activeTab = ref<ConfigTabName>('config');
 const config = ref<ConfigData | null>(null);
@@ -4573,6 +4575,22 @@ async function importConfig() {
             </div>
             <ThemeSwitcher embedded />
           </section>
+        </section>
+
+        <!-- T02482（PRD D4x）：数据备份——原帮助文档「本地数据保护」表单的新家。
+             面板无服务端配置项，不挂生效徽标（uiBadge 无登记项时本来就隐藏，这里直接省略）。 -->
+        <section
+          v-if="visitedTabs.includes('backup') && canOpenTab('backup')"
+          v-show="activeTab === 'backup'"
+          class="config-panel"
+          role="tabpanel"
+          aria-label="数据备份"
+        >
+          <div class="section-header">
+            <span class="section-desc">// 本地数据保护（解锁 / 导出备份 / 导入恢复）</span>
+            <span class="user-badge">当前账户：{{ authStore.user?.username || '游客' }}</span>
+          </div>
+          <LocalDataBackupPanel />
         </section>
 
         <section

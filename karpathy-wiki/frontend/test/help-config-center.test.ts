@@ -46,12 +46,13 @@ describe('T02623 文档口径 = configTabs 单一来源', () => {
     }
   });
 
-  it('11 个 tab 实名逐个能在文档里找到（改名未同步文档时这里先红）', async () => {
+  it('12 个 tab 实名逐个能在文档里找到（改名未同步文档时这里先红）', async () => {
     const wrapper = mountHelp();
     await flushPromises();
     const text = configSectionText(wrapper);
     const tabs = allConfigTabs();
-    expect(tabs).toHaveLength(11);
+    // T02482（PRD D4x）新增「数据备份」：11 → 12。数量在这里显式钉住，是「加了页签没同步文档」的哨兵。
+    expect(tabs).toHaveLength(12);
     for (const tab of tabs) {
       expect(text, `文档缺页签实名「${tab.label}」`).toContain(tab.label);
     }

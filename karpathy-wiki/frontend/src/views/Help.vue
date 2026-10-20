@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { useConversationsStore } from '../stores/conversations';
-import { useAuthStore } from '../stores/auth';
-import { isUnlocked } from '../services/localVault';
-import { createBackup, restoreBackup, downloadBackup, readBackupFile } from '../services/backup';
+// T02482（PRD D4x）：本地数据保护表单（含 isUnlocked / backup 服务与按 owner 重载会话的 watch）
+// 已整体迁至 components/LocalDataBackupPanel.vue，帮助页只留说明 + 直达按钮，此处不再直连这些模块。
 // T02698：用户管理章节的规则不再各写一份——口令 / 用户名规则、出厂账号告警语、
 // 三条锁死红线的提示原文全部取自 userManagePresentation（与页面上实际显示的文案同源）。
 import {
@@ -372,7 +370,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'feature',
         title: '核心功能',
-        content: '配置中心左侧是分组导航，共 3 组 11 个页签。个人偏好：朗读设置、界面主题——只影响当前浏览器里的你自己。AI 服务：AI 服务（本用户的模型与私有 Key）、共享 AI（仅管理员）、Prompt IDE（仅管理员）。系统：系统配置、SCHEMA 规范、MCP 接口、工具配置、QQ 导入、数据迁移。两处容易找错：联网搜索是「AI 服务」页签内的分区，批量编译是「系统配置」页签内「高级配置」的分区，它们都不是独立页签。仅管理员可改的 7 个页签对普通用户置灰保留（不隐藏），点开会收到一句「仅管理员可查看和修改」的说明，而不是被静默送到别的页签。',
+        content: '配置中心左侧是分组导航，共 3 组 12 个页签。个人偏好：朗读设置、界面主题、数据备份——只影响当前浏览器里的你自己。AI 服务：AI 服务（本用户的模型与私有 Key）、共享 AI（仅管理员）、Prompt IDE（仅管理员）。系统：系统配置、SCHEMA 规范、MCP 接口、工具配置、QQ 导入、数据迁移。两处容易找错：联网搜索是「AI 服务」页签内的分区，批量编译是「系统配置」页签内「高级配置」的分区，它们都不是独立页签。本地问答会话的解锁 / 导出 / 导入在「数据备份」页签（已从帮助文档迁入，见文末「本地数据保护」）。仅管理员可改的 7 个页签对普通用户置灰保留（不隐藏），点开会收到一句「仅管理员可查看和修改」的说明，而不是被静默送到别的页签。',
       },
       {
         type: 'config',
@@ -770,96 +768,16 @@ onMounted(async () => {
   if (DOC_SECTIONS.length > 0) {
     activeAnchor.value = DOC_SECTIONS[0].id;
   }
-  // 同步本地加密状态（FR-RM-07）：若已登录且密钥在内存 / sessionStorage，则视为已开启
-  cryptoOn.value = isUnlocked();
   const scrollContainer = document.querySelector('.content');
   if (scrollContainer) {
     scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
   }
 });
 
-// ===== 本地数据保护（FR-RM-07 加密 + 风险 R-2 导出备份）=====
-const conversationsStore = useConversationsStore();
-const authStore = useAuthStore();
-
-// 登录态变化后重新按 owner 隔离加载会话（与 Query.vue 一致的多账户隔离防御）
-watch(
-  () => authStore.user?.id,
-  async () => {
-    try {
-      await conversationsStore.loadConversations();
-    } catch {
-      // 静默降级
-    }
-  },
-);
-const cryptoOn = ref(false);
-const localLocked = computed(() => conversationsStore.localLocked);
-
-const unlockPwd = ref('');
-const exportPwd = ref('');
-const importPwd = ref('');
-const importFile = ref<File | null>(null);
-const busy = ref(false);
-
-async function doUnlock() {
-  if (!unlockPwd.value) return;
-  try {
-    await conversationsStore.unlockLocalData(unlockPwd.value);
-    cryptoOn.value = true;
-    ElMessage.success('本地数据已解锁');
-    unlockPwd.value = '';
-  } catch (e) {
-    ElMessage.error('解锁失败：' + (e instanceof Error ? e.message : String(e)));
-  }
-}
-
-async function doExport() {
-  if (!exportPwd.value) {
-    ElMessage.warning('请先设置备份口令');
-    return;
-  }
-  busy.value = true;
-  try {
-    const backup = await createBackup(exportPwd.value);
-    downloadBackup(backup);
-    ElMessage.success('备份已导出（请用安全方式保存该文件）');
-    exportPwd.value = '';
-  } catch (e) {
-    ElMessage.error('导出失败：' + (e instanceof Error ? e.message : String(e)));
-  } finally {
-    busy.value = false;
-  }
-}
-
-function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement;
-  importFile.value = input.files?.[0] ?? null;
-}
-
-async function doImport() {
-  if (!importFile.value) {
-    ElMessage.warning('请先选择备份文件');
-    return;
-  }
-  if (!importPwd.value) {
-    ElMessage.warning('请输入备份口令');
-    return;
-  }
-  busy.value = true;
-  try {
-    const backup = await readBackupFile(importFile.value);
-    const res = await restoreBackup(backup, importPwd.value);
-    ElMessage.success(`导入完成：会话 ${res.conversations} 条、附件 ${res.attachments} 条`);
-    importFile.value = null;
-    importPwd.value = '';
-    await conversationsStore.loadConversations();
-  } catch (e) {
-    ElMessage.error('导入失败：' + (e instanceof Error ? e.message : String(e)));
-  } finally {
-    busy.value = false;
-  }
-}
+// ===== 本地数据保护（T02482 / PRD D4x）=====
+// 解锁 / 导出 / 导入表单已整体迁至 components/LocalDataBackupPanel.vue（配置中心「数据备份」页签挂载），
+// 本页只留说明与直达按钮（jumpTo({view:'config', tab:'backup'})）。
+// 随之迁走的还有：isUnlocked 状态同步、按 owner 隔离重载会话的 watch——它们只服务于那块表单。
 
 // 复制代码块内容到剪贴板：优先 navigator.clipboard，失败降级 execCommand
 // 为什么单独实现而非抽公共工具：仅此处使用，保持 Help.vue 自包含，避免引入额外依赖
@@ -1039,7 +957,8 @@ onBeforeUnmount(() => {
           未找到匹配的章节
         </div>
 
-        <!-- 本地数据保护（FR-RM-07 加密 + 风险 R-2 导出备份）-->
+        <!-- 本地数据保护（T02482 / PRD D4x）：解锁/导出/导入表单已迁至配置中心「数据备份」页签，
+             帮助页只留说明与直达——出问题时用户的第一站不该是文档页。表单行为口径在新家原样保留。 -->
         <div id="local-data" class="glass-card section-card local-data-card">
           <div class="section-head">
             <div class="section-icon-wrap">
@@ -1051,88 +970,21 @@ onBeforeUnmount(() => {
           </div>
           <p class="section-intro">
             问答会话与附件仅保存在本地浏览器（IndexedDB）。可开启加密（基于登录密码派生密钥）以防同设备其他进程读取，
-            并建议定期导出加密备份以防丢失。
+            并建议定期导出加密备份以防丢失。解锁、导出、导入的操作入口都在<b>配置中心 → 数据备份</b>页签，本页只提供说明与直达。
           </p>
           <div class="blocks">
             <div class="block">
               <div class="block-title">
-                <span class="block-bullet feature"></span>
-                <span>加密状态</span>
-              </div>
-              <p class="block-text">
-                本地加密：<b>{{ cryptoOn ? '已开启' : '未启用' }}</b>；
-                数据锁定：<b>{{ localLocked ? '已锁定（需解锁）' : '正常' }}</b>。
-              </p>
-            </div>
-
-            <div class="block" v-if="localLocked">
-              <div class="block-title">
-                <span class="block-bullet steps"></span>
-                <span>解锁本地数据</span>
-              </div>
-              <p class="block-text">
-                检测到已加密的本地会话，请输入登录密码解锁以查看历史记录。
-              </p>
-              <div class="local-actions">
-                <el-input
-                  v-model="unlockPwd"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  placeholder="登录密码"
-                  size="small"
-                  style="max-width: 240px"
-                />
-                <el-button size="small" type="primary" data-tip="使用登录密码解锁本地加密数据" :disabled="!unlockPwd" @click="doUnlock">解锁</el-button>
-              </div>
-            </div>
-
-            <div class="block">
-              <div class="block-title">
                 <span class="block-bullet scenario"></span>
-                <span>导出备份</span>
+                <span>什么时候需要它</span>
               </div>
               <p class="block-text note-text note-warning">
-                风险 R-2：清除缓存 / 换设备 / 重装会导致本地数据丢失。请定期导出加密备份；
-                备份使用<b>独立口令</b>，即使遗忘登录密码也可凭备份口令恢复本地数据。
+                风险 R-2：清除缓存 / 换设备 / 重装会导致本地数据丢失。备份使用<b>独立口令</b>，
+                即使遗忘登录密码也可凭备份口令恢复本地数据；若本地数据被锁定，同样在「数据备份」页签用登录密码解锁。
               </p>
-              <div class="local-actions">
-                <el-input
-                  v-model="exportPwd"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  placeholder="备份口令"
-                  size="small"
-                  style="max-width: 240px"
-                />
-                <el-button size="small" type="primary" data-tip="导出加密备份文件（使用独立备份口令，换设备可凭此恢复）" :disabled="!exportPwd || busy" @click="doExport">导出</el-button>
-              </div>
-            </div>
-
-            <div class="block">
-              <div class="block-title">
-                <span class="block-bullet config"></span>
-                <span>导入备份</span>
-              </div>
-              <p class="block-text">
-                从备份文件恢复会话与附件（合并写入本地）。导入前请输入备份时设置的口令。
-              </p>
-              <div class="local-actions">
-                <input type="file" accept="application/json,.json" @change="onFileChange" />
-                <el-input
-                  v-model="importPwd"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  placeholder="备份口令"
-                  size="small"
-                  style="max-width: 240px"
-                />
-                <el-button size="small" type="primary" data-tip="从备份文件恢复会话与附件（合并写入本地，需备份口令）" :disabled="!importFile || !importPwd || busy" @click="doImport">
-                  导入
-                </el-button>
-              </div>
+              <button class="block-jump" @click="jumpTo({ view: 'config', tab: 'backup' })">
+                → 前往：配置中心 → 数据备份
+              </button>
             </div>
           </div>
         </div>
@@ -1615,24 +1467,9 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-/* 本地数据保护卡片 */
+/* 本地数据保护卡片（T02482 后只承载说明与直达，表单样式随组件迁至 LocalDataBackupPanel.vue） */
 .local-data-card {
   border-left: 3px solid var(--neon-cyan);
-}
-
-.local-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding-left: 16px;
-  margin-top: 8px;
-}
-
-.local-actions input[type='file'] {
-  max-width: 240px;
-  font-size: 12px;
-  color: var(--text-soft);
 }
 
 /* 底部 */

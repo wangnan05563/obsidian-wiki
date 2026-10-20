@@ -40,14 +40,14 @@ function memStore(initial: Record<string, string> = {}) {
 }
 
 describe('configTabs：分组与权限（REQ-033/REQ-034）', () => {
-  it('三组齐全，展平后 11 个 tab 一个不少（原来横向溢出被截断的那批）', () => {
+  it('三组齐全，展平后 12 个 tab 一个不少（11 项为 C2 原状，T02482 新增「数据备份」）', () => {
     expect(CONFIG_TAB_GROUPS.map((g) => g.label)).toEqual(['个人偏好', 'AI 服务', '系统']);
-    expect(allConfigTabs()).toHaveLength(11);
+    expect(allConfigTabs()).toHaveLength(12);
     expect(configTabNames()).toEqual(
-      expect.arrayContaining(['schema', 'config', 'migrate', 'mcp', 'ai', 'sharedAi', 'tts', 'tools', 'theme', 'qq', 'prompts']),
+      expect.arrayContaining(['schema', 'config', 'migrate', 'mcp', 'ai', 'sharedAi', 'tts', 'tools', 'theme', 'backup', 'qq', 'prompts']),
     );
     // tab 名唯一，否则导航 key 与徽标索引都会撞车
-    expect(new Set(configTabNames()).size).toBe(11);
+    expect(new Set(configTabNames()).size).toBe(12);
   });
 
   it('每组都有面向用户的说明（让用户一眼看出改的是「只有我」还是「所有人」）', () => {
@@ -57,17 +57,17 @@ describe('configTabs：分组与权限（REQ-033/REQ-034）', () => {
     }
   });
 
-  it('adminOnly 逐项对齐改造前的 v-if="isAdmin"（7 项锁定、4 项开放）', () => {
+  it('adminOnly 逐项对齐改造前的 v-if="isAdmin"（7 项锁定、5 项开放——T02482 的「数据备份」是本地操作，不锁）', () => {
     const locked = allConfigTabs().filter((t) => t.adminOnly).map((t) => t.name);
     expect(locked.sort()).toEqual(['config', 'mcp', 'migrate', 'prompts', 'qq', 'schema', 'sharedAi']);
     expect(allConfigTabs().filter((t) => !t.adminOnly).map((t) => t.name).sort())
-      .toEqual(['ai', 'theme', 'tools', 'tts']);
+      .toEqual(['ai', 'backup', 'theme', 'tools', 'tts']);
   });
 
   it('锁定项在导航里保留并标注「仅管理员」，而不是消失', () => {
     const groups = navGroupsFor(false);
     const flat = groups.flatMap((g) => g.items);
-    expect(flat).toHaveLength(11);
+    expect(flat).toHaveLength(12);
     const configItem = flat.find((i) => i.name === 'config');
     expect(configItem?.locked).toBe(true);
     expect(configItem?.label).toBe('系统配置');
