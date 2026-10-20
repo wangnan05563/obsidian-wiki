@@ -8,6 +8,7 @@ import { apiFetch, API_BASE } from '../../utils/apiBase';
 import { loadTtsConfig } from '../../services/ttsConfig';
 import { useAuthStore } from '../../stores/auth';
 import MarkdownRenderer from '../MarkdownRenderer.vue';
+import StateBlock from '../StateBlock.vue';
 import { Aim, Top, Bottom, Refresh, Delete, Plus } from '@element-plus/icons-vue';
 import type { PageItem, SearchHit, SearchResponse } from '../../types';
 
@@ -15,6 +16,8 @@ const authStore = useAuthStore();
 
 // 是否处于可见状态（由 MobileShell 经 v-show 派发）：切回聆听页时用于自动定位当前播放条目
 const props = defineProps<{ visible?: boolean }>();
+// T02720：与 MobileBrowse 同口径——空知识库的下一步是去「投递」页，由 MobileShell 切 Tab。
+const emit = defineEmits<{ (e: 'open-ingest'): void }>();
 
 interface QueueItem {
   path: string;
@@ -27,6 +30,12 @@ const pages = ref<PageItem[]>([]);
 // T02476（PRD X2 / R4 同类缺陷）：原来用 `pages.length === 0` 冒充「加载中」，
 // 知识库真为空时会永远停在「加载中…」，故为列表加载单独加一个状态位。
 const pagesLoading = ref(false);
+// T02720：列表/搜索/预览三个数据面板各有失败槽位（StateBlock 的 error 态用），
+// 与播放链路的 errorMsg（页尾红条）分开——原来共写一个 errorMsg，
+// 列表报错会被搜索面板复用，用户看到的红条与实际失败的面板对不上。
+const pagesError = ref('');
+const searchError = ref('');
+const previewError = ref('');
 const queue = ref<QueueItem[]>([]);
 const currentIndex = ref(-1);
 const isPlaying = ref(false);
@@ -74,13 +83,16 @@ function onSearchInput() {
 }
 async function doSearch(q: string) {
   searching.value = true;
+  searchError.value = '';
   try {
     const res = await apiFetch(`${API_BASE}/search?q=${encodeURIComponent(q)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as SearchResponse;
     searchHits.value = data.hits ?? [];
   } catch (e) {
-    errorMsg.value = '搜索失败：' + (e as Error).message;
+    // T02720：三个数据面板的失败各写各的槽位，由各自 StateBlock 出口呈现；
+    // errorMsg 继续只承载播放/合成类错误（页尾红条），不再与列表失败混用。
+    searchError.value = '搜索失败：' + (e as Error).message;
     searchHits.value = [];
   } finally {
     searching.value = false;
@@ -120,13 +132,15 @@ function titleOf(p: PageItem): string {
 
 async function loadPages() {
   pagesLoading.value = true;
+  pagesError.value = '';
   try {
     const res = await apiFetch(`${API_BASE}/files/pages`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as { pages?: PageItem[] };
     pages.value = data.pages ?? [];
   } catch (e) {
-    errorMsg.value = '加载可朗读列表失败：' + (e as Error).message;
+    pagesError.value = '加载可朗读列表失败：' + (e as Error).message;
+    pages.value = [];
   } finally {
     pagesLoading.value = false;
   }
@@ -146,11 +160,12 @@ async function openPreview(p: PageItem) {
   previewTitle.value = titleOf(p);
   previewBody.value = '';
   previewLoading.value = true;
+  previewError.value = '';
   errorMsg.value = '';
   try {
     previewBody.value = await fetchBody(p.path);
   } catch (e) {
-    errorMsg.value = '读取内容失败：' + (e as Error).message;
+    previewError.value = '读取内容失败：' + (e as Error).message;
   } finally {
     previewLoading.value = false;
   }
@@ -158,6 +173,20 @@ async function openPreview(p: PageItem) {
 function closePreview() {
   previewPath.value = '';
   currentPreviewPage.value = null;
+}
+// T02720：预览失败态的「重新读取」只补正文——不复用 openPreview，
+// 否则会拿一个假 PageItem 重设标题，把已经正确的标题打回 undefined。
+async function reloadPreview() {
+  if (!previewPath.value) return;
+  previewLoading.value = true;
+  previewError.value = '';
+  try {
+    previewBody.value = await fetchBody(previewPath.value);
+  } catch (e) {
+    previewError.value = '读取内容失败：' + (e as Error).message;
+  } finally {
+    previewLoading.value = false;
+  }
 }
 function inQueue(p: PageItem): boolean {
   return queue.value.some((q) => q.path === p.path);
@@ -565,7 +594,17 @@ onBeforeUnmount(() => {
           </button>
           <span class="ml-preview-path">{{ previewPath }}</span>
         </div>
-        <div v-if="previewLoading" class="ml-hint">读取内容中…</div>
+        <!-- T02720：预览三态走 StateBlock（mobile 皮肤），失败给「重新读取」而不是留一块空白 -->
+        <StateBlock v-if="previewLoading" variant="mobile" state="loading" loading-text="正在读取页面内容…" />
+        <StateBlock
+          v-else-if="previewError"
+          variant="mobile"
+          state="error"
+          :error-text="previewError"
+          retry-label="重新读取"
+          @retry="reloadPreview()"
+        />
+        <StateBlock v-else-if="!previewBody" variant="mobile" state="empty" compact empty-title="这一页没有可朗读的正文" />
         <template v-else>
           <h2 class="ml-preview-title">{{ previewTitle }}</h2>
           <div class="ml-preview-actions">
@@ -598,8 +637,23 @@ onBeforeUnmount(() => {
       <!-- 搜索结果 -->
       <section v-if="searchQuery.trim()" class="ml-section">
         <h3 class="ml-h3">搜索结果（{{ searchHits.length }}）</h3>
-        <div v-if="searching" class="ml-hint">搜索中…</div>
-        <div v-else-if="!searchHits.length" class="ml-hint">未找到与「{{ searchQuery }}」相关的内容</div>
+        <!-- T02720：搜索无结果是行内二级空态（输入框还在，改词即可）→ compact -->
+        <StateBlock v-if="searching" variant="mobile" state="loading" loading-text="正在搜索知识库…" />
+        <StateBlock
+          v-else-if="searchError"
+          variant="mobile"
+          state="error"
+          :error-text="searchError"
+          retry-label="重新搜索"
+          @retry="doSearch(searchQuery.trim())"
+        />
+        <StateBlock
+          v-else-if="!searchHits.length"
+          variant="mobile"
+          state="empty"
+          compact
+          :empty-title="`未找到与「${searchQuery}」相关的页面`"
+        />
         <div
           v-for="h in searchHits"
           :key="h.path"
@@ -622,9 +676,28 @@ onBeforeUnmount(() => {
       <!-- 知识库内容（无搜索时显示全部） -->
       <section v-else class="ml-section" data-catalog>
         <h3 class="ml-h3">知识库内容</h3>
-        <!-- T02476（PRD X2）：加载与「真的没有页面」分开说，不再共用一句「加载中…」 -->
-        <div v-if="pagesLoading" class="ml-hint">正在加载可朗读列表…</div>
-        <div v-else-if="pages.length === 0" class="ml-hint">知识库里还没有页面，编译完成后这里会列出可朗读内容</div>
+        <!-- T02476（PRD X2）：加载与「真的没有页面」分开说。
+             T02720（X8 窄屏）：补失败态 + 空知识库给「去投递资料」主按钮，不再是一句死胡同提示 -->
+        <StateBlock v-if="pagesLoading" variant="mobile" state="loading" loading-text="正在加载可朗读列表…" />
+        <StateBlock
+          v-else-if="pagesError"
+          variant="mobile"
+          state="error"
+          :error-text="pagesError"
+          retry-label="重新加载"
+          @retry="loadPages()"
+        />
+        <StateBlock
+          v-else-if="pages.length === 0"
+          variant="mobile"
+          state="empty"
+          empty-title="知识库还没有可朗读的内容"
+          empty-desc="先投递资料并编译，完成后这里会列出可朗读的页面"
+        >
+          <template #action>
+            <button class="ml-empty-cta" @click="emit('open-ingest')">去投递资料</button>
+          </template>
+        </StateBlock>
         <div
           v-for="p in pages"
           :key="p.path"
@@ -708,8 +781,17 @@ onBeforeUnmount(() => {
         </div>
         <div class="ml-ctrls">
           <button class="ml-btn" @click="prev" title="上一首">⏮</button>
-          <button class="ml-btn ml-play" @click="togglePlay" :disabled="loading">
-            {{ loading ? '…' : isPlaying ? '⏸' : '▶' }}
+          <button
+            class="ml-btn ml-play"
+            :disabled="loading"
+            :aria-busy="loading ? 'true' : 'false'"
+            :title="loading ? '正在加载音频…' : isPlaying ? '暂停' : '播放'"
+            @click="togglePlay"
+          >
+            <!-- T02720复核结论：这是「按钮内 pending」反馈，不属列表三态，故不接 StateBlock；
+                 但原来用单字符「…」当加载反馈既不可读也没有可访问语义，改成转圈图标 + aria-busy + 中文 title。 -->
+            <svg v-if="loading" class="ml-btn-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9" /></svg>
+            <template v-else>{{ isPlaying ? '⏸' : '▶' }}</template>
           </button>
           <button class="ml-btn" @click="next" title="下一首">⏭</button>
         </div>
@@ -789,10 +871,32 @@ onBeforeUnmount(() => {
   margin: 0;
   letter-spacing: 0.5px;
 }
-.ml-hint {
-  color: var(--m-text-2, #777777);
+/* T02720：`.ml-hint` 方言退役（三态走 StateBlock mobile 皮肤）。
+   这里只保留 slot 内主按钮与按钮 pending 图标——scoped 下子组件 slot 内容归本组件样式。 */
+.ml-empty-cta {
+  border: 1px solid var(--m-primary, #1554d1);
+  border-radius: 999px;
+  background: var(--m-primary-soft, rgba(21, 84, 209, 0.08));
+  color: var(--m-primary, #1554d1);
   font-size: 13px;
-  padding: 12px 0;
+  font-weight: 600;
+  padding: 8px 20px;
+  cursor: pointer;
+}
+.ml-empty-cta:active {
+  background: var(--m-fill, #f4f5f7);
+}
+.ml-btn-spin {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0 auto;
+  animation: ml-rotate 0.9s linear infinite;
+}
+@keyframes ml-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 搜索栏：吸顶，与播放状态解耦 */

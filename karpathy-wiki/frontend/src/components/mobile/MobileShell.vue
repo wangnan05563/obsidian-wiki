@@ -96,10 +96,12 @@ const icons: Record<TabKey, string> = {
          队列/进度等本地状态不丢失（播放中切页保持播放状态）。其余 Tab 仍用 v-if。 -->
     <main class="mobile-content">
       <MobileQuery v-if="activeTab === 'query'" @open-me="activeTab = 'me'" />
-      <MobileBrowse v-else-if="activeTab === 'browse'" :jump-path="vaultJump" />
+      <!-- T02720：窄屏空态的「下一步」= 切到能解决它的 Tab（知识库为空 → 去「投递」），
+           与 MobileQuery 的 open-me 同一先例，不引入 vue-router。 -->
+      <MobileBrowse v-else-if="activeTab === 'browse'" :jump-path="vaultJump" @open-ingest="activeTab = 'ingest'" />
       <MobileIngest v-else-if="activeTab === 'ingest'" />
       <MobileMe v-else-if="activeTab === 'me'" />
-      <MobileListen v-show="activeTab === 'listen'" :visible="activeTab === 'listen'" />
+      <MobileListen v-show="activeTab === 'listen'" :visible="activeTab === 'listen'" @open-ingest="activeTab = 'ingest'" />
     </main>
 
     <!-- 底部 Tab 导航栏（固定，含安全区适配，浅色描边） -->

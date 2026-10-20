@@ -137,6 +137,11 @@ describe('T02476 加载态/空态方言守护（PRD X2 / X8）', () => {
       'empty-state',
       'result-empty',
       'diff-loading',
+      // T02720：移动端 mb-hint/ml-hint/mq-empty-list 并入 StateBlock（variant="mobile"）后置之名下。
+      // 移动端曾以「窄屏要轻量」为由长期自带一套方言，属于判据里明令禁止的「两头挂」。
+      'mb-hint',
+      'ml-hint',
+      'mq-empty-list',
     ];
     const hits: string[] = [];
     for (const file of FILES) {
@@ -228,6 +233,79 @@ describe('T02476 加载态/空态方言守护（PRD X2 / X8）', () => {
     const cleanup = read('views/Cleanup.vue');
     expect(cleanup).toMatch(/import\s+StateBlock\s+from\s+'[^']*StateBlock\.vue'/);
     expect(cleanup).toContain('empty-title="这一项没有需要清理的内容"');
+  });
+
+  it('T02720 移动端三态走 StateBlock 的 mobile 皮肤，且每条用法都显式声明 variant', () => {
+    const read = (rel: string) => fs.readFileSync(path.join(SRC_DIR, rel), 'utf8');
+    const mobileFiles = FILES.map((f) => path.relative(SRC_DIR, f).replace(/\\/g, '/')).filter((rel) =>
+      rel.startsWith('components/mobile/'),
+    );
+    expect(mobileFiles.length, '应扫描到移动端组件').toBeGreaterThan(5);
+
+    // 组件本体必须先有这层皮肤，否则「variant="mobile"」只是模板里的死属性
+    const block = read('components/StateBlock.vue');
+    expect(block, 'StateBlock 需声明 mobile 皮肤契约').toContain(`'desktop' | 'mobile'`);
+    expect(block, 'StateBlock 需把 mobile 皮肤落到类名上').toContain("'is-mobile': variant === 'mobile'");
+
+    for (const rel of mobileFiles) {
+      const usages = stateBlockUsages(read(rel));
+      for (const usage of usages) {
+        expect(
+          usage,
+          `${rel} 的 StateBlock 用法漏了 variant="mobile"：桌面霓虹皮会直接漏进窄屏`,
+        ).toContain('variant="mobile"');
+      }
+    }
+
+    // 三个数据页必须真的接上三态出口（不是只 import 了组件）
+    for (const rel of ['components/mobile/MobileBrowse.vue', 'components/mobile/MobileListen.vue']) {
+      expect(read(rel)).toMatch(/import\s+StateBlock\s+from\s+'[^']*StateBlock\.vue'/);
+    }
+    const browse = read('components/mobile/MobileBrowse.vue');
+    expect(browse).toContain('loading-text="正在加载页面列表…"');
+    expect(browse).toContain('loading-text="正在搜索知识库…"');
+    expect(browse).toContain('loading-text="正在读取页面内容…"');
+    const listen = read('components/mobile/MobileListen.vue');
+    expect(listen).toContain('loading-text="正在加载可朗读列表…"');
+    expect(listen).toContain('loading-text="正在读取页面内容…"');
+    // 三视图 × 三态：Browse = list/search/detail 各 3 支，Listen = preview(loading/error/empty) +
+    // search(3) + catalog(3)；数字钉住是为了「再加一个裸 div 空态」时立刻暴露成数量不符
+    expect(stateBlockUsages(browse)).toHaveLength(9);
+    expect(stateBlockUsages(listen)).toHaveLength(9);
+  });
+
+  it('T02720 窄屏空态口径：页面级空态给得出下一步，行内空态显式 compact', () => {
+    const read = (rel: string) => fs.readFileSync(path.join(SRC_DIR, rel), 'utf8');
+
+    // 知识库为空 → 唯一可做的下一步是去「投递」，由 MobileShell 切 Tab（与 open-me 同先例）
+    const browse = read('components/mobile/MobileBrowse.vue');
+    expect(browse).toContain(`empty-title="知识库还没有内容"`);
+    expect(browse, '窄屏页面级空态必须有主按钮').toContain(`@click="emit('open-ingest')"`);
+    const listen = read('components/mobile/MobileListen.vue');
+    expect(listen).toContain('empty-title="知识库还没有可朗读的内容"');
+    expect(listen, '窄屏页面级空态必须有主按钮').toContain(`@click="emit('open-ingest')"`);
+    const shell = read('components/mobile/MobileShell.vue');
+    for (const child of ['MobileBrowse', 'MobileListen']) {
+      expect(shell, `${child} 的 open-ingest 没人接，空态按钮会点了没反应`).toMatch(
+        new RegExp(`<${child}[^>]*@open-ingest="activeTab = 'ingest'"`),
+      );
+    }
+
+    // 搜索无结果 / 预览无正文属行内二级空态：必须 compact，不许伪装成页面级断头路
+    for (const rel of ['components/mobile/MobileBrowse.vue', 'components/mobile/MobileListen.vue']) {
+      const inline = stateBlockUsages(read(rel)).filter(
+        (u) => /\sstate="empty"/.test(u) && /未找到与|这一页没有正文内容|这一页没有可朗读的正文/.test(u),
+      );
+      expect(inline.length, `${rel} 的行内空态用法未找到`).toBeGreaterThan(0);
+      for (const u of inline) expect(u, `${rel} 行内空态必须标 compact`).toMatch(/\scompact(\s|"|>)/);
+    }
+
+    // 历史会话空态：筛空与真无会话是两条不同的下一步（文案在 computed 里，按源码断言）
+    const query = read('components/mobile/MobileQuery.vue');
+    expect(query).toContain('没有匹配的会话');
+    expect(query).toContain('还没有会话');
+    expect(query).toContain('清除筛选条件');
+    expect(query).toContain('开始新会话');
   });
 
   it('反向用例：旧方言写法必须被抓到（守护不是空跑）', () => {
