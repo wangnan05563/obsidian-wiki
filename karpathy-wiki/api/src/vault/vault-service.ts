@@ -3,7 +3,7 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import { watch, type FSWatcher } from 'chokidar';
 // T02472 L1：页面口径（目录白名单 + 页面文件判定）单点定义，与数据清洗/统计接口共用
-import { PAGE_DIRS, isPageFile } from './page-scope.js';
+import { PAGE_DIRS, isPageFile, WRITABLE_DIRS, INIT_DIRS } from './page-scope.js';
 
 // 将底层 fs 读取错误包装为带 code 的 Error，保留准确文案（区分不存在/目录/权限/其它）。
 // 为什么需要：路由层需按 HTTP 状态码分流（目录→400、权限→403、不存在→404、其它→500），
@@ -32,7 +32,8 @@ export interface TreeNode {
 // drafts: QQ 导入子系统候选 draft 存放（SRS §5.3.3 状态机 draft → published）
 // qa: QQ 导入子系统 Q&A 编译产物（SRS §3.2 阶段3 体系化编译）
 // solutions: QQ 导入子系统方案沉淀编译产物（SRS §3.2 阶段3 体系化编译）
-const WRITE_ALLOWED_DIRS = new Set(['raw', 'entities', 'concepts', 'comparisons', 'queries', 'drafts', 'qa', 'solutions']);
+// T02686：可写白名单不再自写一份清单，直接取 page-scope 的 WRITABLE_DIRS（= 页面目录 + raw/drafts）
+const WRITE_ALLOWED_DIRS = new Set(WRITABLE_DIRS);
 const WRITE_ALLOWED_FILES = new Set(['index.md', 'log.md']);
 
 // title 规范化：返回主名称 + 括号内英文别名，用于跨命名变体去重
@@ -195,8 +196,10 @@ export class VaultService {
   // 初始化 Vault 目录结构。已存在的文件不覆盖，避免破坏用户内容。
   async init(): Promise<void> {
     await fs.mkdir(this.vaultPath, { recursive: true });
-    const dirs = ['raw', 'entities', 'concepts', 'comparisons', 'queries'];
-    for (const d of dirs) {
+    // T02686：初始化目录取 page-scope 的 INIT_DIRS（= 可写集合 8 个）。
+    // 此前这里写死 5 个（缺 qa/solutions/drafts），与 install.ps1/setup-env.ps1/build-exe.ps1 各写一遍
+    // 同源；新库缺这三个目录时 routes/stats.ts 对缺目录是 catch→0，仪表盘表现为「静默的 0」而非报错。
+    for (const d of INIT_DIRS) {
       await fs.mkdir(path.join(this.vaultPath, d), { recursive: true });
     }
     await this.ensureFile('SCHEMA.md', DEFAULT_SCHEMA);

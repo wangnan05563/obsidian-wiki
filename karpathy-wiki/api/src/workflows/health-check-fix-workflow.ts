@@ -4,6 +4,7 @@ import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
 import type { FixInput, FixProgressEvent } from '../types.js';
 import { getPromptPath } from '../utils/runtime.js';
+import { pageDirsSlash } from '../vault/page-scope.js';
 
 // 加载 fix prompt 单点存储（M-3 prompt 等价性）
 // 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
@@ -34,7 +35,10 @@ export function createFixTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'write_file',
-      description: '写入页面（含 frontmatter）。仅允许 entities/concepts/comparisons/queries/ 目录。',
+      // T02686：文案与页面口径同源。原描述写死 4 个目录（缺 qa/solutions），
+      // 而真实写白名单是 page-scope 的 8 个可写目录——描述落后于实现会让 LLM 以为
+      // 「qa/ 下的体检修复写不进去」，转而把修复产物写到 concepts/ 去。
+      description: `写入页面（含 frontmatter）。仅允许 ${pageDirsSlash()}/ 目录。`,
       parameters: objSchema(
         {
           path: { type: 'string', description: '页面相对路径' },

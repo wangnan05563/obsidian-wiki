@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
 import type { VaultService } from './vault/vault-service.js';
+// T02686：检索侧页面目录取 page-scope 单一来源
+import { PAGE_DIRS } from './vault/page-scope.js';
 
 // 全文检索命中结果
 export interface SearchHit {
@@ -98,7 +100,7 @@ export async function searchPages(
   limit = 20,
   filter?: SearchFilter,
 ): Promise<SearchHit[]> {
-  const pageDirs = ['entities', 'concepts', 'comparisons', 'queries', 'qa', 'solutions'];
+  const pageDirs = PAGE_DIRS;
   const terms = keywords.toLowerCase().split(/\s+/).filter(Boolean);
   const hasFilter = filter?.source || filter?.status || filter?.type;
   if (terms.length === 0 && !hasFilter) return [];

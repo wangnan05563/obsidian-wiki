@@ -18,10 +18,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
 import type { VaultService } from '../vault/vault-service.js';
+// T02686：页面目录取 page-scope 单一来源（此前本文件另写了一份同字面 PAGE_DIRS，无引用关系）
+import { PAGE_DIRS } from '../vault/page-scope.js';
 
 // 页面目录列表：与 vault-service.ts PAGE_DIRS 对齐
 // 为什么本地复制而不导入：避免跨模块内部常量耦合，目录变更时显式同步
-const PAGE_DIRS = ['entities', 'concepts', 'comparisons', 'queries', 'qa', 'solutions'];
+// PAGE_DIRS 由 page-scope 提供（见文件头 import），本文件不再自带清单
 
 // 推荐结果项：前端侧边栏渲染用
 export interface RecommendedPage {

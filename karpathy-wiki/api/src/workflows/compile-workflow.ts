@@ -4,6 +4,8 @@ import matter from 'gray-matter';
 import type { ToolDefinition, HarnessConfig, StepResult } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
+// T02686：目录集合取自 page-scope 单一来源
+import { TITLE_DEDUPE_DIRS, PAGE_DIR_TO_TYPE, pageDirsSlash } from '../vault/page-scope.js';
 import type { CompileInput, ProgressEvent, AppConfig } from '../types.js';
 import { RunLogger } from '../run-logger.js';
 import { CompileCache } from '../compile-cache.js';
@@ -47,15 +49,10 @@ function stripInternalPrefix(name: string): string {
 
 // FR-15-4：目录名 → type 推断映射
 // 为什么需要兜底：LLM 可能漏写或写错 type 字段，按写入路径的顶层目录推断是最可靠的回退策略
-// 与前端 Browse.vue KANBAN_COLUMNS 的 dirMap 保持一致，避免前后端推断分歧
-const DIR_TO_TYPE: Record<string, PageType> = {
-  entities: 'entity',
-  concepts: 'concept',
-  comparisons: 'comparison',
-  queries: 'query',
-  qa: 'qa',
-  solutions: 'solution',
-};
+// T02686：映射本体收在 page-scope.PAGE_DIR_TO_TYPE（数据清洗补元信息走同一份），
+// 这里只做 PageType 的类型收窄；与前端 Browse.vue dirMap 的一致性由
+// api/test/vault-dirs-single-source.test.ts 比对源码断言。
+const DIR_TO_TYPE: Record<string, PageType> = PAGE_DIR_TO_TYPE as Record<string, PageType>;
 
 // FR-15-4：校验并补全页面 frontmatter 的 type 字段
 // - type 合法：原样返回（fast path，零开销）
@@ -201,7 +198,7 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'write_file',
-      description: '写入 Wiki 页面（含 frontmatter）。仅允许 entities/concepts/comparisons/queries/qa/solutions/ 目录。',
+      description: `写入 Wiki 页面（含 frontmatter）。仅允许 ${pageDirsSlash()}/ 目录。`,
       parameters: objSchema(
         {
           path: { type: 'string', description: '页面相对路径，如 concepts/llm-wiki.md' },
@@ -212,10 +209,11 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
       handler: async (args: unknown) => {
         const { path: p, content } = args as { path: string; content: string };
         // P2 去重：按 frontmatter title 查找已有页面，命中则重定向到已有路径（覆盖更新而非新建重复）
-        // 仅对 entities/concepts 目录生效（这两个目录重复最严重；qa/solutions 按 rawId 命名天然不重复）
+        // 仅对 TITLE_DEDUPE_DIRS（entities/concepts）生效；差异原因记在 page-scope：
+        // qa/solutions 按 rawId 命名天然不重复，comparisons/queries 是聚合产物，按 title 重定向会并页
         const topDir = p.split('/')[0]?.toLowerCase() ?? '';
         let targetPath = p;
-        if (topDir === 'entities' || topDir === 'concepts') {
+        if (TITLE_DEDUPE_DIRS.includes(topDir)) {
           try {
             const parsed = matter(content);
             const title = typeof parsed.data.title === 'string' ? parsed.data.title : '';

@@ -13,10 +13,14 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 import { recommendPages, createBidirectionalLink } from '../workflows/discover-workflow.js';
+import { PAGE_DIRS_ALT } from '../vault/page-scope.js';
 
 // 路径白名单正则：与 tags.ts 对齐
 // 为什么复用相同模式：discover 与 tags 操作同样的页面集合，路径校验需一致
-const VAULT_PAGE_PATTERN = /^(entities|concepts|comparisons|queries|qa|solutions)\/[\w\u4e00-\u9fa5-]+\.md$/i;
+// T02686：目录交替串取 page-scope 的 PAGE_DIRS_ALT，不再自带 6 目录字面清单
+//   （自带副本在新目录并入 PAGE_DIRS 时会把合法页面判成 Invalid path → 400）
+const VAULT_PAGE_PATTERN = new RegExp(`^(${PAGE_DIRS_ALT})/[\\w\\u4e00-\\u9fa5-]+\\.md$`, 'i');
+const PAGE_PATH_HINT = `^(${PAGE_DIRS_ALT})/[name].md$`;
 
 export function registerDiscoverRoute(app: FastifyInstance, vault: VaultService): void {
   // GET /api/discover/recommend?pagePath=entities/foo.md
@@ -26,7 +30,7 @@ export function registerDiscoverRoute(app: FastifyInstance, vault: VaultService)
     const pagePath = query?.pagePath ?? '';
     if (!VAULT_PAGE_PATTERN.test(pagePath)) {
       reply.code(400).send({
-        error: 'Invalid pagePath: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
+        error: `Invalid pagePath: must match ${PAGE_PATH_HINT}`,
       });
     }
 
@@ -51,12 +55,12 @@ export function registerDiscoverRoute(app: FastifyInstance, vault: VaultService)
 
     if (!VAULT_PAGE_PATTERN.test(sourcePath)) {
       reply.code(400).send({
-        error: 'Invalid sourcePath: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
+        error: `Invalid sourcePath: must match ${PAGE_PATH_HINT}`,
       });
     }
     if (!VAULT_PAGE_PATTERN.test(targetPath)) {
       reply.code(400).send({
-        error: 'Invalid targetPath: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
+        error: `Invalid targetPath: must match ${PAGE_PATH_HINT}`,
       });
     }
 

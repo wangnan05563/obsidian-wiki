@@ -12,6 +12,10 @@ import type { VaultService } from '../vault/vault-service.js';
 import type { EngineAdapter, AppConfig } from '../types.js';
 import { searchPages } from '../search-util.js';
 import {
+  WRITABLE_DIRS as PAGE_WRITABLE_DIRS,
+  READABLE_DIRS as PAGE_READABLE_DIRS,
+} from '../vault/page-scope.js';
+import {
   suggestTagsForPage,
   confirmTagForPage,
   listPendingTagPages,
@@ -33,9 +37,10 @@ export interface McpTool {
   handler: (args: Record<string, unknown>, ctx: McpToolContext) => Promise<unknown>;
 }
 
-// 允许写入的顶层目录（与 vault-service 的 WRITE_ALLOWED_DIRS 保持一致）
-const WRITABLE_DIRS = new Set(['raw', 'entities', 'concepts', 'comparisons', 'queries', 'drafts', 'qa', 'solutions']);
-const READABLE_DIRS = ['entities', 'concepts', 'comparisons', 'queries', 'qa', 'solutions', 'raw', 'drafts'];
+// T02686：目录清单收敛到 page-scope 单一来源（原注释「与 vault-service 的 WRITE_ALLOWED_DIRS 保持一致」
+// 是靠人工维持的，两份字面量各写一遍；现在两侧取同一个常量）
+const WRITABLE_DIRS = new Set(PAGE_WRITABLE_DIRS);
+const READABLE_DIRS = PAGE_READABLE_DIRS;
 
 function requireString(args: Record<string, unknown>, key: string, fallback?: string): string {
   const v = args[key];
@@ -216,7 +221,8 @@ const definitions: McpTool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: '目录（entities/concepts/comparisons/queries/qa/solutions/raw/drafts）' },
+        // T02686：可选目录清单文案与校验用的 PAGE_WRITABLE_DIRS 同源（原来另写一遍字面量）
+        dir: { type: 'string', description: `目录（${PAGE_WRITABLE_DIRS.join('/')}）` },
         name: { type: 'string', description: '页面名，如 deepseek-r1' },
         title: { type: 'string', description: 'frontmatter title（默认取 name）' },
         body: { type: 'string', description: '正文 Markdown' },

@@ -263,7 +263,13 @@ if (Test-Path (Join-Path $HarnessPath "package.json")) {
 
 Write-Step "[4/7] 初始化 Vault 目录（$VaultPath）..."
 $VaultFull = if ([System.IO.Path]::IsPathRooted($VaultPath)) { $VaultPath } else { Join-Path $ProjectRoot $VaultPath }
-$PageDirs = @('raw', 'entities', 'concepts', 'comparisons', 'queries')
+# T02686：清单取自单一来源（scripts/vault-dirs.mjs ↔ api/src/vault/page-scope.ts），读不到即中止
+$DirsScript = Join-Path $PSScriptRoot "vault-dirs.mjs"
+$PageDirs = @(& node $DirsScript init)
+if ($PageDirs.Count -eq 0) {
+    Write-Host "  [FAIL] 无法从单一来源读取 Vault 目录清单：$DirsScript（需 node 可用且该文件存在）" -ForegroundColor Red
+    exit 1
+}
 foreach ($d in $PageDirs) {
     $dirPath = Join-Path $VaultFull $d
     if (-not (Test-Path $dirPath)) {
@@ -371,6 +377,8 @@ if (-not $SkipWizard) {
 
 Write-Step "[6/7] 检查 .gitignore..."
 $Gitignore = Join-Path $ProjectRoot ".gitignore"
+# T02686 判定：gitignore 种子清单，不是页面/可写集合（故意只忽略个人内容与流水文件，
+# 概念页与 qa/solutions 要入库共享），因此与 install.ps1 一样保留独立定义、不复用 vault-dirs.mjs。
 $ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/', 'release/')
 $existing = if (Test-Path $Gitignore) { Get-Content $Gitignore } else { @() }
 $updated = $existing
