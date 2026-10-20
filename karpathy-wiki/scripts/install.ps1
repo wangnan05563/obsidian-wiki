@@ -98,7 +98,15 @@ if (Test-Path (Join-Path $HarnessPath "package.json")) {
 # ============================================================
 Write-Step "初始化 Vault 目录（$VaultPath）..."
 $VaultFull = if ([System.IO.Path]::IsPathRooted($VaultPath)) { $VaultPath } else { Join-Path $Root $VaultPath }
-$PageDirs = @('raw', 'entities', 'concepts', 'comparisons', 'queries')
+# T02686：目录清单取自单一来源（scripts/vault-dirs.mjs ↔ api/src/vault/page-scope.ts），
+# 不在本脚本写死：写死的 5 项清单缺 qa/solutions/drafts，新库这三目录不建，仪表盘上表现为静默的 0。
+# 读不到就中止——回退到脚本内清单等于把缺陷再种回去。
+$DirsScript = Join-Path $PSScriptRoot "vault-dirs.mjs"
+$PageDirs = @(& node $DirsScript init)
+if ($PageDirs.Count -eq 0) {
+    Write-Host "  [FAIL] 无法从单一来源读取 Vault 目录清单：$DirsScript（需 node 可用且该文件存在）" -ForegroundColor Red
+    exit 1
+}
 foreach ($d in $PageDirs) {
     $dirPath = Join-Path $VaultFull $d
     if (-not (Test-Path $dirPath)) {
@@ -215,6 +223,9 @@ if (-not $SkipWizard) {
 # 步骤 6：确保 .gitignore 排除敏感文件（M-7）
 # ============================================================
 $Gitignore = Join-Path $Root ".gitignore"
+# T02686 判定：这条清单**不是**页面集合/可写集合，故不复用 vault-dirs.mjs——
+# 它是 gitignore 种子（故意只忽略 raw/entities/queries 这类个人内容与 log/index 流水，
+# 概念页与 qa/solutions 要入库共享）。若改成「全部 Vault 目录」会把知识库正文一起忽略掉。
 $ignoreRules = @('.env', 'node_modules/', 'dist/', 'data/vault/raw/', 'data/vault/entities/', 'data/vault/queries/', 'data/vault/log.md', 'data/vault/index.md', 'data/vault/.harness/')
 $existing = if (Test-Path $Gitignore) { Get-Content $Gitignore } else { @() }
 $updated = $existing

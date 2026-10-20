@@ -14,11 +14,14 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { VaultService } from '../vault/vault-service.js';
 import type { AppConfig } from '../types.js';
 import { suggestTagsForPage, confirmTagForPage, listPendingTagPages } from '../workflows/tag-suggest-workflow.js';
+import { PAGE_DIRS_ALT } from '../vault/page-scope.js';
 
-// 路径白名单正则：仅允许 entities/concepts/comparisons/queries/qa/solutions 目录下的 .md 文件
+// 路径白名单正则：仅允许 PAGE_DIRS 目录下的 .md 文件
 // 与 vault-service.ts WRITE_ALLOWED_DIRS 中的页面目录对齐（排除 drafts/raw）
 // 为什么不用单一 [a-zA-Z0-9_-]+：页面名可能含中文，需 \u4e00-\u9fa5 字符范围
-const VAULT_PAGE_PATTERN = /^(entities|concepts|comparisons|queries|qa|solutions)\/[\w\u4e00-\u9fa5-]+\.md$/i;
+// T02686：目录交替串取 page-scope 单一来源，与 discover.ts 共用同一份清单
+const VAULT_PAGE_PATTERN = new RegExp(`^(${PAGE_DIRS_ALT})/[\\w\\u4e00-\\u9fa5-]+\\.md$`, 'i');
+const PAGE_PATH_HINT = `^(${PAGE_DIRS_ALT})/[name].md$`;
 
 // tag 校验正则：小写英文/中文/连字符，长度 1~32
 // 为什么限制长度：防止 LLM 返回超长字符串污染 frontmatter
@@ -52,7 +55,7 @@ export function registerTagsRoute(
     const pagePath = body?.path ?? '';
     if (!VAULT_PAGE_PATTERN.test(pagePath)) {
       return void reply.code(400).send({
-        error: 'Invalid path: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
+        error: `Invalid path: must match ${PAGE_PATH_HINT}`,
       });
     }
 
@@ -73,7 +76,7 @@ export function registerTagsRoute(
 
     if (!VAULT_PAGE_PATTERN.test(pagePath)) {
       return void reply.code(400).send({
-        error: 'Invalid path: must match ^(entities|concepts|comparisons|queries|qa|solutions)/[name].md$',
+        error: `Invalid path: must match ${PAGE_PATH_HINT}`,
       });
     }
     if (!TAG_PATTERN.test(tag)) {

@@ -485,7 +485,13 @@ Write-Ok ".env.example 已生成"
 # 6.4 默认 Vault 目录结构
 Write-Host "  [6.4] 创建默认 Vault 目录..."
 $vaultTarget = Join-Path $pkgOutputDir "vault"
-$PageDirs = @('raw', 'entities', 'concepts', 'comparisons', 'queries')
+# T02686：打包内默认 Vault 目录同样取单一来源，与 install/setup-env/VaultService.init 保持一致
+$DirsScript = Join-Path $PSScriptRoot "vault-dirs.mjs"
+$PageDirs = @(& node $DirsScript init)
+if ($PageDirs.Count -eq 0) {
+    Write-Host "  [FAIL] 无法从单一来源读取 Vault 目录清单：$DirsScript（需 node 可用且该文件存在）" -ForegroundColor Red
+    exit 1
+}
 foreach ($d in $PageDirs) {
     $dirPath = Join-Path $vaultTarget $d
     New-Item -ItemType Directory -Force $dirPath | Out-Null

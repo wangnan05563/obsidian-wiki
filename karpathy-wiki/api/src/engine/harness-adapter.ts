@@ -16,6 +16,8 @@ import { ClarifySessionStore } from '../workflows/clarify/clarify-store.js';
 import matter from 'gray-matter';
 // FR-18 知识时效判定：healthCheck 复检项复用同一判定规则，保证与浏览/问答取值一致
 import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
+// T02686：页面口径单一来源（目录集合 + 测试文件排除规则）
+import { PAGE_DIRS, isPageFile } from '../vault/page-scope.js';
 
 // BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
 import { applyPerRequestOverride } from './byok-override.js';
@@ -242,14 +244,17 @@ export class HarnessAdapter implements EngineAdapter {
 
     // 断链检测：扫描每个页面的 [[link]]，对照已存在的页面名集合。
     // buildLinkGraph 只记录 "目标存在" 的边，这里补 "目标不存在" 的断链。
-    const pageDirs = ['entities', 'concepts', 'comparisons', 'queries'];
+    // T02686 修复：断链扫描口径与页面口径统一。
+    // 原来这里写死 4 个目录（entities/concepts/comparisons/queries），而链接图/统计/清洗按 6 个目录算页面
+    // → qa/ 与 solutions/ 页面里的 [[链接]] 永远不会被体检判为断链（体检报「0 断链」但页面确实指空）。
+    const pageDirs = PAGE_DIRS;
     const nameToPath = new Map<string, string>();
     for (const rel of graph.nodes) {
       const base = path.basename(rel, '.md');
       nameToPath.set(base, rel);
     }
 
-    // §11.2：4 个目录并行扫描断链，Promise.all 等待全部完成
+    // §11.2：页面目录（PAGE_DIRS，6 个）并行扫描断链，Promise.all 等待全部完成
     const wikilinkRe = /\[\[([^\]]+)\]\]/g;
     const scanDir = async (d: string): Promise<Array<{ from: string; to: string }>> => {
       const results: Array<{ from: string; to: string }> = [];
@@ -261,7 +266,8 @@ export class HarnessAdapter implements EngineAdapter {
         return results;
       }
       for (const f of entries) {
-        if (!f.endsWith('.md')) continue;
+        // T02686：与链接图同口径——联调遗留的 test-*.md / proxy-test*.md 不是页面，不产断链
+        if (!isPageFile(f)) continue;
         const fromRel = `${d}/${f}`;
         let content = '';
         try {

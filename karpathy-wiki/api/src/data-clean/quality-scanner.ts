@@ -3,7 +3,7 @@ import path from "node:path";
 import matter from "gray-matter";
 import type { VaultService } from "../vault/vault-service.js";
 // T02472 L1：页面口径与链接图/统计接口共用同一份定义，避免「216 vs 245」两处总数矛盾
-import { PAGE_DIRS, isPageFile } from "../vault/page-scope.js";
+import { PAGE_DIRS, PAGE_DIR_TO_TYPE, isPageFile } from "../vault/page-scope.js";
 import type { PageQualityScore, DuplicatePair, MergeResult, PrecheckResult } from "../types.js";
 
 const MAX_RETRIES = 3;
@@ -242,10 +242,11 @@ export async function fixFrontmatter( // NOSONAR - 认知复杂度由业务逻�
       }
       if (!newFm.type) {
         const dir = relPath.split("/")[0];
-        const typeMap: Record<string, string> = {
-          entities: "entity", concepts: "concept", comparisons: "comparison", queries: "query",
-        };
-        newFm.type = typeMap[dir] || "concept";
+        // T02686：dir→type 推断改用 page-scope.PAGE_DIR_TO_TYPE 单一来源。
+        // 原来这里自带一份只有 4 个目录的映射（缺 qa/solutions），补元信息时 qa/ 与 solutions/
+        // 下的页面会走 `|| "concept"` 兜底被写成 concept，前端按 type 分组随之分错——
+        // 与编译侧（compile-workflow.DIR_TO_TYPE，6 个目录）不是同一份口径。
+        newFm.type = PAGE_DIR_TO_TYPE[dir] || "concept";
       }
       if (!newFm.updated) newFm.updated = new Date().toISOString().split("T")[0];
       if (!newFm.created) newFm.created = newFm.updated;

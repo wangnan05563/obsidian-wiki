@@ -7,6 +7,8 @@
 // 设置页重建入口走同一函数；索引失败重试 ≤3 次后标记 pending，不阻塞搜索主流程。
 import path from 'node:path';
 import { VaultService } from '../vault/vault-service.js';
+// T02686：与 search-util 同源——页面目录取 page-scope，不再各自写清单
+import { PAGE_DIRS } from '../vault/page-scope.js';
 import {
   getIndexDb,
   replacePageChunks,
@@ -131,7 +133,7 @@ async function indexPageVectors(dataDir: string, vault: VaultService, relPath: s
 
 /** 列出 vault 内全部可检索页面（6 类页面目录，与 search-util 同源） */
 export async function listVaultPages(vault: VaultService): Promise<string[]> {
-  const pageDirs = ['entities', 'concepts', 'comparisons', 'queries', 'qa', 'solutions'];
+  const pageDirs = PAGE_DIRS;
   const fs = await import('node:fs/promises');
   const pages: string[] = [];
   for (const dir of pageDirs) {
