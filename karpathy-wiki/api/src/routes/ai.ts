@@ -311,7 +311,7 @@ export function registerAiRoute(
       return void reply.send({
         ok: false,
         detail: body.useServerKey
-          ? '共享AI 未配置 API Key：请先在「共享AI」页填写并保存共享 API Key'
+          ? '共享 AI 未配置 API Key：请先在「共享 AI」页填写并保存共享 API Key'
           : 'API Key 未设置：测试连接按个人 BYOK 密钥校验（与问答口径一致），请在「配置中心 → AI 服务」填写你自己的 API Key 后再测试',
       });
     }
