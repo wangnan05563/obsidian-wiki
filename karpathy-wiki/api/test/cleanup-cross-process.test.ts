@@ -26,6 +26,7 @@ import {
   acquireCleanup,
   awaitCleanupIdle,
   getForeignCleanupWaitStats,
+  MARKER_POLL_MS,
   __resetCleanupMutexForTest,
 } from '../src/cleanup-mutex.js';
 import {
@@ -54,22 +55,33 @@ function stubGuards(): IsolationGuards {
   return { enabled: false, requireAuth: passThrough, requireAdmin: passThrough };
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+// T02836：等待一律走公共工具。原先本文件自带 `const sleep = (ms) => setTimeout(r, ms)`，
+// 参数化时长把裸写数值藏进了变量（`sleep(500)`），守护抓不到——那正是「换了个写法继续赌时长」的口子。
+// 现在让步只有 yieldSlice/contractSleep 两个出口，带终点的场景一律 pollUntil 读真实状态。
+import {
+  MARKER_WAIT_BUDGET_MS,
+  NO_TIMER_CHAIN,
+  contractSleep,
+  pollUntil,
+} from './helpers/waitForProgress.js';
+
+// T02836 等待口径清点（本文件 3 处等待的逐处判定）：
+//  | 「等本进程登记落盘/撤销后消失」×2（原 waitForFile + 5ms 轮询 + 3s 超时） | 终点可观测：文件在不在 | pollUntil 读 fs.access，预算 NO_TIMER_CHAIN |
+//  | 「等任务被另一实例的真删挂住」1 处（原 sleep(500)）                      | 终点不可观测：断言的是「没有起跑」 | contractSleep(MARKER_WAIT_BUDGET_MS)，= 产品侧 MARKER_POLL_MS×2 |
+// 负向断言前的让步取「两整轮标记轮询」：只等一轮证明不了起跑点没有复判通过，等够两轮仍不起跑才是挂住。
 
 /**
- * 等某个文件出现/消失（进展感知等待，不是固定 sleep）。
- * 活跃登记是 fire-and-forget 落盘的，固定等待时长在 CI 上必然偶发闪断（T02836 同一类）。
+ * 等某个文件出现/消失（T02836：委托给 pollUntil，判据 = 超过契约下限且连续无进展）。
+ * 活跃登记是 fire-and-forget 落盘的、跨进程删除是异步的，固定等待时长在 CI 上必然偶发闪断。
+ * 预算 NO_TIMER_CHAIN：cap 3000 与本用例原先的 timeoutMs=3000 同严，不是放松。
  */
-async function waitForFile(file: string, exist: boolean, timeoutMs = 3000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const present = await fs.access(file).then(() => true, () => false);
-    if (present === exist) return;
-    if (Date.now() > deadline) {
-      throw new Error(`等待文件${exist ? '出现' : '消失'}超时：${file}`);
-    }
-    await sleep(25);
-  }
+async function expectFileState(file: string, exist: boolean): Promise<void> {
+  await pollUntil(
+    `等待文件${exist ? '出现' : '消失'}：${file}`,
+    () => fs.access(file).then(() => true, () => false),
+    (present) => present === exist,
+    NO_TIMER_CHAIN,
+  );
 }
 
 let tempRoot = '';
@@ -81,6 +93,7 @@ const children: ChildProcess[] = [];
 
 /** 起一个只负责「活着」的子进程，充当另一实例的 pid。 */
 function spawnPeer(): ChildProcess {
+  // T02836-allow: 非测试等待——真子进程 -e 存活脚本里的时长，守护按文本扫进了字符串字面量
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
   children.push(child);
   return child;
@@ -255,13 +268,13 @@ describe('cleanup-cross-process 单元语义', () => {
     // 那些冒充出来的断言照样全绿——跨进程守卫会退化成只有测试在履行的契约。
     const file = path.join(activityDir, `${process.pid}.json`);
     const release = beginActivity('compile');
-    await waitForFile(file, true);
+    await expectFileState(file, true);
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toMatchObject({ compile: 1, query: 0 });
     // 换到对侧视角读（selfPid 是别的进程）就必须看见本进程在跑
     expect(await readForeignActivities(activityDir, { selfPid: 999999 })).toMatchObject({ compile: 1 });
 
     release();
-    await waitForFile(file, false);
+    await expectFileState(file, false);
   });
 });
 
@@ -273,7 +286,10 @@ describe('T02817 起跑点：被另一实例的真删拦住或排队', () => {
     const pending = withCompileLock(async () => {
       ran = true;
     });
-    await sleep(500);
+    await contractSleep(
+      `MARKER_WAIT_BUDGET_MS=${MARKER_WAIT_BUDGET_MS}（cleanup-mutex.ts 的 MARKER_POLL_MS=${MARKER_POLL_MS} × 2）：断言的是「任务没有起跑」，终点不可观测；两整轮标记轮询内都不起跳才算被挂住`,
+      MARKER_WAIT_BUDGET_MS,
+    );
     expect(ran).toBe(false);
     expect(activeActivities()).toEqual({ compile: 0, query: 0 });
 

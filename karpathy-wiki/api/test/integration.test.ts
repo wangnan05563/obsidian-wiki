@@ -12,12 +12,21 @@ import {
   deleteUser,
   resetUserStore,
 } from '../src/auth/user-store.js';
-import { createSession, validateSession, destroySession, clearAllSessions } from '../src/auth/session.js';
-import { checkPermission, invalidateRoleCache, clearPermissionCache } from '../src/auth/permission-cache.js';
+import { createSession, validateSession, destroySession, clearAllSessions, getSessionCount } from '../src/auth/session.js';
+import { checkPermission, checkPermissionWithStats, getCacheStats, resetCacheStats, invalidateRoleCache, clearPermissionCache } from '../src/auth/permission-cache.js';
 import { initAuditLog, writeAuditLog, readAuditLog, flushAuditLog, resetAuditLog, createAuditEntry } from '../src/auth/audit-log.js';
 import { hasPermission, getRolePermissions, getRolePermissionMatrix } from '../src/auth/rbac.js';
 import { verifyPassword } from '../src/auth/password.js';
 import { requirePermission } from '../src/middleware/auth.js';
+// T02836：等待口径收进公共工具。本文件原先两处 `setTimeout(r, 5)` 都是在赌「真实时钟跨过了
+// ttlMs=1ms 这个刻度」——Windows 时钟粒度可达 ~16ms，5ms 根本未必跨得过去；
+// 而「过期」这件事本身是可观测的（缓存的 missCount / 会话是否还能验出），所以一律改为轮询真实状态。
+import { NO_TIMER_CHAIN, waitForProgress } from './helpers/waitForProgress.js';
+
+// T02836 等待口径清点（本文件卡面登记 2 处，均为 setTimeout(r, 5)）：
+//  | 「TTL 到期后缓存失效」   | 等 5ms 后断言 `checkPermission()===true`（恒真，用例空跑） | 终点可观测（getCacheStats().missCount 由 1 变 2）→ waitForProgress；顺带把恒真断言换成可证伪判据 |
+//  | 「会话过期后无效」       | 等 5ms 后断言 validateSession 为 null                      | 终点可观测（validateSession 由对象翻转为 null）→ waitForProgress；「未过期⇒非 null」由同组长期 TTL 用例负责，不在 1ms 会话上前置断言 |
+// 两处都不保留定时出口：跨时钟刻度这件事本身可读数验证，赌时长只会红得没有信息量。
 
 // 集成测试：验证不同角色（admin/user/guest）的权限边界
 // 覆盖需求：
@@ -224,11 +233,24 @@ describe('集成测试：RBAC 权限边界', () => {
     });
 
     it('TTL 到期后缓存失效', async () => {
-      checkPermission('admin', 'dashboard', 1);
-      await new Promise((r) => setTimeout(r, 5));
-      // 缓存已过期，重新计算
-      const r = checkPermission('admin', 'dashboard', 60000);
-      expect(r).toBe(true);
+      // T02836：原先 `checkPermission(...,1)` + `setTimeout(r, 5)` 再断言 `=== true`——
+      // 那条断言恒真（缓存命中与回源都返回 true），等 5ms 只是「赌过期了」，用例其实是空跑。
+      // 现在用带统计的入口：missCount 从 1 变 2 就是「缓存真的判过期并回源」的可观测终点。
+      resetCacheStats();
+      const TTL_MS = 1;
+      checkPermissionWithStats('admin', 'dashboard', TTL_MS);
+      expect(getCacheStats().missCount).toBe(1);
+      // 轮询真实状态而不是赌时长：Windows 时钟粒度可达 ~16ms，ttlMs=1 是否跨过只有计数器知道
+      await waitForProgress(
+        'TTL 到期后再次检查计为未命中（缓存真的失效并回源）',
+        () => {
+          checkPermissionWithStats('admin', 'dashboard', TTL_MS);
+          return getCacheStats().missCount >= 2;
+        },
+        { ...NO_TIMER_CHAIN, progress: () => `missCount=${getCacheStats().missCount} size=${getCacheStats().size}` },
+      );
+      expect(getCacheStats().missCount).toBeGreaterThanOrEqual(2);
+      expect(checkPermission('admin', 'dashboard', 60000)).toBe(true);
     });
 
     it('角色级缓存清除应只影响该角色', () => {
@@ -464,7 +486,17 @@ describe('集成测试：RBAC 权限边界', () => {
         secret: SECRET,
         ttlMs: 1,
       });
-      await new Promise((r) => setTimeout(r, 5));
+      // T02836：终点可观测（validateSession 由有效翻转为 null 就是过期判定生效）→ 轮询真实状态。
+      // 原先的 `setTimeout(r, 5)` 是赌真实时钟跨过 ttlMs=1：Windows 粒度可达 ~16ms，
+      // 赌不赢时 validateSession 仍返回会话，用例红得毫无信息量。
+      // 「有效 ⇒ 非 null」这一半不在这里断言：ttlMs=1 的会话起跑时可能已经跨格，
+      // 前置断言本身又变成赌时长（实测首轮即红）；同组 '会话 token 防伪造' 与本文件的
+      // 长期 TTL 用例已经把「未过期时能取回会话」锁住了，翻转判据不会假绿。
+      await waitForProgress(
+        'ttlMs=1 的会话过期后 validateSession 返回 null',
+        () => validateSession(session.token, SECRET) === null,
+        { ...NO_TIMER_CHAIN, progress: () => `sessions=${getSessionCount()}` },
+      );
       expect(validateSession(session.token, SECRET)).toBeNull();
     });
   });

@@ -9,6 +9,9 @@ import {
   checkPermissionWithStats,
 } from '../src/auth/permission-cache.js';
 import type { AuthRole, AuthPermission } from '../src/auth/types.js';
+// T02836：等待口径清点（本文件 1 处）——
+//  | 「TTL 到期后应重新计算」 | new Promise + setTimeout(5) 后断言恒真的 === true | 终点可观测（getCacheStats().missCount 翻转）→ waitForProgress；顺带把恒真断言换成可证伪判据 |
+import { NO_TIMER_CHAIN, waitForProgress } from './helpers/waitForProgress.js';
 
 // 权限缓存测试
 // 覆盖点：缓存命中/未命中、TTL 失效、角色级缓存清除、批量检查、统计
@@ -73,17 +76,24 @@ describe('permission-cache 模块', () => {
   });
 
   describe('TTL 失效', () => {
-    it('TTL 到期后应重新计算', () => {
+    it('TTL 到期后应重新计算', async () => {
+      // T02836：原写法 `setTimeout(..., 5)` 后断言 `checkPermission(...) === true` 是双重空跑——
+      // 5ms 赌 Windows 真实时钟跨过 ttl=1（粒度可达 ~16ms），而缓存命中与回源都返回 true，
+      // 那条断言恒真。改用带统计的入口：missCount 由 1 变 2 才是「缓存真的判过期并回源」的可观测终点。
       const ttl = 1;
-      checkPermission('admin', 'dashboard', ttl);
-      return new Promise<void>((resolve) => {
-        setTimeout(() => {
-          // 缓存应过期，重新计算
-          const r = checkPermission('admin', 'dashboard', 60000);
-          expect(r).toBe(true);
-          resolve();
-        }, 5);
-      });
+      resetCacheStats();
+      checkPermissionWithStats('admin', 'dashboard', ttl);
+      expect(getCacheStats().missCount).toBe(1);
+      await waitForProgress(
+        'TTL 到期后再次检查计为未命中（缓存真的失效并回源）',
+        () => {
+          checkPermissionWithStats('admin', 'dashboard', ttl);
+          return getCacheStats().missCount >= 2;
+        },
+        { ...NO_TIMER_CHAIN, progress: () => `missCount=${getCacheStats().missCount} size=${getCacheStats().size}` },
+      );
+      expect(getCacheStats().missCount).toBeGreaterThanOrEqual(2);
+      expect(checkPermission('admin', 'dashboard', 60000)).toBe(true);
     });
   });
 

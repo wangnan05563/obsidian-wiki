@@ -14,6 +14,11 @@ import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerHealthCheckRoute } from '../src/routes/health-check.js';
 import type { EngineAdapter, FixProgressEvent, HealthReport } from '../src/types.js';
+// T02836：等待口径统一走公共工具（本文件原先自带 `function waitFor`：10ms 轮询 + 3s 绝对超时）。
+// 清点（卡面登记 1 处 = 本文件自带 waitFor，实际 6 个调用点）：终点都可观测（后台作业快照的 status
+// 字段 / /current 的 jobId 指向）→ pollUntil 读真实状态，进展签名取 status（状态在变就一直等），
+// 预算 NO_TIMER_CHAIN（cap 3000 与旧实现 3000ms 绝对超时同严，不是放松）。
+import { NO_TIMER_CHAIN, pollUntil } from './helpers/waitForProgress.js';
 
 const REPORT: HealthReport = {
   orphans: ['a.md'],
@@ -66,15 +71,34 @@ function tempJobsDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'batch-fix-route-test-'));
 }
 
-// 后台作业的执行与 HTTP 请求解耦，断言前需等它自然收敛（有超时兜底，不靠固定 sleep）
-async function waitFor<T>(read: () => Promise<T>, predicate: (v: T) => boolean, timeoutMs = 3000): Promise<T> {
-  const startedAt = Date.now();
-  let value = await read();
-  while (!predicate(value)) {
-    if (Date.now() - startedAt > timeoutMs) throw new Error('waitFor timeout');
-    await new Promise((r) => setTimeout(r, 10));
-    value = await read();
-  }
+// 后台作业的执行与 HTTP 请求解耦，断言前需等它自然收敛。
+// T02836：原先本文件自带 `function waitFor`（10ms 轮询 + 3000ms 绝对超时）——判据是「等够就失败」，
+// 与链路是否仍在推进无关，且各文件各写一份必然漂移。现统一走 helpers/waitForProgress 的 pollUntil：
+// 进展签名取快照里的 status，状态在变就一直等，状态僵住才红；预算 NO_TIMER_CHAIN（cap 3000
+// 与旧实现的 3000ms 绝对超时同严，不是放松）。
+function readStatus(r: { statusCode: number; json: <T>() => T }): string {
+  if (r.statusCode !== 200) return `http:${r.statusCode}`;
+  return String((r.json() as { status?: string } | null)?.status ?? 'none');
+}
+
+// 返回「读取器」而非 Promise：轮询需要可重复调用的函数（读快照直到终态）
+function readSnapshot(a: FastifyInstance, jobId: string) {
+  return () => a.inject({ method: 'GET', url: `/api/health-check/fix/batch/${jobId}` });
+}
+
+type SnapshotReader = ReturnType<typeof readSnapshot>;
+
+async function untilCompleted(label: string, read: SnapshotReader) {
+  const seen = { status: '' };
+  const { value } = await pollUntil(
+    label,
+    read,
+    (r) => {
+      seen.status = readStatus(r);
+      return r.statusCode === 200 && seen.status === 'completed';
+    },
+    { ...NO_TIMER_CHAIN, progress: () => `status=${seen.status}` },
+  );
   return value;
 }
 
@@ -176,10 +200,6 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
   const itemBroken = { issueType: 'broken_link', target: { from: 'a.md', to: 'b.md' } };
   const itemOrphan = { issueType: 'orphan', target: 'c.md' };
 
-  // 返回「读取器」而非 Promise：waitFor 需要可重复调用的函数（轮询快照直到终态）
-  const readSnapshot = (a: FastifyInstance, jobId: string) => () =>
-    a.inject({ method: 'GET', url: `/api/health-check/fix/batch/${jobId}` });
-
   it('请求体校验：缺 items / 空数组 / 项非法 → 400 且不调用 adapter', async () => {
     const stub = makeAdapter(() => iterEvents([]));
     const a = await withApp(stub);
@@ -223,7 +243,7 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
       payload: { items: [itemBroken, itemOrphan], issueKeys: ['broken:a.md->b.md'] },
     });
     const jobId = (started.json() as { jobId: string }).jobId;
-    const snap = await waitFor(readSnapshot(a, jobId), (r) => r.statusCode === 200 && (r.json() as { status: string }).status === 'completed');
+    const snap = await untilCompleted('批量作业快照进入 completed 终态', readSnapshot(a, jobId));
     const snapshot = snap.json() as Record<string, unknown>;
     expect(snapshot).toMatchObject({ jobId, status: 'completed', total: 2, doneCount: 2, successCount: 2, failCount: 0, nextIndex: 2 });
     // issueKeys：前端传入优先，缺位按下标回退
@@ -242,7 +262,7 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
       payload: { items: [itemBroken] },
     });
     const jobId = (started.json() as { jobId: string }).jobId;
-    await waitFor(readSnapshot(a, jobId), (r) => (r.json() as { status: string }).status === 'completed');
+    await untilCompleted('批量作业快照进入 completed 终态', readSnapshot(a, jobId));
     const events = await a.inject({ method: 'GET', url: `/api/health-check/fix/batch/${jobId}/events` });
     const frames = parseSSE(events.body);
     expect(frames.map((f) => f.event)).toEqual(['batch_start', 'issue_start', 'progress', 'fixed', 'issue_done', 'batch_done']);
@@ -257,7 +277,7 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
     const a = await withApp(stub);
     const started = await a.inject({ method: 'POST', url: '/api/health-check/fix/batch', payload: { items: [itemBroken] } });
     const jobId = (started.json() as { jobId: string }).jobId;
-    await waitFor(readSnapshot(a, jobId), (r) => (r.json() as { status: string }).status === 'completed');
+    await untilCompleted('批量作业快照进入 completed 终态', readSnapshot(a, jobId));
     // 事件序号：batch_start=1、issue_start=2、issue_done=3、batch_done=4
     // fromSeq=3 → 只回放 seq>=3，客户端已收到的前两条不再重复推送
     const res = await a.inject({ method: 'GET', url: `/api/health-check/fix/batch/${jobId}/events?fromSeq=3` });
@@ -278,7 +298,7 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
     const jobId = (started.json() as { jobId: string }).jobId;
     // inject 的 GET 在响应结束时即「断开」，等价于关页/刷新
     await a.inject({ method: 'GET', url: `/api/health-check/fix/batch/${jobId}/events` });
-    await waitFor(readSnapshot(a, jobId), (r) => (r.json() as { status: string }).status === 'completed');
+    await untilCompleted('批量作业快照进入 completed 终态', readSnapshot(a, jobId));
     expect(stub.fix).toHaveBeenCalledTimes(3);
     await a.close();
   });
@@ -298,7 +318,7 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
       payload: { items: [itemBroken, itemOrphan, itemBroken] },
     });
     const jobId = (started.json() as { jobId: string }).jobId;
-    const snap = await waitFor(readSnapshot(a, jobId), (r) => (r.json() as { status: string }).status === 'completed');
+    const snap = await untilCompleted('混合结果作业进入 completed 终态', readSnapshot(a, jobId));
     const snapshot = snap.json() as { successCount: number; failCount: number; doneKeys: string[]; failed: Array<{ issueKey: string; message: string }> };
     expect(snapshot).toMatchObject({ successCount: 1, failCount: 2 });
     expect(snapshot.doneKeys).toEqual(['broken_link:0']);
@@ -313,7 +333,13 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
     const started = await a.inject({ method: 'POST', url: '/api/health-check/fix/batch', payload: { items: [itemOrphan] } });
     const jobId = (started.json() as { jobId: string }).jobId;
     const readCurrent = () => a.inject({ method: 'GET', url: '/api/health-check/fix/batch/current' });
-    const current = await waitFor(readCurrent, (r) => (r.json() as { jobId?: string }).jobId === jobId);
+    // 终点可观测（/current 里的 jobId 就是本次作业）→ 轮询真实状态；无固定时长、无本地 waitFor
+    const { value: current } = await pollUntil(
+      '/current 指向本次作业',
+      readCurrent,
+      (r) => (r.json() as { jobId?: string }).jobId === jobId,
+      NO_TIMER_CHAIN,
+    );
     expect((current.json() as { total: number }).total).toBe(1);
     await a.close();
   });

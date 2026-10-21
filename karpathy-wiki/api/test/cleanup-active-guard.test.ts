@@ -33,6 +33,17 @@ import type {
   CleanupResult,
   CleanupStorageStatus,
 } from '../src/types.js';
+// T02836：等待口径收进公共工具（本文件原先各处自带 `setTimeout(r, 10)` 轮询与固定时长让步）。
+// 口径与 frontend/test/helpers/waitForProgress.ts 一致，判据是「超过契约下限且连续无进展」。
+import { NO_TIMER_CHAIN, waitForProgress } from './helpers/waitForProgress.js';
+
+// T02836 等待口径清点（本文件卡面登记 5 处：10/10/10/30/10ms，逐处判定）：
+//  | waitActive() 的 10ms 自旋（全文件调用） | 固定间隔轮询 + 到点不抛错 | 终点可观测（活跃计数翻转）→ waitForProgress + NO_TIMER_CHAIN，超时带计数现场 |
+//  | waitReleased() 的 10ms 自旋             | 同上                       | 同上（等 query 归零），终态由计数读数判定 |
+//  | 「run 停在流中间待取消」的 50 拍 ×10ms   | 赌来得及在流里 cancel     | 换成挂在 abort 事件上的 Promise：取消窗口由被测信号决定，不再有时长 |
+//  | 「已登记但未结束」的 30ms 窗口          | 赌机器来不来得及           | 换事件握手（observed/markObserved）：用例确认看到登记后 producer 才收尾 |
+//  | multipart 编译的 200 拍 ×10ms 自旋      | 等够就往下断言（假通过风险） | 终点可观测（entered + compile 计数）→ waitForProgress，判据是合取而非时长 |
+// 判定结论：本文件**零处**保留定时等待——五个终点的可观测面分别是活跃计数、abort 事件、握手 Promise。
 
 // 路由只用 vault.getVaultPath()，其余方法在这条链路上不会被调用。
 // 用 stub 而不是真实 VaultService：真实构造会起 chokidar 监听，测试要的是清理语义不是 vault 语义。
@@ -48,20 +59,19 @@ function stubGuards(): IsolationGuards {
 }
 
 /**
- * 等到某一类活跃计数达到期望值。
+ * 等到某一类活跃计数达到期望值（T02836：改为走公共等待工具，判据 = 超过契约下限且连续无进展）。
  * 为什么需要它（T02774）：起跑点现在先 `await awaitCleanupIdle()` 再 `beginActivity(...)`
  * ——顺序是这套互斥成立的前提（先登记的化，一个还没碰文件、只是排队等清理的任务会把后续清理误拦成 409）。
  * 代价是「登记」不再发生在调用帧内，本文件原先靠单帧微任务的时序假设因此不再成立。
- * 这里等的是「机制生效」，不是「等一个大概」：超时即抛错，计数不对照样红。
+ * 这里等的是「机制生效」，不是「等一个大概」：超时即抛错并带上计数现场，计数不对照样红。
+ * 预算取 NO_TIMER_CHAIN：这条链路（chain.then(run) → 等清理 → 登记）在被测环境里没有产品侧定时器，
+ * 唯一契约是 vitest 单用例默认 5000ms，cap 3000 刻意小于它，让失败由本工具给出取证快照。
  */
 async function waitActive(kind: 'compile' | 'query', expected: number): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (activeActivities()[kind] === expected) return;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw new Error(
-    `等待 ${kind} 活跃计数变为 ${expected} 超时（当前 ${JSON.stringify(activeActivities())}）`,
-  );
+  await waitForProgress(`${kind} 活跃计数变为 ${expected}`, () => activeActivities()[kind] === expected, {
+    ...NO_TIMER_CHAIN,
+    progress: () => JSON.stringify(activeActivities()),
+  });
 }
 
 describe('T02655 activity 计数', () => {
@@ -180,11 +190,11 @@ describe('T02655 问答 run 的活跃登记（streamRunManager 接线）', () =>
   // 为什么必须验：问答这一路的拦截依据就挂在 start()/finishRun() 上，
   // 接线漏了不会报错——只会让「有问答在跑时清 run_state」重新变成无人拦截。
   async function waitReleased(runId: string): Promise<void> {
-    for (let i = 0; i < 200; i++) {
-      if (activeActivities().query === 0) return;
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    throw new Error(`run ${runId} 结束后 query 活跃计数未归零（泄漏会永久拦截清理）`);
+    await waitForProgress(
+      `run ${runId} 结束后 query 活跃计数归零`,
+      () => activeActivities().query === 0,
+      { ...NO_TIMER_CHAIN, progress: () => JSON.stringify(activeActivities()) },
+    );
   }
 
   it('run 起跑计入 1 个 query，终态后释放', async () => {
@@ -194,12 +204,15 @@ describe('T02655 问答 run 的活跃登记（streamRunManager 接线）', () =>
     streamRunManager.start(runId, {
       producer: () =>
         (async function* () {
-          for (let i = 0; i < 50; i++) {
-            if (controller.signal.aborted) throw new Error('已由用户停止');
-            yield { runId, text: `c${i}` };
-            await new Promise((r) => setTimeout(r, 10));
-          }
-          yield { runId, done: true, refs: [], webRefs: [] };
+          yield { runId, text: 'c0' };
+          // T02836：原先「50 拍 × 10ms」是为了赌「用例还来得及在这段流里取消」。
+          // 改成挂在 abort 事件上：run 真实停在流中间，直到被停止——
+          // 取消窗口由被测机制（信号）决定，不再由经验时长决定。
+          await new Promise<void>((resolve) => {
+            if (controller.signal.aborted) resolve();
+            else controller.signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+          throw new Error('已由用户停止');
         })(),
       onDone: async () => ({ threadId: 't', sessionId: 's', messageIndex: 0 }),
       governor: null,
@@ -220,13 +233,18 @@ describe('T02655 问答 run 的活跃登记（streamRunManager 接线）', () =>
     __resetActivitiesForTest();
     const runId = 't02655-query-natural';
     const controller = new AbortController();
+    // T02836：这里的 30ms 是「留一个已登记但还没结束的窗口」，靠时长赌机器来不来得及。
+    // 换成事件握手：生产者跑完前一帧就**等用例确认看到登记**，看到之后才收尾。
+    // 于是「计数从 0 到 0、登记这件事根本没法断言」这条失败路径在机制上不存在了。
+    let markObserved: () => void = () => {};
+    const observed = new Promise<void>((resolve) => {
+      markObserved = resolve;
+    });
     streamRunManager.start(runId, {
       producer: () =>
         (async function* () {
           yield { runId, text: 'only' };
-          // 留一个「已登记但还没结束」的可观测窗口：这条 run 若一帧内就跑完，
-          // 计数从 0 到 0，「登记过」这件事根本没法断言（T02774 后登记不再同步发生在 start() 帧内）
-          await new Promise((r) => setTimeout(r, 30));
+          await observed;
           yield { runId, done: true, refs: [], webRefs: [] };
         })(),
       onDone: async () => ({ threadId: 't', sessionId: 's', messageIndex: 0 }),
@@ -235,6 +253,7 @@ describe('T02655 问答 run 的活跃登记（streamRunManager 接线）', () =>
     });
     await waitActive('query', 1);
     expect(activeActivities().query).toBe(1);
+    markObserved();
     await waitReleased(runId);
     expect(activeActivities().query).toBe(0);
   });
@@ -312,10 +331,17 @@ describe('T02655 真链路：编译进行中 → 清理被拦 → 编译结束�
       payload: body,
     });
 
-    // 等到真的进了 withCompileLock（否则可能还在解析 multipart，断言会假通过）
-    for (let i = 0; i < 200 && (entered === 0 || activeActivities().compile === 0); i++) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    // 等到真的进了 withCompileLock（否则可能还在解析 multipart，断言会假通过）。
+    // T02836：200×10ms 的自旋换成公共轮询——原写法到点不抛错，只是「等够了就往下断言」，
+    // 慢机器上等于拿未起跑的状态去做已起跑的断言（红得没有信息量）。
+    await waitForProgress(
+      '编译进入 adapter 且已登记 compile 活跃',
+      () => entered === 1 && activeActivities().compile === 1,
+      {
+        ...NO_TIMER_CHAIN,
+        progress: () => `entered=${entered} active=${JSON.stringify(activeActivities())}`,
+      },
+    );
     expect(entered).toBe(1);
     expect(activeActivities().compile).toBe(1);
 

@@ -18,6 +18,17 @@ import {
   resetUserStore,
 } from '../src/auth/user-store.js';
 import { verifyPassword } from '../src/auth/password.js';
+// T02836：本文件只剩这一处「确需定时」的等待——终点是被测函数**将要写入**的时间戳，
+// 在它写入之前读不到，因此不能轮询真实状态，只能按契约常量定时（守护用例只放行这一类写法）。
+import { contractSleep } from './helpers/waitForProgress.js';
+
+// T02836 等待口径清点（本文件卡面登记 1 处：setTimeout(r, 10)）：
+//  | 「updatedAt 应被更新」 | 裸写 10ms 赌时间戳变化 | **终点不可观测**（要等的是被测函数即将写入的时间戳本身）→ contractSleep(CLOCK_TICK_MS × 2)，来源点名 user-store.ts:303 的毫秒精度 ISO 时间戳 + Windows 时钟粒度上限 16ms；让步后再用 Date.now() > startedAt 实证时钟确实跨格 |
+
+// Windows 真实时钟的推进粒度上限（Date.now()/new Date() 在同一次系统更新内不会变）。
+// 来源：user-store.ts:303 `user.updatedAt = new Date().toISOString()` 只有毫秒精度，
+// 两次调用落在同一格内就会得到相同字符串 → 断言必然假红。取 2 格保证跨过。
+const CLOCK_TICK_MS = 16;
 
 // 用户存储测试
 // 覆盖点：初始化、默认用户、CRUD、唯一性校验、最后管理员保护
@@ -298,8 +309,14 @@ describe('user-store 模块', () => {
     it('updatedAt 应被更新', async () => {
       const user = await findUserByUsername('user');
       const oldUpdatedAt = user!.updatedAt;
-      // 等待 10ms 确保 timestamp 不同
-      await new Promise((r) => setTimeout(r, 10));
+      // 等待真实时钟跨过一格，确保 updateUser 写出的毫秒时间戳与旧值不同（来源见 CLOCK_TICK_MS 注释）
+      const startedAt = Date.now();
+      await contractSleep(
+        `CLOCK_TICK_MS=16（Windows 时钟粒度上限）× 2：user-store.ts:303 updatedAt = new Date().toISOString() 为毫秒精度，同格内两次值相同`,
+        CLOCK_TICK_MS * 2,
+      );
+      // 让步够不够只有时钟自己知道：这里读真实状态复核，不足就当场点名（而不是让下一条断言假红）
+      expect(Date.now(), '让步后真实时钟未跨格，updatedAt 必然与旧值相同').toBeGreaterThan(startedAt);
       const updated = await updateUser(user!.id, { enabled: false });
       expect(updated.updatedAt).not.toBe(oldUpdatedAt);
     });
