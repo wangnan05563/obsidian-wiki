@@ -68,7 +68,11 @@ export class Harness {
     if (config.subAgents?.length) {
       this.tools = [
         ...this.tools,
-        ...config.subAgents.map((sa) => createSubAgentTool(config, sa, this.tools)),
+        // T02809：把**已解析**的 stateStore（第 54 行的结果，含回退出来的 FileStateStore）
+        // 传给子工具工厂，子 Harness 才不会各自再回退一次、把状态写到另一处目录。
+        ...config.subAgents.map((sa) =>
+          createSubAgentTool({ ...config, stateStore: this.stateStore }, sa, this.tools),
+        ),
       ];
     }
   }

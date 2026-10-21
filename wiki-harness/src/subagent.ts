@@ -6,7 +6,9 @@
 //  - 子继承父的 llm 配置（同一 provider/baseUrl/apiKey），独立预算避免拖垮父循环
 //  - 子工具集默认排除 spawn_*（切断隐式无限递归）；业务可显式白名单多层委派
 //  - 子不继承父的 hooks/interceptors/planner/compactor（子智能体独立运行，隔离护栏）
-//  - 子默认文件持久化（runId 唯一，不冲突），可审计/重放
+//  - 子状态存储继承父的 stateStore（T02809）：不传时会落回 FileStateStore 的相对默认目录
+//    `.harness/state`，落点随进程 CWD 漂移——这正是 api 侧「遗留目录清不掉」那类缺陷的根因形态。
+//    runId 全局唯一，父子共用同一目录不会互相覆盖，且清理侧只需认一处。
 
 import type { HarnessConfig, SubAgentConfig, ToolDefinition } from './types.js';
 import { Harness } from './harness.js';
@@ -45,10 +47,13 @@ export function createSubAgentTool(
     },
     handler: async (args: unknown) => {
       const task = (args as { task?: string } | null)?.task ?? '';
-      // §spawn：构造独立子 Harness，仅继承 llm 与（过滤后的）工具集，独立预算
+      // §spawn：构造独立子 Harness，仅继承 llm、状态存储与（过滤后的）工具集，独立预算
       const child = new Harness({
         llm: parentConfig.llm,
         tools: childTools,
+        // T02809：状态存储必须跟着继承，否则子 Harness 落回 `new FileStateStore()`
+        // 的相对默认目录（位置由进程 CWD 决定），清理侧与续传侧都扫不到这些文件。
+        stateStore: parentConfig.stateStore,
         budget: {
           maxSteps: sa.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS,
           tokenBudget: sa.tokenBudget ?? DEFAULT_SUBAGENT_TOKEN_BUDGET,

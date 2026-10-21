@@ -149,7 +149,8 @@ describe('T02772 生产接线（源码级锁）', () => {
     );
     expect(indexSrc).toMatch(/const stateDir = runStateDirs\[0\];/);
     expect(indexSrc).toMatch(/registerRunsRoute\(app, stateDir, isolationGuards, runStateDirs\)/);
-    expect(indexSrc).toMatch(/registerCleanupRoute\(app, vault, isolationGuards, runStateDirs\)/);
+    // T02809：清理路由同时收到 `.harness` 根清单——漏传那一参，编译缓存/日志仍只清一个根
+    expect(indexSrc).toMatch(/registerCleanupRoute\(app, vault, isolationGuards, runStateDirs, harnessDirs\)/);
   });
 
   it('路由侧默认仍是「只认传入目录」，漏传清单不会误碰真实用户目录', () => {

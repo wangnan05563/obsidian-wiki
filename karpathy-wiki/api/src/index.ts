@@ -16,6 +16,7 @@ import { HarnessAdapter, resolveSubAgents } from './engine/harness-adapter.js';
 // T02772：运行状态落盘目录合流（写入规范目录，读取回退遗留目录）
 import { createRunStateStore } from './engine/run-state-store.js';
 import { getRunStateDirs, getCanonicalRunStateDir, getCanonicalRunStateDirFromVault } from './utils/run-state-dirs.js';
+import { getHarnessDirs, getHarnessDirFromVault, getCanonicalHarnessDir } from './utils/harness-dirs.js';
 import { registerCompileRoute } from './routes/compile.js';
 import { registerQueryRoute, registerQueryArchiveRoute } from './routes/query.js';
 import { registerHealthCheckRoute } from './routes/health-check.js';
@@ -270,6 +271,14 @@ export async function buildApp(): Promise<BuiltApp> {
     primaryDirs: [getCanonicalRunStateDir(), getCanonicalRunStateDirFromVault(vault.getVaultPath())],
   });
 
+  // T02809：`.harness` 根目录清单与 runStateDirs 同族在此组装，只交给清理路由。
+  // 首项必须是 compile-workflow 的写入锚点（与 vault 同级的 .harness）——编译缓存与运行日志
+  // 一直写在这里；次项是数据目录下的 .harness（run-state 的规范根，与首项通常同值）；
+  // 其后是历史上按进程 CWD 展开的候选，让改口径之前散出去的缓存/日志仍能被扫到。
+  const harnessDirs = getHarnessDirs({
+    primaryDirs: [getHarnessDirFromVault(vault.getVaultPath()), getCanonicalHarnessDir()],
+  });
+
   const adapter = new HarnessAdapter(
     {
       llm: {
@@ -510,7 +519,8 @@ export async function buildApp(): Promise<BuiltApp> {
 
   registerAiRoute(app, adapter, isolationGuards);
   // T02772：传入合并后的 run-state 目录清单，清理才能既覆盖规范目录也覆盖遗留目录
-  registerCleanupRoute(app, vault, isolationGuards, runStateDirs);
+  // T02809：再传入 `.harness` 根清单，编译缓存/运行日志两类目标同样覆盖历史散落的根
+  registerCleanupRoute(app, vault, isolationGuards, runStateDirs, harnessDirs);
 registerDataCleanRoute(app, vault, isolationGuards);
   // QQ 聊天记录导入子系统（SRS §6.1 路由族）
 

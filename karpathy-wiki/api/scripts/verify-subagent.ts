@@ -13,6 +13,7 @@
 import { Harness } from '@wiki/harness';
 import { VaultService } from '../src/vault/vault-service.js';
 import { createQueryTools } from '../src/workflows/query-workflow.js';
+import { createRunStateStore } from '../src/engine/run-state-store.js';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -132,6 +133,9 @@ async function main() {
   const harness = new Harness({
     llm,
     tools,
+    // T02809：不传 stateStore 时 harness 回退 `new FileStateStore()`，
+    // 目录相对进程 CWD——本脚本每次跑都会在起脚本的目录下攒一份无人认领的状态文件。
+    stateStore: createRunStateStore(),
     budget: config.budget ?? { maxSteps: 20, tokenBudget: 50000 },
     subAgents,
   });
