@@ -248,6 +248,9 @@ export interface HarnessConfig {
   planner?: Planner;
   // §P3-SubAgent 子智能体：可选；缺省不注册 spawn 工具，零破坏
   subAgents?: SubAgentConfig[];
+  // 状态存储：宿主契约是**必须注入**。缺省时 Harness 回退 FileStateStore()，
+  // 而它只接受绝对目录（显式实参或 WIKI_HARNESS_STATE_DIR），否则构造期抛错——
+  // 不再有「相对进程 CWD 的 .harness/state」这种隐式落点（T02811）。
   stateStore?: StateStore;
 }
 
