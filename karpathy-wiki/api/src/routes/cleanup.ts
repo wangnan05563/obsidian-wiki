@@ -32,6 +32,8 @@ import { currentActiveState, evaluateCleanupGuard, guardErrorMessage } from '../
 
 const DEFAULT_DAYS = 30;
 const BYTES_PER_MB = 1024 * 1024;
+// 释放空间的上报下限（MB）：真删了文件就不报 0，见下方 result.total_freed_mb 处注释
+const MIN_REPORTED_MB = 0.01;
 
 // 移到模块顶层：纯函数无外部依赖，避免每次路由注册重建闭包
 function bytesToMb(bytes: number): number {
@@ -329,8 +331,12 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
       }
 
       result.count = result.cleaned.length;
+      // 释放量口径：totalFreedBytes 只在 fs.unlink 成功后累加，所以「条目失败但没删成任何文件」
+      // 时它是 0 → 字段缺省，前端不显示「释放」（而不是显示一个 0）。
+      // 下限 MIN_REPORTED_MB：真删了几 KB 时 2 位小数会舍入成 0，响应里就会出现「释放 0 MB」，
+      // 与「没删东西所以不显示」撞车（T02773 验收：清理量为 0 不显示该片段）。
       if (totalFreedBytes > 0) {
-        result.totalFreedMb = bytesToMb(totalFreedBytes);
+        result.total_freed_mb = Math.max(MIN_REPORTED_MB, bytesToMb(totalFreedBytes));
       }
 
       // 审计写入（dry_run 模式也记录，便于回溯预览操作）
@@ -341,7 +347,7 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
         dry_run: dryRun,
         cleaned_count: result.count,
         error_count: result.errors.length,
-        total_freed_mb: result.totalFreedMb ?? 0,
+        total_freed_mb: result.total_freed_mb ?? 0,
         cleaned_items: result.cleaned.slice(0, 20),
         errors: result.errors.slice(0, 5),
       });

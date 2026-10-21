@@ -949,8 +949,15 @@ export interface CleanupResult {
   errors: string[];
   // 成功项数
   count: number;
-  // 释放空间（MB），仅 run_logs/raw_archive 适用
-  totalFreedMb?: number;
+  // 释放空间（MB）：4 类目标真实删除的字节数累加后换算，预览模式（dry_run）与
+  // 「本次一个文件都没删」时该字段缺省——前端据此不渲染「释放 X MB」，而不是渲染一个 0。
+  // 命名用 snake_case 的理由：本响应体里唯一的多词字段（dry_run）与审计日志字段都是
+  // snake_case，前端镜像类型 CleanupResult 与 Cleanup.vue 读的也是 snake_case 名字。
+  // T02773：本字段曾写作后端私有 camelCase，而 TS 的 api/frontend 两侧 tsconfig 都只
+  // include 各自的 src/**/*，镜像类型不同源，编译器查不出这种跨服务契约错配 →
+  // 前端恒取到 undefined，「释放 X MB」在任何清理量下都不显示（数值本身算对了，
+  // 审计日志里能看到）。键名一致性由 api/test/cleanup-freed-contract.test.ts 锁死。
+  total_freed_mb?: number;
 }
 
 // 活跃任务快照（T02655）：真实删除模式下的硬拦截依据。
