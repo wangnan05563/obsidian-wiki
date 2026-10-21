@@ -10,9 +10,11 @@ import type {
 } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
-import { currentActiveState, evaluateCleanupGuard, guardErrorMessage } from '../cleanup-guard.js';
+import { activeStateAcrossProcesses, currentActiveState, evaluateCleanupGuard, guardErrorMessage } from '../cleanup-guard.js';
 // T02774：真实清理的独占锁（把「守卫通过 ~ 删除完成」的窗口封成机制上的零）
 import { acquireCleanup, type CleanupHandle } from '../cleanup-mutex.js';
+// T02817：跨进程协调（另一实例的真删标记 + 另一实例的活跃声明）
+import { claimCleanupMarker, coordinationPaths, releaseCleanupMarker } from '../cleanup-cross-process.js';
 // T02809：`.harness` 产物路径改走单一口径（原先这里与写入侧 compile-workflow 各写一份拼接）
 import {
   auditFileIn,
@@ -228,8 +230,10 @@ export function registerCleanupRoute(
       const rawStat = await statDir(rawDir, /^(wiki-batch-|wiki-compile-|input-).*/);
 
       const status: CleanupStorageStatus = {
-        // T02655：活跃任务快照。前端据此逐卡置灰；口径与 POST 守卫同源（cleanup-guard）
-        active: currentActiveState(),
+        // T02655：活跃任务快照。前端据此逐卡置灰；口径与 POST 守卫同源（cleanup-guard）。
+        // T02817：并上其它进程的声明——用户在 A 实例的页面上要能看到 B 实例正在跑编译，
+        // 否则置灰形同虚设（他看不到，也就不知道自己为什么被 409）。
+        active: await activeStateAcrossProcesses(),
         compileCache: {
           exists: compileCacheExists,
           sizeMb: bytesToMb(compileCacheSize),
@@ -280,12 +284,17 @@ export function registerCleanupRoute(
     // 单向优先级：已开始的清理先做完，后来的任务排队（等待不拒绝，任务只是晚一点起跑）。
     // 不互锁：清理不会等任务（判到活跃直接 409），任务只等清理，两条等待链不成环。
     let cleanupHandle: CleanupHandle | null = null;
+    // T02817：跨进程删除标记的持有状态（true 才需要在 finally 撤销）
+    let markerClaimed = false;
     if (!dryRun) {
-      const verdict = evaluateCleanupGuard(target);
+      // T02817：判定输入换成「本进程 + 其它进程」合并的活跃快照。
+      // 原先读的是进程内计数，另一实例的编译/问答对它不可见——那正是本单要收的破口。
+      const active0 = await activeStateAcrossProcesses();
+      const verdict = evaluateCleanupGuard(target, active0);
       if (verdict.blocked.length > 0) {
-        const active = currentActiveState();
+        const active = active0;
         const blocked: CleanupBlockedResponse = {
-          error: guardErrorMessage(target, verdict),
+          error: guardErrorMessage(target, verdict, active0),
           code: 'cleanup_blocked_by_active_task',
           target,
           blocked: verdict.blocked,
@@ -331,6 +340,82 @@ export function registerCleanupRoute(
         return void reply.code(409).send(blocked);
       }
       cleanupHandle = handle;
+
+      // T02817：拿到进程内锁之后，再抢跨进程删除标记（原子 wx 创建 = 天然的跨进程独占原语）。
+      // 抢不到说明**另一实例**正在真删：本进程的 held 看不见它，只有文件能说明这件事。
+      // 拿到标记后还要再读一遍活跃声明——起跑侧是「先声明、再读标记」，两侧各完成自己的
+      // 那步才判定（Dekker），才不存在「双方都读到对方还没写」的空档。
+      const paths = coordinationPaths();
+      if (paths.markerFile) {
+        const lockFile = paths.markerFile;
+        const claim = await claimCleanupMarker({ lockFile, instance: paths.instance, target });
+        if (!claim.ok) {
+          const m = claim.blockedBy.marker;
+          const reason = `另一服务实例正在执行真实删除（pid ${m?.pid ?? '?'} @ ${m?.instance ?? '?'}，目标 ${m?.target ?? '?'}，已持续 ${Math.round(claim.blockedBy.ageMs / 1000)} 秒），本次删除已拒绝。`;
+          const active = await activeStateAcrossProcesses();
+          cleanupHandle?.release();
+          cleanupHandle = null;
+          await writeAudit({
+            ts: new Date().toISOString(),
+            target,
+            days,
+            dry_run: false,
+            blocked_by_other_process: true,
+            other_marker: m ?? null,
+            other_age_ms: claim.blockedBy.ageMs,
+            active,
+          });
+          return void reply.code(409).send({
+            error: reason,
+            code: 'cleanup_blocked_by_other_process',
+            target,
+            blocked: [] as string[],
+            reasons: [reason],
+            active,
+          } satisfies CleanupBlockedResponse);
+        }
+        markerClaimed = true;
+        // 陈旧标记被回收也要留痕：排查时这才不是「莫名其妙的放行」
+        if (claim.purged) {
+          await writeAudit({
+            ts: new Date().toISOString(),
+            target,
+            days,
+            dry_run: false,
+            cleanup_marker_stale_purged: true,
+            stale_reason: claim.purged.reason ?? 'unknown',
+            stale_marker: claim.purged.marker ?? null,
+            stale_age_ms: claim.purged.ageMs,
+          });
+        }
+        const afterClaim = await activeStateAcrossProcesses();
+        const recheck = evaluateCleanupGuard(target, afterClaim);
+        if (recheck.blocked.length > 0) {
+          const reason = `取得删除权后发现另一实例刚起跑任务：${recheck.reasons.join('；')}`;
+          await releaseCleanupMarker(lockFile);
+          markerClaimed = false;
+          cleanupHandle?.release();
+          cleanupHandle = null;
+          await writeAudit({
+            ts: new Date().toISOString(),
+            target,
+            days,
+            dry_run: false,
+            blocked_by_active_task: true,
+            blocked_after_marker: true,
+            blocked: recheck.blocked,
+            active: afterClaim,
+          });
+          return void reply.code(409).send({
+            error: reason,
+            code: 'cleanup_blocked_by_active_task',
+            target,
+            blocked: recheck.blocked,
+            reasons: [reason],
+            active: afterClaim,
+          } satisfies CleanupBlockedResponse);
+        }
+      }
     }
 
     const result: CleanupResult = {
@@ -496,6 +581,10 @@ export function registerCleanupRoute(
         error: err instanceof Error ? err.message : String(err),
       });
     } finally {
+      // T02817：先撤跨进程标记、再放进程内锁。反序会留出一个空档——本进程锁已放、
+      // 标记还在，另一实例的起跑点会白等一轮，而本进程已经能接受下一次删除。
+      const lockFile = coordinationPaths().markerFile;
+      if (markerClaimed && lockFile) await releaseCleanupMarker(lockFile);
       cleanupHandle?.release();
     }
 
@@ -517,6 +606,8 @@ export function registerCleanupRoute(
       cleanup_locked: cleanupHandle !== null,
       cleanup_deferred_tasks: cleanupHandle?.deferredTasks() ?? 0,
       cleanup_held_ms: cleanupHandle?.heldMs() ?? 0,
+      // T02817：本次真删是否真的持有过跨进程标记（未接上路径 / dry_run 时为 false）
+      cleanup_marker_held: markerClaimed,
     });
 
     return void reply.send(result);

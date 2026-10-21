@@ -18,7 +18,7 @@ import { withSessionLock } from '../session-lock.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 // T02655：问答执行期登记「活跃任务」，供系统清理真实删除前的硬拦截
-import { beginActivity } from '../activity.js';
+import { beginActivity, confirmActivityStart } from '../activity.js';
 // T02774：真实清理进行中时问答排队等待（清理与问答互斥的单向优先级）
 import { awaitCleanupIdle } from '../cleanup-mutex.js';
 
@@ -306,7 +306,12 @@ export function registerQueryRoute(
     // T02774：登记前先等真实清理结束（与 compile 同口径）。问答会写 run-state 与线程记忆，
     // 在清理删除窗口内起跑同样会留下「刚写完就被删」的空档。
     await awaitCleanupIdle();
-    const releaseInlineQuery = beginActivity('query');
+    // T02817：登记落盘后回读另一实例的删除标记；恰好被对方抢到删除权就收回登记、重新排队。
+    let releaseInlineQuery = beginActivity('query');
+    while (!(await confirmActivityStart(releaseInlineQuery))) {
+      await awaitCleanupIdle();
+      releaseInlineQuery = beginActivity('query');
+    }
 
     try {
       // §6.0.2 per-session Lock：同 question 的并发请求串行化，避免 LLM 重复调用浪费 token

@@ -1064,9 +1064,14 @@ export interface CleanupStorageStatus {
 //  - cleanup_blocked_by_active_task：有编译/问答在跑，blocked[] 列出被拦目标（可据此置灰）；
 //  - cleanup_blocked_by_concurrent_cleanup：上一次真实清理还在删（T02774 的互斥），
 //    与「目标是否安全」无关，故 blocked[] 恒为空——前端不能套用置灰逻辑。
+//  - cleanup_blocked_by_other_process（T02817）：**另一个服务实例**正在真删。
+//    本进程的 held 看不见它，靠 `.harness/cleanup.lock` 才判得出来；blocked[] 同样恒为空。
 export interface CleanupBlockedResponse {
   error: string;
-  code: 'cleanup_blocked_by_active_task' | 'cleanup_blocked_by_concurrent_cleanup';
+  code:
+    | 'cleanup_blocked_by_active_task'
+    | 'cleanup_blocked_by_concurrent_cleanup'
+    | 'cleanup_blocked_by_other_process';
   target: string;
   blocked: string[];
   reasons: string[];

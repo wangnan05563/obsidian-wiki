@@ -17,6 +17,8 @@ import { HarnessAdapter, resolveSubAgents } from './engine/harness-adapter.js';
 import { createRunStateStore } from './engine/run-state-store.js';
 import { getRunStateDirs, getCanonicalRunStateDir, getCanonicalRunStateDirFromVault } from './utils/run-state-dirs.js';
 import { getHarnessDirs, getHarnessDirFromVault, getCanonicalHarnessDir } from './utils/harness-dirs.js';
+// T02817：跨进程清理/活跃协调
+import { activityDirIn, cleanupMarkerFileIn, setCoordinationPaths } from './cleanup-cross-process.js';
 import { registerCompileRoute } from './routes/compile.js';
 import { registerQueryRoute, registerQueryArchiveRoute } from './routes/query.js';
 import { registerHealthCheckRoute } from './routes/health-check.js';
@@ -277,6 +279,16 @@ export async function buildApp(): Promise<BuiltApp> {
   // 其后是历史上按进程 CWD 展开的候选，让改口径之前散出去的缓存/日志仍能被扫到。
   const harnessDirs = getHarnessDirs({
     primaryDirs: [getHarnessDirFromVault(vault.getVaultPath()), getCanonicalHarnessDir()],
+  });
+
+  // T02817：跨进程协调文件（cleanup.lock 与 activity/<pid>.json）的位置在此一次算定。
+  // 为什么只认 harnessDirs[0]（写入锚点）而不铺整份清单：这两样是**实时协调**产物，
+  // 只在「此刻」有意义；多根回退那套是给升级前散出去的历史文件用的，这里没有历史可言。
+  // 漏接的后果是退回 T02774 的纯进程内语义（不会误删用户文件），由源码锁守住。
+  setCoordinationPaths({
+    markerFile: cleanupMarkerFileIn(harnessDirs[0]),
+    activityDir: activityDirIn(harnessDirs[0]),
+    instance: `pid ${process.pid} @ :${config.server.port}`,
   });
 
   const adapter = new HarnessAdapter(

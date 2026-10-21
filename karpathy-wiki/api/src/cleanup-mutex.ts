@@ -25,6 +25,11 @@
 //
 // 口径与 activity.ts 一致：清理不登记为 compile/query，不会污染
 // `GET /api/cleanup/status` 的 active 读数，前端置灰规则因此不受本模块影响。
+//
+// T02817 追加跨进程维度：以上全部仍是**本进程**的锁。另一实例（桌面端 + 手工 dev 并存）
+// 有自己的 held，两边互不可见。起跑点因此除内存锁外还要看 `cleanup.lock` 标记文件——
+// 路径由 index.ts 的 setCoordinationPaths() 在启动时接上；未接上时行为与 T02774 完全一致（纯进程内）。
+import { coordinationPaths, readCleanupMarker } from './cleanup-cross-process.js';
 
 export interface CleanupHandle {
   /** 释放锁并放行期间排队的任务；幂等，可安全放进 finally。 */
@@ -85,13 +90,50 @@ export function isCleanupInProgress(): boolean {
  * 任务起跑点调用：清理进行中就等它做完。
  * 循环而非单次判断——被放行后仍可能有新的清理抢先持有锁，
  * 那时本任务必须继续等，否则「清理期间绝不新建任务」这条不变式会出现空档。
+ *
+ * T02817：等待条件除本进程 held 外，再加上「另一实例的 cleanup.lock 标记仍在有效期」。
+ * 未接上标记路径（setCoordinationPaths 没调，或测试环境）时只判 held，语义与 T02774 相同。
  */
 export async function awaitCleanupIdle(): Promise<void> {
-  while (held > 0) {
-    await new Promise<void>((resolve) => {
-      waiters.push(resolve);
-    });
+  for (;;) {
+    while (held > 0) {
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    }
+    const { markerFile } = markerOptions();
+    if (!markerFile) return;
+    const tickStartedAt = Date.now();
+    const read = await readCleanupMarker(markerFile);
+    if (read.state !== 'busy') {
+      if (pendingWaitMs > 0) {
+        foreignWaitCount += 1;
+        foreignWaitMs += pendingWaitMs;
+        pendingWaitMs = 0;
+      }
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, MARKER_POLL_MS));
+    pendingWaitMs += Date.now() - tickStartedAt;
   }
+}
+
+// 跨进程标记的轮询节奏：真删是秒级操作，250ms 足够细，又不至于把读盘当心跳打。
+const MARKER_POLL_MS = 250;
+
+/** 供 awaitCleanupIdle 取路径；未接上（markerFile=null）即完全退回 T02774 的进程内语义。 */
+function markerOptions(): { markerFile: string | null } {
+  const p = coordinationPaths();
+  return { markerFile: p.markerFile };
+}
+
+// 等待统计：审计与排查据此区分「本进程排队」与「被另一进程拦住」。
+let pendingWaitMs = 0;
+let foreignWaitCount = 0;
+let foreignWaitMs = 0;
+
+export function getForeignCleanupWaitStats(): { count: number; totalMs: number } {
+  return { count: foreignWaitCount, totalMs: foreignWaitMs };
 }
 
 /** 仅供测试：清空锁与等待队列并返回原持有数。生产代码不得调用（同 activity.ts）。 */
@@ -100,5 +142,8 @@ export function __resetCleanupMutexForTest(): { held: number; waiters: number } 
   held = 0;
   const pending = waiters.splice(0, waiters.length);
   pending.forEach((resolve) => resolve());
+  pendingWaitMs = 0;
+  foreignWaitCount = 0;
+  foreignWaitMs = 0;
   return prev;
 }

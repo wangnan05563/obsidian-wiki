@@ -5,7 +5,7 @@
 // 实现：Promise 链式队列。每个 compile 请求等待前一个完成后才开始，
 // 不拒绝请求，按到达顺序串行执行。
 
-import { beginActivity } from './activity.js';
+import { beginActivity, confirmActivityStart } from './activity.js';
 // T02774：清理独占锁。登记活跃之前先等「没有真实清理正在进行」，
 // 把 T02655 遗留的「守卫通过 ~ 删除完成」毫秒级窗口从机制上封掉（不是靠时序运气）。
 import { awaitCleanupIdle } from './cleanup-mutex.js';
@@ -24,12 +24,19 @@ export function withCompileLock<T>(task: () => Promise<T>): Promise<T> {
   // active.compile（否则后来的清理会被自己这类「还没动手」的任务误拦），也不得触碰任何文件。
   // 等待同样发生在 compile 链上，因此「前一个编译 → 清理 → 后一个编译」的串行顺序仍然成立。
   const run = async (): Promise<T> => {
-    await awaitCleanupIdle();
-    const release = beginActivity('compile');
-    try {
-      return await task();
-    } finally {
-      release();
+    // T02817：起跑要过「双方各自先声明、再读对方」这道握手。
+    // awaitCleanupIdle 已含跨进程标记轮询；confirmActivityStart 再把本进程的活跃声明落盘、
+    // 回读标记——若另一实例恰好在这一步抢到删除权，登记会被收回并重新排队。
+    for (;;) {
+      await awaitCleanupIdle();
+      const release = beginActivity('compile');
+      if (await confirmActivityStart(release)) {
+        try {
+          return await task();
+        } finally {
+          release();
+        }
+      }
     }
   };
   // chain.then(run, run) 保证 run 在前一个完成后执行；
