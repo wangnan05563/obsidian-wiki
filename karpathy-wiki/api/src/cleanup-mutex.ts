@@ -129,7 +129,9 @@ export async function awaitCleanupIdle(): Promise<void> {
 }
 
 // 跨进程标记的轮询节奏：真删是秒级操作，250ms 足够细，又不至于把读盘当心跳打。
-const MARKER_POLL_MS = 250;
+// T02836 导出：测试里「等另一实例的真删拦住起跑」这类终点不可观测的断言，
+// 让步预算必须由这一条产品侧契约推导（×2 即「两整轮轮询都拦不住」），不再裸写 500。
+export const MARKER_POLL_MS = 250;
 
 /** 供 awaitCleanupIdle 取路径；未接上（markerFile=null）即完全退回 T02774 的进程内语义。 */
 function markerOptions(): { markerFile: string | null } {

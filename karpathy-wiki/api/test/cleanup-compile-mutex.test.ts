@@ -15,14 +15,22 @@
 //    窗口由测试掌控；文件数降为 12，只承担「真实删除路径跑得通」。
 //  - 路由级「编译既不起跑也不登记活跃」：原先 60ms 抢窗口 + 200×10ms 等起跑。
 //    已改为「等 waiters 入队」+「等 adapter entered 事件」，正负向结论都挂在机制事实上。
-//  - 单元语义 / withCompileLock 各例的 `await tick()`：全部保留，但前面补了
+//  - 单元语义 / withCompileLock 各例的「让步一拍」：全部保留，但前面补了
 //    「等待者确实入队」这一步——直接调 awaitCleanupIdle 时入队是同步的（断言 waiters 即可），
 //    经 withCompileLock 时 run 挂在 chain.then 上要等一个微任务（改为等 waiters>=1 的事件）。
-//    先证明任务真的挂着，tick 之后的 `passed/started === false` 才是有内容的负向断言
-//    （否则负载高时那 5ms 里它压根没被调度到，等于没检查）。
-//  - 「放行后又被新清理抢锁」的第二个 tick：刻意保留且不可换成同步断言，
+//    先证明任务真的挂着，让步之后的 `passed/started === false` 才是有内容的负向断言
+//    （否则负载高时那几毫秒里它压根没被调度到，等于没检查）。
+//  - 「放行后又被新清理抢锁」的第二次让步：刻意保留且不可换成同步断言，
 //    它是该用例的检测手段（有缺陷的实现需要续延真的跑过才暴露）。
 //  - 不用 retry / skip 抹平：那会把回归防线改成噪声过滤器（卡面明令）。
+//
+// T02836 等待口径清点（本文件 5 处等待的逐处判定，写法一律走 helpers/waitForProgress）：
+//  | 位置 | 原判据 | 现判据 |
+//  | 单元语义 4 例的 tick()（5ms 自带实现） | 固定 5ms 让步 | yieldSlice(来源说明)：TEST_SLICE_MS=5ms，前面都有 waiters 机制事实 |
+//  | withCompileLock 两例的 waitFor()（5ms 轮询 + 10s 绝对超时） | 等够就往下 | waitForProgress + NO_TIMER_CHAIN，progress 签名带 waiters/held/started |
+//  | 串行队列任务体内的 setTimeout(r,5) | 裸写 5ms | yieldSlice(占住串行链，使「不并发」可观测) |
+//  | 路由级「编译挂起」waitFor() | 同上 | waitForProgress(等 waiters 入队) + await enteredEvent（事件，不是时长） |
+//  | 路由级「删除前屏障」waitFor() | 同上 | 改为 await barrierHit（钩子命中即事件），断言锁持有态 |
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
@@ -46,6 +54,10 @@ import { registerCompileRoute } from '../src/routes/compile.js';
 import type { IsolationGuards } from '../src/middleware/auth.js';
 import type { VaultService } from '../src/vault/vault-service.js';
 import type { CleanupBlockedResponse, CleanupResult } from '../src/types.js';
+// T02836：等待原语统一走公共工具（本文件原先自带 `const tick`（5ms）与 `async function waitFor`（5ms 轮询 + 10s 绝对超时））。
+// 口径与 frontend/test/helpers/waitForProgress.ts 一致：判据是「超过契约下限且连续无进展」，
+// 让步预算集中在 TEST_SLICE_MS 一处并写明来源。
+import { NO_TIMER_CHAIN, waitForProgress, yieldSlice } from './helpers/waitForProgress.js';
 
 const srcDir = path.resolve(fileURLToPath(import.meta.url), '..', '..');
 
@@ -72,34 +84,6 @@ async function readAudit(harnessDir: string): Promise<Array<Record<string, unkno
       .map((l) => JSON.parse(l) as Record<string, unknown>);
   } catch {
     return [];
-  }
-}
-
-const tick = () => new Promise((r) => setTimeout(r, 5));
-
-// T02835：把「靠固定时长抢窗口」换成「等一个必然发生的事实」。
-// 与 retry/skip 的区别：这里等的是**机制上确定会到**的状态（屏障命中、等待者入队、adapter 进入），
-// 超时只是兜底，且失败信息直接说清卡在哪一步——负载高只会让用例慢，不会让它假红/假绿。
-async function waitFor(
-  what: string,
-  predicate: () => boolean,
-  diagnostics: () => string = () => '',
-  timeoutMs = 10_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  const startedAt = Date.now();
-  while (!predicate()) {
-    if (Date.now() > deadline) {
-      throw new Error(
-        `[等待超时 ${timeoutMs}ms] 未观测到「${what}」；现场：${diagnostics()}`.trim(),
-      );
-    }
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  const waitedMs = Date.now() - startedAt;
-  if (waitedMs > 2_000) {
-    // 只记录不失败：本轮高负载下确实慢，但结论仍然成立（区别于「抢不到窗口」的假红）
-    console.warn(`[T02835] 「${what}」耗时 ${waitedMs}ms（负载偏高，机制未变）`);
   }
 }
 
@@ -149,7 +133,7 @@ describe('T02774 cleanup-mutex 单元语义', () => {
     // T02835：等待者入队是同步发生的（awaitCleanupIdle 在第一个 await 前就 push），
     // 所以这里断言的是机制而不是时序；随后的 passed===false 才有内容。
     expect(cleanupQueueStats().waiters).toBe(1);
-    await tick();
+    await yieldSlice('给 awaitCleanupIdle 的续延一次执行机会，好证明它真的没被放行');
     expect(passed).toBe(false);
     // 计数只能在 release 之后读——写在删除循环里恒为 0，台账口径就没了意义
     expect(handle?.deferredTasks()).toBe(0);
@@ -165,7 +149,7 @@ describe('T02774 cleanup-mutex 单元语义', () => {
     const handle = acquireCleanup();
     const waiters = [awaitCleanupIdle(), awaitCleanupIdle(), awaitCleanupIdle()];
     expect(cleanupQueueStats().waiters).toBe(3);
-    await tick();
+    await yieldSlice('给三个续延执行机会，好证明 deferredTasks 在释放前仍为 0');
     expect(handle?.deferredTasks()).toBe(0);
     handle?.release();
     await Promise.all(waiters);
@@ -179,16 +163,16 @@ describe('T02774 cleanup-mutex 单元语义', () => {
       passed = true;
     });
     expect(cleanupQueueStats().waiters).toBe(1);
-    await tick();
+    await yieldSlice('给放行续延执行机会，好证明「还没释放」时它确实没被放行');
     expect(passed).toBe(false);
     // 同步释放再立刻抢锁：续延（微任务）真正跑 while 复判时，锁已在第二个人手里。
     // 若 awaitCleanupIdle 用「if 判断 + 单次 await」实现，这里就会带着放行错觉继续起跑。
     first?.release();
     const second = acquireCleanup();
     expect(second).not.toBeNull();
-    // 这一句 tick 是本用例的检测手段，不能换成同步断言：
+    // 这一次让步是本用例的检测手段，不能换成同步断言：
     // 有缺陷的实现要给它一个「续延真的跑过了却没重新挂起」的机会，才能观察到 passed 变 true。
-    await tick();
+    await yieldSlice('让被放行的续延真的跑过 while 复判（本用例的检测手段）');
     expect(cleanupQueueStats().waiters).toBe(1);
     expect(passed).toBe(false);
     second?.release();
@@ -200,7 +184,7 @@ describe('T02774 cleanup-mutex 单元语义', () => {
     const handle = acquireCleanup();
     const waiting = awaitCleanupIdle();
     expect(cleanupQueueStats().waiters).toBe(1);
-    await tick();
+    await yieldSlice('证明清场前它真的还挂在队列上（而不是恰好没被调度）');
     const prev = __resetCleanupMutexForTest();
     expect(prev.held).toBe(1);
     expect(prev.waiters).toBe(1);
@@ -234,10 +218,10 @@ describe('T02774 withCompileLock 与清理的单向优先级', () => {
     // 原先只 `await tick()` 然后看 started 还是 false——负载高时那 5ms 里任务根本没被调度到，
     // 断言等于什么都没检查（假绿）。注意 withCompileLock 是 chain.then(run) 起跑的，
     // run 里的 awaitCleanupIdle 要到微任务之后才执行，所以这里等的是入队事件而非固定时长。
-    await waitFor(
+    await waitForProgress(
       '任务挂进清理等待队列',
       () => cleanupQueueStats().waiters >= 1,
-      () => `waiters=${cleanupQueueStats().waiters} held=${cleanupQueueStats().held} started=${started}`,
+      { ...NO_TIMER_CHAIN, progress: () => `waiters=${cleanupQueueStats().waiters} held=${cleanupQueueStats().held} started=${started}` },
     );
     expect(started).toBe(false);
     expect(activeActivities().compile).toBe(0);
@@ -252,17 +236,18 @@ describe('T02774 withCompileLock 与清理的单向优先级', () => {
     const order: number[] = [];
     const jobs = [1, 2, 3].map((n) =>
       withCompileLock(async () => {
-        await new Promise((r) => setTimeout(r, 5));
+        // 占住串行链一小段时间，使「后两个任务只能排队」这件事可被观测
+        await yieldSlice('让队头任务占住 compile 链，本例要断言的正是后来者不并发');
         order.push(n);
         return n;
       }),
     );
     // compile 链本身是串行的：只有队头会走到 awaitCleanupIdle 并挂住，后两个还排在 chain 上
     // （waiters 因此是 1 而不是 3）。等这个 1 出现，才证明「order 仍为空」是真检查过了。
-    await waitFor(
+    await waitForProgress(
       '队头任务挂进清理等待队列',
       () => cleanupQueueStats().waiters >= 1,
-      () => `waiters=${cleanupQueueStats().waiters} order=${JSON.stringify(order)}`,
+      { ...NO_TIMER_CHAIN, progress: () => `waiters=${cleanupQueueStats().waiters} order=${JSON.stringify(order)}` },
     );
     expect(order).toEqual([]);
     handle?.release();
@@ -388,10 +373,13 @@ describe('T02774 路由级：真实清理 / 编译并发', () => {
     expect(handle).not.toBeNull();
 
     const compileRequest = fireCompile();
-    await waitFor(
+    await waitForProgress(
       '编译挂进清理等待队列',
       () => cleanupQueueStats().waiters >= 1,
-      () => `waiters=${cleanupQueueStats().waiters} held=${cleanupQueueStats().held} entered=${entered}`,
+      {
+        ...NO_TIMER_CHAIN,
+        progress: () => `waiters=${cleanupQueueStats().waiters} held=${cleanupQueueStats().held} entered=${entered}`,
+      },
     );
     // 关键断言：窗口内任务根本没起跑 —— 「活跃计数为 0」证明它不会污染守卫口径，
     // 「entered 为 0」证明它也没触碰任何文件
@@ -490,10 +478,14 @@ describe('T02774 路由级：真实清理 / 编译并发', () => {
       started = true;
       return 'ran';
     });
-    await waitFor(
+    await waitForProgress(
       '任务挂进清理等待队列',
       () => cleanupQueueStats().waiters >= 1,
-      () => `waiters=${cleanupQueueStats().waiters} held=${cleanupQueueStats().held} started=${started} barrierHits=${barrierHits}`,
+      {
+        ...NO_TIMER_CHAIN,
+        progress: () =>
+          `waiters=${cleanupQueueStats().waiters} held=${cleanupQueueStats().held} started=${started} barrierHits=${barrierHits}`,
+      },
     );
     // 清理还在删（屏障未开），任务已挂起 —— 这正是被 T02655 认定为「不活跃」的那类任务
     expect(started).toBe(false);
