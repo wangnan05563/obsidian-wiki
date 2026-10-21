@@ -13,6 +13,7 @@ import ThemeSwitcher from '../components/ThemeSwitcher.vue';
 import MarkdownRenderer from '../components/MarkdownRenderer.vue';
 import type { ConfigData, SchemaContent, ReloadResult, SchemaCommit, DiffLine, AiConfig, LlmPreset, AiTestResult, ToolsConfig, McpServerEntry, QqConfigData, PromptFile, PromptTestRunEvent } from '../types';
 import { apiErrorMessage } from '../utils/apiError';
+import { mergeMcpJsonIntoServers, type McpJsonFile } from '../utils/mcpConfigMode';
 import { consumeSSE } from '../utils/sse';
 import { useAuthStore } from '../stores/auth';
 import { useTtsStore } from '../stores/tts';
@@ -2104,7 +2105,7 @@ function applyMcpJsonToForm(): boolean {
     toolsForm.value.mcpServers = toolsForm.value.mcpServers.filter(s => s.transport !== 'stdio');
     return true;
   }
-  let parsed: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }> };
+  let parsed: McpJsonFile;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
@@ -2115,25 +2116,14 @@ function applyMcpJsonToForm(): boolean {
     mcpJsonError.value = 'JSON 格式错误：缺少 mcpServers 字段或不是对象';
     return false;
   }
-  // 保留非 stdio server，清空 stdio server 后从 JSON 重建
-  // 为什么重建而非合并：JSON 是权威源，表单中 stdio server 的增删应以 JSON 为准
-  const nonStdioServers = toolsForm.value.mcpServers.filter(s => s.transport !== 'stdio');
-  const newStdioServers: McpServerEntry[] = [];
-  for (const [name, cfg] of Object.entries(parsed.mcpServers)) {
-    if (!cfg?.command) {
-      mcpJsonError.value = `服务器 "${name}" 缺少 command 字段`;
-      return false;
-    }
-    newStdioServers.push({
-      name,
-      transport: 'stdio',
-      command: cfg.command,
-      args: Array.isArray(cfg.args) ? cfg.args : [],
-      env: cfg.env && typeof cfg.env === 'object' ? cfg.env : {},
-      enabled: true,
-    });
+  // 合并口径抽到 utils/mcpConfigMode.ts（stdio 以 JSON 为权威源重建，
+  // 并按 name 带回 JSON 格式里没有的 timeoutMs / triggerKeywords / placeholderTools）
+  const merged = mergeMcpJsonIntoServers(toolsForm.value.mcpServers, parsed);
+  if (merged.error) {
+    mcpJsonError.value = merged.error;
+    return false;
   }
-  toolsForm.value.mcpServers = [...nonStdioServers, ...newStdioServers];
+  toolsForm.value.mcpServers = merged.servers;
   return true;
 }
 

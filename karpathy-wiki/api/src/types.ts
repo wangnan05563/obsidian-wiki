@@ -308,6 +308,10 @@ export interface FixProgressEvent {
 // 复用 withCompileLock 队列与 compile 互斥，避免 index.md/log.md 追加竞态。
 export interface BatchFixRequest {
   items: FixInput[];
+  // 与 items 一一对应的前端稳定 key（如 "orphan:foo.md"），用于日志与列表项状态联动。
+  // 为什么写进类型：此前只有前端那份镜像有它，路由只能就地 `& { issueKeys?: string[] }` 补——
+  // 跨服务契约的键名一旦漂移，编译器与测试都看不见（T02773 的同形缺陷）。
+  issueKeys?: string[];
 }
 
 // 批量修复 SSE 事件：包装单个 FixProgressEvent 并附带定位信息。
