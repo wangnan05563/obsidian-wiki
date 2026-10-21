@@ -3,7 +3,7 @@
 // 这一单的风险不是「功能没做」，而是「看起来做了但没拦住」，所以断言全部落在
 // 可观测事实上：文件是否还在、状态码是什么、审计是否留痕。
 //  1) activity：计数与释放（含异常路径与幂等 release）——泄漏会让清理永久 409。
-//  2) cleanup-guard：拦截口径的纯函数分支穷举（拦哪两类、为什么不拦另两类）。
+//  2) cleanup-guard：拦截口径的纯函数分支穷举（拦哪三类、为什么 run_logs 不拦）。
 //  3) 路由级：真实 Fastify + 临时目录，验证 409 时文件确实没被删、放行后确实被删。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -23,6 +23,7 @@ import { withCompileLock } from '../src/compile-queue.js';
 import { evaluateCleanupGuard } from '../src/cleanup-guard.js';
 import { registerCleanupRoute } from '../src/routes/cleanup.js';
 import { registerCompileRoute } from '../src/routes/compile.js';
+import { compileCacheFileIn } from '../src/utils/harness-dirs.js';
 import { streamRunManager } from '../src/workflows/stream-run-manager.js';
 import type { IsolationGuards } from '../src/middleware/auth.js';
 import type { VaultService } from '../src/vault/vault-service.js';
@@ -136,11 +137,14 @@ describe('T02655 cleanup-guard 拦截口径', () => {
     blockedReasons: [],
   });
 
-  it('编译进行中：拦 run_state 与 raw_archive，放行 compile_cache 与 run_logs', () => {
+  // T02818：compile_cache 从「放行」改为「拦」。放行时的口径写的是"代价可自愈"，漏掉的是
+  // 编译结束会把整份内存缓存写回——删除窗口内的清理会当场失效，响应却报「已删除」。
+  it('编译进行中：拦 compile_cache、run_state 与 raw_archive，只放行 run_logs', () => {
     const active = snapshot(1, 0);
     expect(evaluateCleanupGuard('run_state', active).blocked).toEqual(['run_state']);
     expect(evaluateCleanupGuard('raw_archive', active).blocked).toEqual(['raw_archive']);
-    expect(evaluateCleanupGuard('compile_cache', active).blocked).toEqual([]);
+    expect(evaluateCleanupGuard('compile_cache', active).blocked).toEqual(['compile_cache']);
+    // run_logs 仍放行：它带 days 过滤，正在写的日志 mtime 必然新于 cutoff（前提锁见矩阵测试）
     expect(evaluateCleanupGuard('run_logs', active).blocked).toEqual([]);
   });
 
@@ -148,11 +152,13 @@ describe('T02655 cleanup-guard 拦截口径', () => {
     const active = snapshot(0, 1);
     expect(evaluateCleanupGuard('run_state', active).blocked).toEqual(['run_state']);
     expect(evaluateCleanupGuard('raw_archive', active).blocked).toEqual([]);
+    // 问答不写编译缓存，所以缓存清理不受问答影响（拦截规则按 kind 精确配对，不是一刀切）
+    expect(evaluateCleanupGuard('compile_cache', active).blocked).toEqual([]);
   });
 
   it('target=all：展开后任一子目标被拦即命中，并列出被拦子目标', () => {
     const verdict = evaluateCleanupGuard('all', snapshot(2, 1));
-    expect(verdict.blocked).toEqual(['run_state', 'raw_archive']);
+    expect(verdict.blocked).toEqual(['compile_cache', 'run_state', 'raw_archive']);
     // 原因去重且不泄露无关目标
     expect(verdict.reasons.length).toBeGreaterThan(0);
     expect(verdict.reasons.filter((r) => r.includes('原始资料'))).toHaveLength(1);
@@ -332,6 +338,7 @@ describe('T02655 清理路由级硬拦截', () => {
   let app: FastifyInstance;
   let stateDir = '';
   let rawDir = '';
+  let cacheFile = '';
 
   async function seed(): Promise<void> {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wiki-cleanup-guard-'));
@@ -339,10 +346,13 @@ describe('T02655 清理路由级硬拦截', () => {
     const harnessDir = path.join(tempRoot, 'data', '.harness');
     stateDir = path.join(harnessDir, 'state');
     rawDir = path.join(vaultPath, 'raw');
+    // T02818：编译缓存也种子一份，用于验证「有编译在跑就不删缓存」这条新口径
+    cacheFile = compileCacheFileIn(harnessDir);
     await fs.mkdir(stateDir, { recursive: true });
     await fs.mkdir(rawDir, { recursive: true });
     await fs.writeFile(path.join(stateDir, 'run-a.json'), '{"status":"done"}', 'utf8');
     await fs.writeFile(path.join(rawDir, 'input-1.md'), 'raw', 'utf8');
+    await fs.writeFile(cacheFile, '{"hash-a":"raw/input-1.md"}', 'utf8');
 
     app = Fastify();
     registerCleanupRoute(app, stubVault(vaultPath), stubGuards());
@@ -369,9 +379,27 @@ describe('T02655 清理路由级硬拦截', () => {
     expect(res.statusCode).toBe(200);
     const status = res.json() as CleanupStorageStatus;
     expect(status.active.compile).toBe(1);
-    expect(status.active.blockedTargets).toEqual(['run_state', 'raw_archive']);
+    expect(status.active.blockedTargets).toEqual(['compile_cache', 'run_state', 'raw_archive']);
     expect(status.active.blockedReasons.every((r) => r.reason.length > 0)).toBe(true);
     release();
+  });
+
+  // T02818：缓存清理与进行中编译互斥。放行时的旧口径说"代价可自愈"，实际形态是假回执——
+  // 编译在结束时把整份内存映射写回，用户看到「已删除编译缓存」而文件带着全部旧条目回来。
+  it('有编译在跑 → 清缓存 409 且缓存文件不动；编译登记释放后才真删', async () => {
+    const release = beginActivity('compile');
+    const res = await postCleanup({ target: 'compile_cache', dry_run: false });
+    expect(res.statusCode).toBe(409);
+    const body = res.json() as CleanupBlockedResponse;
+    expect(body.blocked).toEqual(['compile_cache']);
+    expect(body.reasons[0]).toContain('写回');
+    await expect(fs.readFile(cacheFile, 'utf8')).resolves.toContain('hash-a');
+    release();
+
+    const allowed = await postCleanup({ target: 'compile_cache', dry_run: false });
+    expect(allowed.statusCode).toBe(200);
+    expect((allowed.json() as CleanupResult).count).toBe(1);
+    await expect(fs.stat(cacheFile)).rejects.toThrow();
   });
 
   it('有编译在跑 + 关掉预览 → 409，且状态文件一个都没少', async () => {

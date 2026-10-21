@@ -77,19 +77,30 @@ export function getHarnessDirs(
   return dirs;
 }
 
+// 产物名/目录名在这里定一次（T02818）。
+// 为什么要导出这几个字符串：清理侧「删哪些文件」与写入侧「往哪写」此前只有各自的内联拼接，
+// 于是「某个写入到底会不会被删」只能靠人读两边代码猜。utils/cleanup-surface.ts 直接引用这些
+// 常量做判定，入口矩阵（api/test/cleanup-write-surface-matrix.test.ts）因此是**行为**断言，
+// 而不是把文件名抄第三遍。
+export const HARNESS_DIR_BASENAME = '.harness';
+export const COMPILE_CACHE_BASENAME = 'compile-cache.json';
+export const AUDIT_LOG_BASENAME = 'cleanup-audit.log';
+export const LOGS_DIR_BASENAME = 'logs';
+export const STATE_DIR_BASENAME = 'state';
+
 // 单个 `.harness` 目录里的产物路径（逐目录统计/删除用，避免每处再手写文件名拼接）
 export function compileCacheFileIn(harnessDir: string): string {
-  return path.join(harnessDir, 'compile-cache.json');
+  return path.join(harnessDir, COMPILE_CACHE_BASENAME);
 }
 
 export function logsDirIn(harnessDir: string): string {
-  return path.join(harnessDir, 'logs');
+  return path.join(harnessDir, LOGS_DIR_BASENAME);
 }
 
 export function stateDirIn(harnessDir: string): string {
-  return path.join(harnessDir, 'state');
+  return path.join(harnessDir, STATE_DIR_BASENAME);
 }
 
 export function auditFileIn(harnessDir: string): string {
-  return path.join(harnessDir, 'cleanup-audit.log');
+  return path.join(harnessDir, AUDIT_LOG_BASENAME);
 }
