@@ -11,6 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import ElementPlus from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { waitForProgress, NO_TIMER_CHAIN } from './helpers/waitForProgress';
 import DataClean from '../src/views/DataClean.vue';
 import { useAuthStore } from '../src/stores/auth';
 import { useModelStore } from '../src/stores/model';
@@ -142,8 +144,9 @@ describe('DataClean AI 分析 BYOK llmConfig 注入 + 结论渲染', () => {
     const aiBtn = findButton(wrapper, 'AI分析');
     expect(aiBtn, '应存在「AI分析」按钮').toBeTruthy();
     await aiBtn!.trigger('click');
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
+    // T02753：等「请求体已落进 spy」这个真实终点，而不是睡 10ms 猜机器时长
+    //（旧写法在全套并发时链条变长即假失败；见 helpers/waitForProgress）
+    await waitForProgress('AI 分析请求已发出', () => lastAnalyzeBody() !== null, NO_TIMER_CHAIN);
     await flushPromises();
 
     // 2) 后端 ai-analyze 被调用，且请求体注入 BYOK llmConfig
@@ -197,8 +200,15 @@ describe('DataClean AI 分析 BYOK llmConfig 注入 + 结论渲染', () => {
 
     const aiBtn = findButton(wrapper, 'AI分析');
     await aiBtn!.trigger('click');
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
+    // T02753：本例断言的是「没有发出请求」，终点不可轮询；改用链路**真正走完**的信号——
+    // buildLlmConfig 解析后 apiKey 为空时 DataClean.vue:322 必然弹「请先在「配置 / 我的」中填写完整的 API Key」，
+    // 等到这条提示即等价于「异步链已抵达提前 return 分支」，比睡 10ms 强：
+    // 睡 10ms 时「还没跑到」与「跑完且确实没调用」长得一模一样，本例要区分的正是后者。
+    await waitForProgress(
+      '无 apiKey 分支已给出提示（链路走完）',
+      () => (ElMessage.warning as any).mock.calls.some((c: any[]) => String(c[0]).includes('API Key')),
+      NO_TIMER_CHAIN,
+    );
     await flushPromises();
 
     // 无 apiKey → runAiAnalysis 提前 return，不应调用 ai-analyze
