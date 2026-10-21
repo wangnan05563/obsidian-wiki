@@ -22,13 +22,35 @@ const BANS_PATH = path.join(REPO_ROOT, 'docs', 'terminology-bans.json');
 const DOC_PATH = path.join(REPO_ROOT, 'docs', '术语表.md');
 const CONFIG_TABS_PATH = path.join(REPO_ROOT, 'frontend', 'src', 'utils', 'configTabs.ts');
 
+interface LineExempt {
+  file: string;
+  // 行级豁免的定位片段：必须在目标文件里唯一命中一行，且该行确实含该禁用词
+  contains: string;
+  reason: string;
+}
+
+interface FileExempt {
+  file: string;
+  reason: string;
+}
+
+interface SideExempt {
+  files?: FileExempt[];
+  lines?: LineExempt[];
+}
+
 interface Ban {
   term: string;
   why: string;
-  exempt?: Record<string, string[]>;
+  // 豁免按扫描侧分组（键只能是 frontend / api），值分整文件/行级两级粒度
+  exempt?: Record<string, SideExempt>;
 }
 
 const BANS: Ban[] = JSON.parse(fs.readFileSync(BANS_PATH, 'utf8')).bans;
+const SIDE_ROOTS: Record<string, string> = {
+  frontend: path.join(REPO_ROOT, 'frontend', 'src'),
+  api: SRC_DIR,
+};
 
 function collectSourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -41,6 +63,17 @@ function collectSourceFiles(dir: string): string[] {
   return out;
 }
 
+// T02790：豁免分整文件（files）与行级（lines）两级粒度，行级是默认选择——
+// 整文件放行会让该文件其余用户可见文案一起失去守护。
+// 本函数与 frontend/test/terminology-single-source.test.ts 里的同名实现必须逐字一致，
+// 由前端侧「两侧豁免判定与注释口径的实现逐字一致」用例锁死。
+export function isExempted(ban: Ban, side: 'frontend' | 'api', rel: string, text: string): boolean {
+  const exempt = ban.exempt?.[side];
+  if (!exempt) return false;
+  if (exempt.files?.some((e) => e.file === rel)) return true;
+  return (exempt.lines ?? []).some((e) => e.file === rel && text.includes(e.contains));
+}
+
 interface Hit {
   file: string;
   line: number;
@@ -49,13 +82,19 @@ interface Hit {
   text: string;
 }
 
+// 整行注释豁免口径：修复说明必须能点名旧词，所以注释不参与扫描。
+// 与 isExempted 一样，两侧守护各留一份但由「实现逐字一致」用例锁死。
+export function isCommentLine(text: string): boolean {
+  return text.startsWith('//') || text.startsWith('/*') || text.startsWith('*') || text.startsWith('<!--');
+}
+
 /** 与前端守护同一套单行口径：整行注释豁免，其余原样比对（注释要能点名旧词） */
 export function scanLine(rel: string, raw: string, line: number): Hit[] {
   const text = raw.trim();
-  if (text.startsWith('//') || text.startsWith('/*') || text.startsWith('*') || text.startsWith('<!--')) return [];
+  if (isCommentLine(text)) return [];
   const hits: Hit[] = [];
   for (const ban of BANS) {
-    if (ban.exempt?.api?.includes(rel)) continue;
+    if (isExempted(ban, 'api', rel, text)) continue;
     if (text.includes(ban.term)) {
       hits.push({ file: rel, line, term: ban.term, why: ban.why, text: text.slice(0, 90) });
     }
@@ -116,10 +155,55 @@ describe('T02705 术语表守护扩到后端用户可见文案', () => {
 
   it('豁免只用于外部语境，且按侧生效（前端的豁免不能漏到后端）', () => {
     const notes = BANS.find((b) => b.term === '笔记');
-    expect(notes?.exempt?.frontend, '前端豁免 views/Help.vue 仍在').toContain('views/Help.vue');
-    // 后端没有任何「笔记」的正当外部语境：exempt 未给 api 开口，命中即红
-    expect(notes?.exempt?.api ?? [], '后端不应有文件级豁免').toEqual([]);
+    expect(notes?.exempt?.frontend?.lines?.map((e) => e.file), '前端行级豁免登记缺失').toContain('views/Help.vue');
+    // 后端没有任何「笔记」的正当外部语境：api 侧两级通道都不得开口，命中即红
+    expect(notes?.exempt?.api?.files ?? [], '后端不应有整文件豁免').toEqual([]);
+    expect(notes?.exempt?.api?.lines ?? [], '后端不应有行级豁免').toEqual([]);
     expect(scanLine('services/y.ts', `return 'Obsidian 笔记'`, 1).map((h) => h.term)).toContain('笔记');
+    // 前端那一行的豁免不会漏给后端：同一 rel 文本在后端侧仍然红
+    expect(isExempted(notes as Ban, 'api', 'views/Help.vue', '将外部资料（Obsidian 笔记）导入知识库')).toBe(false);
+  });
+
+  it('豁免登记自审：只认 frontend/api 两侧、理由必填、登记的文件真实存在（T02790）', () => {
+    for (const ban of BANS) {
+      for (const [side, exempt] of Object.entries(ban.exempt ?? {})) {
+        expect(SIDE_ROOTS[side], `禁用词「${ban.term}」的豁免键「${side}」不是合法扫描侧（写错侧名 = 豁免永不生效）`).toBeDefined();
+        for (const entry of exempt.files ?? []) {
+          expect(entry.reason?.trim(), `「${ban.term}」在 ${side} 的整文件豁免 ${entry.file} 未写理由`).not.toBe('');
+          expect(
+            fs.existsSync(path.join(SIDE_ROOTS[side], entry.file)),
+            `「${ban.term}」的整文件豁免指向不存在的文件：${side}/${entry.file}`,
+          ).toBe(true);
+        }
+        for (const entry of exempt.lines ?? []) {
+          expect(entry.reason?.trim(), `「${ban.term}」在 ${side}/${entry.file} 的行级豁免未写理由`).not.toBe('');
+          expect(entry.contains?.trim(), `「${ban.term}」在 ${side}/${entry.file} 的行级豁免缺定位片段`).not.toBe('');
+          expect(
+            fs.existsSync(path.join(SIDE_ROOTS[side], entry.file)),
+            `「${ban.term}」的行级豁免指向不存在的文件：${side}/${entry.file}`,
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('行级豁免只放过声明的那一行：本侧判定口径与前端同形（合成登记验证）', () => {
+    // 后端目前没有真实豁免需求（exempt.api 全空），所以用一条合成登记验判定口径本身，
+    // 防止「行级通道在后端侧退化成整文件通道」这种只在需要用的那天才暴露的缺陷。
+    const synth: Ban = {
+      term: '笔记',
+      why: '合成用例',
+      exempt: { api: { files: [], lines: [{ file: 'routes/x.ts', contains: 'Obsidian 笔记', reason: '外部语境' }] } },
+    };
+    expect(isExempted(synth, 'api', 'routes/x.ts', "detail: '支持 Obsidian 笔记导入'")).toBe(true);
+    // 同一文件的下一行写旧词：仍然不放行
+    expect(isExempted(synth, 'api', 'routes/x.ts', "detail: '请先整理本地笔记'")).toBe(false);
+    // 换一个文件：仍然不放行（豁免不跨文件）
+    expect(isExempted(synth, 'api', 'routes/y.ts', "detail: '支持 Obsidian 笔记导入'")).toBe(false);
+    // 整文件通道仍可用，但必须显式登记且带理由
+    const whole: Ban = { term: '笔记', why: '合成用例', exempt: { api: { files: [{ file: 'routes/x.ts', reason: '整篇是外部语境' }] } } };
+    expect(isExempted(whole, 'api', 'routes/x.ts', "detail: '请先整理本地笔记'")).toBe(true);
+    expect(isExempted(whole, 'api', 'routes/y.ts', "detail: '请先整理本地笔记'")).toBe(false);
   });
 
   it('后端提示语里的「配置中心 → X」必须是真实存在的标签页实名', () => {
