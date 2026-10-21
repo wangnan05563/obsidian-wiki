@@ -1002,6 +1002,27 @@ export interface CleanupActiveState {
   blockedReasons: { target: string; reason: string }[];
 }
 
+// 运行状态目录的角色（T02808）。
+// 判据与 routes/cleanup.ts 的 isLegacyStateDir 同源：清单首项 = 写入侧规范目录，其余都是历史落点。
+// 前端「高级」面板的「当前存放位置 / 旧存放位置」文案按这一档取，两侧不得各写一套判断。
+export type CleanupRunStateRole = 'canonical' | 'legacy';
+
+// 「运行状态」一类对象实际扫描的目录（T02808）。
+// 为什么要把目录清单随状态一起返回：清理页原先只报一个合并后的数字，用户看不出这些文件
+// 落在几个位置、其中多少是升级前的历史落点，也就无法判断「清完会不会再来」。
+// path 逐字取自 getRunStateDirs() 的返回项（不做相对化、不做美化），
+// 页面显示的路径与后端真实扫描路径因此是同一个字符串。
+export interface CleanupRunStateDir {
+  path: string;
+  // 目录内 *.json 的个数，口径与合并计数一致（同一个 statDir 调用）
+  fileCount: number;
+  sizeMb: number;
+  role: CleanupRunStateRole;
+  // 目录本身是否存在：false 时 fileCount 必为 0，前端据此区分
+  // 「这个位置还没有目录」与「目录在、但里面是空的」
+  exists: boolean;
+}
+
 // 存储状态总览（GET /api/cleanup/status 返回结构）
 // 统计范围必须与实际清理范围严格一致，避免「显示 0MB 但清理 271 项」歧义
 export interface CleanupStorageStatus {
@@ -1018,6 +1039,9 @@ export interface CleanupStorageStatus {
     fileCount: number;
     sizeMb: number;
     oldest: string | null;
+    // T02808：合并计数的来源目录清单。fileCount = dirs 各项之和（由同一次逐目录统计
+    // 求和得出，不是两条代码路径的巧合），前端「高级」面板据此列出真实路径。
+    dirs: CleanupRunStateDir[];
   };
   // 运行日志：.harness/logs/*.log
   runLogs: {

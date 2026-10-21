@@ -24,7 +24,16 @@ function statusOf(over: Partial<CleanupStorageStatus> = {}): CleanupStorageStatu
     // T02655：默认「无活跃任务」；被拦分支的用例在 cleanup-active-guard.test.ts 里显式覆盖
     active: { compile: 0, query: 0, blockedTargets: [], blockedReasons: [] },
     compileCache: { exists: true, sizeMb: 1.2, entryCount: 42 },
-    runState: { fileCount: 3, sizeMb: 0.1, oldest: '2026-09-01' },
+    runState: {
+      fileCount: 3,
+      sizeMb: 0.1,
+      oldest: '2026-09-01',
+      // T02808：合并计数与目录清单必须成对给出（卡计数 = 各目录计数之和）
+      dirs: [
+        { path: 'D:/wiki/karpathy-wiki/data/.harness/state', fileCount: 1, sizeMb: 0.05, role: 'canonical', exists: true },
+        { path: 'D:/wiki/karpathy-wiki/api/.harness/state', fileCount: 2, sizeMb: 0.05, role: 'legacy', exists: true },
+      ],
+    },
     runLogs: { fileCount: 12, sizeMb: 4.5, oldest: '2026-08-11' },
     rawArchive: { fileCount: 7, sizeMb: 2.2, oldest: '2026-07-30' },
     ...over,

@@ -871,6 +871,19 @@ export interface CleanupBlockedResponse {
   active: CleanupActiveState;
 }
 
+// 运行状态目录（T02808，与后端 CleanupRunStateDir 对齐）
+// path 是后端 getRunStateDirs() 返回的绝对路径原文；页面直接展示它，
+// 于是「页面显示的清单」与「后端真正扫的清单」不可能各写一份。
+export type CleanupRunStateRole = 'canonical' | 'legacy';
+
+export interface CleanupRunStateDir {
+  path: string;
+  fileCount: number;
+  sizeMb: number;
+  role: CleanupRunStateRole;
+  exists: boolean;
+}
+
 // 存储状态（GET /api/cleanup/status）
 export interface CleanupStorageStatus {
   // T02655：活跃任务快照，必填（与后端同步发布，不设可选以免掩盖漏返回）
@@ -884,6 +897,8 @@ export interface CleanupStorageStatus {
     fileCount: number;
     sizeMb: number;
     oldest: string | null;
+    // 必填同上：缺它就没有「卡计数 = 各目录计数之和」的对照，前端只能猜
+    dirs: CleanupRunStateDir[];
   };
   runLogs: {
     fileCount: number;

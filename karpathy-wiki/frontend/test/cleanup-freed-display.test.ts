@@ -49,7 +49,13 @@ function wireResult(over: Record<string, unknown> = {}): Record<string, unknown>
 const status: CleanupStorageStatus = {
   active: { compile: 0, query: 0, blockedTargets: [], blockedReasons: [] },
   compileCache: { exists: true, sizeMb: 0.4, entryCount: 12 },
-  runState: { fileCount: 2, sizeMb: 0.1, oldest: '2026-09-20' },
+  runState: {
+    fileCount: 2,
+    sizeMb: 0.1,
+    oldest: '2026-09-20',
+    // T02808：卡计数与目录清单成对（各目录计数之和 = fileCount）
+    dirs: [{ path: '/data/.harness/state', fileCount: 2, sizeMb: 0.1, role: 'canonical', exists: true }],
+  },
   runLogs: { fileCount: 9, sizeMb: 4.5, oldest: '2026-08-11' },
   rawArchive: { fileCount: 3, sizeMb: 2.2, oldest: '2026-07-30' },
 };
