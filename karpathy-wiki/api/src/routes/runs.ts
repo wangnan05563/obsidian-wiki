@@ -19,9 +19,11 @@ export function registerRunsRoute(
   // 默认只认传入的 stateDir：单测不传即只看自己造的临时目录，不会把真实用户目录读进断言。
   runStateDirsOverride?: string[],
 ) {
-  // 日志目录与 state 目录同级：.harness/logs/
-  const logDir = path.resolve(stateDir, '..', 'logs');
   const dirs = runStateDirsOverride ?? [stateDir];
+  // 日志目录与 state 目录同级：.harness/logs/。
+  // T02809：跟着 run-state 清单一起展开——状态文件散在几个根，它的技术日志就在对应根的 logs/ 下。
+  // 只认第一个根的日志时，遗留目录里那些历史运行会在「步骤追踪」列表中看得到、点开却报日志不存在。
+  const logDirs = dirs.map((dir) => path.resolve(dir, '..', 'logs'));
 
   // 跨目录收集状态文件，按文件名（<runId>.json）去重，目录顺序即优先级。
   // 为什么规范目录在前：写入合流后新状态一定落在规范目录，遗留目录只用于
@@ -106,9 +108,21 @@ export function registerRunsRoute(
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
         return void reply.code(400).send({ error: '无效的 runId' });
       }
-      const logFile = path.join(logDir, `${runId}.log`);
+      // 按目录优先级找第一份存在的日志（规范目录在前，与状态文件同一口径）
+      let raw: string | null = null;
+      for (const dir of logDirs) {
+        try {
+          raw = await fs.readFile(path.join(dir, `${runId}.log`), 'utf8');
+          break;
+        } catch {
+          // 这个来源没有，看下一个
+        }
+      }
+      if (raw === null) {
+        // 文件不存在或读取失败
+        return void reply.code(404).send({ error: '日志不存在', entries: [] });
+      }
       try {
-        const raw = await fs.readFile(logFile, 'utf8');
         // JSONL：每行一个 JSON，空行跳过
         const entries = raw
           .split('\n')
@@ -116,7 +130,6 @@ export function registerRunsRoute(
           .map((line) => JSON.parse(line));
         reply.send({ entries });
       } catch {
-        // 文件不存在或读取失败
         reply.code(404).send({ error: '日志不存在', entries: [] });
       }
     },

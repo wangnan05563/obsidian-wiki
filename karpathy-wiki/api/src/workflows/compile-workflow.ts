@@ -14,6 +14,11 @@ import { convertPdfToMarkdown } from '../utils/pdf-convert.js';
 import { ocrImageToMarkdown, resolveOcrConfig, OCR_SUPPORTED_MIME } from '../utils/ocr-convert.js';
 import { audioToText, resolveAudioConfig, AUDIO_SUPPORTED_MIME } from '../utils/audio-convert.js';
 import { friendlyLlmError } from '../utils/llm-error.js';
+import {
+  compileCacheFileIn,
+  getHarnessDirFromVault,
+  logsDirIn,
+} from '../utils/harness-dirs.js';
 import { suggestTagsForPage } from './tag-suggest-workflow.js';
 
 // §12.3-6：compile 中途失败时，给已生成的页面标记 status: draft。
@@ -368,7 +373,9 @@ export async function* compileWorkflow(
   yield { step: 'archive', status: 'done', message: `原始资料已存档: ${rawPath}`, data: { path: rawPath } };
 
   // §11.2 增量编译：内容哈希命中缓存时跳过编译，避免重复消耗 token。
-  const cacheFile = path.join(vault.getVaultPath(), '..', '.harness', 'compile-cache.json');
+  // T02809：路径走 utils/harness-dirs 的统一口径（与清理侧同一个函数），
+  // 不再在这里手写 `join(vaultPath, '..', '.harness', …)` 的相对拼接。
+  const cacheFile = compileCacheFileIn(getHarnessDirFromVault(vault.getVaultPath()));
   const cache = new CompileCache(cacheFile);
   const cached = await cache.lookup(rawContent);
   if (cached) {
@@ -460,8 +467,9 @@ async function* bridgeHarnessToEvents(
   const queue: ProgressEvent[] = [];
   let resolveWaiter: (() => void) | null = null;
   let finished = false;
-  // §12.3-8：harness 运行日志双写。logger 实例随每次编译创建，日志目录与 vault 同级。
-  const logger = new RunLogger(path.join(vault.getVaultPath(), '..', '.harness', 'logs'));
+  // §12.3-8：harness 运行日志双写。logger 实例随每次编译创建，日志目录与 vault 同级
+  // （T02809：走 harness-dirs 统一口径，落点不再随进程 CWD 漂移）。
+  const logger = new RunLogger(logsDirIn(getHarnessDirFromVault(vault.getVaultPath())));
   let currentRunId = '';
   // §12.3-6：跟踪本次生成的页面路径，失败时标记 draft
   const generatedPages: string[] = [];

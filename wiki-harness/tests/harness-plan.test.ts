@@ -1,6 +1,10 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Harness } from '../src/harness.js';
+import { FileStateStore } from '../src/state/file-state-store.js';
 import { StaticPlanner } from '../src/session/planning.js';
 import type { HarnessConfig, Message } from '../src/types.js';
 
@@ -25,10 +29,15 @@ function mockFetch(capture: (body: { messages: Message[] }) => void): void {
   }) as typeof fetch;
 }
 
+// T02809：显式给临时状态目录——不传时 Harness 回退 `new FileStateStore()`，
+// 目录相对进程 CWD，每跑一次测试就在仓库里留下无人认领的运行状态文件。
+const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-harness-plan-state-'));
+
 function baseConfig(planner?: HarnessConfig['planner']): HarnessConfig {
   return {
     llm: { provider: 'deepseek', baseUrl: 'http://x', apiKey: 'k', model: 'm' },
     tools: [],
+    stateStore: new FileStateStore(testStateDir),
     planner,
   };
 }

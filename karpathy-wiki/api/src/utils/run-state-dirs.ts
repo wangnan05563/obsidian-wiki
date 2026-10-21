@@ -18,6 +18,7 @@
 // 属此类）时历史文件在 <cwd>/.harness/state。两个候选都留，清完即自然收敛为空。
 import path from 'node:path';
 import { getApiDir, getDataDir } from './runtime.js';
+import { toAbsVaultPath } from './harness-dirs.js';
 
 // 规范目录：数据目录下的 .harness/state（开发模式 karpathy-wiki/data/，
 // SEA 模式 %LOCALAPPDATA%\KarpathyWiki\data\，两者都在用户可写区）。
@@ -30,8 +31,11 @@ export function getCanonicalRunStateDir(dataDir: string = getDataDir()): string 
 // （resolve(vaultPath, '..', '.harness', 'state')）。真实部署里 vault 就在 data/vault，
 // 两条口径必须同值——否则清理清的就是一个不存在的目录（本单的原始症状）。
 // 同值由 api/test/run-state-dirs.test.ts 断言锁死，改任一侧都会红。
+// T02809：改走 toAbsVaultPath 定根。原先相对 vaultPath（config 里的 `../data/vault`）
+// 由 path.resolve 按进程 CWD 展开，换目录起进程时它会变成一个既非规范、也不在遗留清单里的
+// 第三方目录，混进 primaryDirs 后被当作「规范优先」项参与写入与标注。
 export function getCanonicalRunStateDirFromVault(vaultPath: string): string {
-  return path.resolve(vaultPath, '..', '.harness', 'state');
+  return path.join(toAbsVaultPath(vaultPath), '..', '.harness', 'state');
 }
 
 // 遗留目录候选（不含规范目录；去重在 getRunStateDirs 里做）

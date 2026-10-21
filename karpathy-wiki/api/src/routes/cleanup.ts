@@ -13,6 +13,14 @@ import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.
 import { currentActiveState, evaluateCleanupGuard, guardErrorMessage } from '../cleanup-guard.js';
 // T02774：真实清理的独占锁（把「守卫通过 ~ 删除完成」的窗口封成机制上的零）
 import { acquireCleanup, type CleanupHandle } from '../cleanup-mutex.js';
+// T02809：`.harness` 产物路径改走单一口径（原先这里与写入侧 compile-workflow 各写一份拼接）
+import {
+  auditFileIn,
+  compileCacheFileIn,
+  getHarnessDirFromVault,
+  logsDirIn,
+  stateDirIn,
+} from '../utils/harness-dirs.js';
 
 // 系统清理路由。
 //   GET  /api/cleanup/status   查询 4 类对象存储状态
@@ -43,6 +51,19 @@ function bytesToMb(bytes: number): number {
   return Math.round((bytes / BYTES_PER_MB) * 100) / 100;
 }
 
+// 多目录统计合并：计数/体积求和，最早时间取各目录最小值。
+// 单独成函数是为了让「合并」只有一份实现——各卡自己 reduce 一遍，
+// 就会退回到 T02772 之前「两套口径各算一套」的形态。
+type DirStats = { fileCount: number; sizeBytes: number; oldest: string | null };
+function mergeDirStats(list: DirStats[]): DirStats {
+  return {
+    fileCount: list.reduce((n, s) => n + s.fileCount, 0),
+    sizeBytes: list.reduce((n, s) => n + s.sizeBytes, 0),
+    // oldest 是 YYYY-MM-DD 字符串，字典序即时间序
+    oldest: list.map((s) => s.oldest).filter((v): v is string => v !== null).sort()[0] ?? null,
+  };
+}
+
 export function registerCleanupRoute(
   app: FastifyInstance,
   vault: VaultService,
@@ -51,21 +72,31 @@ export function registerCleanupRoute(
   // 默认只认「与 vault 同级」这一个目录——fail-safe 取向：调用方漏传时是「少清一处」，
   // 而不是「把用户真实目录算进删除清单」（单测都用临时目录，漏传即只碰临时目录）。
   runStateDirsOverride?: string[],
+  // T02809：`.harness` 根目录清单（compile-cache / logs / 审计日志所在的几处）。
+  // 与 runStateDirsOverride 同一 fail-safe 口径：默认只认「与 vault 同级」这一个根，
+  // 合并清单由 index.ts 显式传入——调用方漏传的后果是「少清一处」，
+  // 而不是把用户别的目录算进删除清单。
+  harnessDirsOverride?: string[],
 ): void {
   const vaultPath = vault.getVaultPath();
-  // .harness 与 vault 同级（与 index.ts stateDir 计算一致）
-  const harnessDir = path.resolve(vaultPath, '..', '.harness');
-  const compileCacheFile = path.join(harnessDir, 'compile-cache.json');
-  const stateDir = path.join(harnessDir, 'state');
+  // T02809：`.harness` 及其中各类产物改走 utils/harness-dirs 的统一口径。
+  // 原先这里 `resolve(vaultPath,'..','.harness')` 与写入侧 compile-workflow 的
+  // `join(vaultPath,'..','.harness',…)` 是两份各自写的拼接——同值只取决于「同一进程同一 CWD」，
+  // 相对 vaultPath 一旦从别的目录定根，清理就会对着一个空目录报 0。
+  // harnessDir 恒为**写入侧锚点**（compile-workflow 就用它），审计日志只往这里追加。
+  const harnessDir = getHarnessDirFromVault(vaultPath);
+  const harnessDirs = harnessDirsOverride ?? [harnessDir];
+  const compileCacheFiles = harnessDirs.map(compileCacheFileIn);
+  const stateDir = stateDirIn(harnessDir);
   // 运行状态可能散在多个目录：写入侧历史上按进程 CWD 落盘，清理侧历史上只认这里，
   // 两套口径的交集为空时就是本单的原始症状——卡面显示 0 个，磁盘上攒了 100+ 个。
   // 默认只扫本目录（fail-safe）：合并清单由 index.ts 显式传入，
   // 调用方漏传的后果是「少清一处」，而不是把用户真实目录算进删除清单。
   const runStateDirs = runStateDirsOverride ?? [stateDir];
-  const logsDir = path.join(harnessDir, 'logs');
+  const logsDirs = harnessDirs.map(logsDirIn);
   const rawDir = path.join(vaultPath, 'raw');
   // 审计日志：追加到 .harness/cleanup-audit.log（避免引入数据库依赖）
-  const auditLog = path.join(harnessDir, 'cleanup-audit.log');
+  const auditLog = auditFileIn(harnessDir);
 
   // ===== 工具函数 =====
 
@@ -139,6 +170,12 @@ export function registerCleanupRoute(
     return path.resolve(dir).toLowerCase() !== path.resolve(canonicalStateDir).toLowerCase();
   }
 
+  // 同一套标注口径给 `.harness` 根：规范根 = 写入侧锚点 harnessDir（不是清单首项，
+  // 因为清单首项在生产是 data 目录下的 .harness，两者同值但语义上写入锚点才是「当前位置」）。
+  function isLegacyHarnessDir(dir: string): boolean {
+    return path.resolve(dir).toLowerCase() !== path.resolve(harnessDir).toLowerCase();
+  }
+
   // 审计写入：JSONL 追加，失败不阻塞主流程（与闲鱼 _log_cleanup_action 一致）
   async function writeAudit(entry: Record<string, unknown>): Promise<void> {
     try {
@@ -153,19 +190,23 @@ export function registerCleanupRoute(
 
   app.get('/api/cleanup/status', async (_req, reply) => {
     try {
-      // 编译缓存
+      // 编译缓存：逐目录取存在的文件后合并（T02809）。
+      // 写入侧历史上按进程 CWD 落盘，只认一个根时「缓存卡显示 0MB、磁盘上另有一处」
+      // 与 T02772 的运行状态卡是同一形态的缺陷。
       let compileCacheExists = false;
       let compileCacheSize = 0;
       let compileCacheEntries = 0;
-      try {
-        const stat = await fs.stat(compileCacheFile);
-        compileCacheExists = true;
-        compileCacheSize = stat.size;
-        const raw = await fs.readFile(compileCacheFile, 'utf8');
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        compileCacheEntries = Object.keys(parsed).length;
-      } catch {
-        // 文件不存在或解析失败
+      for (const file of compileCacheFiles) {
+        try {
+          const stat = await fs.stat(file);
+          compileCacheExists = true;
+          compileCacheSize += stat.size;
+          const raw = await fs.readFile(file, 'utf8');
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          compileCacheEntries += Object.keys(parsed).length;
+        } catch {
+          // 文件不存在或解析失败
+        }
       }
 
       // 运行状态：逐目录统计后合并（T02772 合并计数 + T02808 目录清单随状态返回）。
@@ -180,14 +221,9 @@ export function registerCleanupRoute(
         role: s.role,
         exists: s.exists,
       }));
-      // oldest 是 YYYY-MM-DD 字符串，字典序即时间序，排序取首个即可
-      const runStateSizeBytes = runStateStats.reduce((n, s) => n + s.sizeBytes, 0);
-      const runStateOldest = runStateStats
-        .map((s) => s.oldest)
-        .filter((v): v is string => v !== null)
-        .sort()[0] ?? null;
-      // 运行日志
-      const logsStat = await statDir(logsDir, /\.log$/);
+      const runStateMerged = mergeDirStats(runStateStats);
+      // 运行日志：同编译缓存逐根合并
+      const logsStat = mergeDirStats(await Promise.all(logsDirs.map((dir) => statDir(dir, /\.log$/))));
       // 原始资料存档（仅清理内部临时前缀文件，避免误删用户命名的源文件）
       const rawStat = await statDir(rawDir, /^(wiki-batch-|wiki-compile-|input-).*/);
 
@@ -200,9 +236,9 @@ export function registerCleanupRoute(
           entryCount: compileCacheEntries,
         },
         runState: {
-          fileCount: runStateStats.reduce((n, s) => n + s.fileCount, 0),
-          sizeMb: bytesToMb(runStateSizeBytes),
-          oldest: runStateOldest,
+          fileCount: runStateMerged.fileCount,
+          sizeMb: bytesToMb(runStateMerged.sizeBytes),
+          oldest: runStateMerged.oldest,
           dirs: runStateDirsResult,
         },
         runLogs: {
@@ -325,20 +361,24 @@ export function registerCleanupRoute(
       }
     }
 
-    // 编译缓存清理
+    // 编译缓存清理：逐根删除存在的缓存文件（T02809，与状态统计同一份目录清单）。
+    // 标出旧存放位置的理由同 T02772——预览列表是用户决定「要不要真删」的唯一依据。
     async function cleanupCompileCache(): Promise<void> {
-      try {
-        const stat = await fs.stat(compileCacheFile);
-        if (dryRun) {
-          result.cleaned.push(`[预览] 将删除编译缓存 compile-cache.json (${bytesToMb(stat.size)}MB)`);
-        } else {
-          await fs.unlink(compileCacheFile);
-          totalFreedBytes += stat.size;
-          result.cleaned.push('已删除编译缓存 compile-cache.json，下次编译将重新生成');
+      for (const file of compileCacheFiles) {
+        const legacy = isLegacyHarnessDir(path.dirname(file)) ? '（旧存放位置）' : '';
+        try {
+          const stat = await fs.stat(file);
+          if (dryRun) {
+            result.cleaned.push(`[预览] 将删除编译缓存${legacy} compile-cache.json (${bytesToMb(stat.size)}MB)`);
+          } else {
+            await fs.unlink(file);
+            totalFreedBytes += stat.size;
+            result.cleaned.push(`已删除编译缓存${legacy} compile-cache.json，下次编译将重新生成`);
+          }
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          result.errors.push(`编译缓存清理失败: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-        result.errors.push(`编译缓存清理失败: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -361,27 +401,33 @@ export function registerCleanupRoute(
       }
     }
 
-    // 运行日志清理（按 days）
+    // 运行日志清理（按 days）：逐根收集后再判窗口（T02809）
     async function cleanupRunLogs(): Promise<void> {
-      const files = await listFiles(logsDir, /\.log$/);
-      if (files.length === 0) {
+      const collected: Array<{ file: string; dir: string }> = [];
+      for (const dir of logsDirs) {
+        for (const file of await listFiles(dir, /\.log$/)) {
+          collected.push({ file, dir });
+        }
+      }
+      if (collected.length === 0) {
         if (dryRun) result.cleaned.push('[预览] 无运行日志文件');
         return;
       }
-      for (const f of files) {
+      for (const { file, dir } of collected) {
+        const legacy = isLegacyHarnessDir(dir) ? '（旧存放位置）' : '';
         try {
-          const stat = await fs.stat(f);
+          const stat = await fs.stat(file);
           if (stat.mtimeMs < cutoffMs) {
             if (dryRun) {
-              result.cleaned.push(`[预览] 将删除日志 ${path.basename(f)} (${bytesToMb(stat.size)}MB, ${stat.mtime.toISOString().slice(0, 10)})`);
+              result.cleaned.push(`[预览] 将删除日志${legacy} ${path.basename(file)} (${bytesToMb(stat.size)}MB, ${stat.mtime.toISOString().slice(0, 10)})`);
             } else {
-              await fs.unlink(f);
+              await fs.unlink(file);
               totalFreedBytes += stat.size;
-              result.cleaned.push(`已删除日志 ${path.basename(f)} (${bytesToMb(stat.size)}MB)`);
+              result.cleaned.push(`已删除日志${legacy} ${path.basename(file)} (${bytesToMb(stat.size)}MB)`);
             }
           }
         } catch (err: unknown) {
-          result.errors.push(`日志 ${path.basename(f)} 处理失败: ${err instanceof Error ? err.message : String(err)}`);
+          result.errors.push(`日志 ${path.basename(file)} 处理失败: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }
