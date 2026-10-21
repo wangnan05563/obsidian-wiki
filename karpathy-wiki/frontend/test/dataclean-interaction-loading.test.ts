@@ -18,6 +18,7 @@ import { useModelStore } from '../src/stores/model';
 import { apiFetch } from '../src/utils/apiBase';
 import { loadAiUserConfigForPreset } from '../src/services/userConfig';
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../src/utils/autoModel';
+import { waitForProgress, NO_TIMER_CHAIN } from './helpers/waitForProgress';
 
 vi.mock('../src/utils/apiBase', () => ({
   API_BASE: '/wiki/api',
@@ -125,8 +126,12 @@ describe('数据清洗页后台任务按钮即时加载反馈', () => {
 
     // 点击 → 触发布局同步设置 diffingKey 并 await fetch（pending）
     await viewBtn!.trigger('click');
-    await nextTick();
-    await new Promise((r) => setTimeout(r, 10));
+    // T02753：等真实终点（diffLoading 已置位 = 请求确实在飞行中），不再睡 10ms 猜机器时长
+    await waitForProgress(
+      '差异请求已进入加载态',
+      () => (wrapper.vm as any).diffLoading === true,
+      NO_TIMER_CHAIN,
+    );
     await nextTick();
 
     // 后台任务进行中：按钮应处于 loading + 禁用态
@@ -139,8 +144,12 @@ describe('数据清洗页后台任务按钮即时加载反馈', () => {
 
     // 差异返回 → 任务结束 → loading 清除 + 结果渲染
     fetchCtrl!.resolve(DIFF_RESULT);
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
+    // T02753：等「加载态已清除且差异行已渲染」这两个真实终点都抵达
+    await waitForProgress(
+      '差异结果已渲染且加载态已清除',
+      () => (wrapper.vm as any).diffLoading === false && wrapper.text().includes('A 独有'),
+      NO_TIMER_CHAIN,
+    );
     await nextTick();
 
     expect((wrapper.vm as any).diffLoading, 'diffLoading 应已清除').toBe(false);
@@ -178,8 +187,12 @@ describe('数据清洗页后台任务按钮即时加载反馈', () => {
 
     await mergeBtn!.trigger('click');
     // ElMessageBox.confirm 默认 resolve(true)；之后 mergingKey 被置位并 await merge（pending）
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
+    // T02753：等 mergingKey 真的置位（= 确认已过、请求在飞），替代固定 10ms
+    await waitForProgress(
+      '合并请求已进入加载态',
+      () => (wrapper.vm as any).mergingKey !== null && (wrapper.vm as any).mergingKey !== undefined,
+      NO_TIMER_CHAIN,
+    );
     await nextTick();
 
     expect(mergeBtn!.classes().includes('is-loading'), '合并按钮应处于加载态').toBe(true);
@@ -187,8 +200,8 @@ describe('数据清洗页后台任务按钮即时加载反馈', () => {
 
     // 合并请求返回 → 任务结束（合并会把该重复对从列表移除，按钮随之从 DOM 卸载）
     mergeCtrl.resolve({ errors: [], linkReplacements: 3 });
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
+    // T02753：等真相源 mergingKey 归零，而不是睡 10ms
+    await waitForProgress('合并任务已结束（mergingKey 已清除）', () => (wrapper.vm as any).mergingKey === null, NO_TIMER_CHAIN);
     await nextTick();
 
     // 以数据源 mergingKey 为真相源：完成后必为 null（按钮若仍在 DOM，也不应再 loading）

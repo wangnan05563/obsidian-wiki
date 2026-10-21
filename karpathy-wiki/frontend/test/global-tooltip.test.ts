@@ -4,7 +4,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
-import TipPlugin from '../src/directives/tip';
+import TipPlugin, { HIDE_GRACE_MS } from '../src/directives/tip';
+import { waitForProgress } from './helpers/waitForProgress';
+
+// 隐藏宽限来自产品契约（tip.ts:27 定义、:122 使用 HIDE_GRACE_MS），倍率是给并发跑时定时器被挤压留的余量——
+// 不是经验数值。轮询真实终点（display:none / title 复原）后，这个预算只用作硬上限，
+// 命中终点即返回，机器快时不会白等。
+const GRACE_BUDGET = { floorMs: HIDE_GRACE_MS, idleMs: HIDE_GRACE_MS * 2, capMs: HIDE_GRACE_MS * 4 };
 
 function tipEl(): HTMLElement | null {
   return document.querySelector('.app-global-tip');
@@ -47,8 +53,8 @@ describe('全局 tooltip 悬浮提示', () => {
     expect((wrapper.vm as any).clicks, '悬浮显示期间点击应仍触发按钮逻辑').toBe(1);
 
     btn.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-    // hide 有 80ms 宽限
-    await new Promise((r) => setTimeout(r, 120));
+    // T02753：宽限到点后浮层 display:none 是真实终点，直接轮询它（旧写法裸写 120ms 猜时长）
+    await waitForProgress('移出后浮层已隐藏', () => tipEl()?.style.display === 'none', GRACE_BUDGET);
     await nextTick();
     expect(tip!.style.display, '移出后浮层应隐藏').toBe('none');
 
@@ -76,7 +82,8 @@ describe('全局 tooltip 悬浮提示', () => {
     expect(btn.getAttribute('title'), '悬浮期间原生 title 应被临时清空').toBe('');
 
     btn.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 120));
+    // T02753：宽限到点后原生 title 复原是真实终点（旧写法裸写 120ms 猜时长）
+    await waitForProgress('隐藏后原生 title 已复原', () => btn.getAttribute('title') === '原生标题', GRACE_BUDGET);
     await nextTick();
     expect(btn.getAttribute('title'), '隐藏后应恢复原生 title').toBe('原生标题');
 

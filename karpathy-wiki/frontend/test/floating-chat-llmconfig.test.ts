@@ -18,6 +18,7 @@ import { useModelStore } from '../src/stores/model';
 import { useInputBoxSettings } from '../src/stores/inputBoxSettings';
 import { loadAiUserConfigForPreset, loadSearchUserConfig, loadToolsUserConfig } from '../src/services/userConfig';
 import { resolveAutoPresetForUser } from '../src/utils/autoModel';
+import { waitForProgress, NO_TIMER_CHAIN } from './helpers/waitForProgress';
 
 // 拦截依赖，隔离 IndexedDB / 真实 fetch：API_BASE 仍由本 mock 提供（用于拼 URL），
 // 但请求不再走 apiFetch（T02462 起走 authStore.authFetch）。
@@ -117,8 +118,8 @@ describe('FloatingChat BYOK llmConfig 注入 + Q5 鉴权口径', () => {
 
     wrapper.vm.inputQuestion = question;
     wrapper.vm.handleSubmit();
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 10));
+    // T02753：等「/query 请求已发出」这个真实终点（本文件四个用例都以它为前提），不再睡 10ms 猜时长
+    await waitForProgress('问答请求已发出', () => authFetchSpy?.mock?.calls?.length > 0, NO_TIMER_CHAIN);
     await flushPromises();
 
     wrapper.unmount();

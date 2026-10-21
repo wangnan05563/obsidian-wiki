@@ -22,6 +22,9 @@ import { computeTipPlacement } from './tipPosition';
 
 const TIP_ATTR = 'data-tip';
 const TITLE_STASH = 'data-tip-title-stash';
+// 移出后隐藏浮层的宽限时长（在同组子节点间移动不闪断）。
+// 导出理由：这是全局提示的时间契约，测试侧的等待预算须由它推导而不是猜机器时长（T02753）。
+export const HIDE_GRACE_MS = 80;
 
 let layer: HTMLDivElement | null = null;
 let currentEl: HTMLElement | null = null;
@@ -116,7 +119,7 @@ function hide() {
       }
       currentEl = null;
     }
-  }, 80);
+  }, HIDE_GRACE_MS);
 }
 
 function onOver(e: MouseEvent) {

@@ -11,6 +11,7 @@ import { useQueryStore } from '../src/stores/query';
 import { useAuthStore } from '../src/stores/auth';
 import { useConversationsStore } from '../src/stores/conversations';
 import { useModelStore } from '../src/stores/model';
+import { waitForProgress, type ProgressWaitOptions, type WaitResult } from './helpers/waitForProgress';
 
 // 构造一个最小可消费的 SSE 响应（仅成功结束，不依赖 happy-dom 的 Response 实现）
 function fakeResponse() {
@@ -126,62 +127,19 @@ const HARD_CAP_MS = EDIT_RESEND_FALLBACK_MS + 2_000 + 1_000;
 // 单个用例的 vitest 超时：需覆盖硬上限 + 用例自身的挂载开销
 const CASE_TIMEOUT_MS = 20_000;
 
-interface WaitOptions {
-  /** 进展签名：值变化即视为「异步链仍在推进」，用于续期无进展预算 */
-  progress?: () => string;
-  /** 契约下限：早于此不判「无进展」失败（默认 CONTRACT_FLOOR_MS） */
-  floorMs?: number;
-  idleMs?: number;
-  capMs?: number;
-}
-
-interface WaitResult {
-  /** 从调用到谓词成立实际等待的墙钟毫秒（供取证断言） */
-  elapsedMs: number;
-  rounds: number;
-}
-
-async function waitFor(
+// T02753：等待实现已抽到 helpers/waitForProgress.ts（全站只有一份），本文件只保留自己的契约常量，
+// 下面的 waitFor 是给那些常量做默认值的薄适配层，不是第二套实现。
+const waitFor = (
   label: string,
   predicate: () => boolean,
-  options: WaitOptions = {},
-): Promise<WaitResult> {
-  const floorMs = options.floorMs ?? CONTRACT_FLOOR_MS;
-  const idleMs = options.idleMs ?? IDLE_BUDGET_MS;
-  const capMs = options.capMs ?? HARD_CAP_MS;
-  const startedAt = Date.now();
-  let lastProgressAt = startedAt;
-  let lastSignature = options.progress?.() ?? '-';
-  let rounds = 0;
-  for (;;) {
-    rounds++;
-    if (predicate()) {
-      return { elapsedMs: Date.now() - startedAt, rounds };
-    }
-    const now = Date.now();
-    const elapsed = now - startedAt;
-    const signature = options.progress?.() ?? '-';
-    if (signature !== lastSignature) {
-      lastSignature = signature;
-      lastProgressAt = now;
-    } else if (elapsed > floorMs && now - lastProgressAt > idleMs) {
-      throw new Error(
-        `waitFor 超时（第 ${elapsed}ms 仍无进展，已连续 ${now - lastProgressAt}ms > ${idleMs}ms，` +
-          `且超过契约下限 ${floorMs}ms）：${label}\n` +
-          `  轮询 ${rounds} 次，最后进展于第 ${lastProgressAt - startedAt}ms\n` +
-          `  最后一次进展签名：${lastSignature}`,
-      );
-    } else if (elapsed > capMs) {
-      throw new Error(
-        `waitFor 超时（总时长 ${elapsed}ms > 硬上限 ${capMs}ms）：${label}\n` +
-          `  轮询 ${rounds} 次，最后进展于第 ${lastProgressAt - startedAt}ms\n` +
-          `  最后一次进展签名：${lastSignature}`,
-      );
-    }
-    await flushPromises();
-    await new Promise((r) => setTimeout(r, 0));
-  }
-}
+  options: Partial<ProgressWaitOptions> = {},
+): Promise<WaitResult> =>
+  waitForProgress(label, predicate, {
+    floorMs: CONTRACT_FLOOR_MS,
+    idleMs: IDLE_BUDGET_MS,
+    capMs: HARD_CAP_MS,
+    ...options,
+  });
 
 /** 进展签名：把「异步链是否还在动」可观测化的最小集合 */
 function progressSignature(
@@ -425,6 +383,10 @@ describe('Query.vue 编辑重发端到端', () => {
     const textarea = wrapper.find('.msg-edit textarea');
     expect(textarea.exists(), '编辑态 textarea 应出现').toBe(true);
     await textarea.setValue('修改后的问题');
+    // 计时起点取在「派发确认点击」这一刻：兜底定时器是在点击处理里 arm 的，
+    // 从 waitFor 调用起算会少掉点击自身花掉的若干毫秒（实测 2978ms），
+    // 那是度量口径错，不是产品走错了路径。
+    const clickedAt = Date.now();
     await wrapper.find('button[data-testid="confirm-edit"]').trigger('click');
 
     const resendCalled = () =>
@@ -434,12 +396,16 @@ describe('Query.vue 编辑重发端到端', () => {
     const { elapsedMs } = await waitFor('S3 兜底定时器应触发携带新文本的重发', resendCalled, {
       progress: () => progressSignature(authFetch.mock.calls.length, queryStore),
     });
-    console.info(`[T02687] S3 兜底重发实测等待 ${elapsedMs}ms（兜底阈值 ${EDIT_RESEND_FALLBACK_MS}ms）`);
+    const sinceClickMs = Date.now() - clickedAt;
+    console.info(
+      `[T02687] S3 兜底重发：点击后 ${sinceClickMs}ms（兜底阈值 ${EDIT_RESEND_FALLBACK_MS}ms）/ ` +
+        `其中 waitFor 轮询 ${elapsedMs}ms`,
+    );
 
     // 取证断言：重发确实发生在兜底定时器阈值之后——旧 2000ms 墙钟预算在此必然判失败。
     expect(
-      elapsedMs,
-      '重发由 S3 兜底定时器触发，耗时应不早于兜底阈值；若小于阈值说明走错了路径',
+      sinceClickMs,
+      '重发由 S3 兜底定时器触发，距确认点击应不早于兜底阈值；若小于阈值说明走错了路径',
     ).toBeGreaterThanOrEqual(EDIT_RESEND_FALLBACK_MS);
     // 断言本身仍成立（未放宽）：兜底路径同样丢弃被编辑消息并重插编辑后的文本
     expect(resendCalled(), 'S3 兜底应触发携带新文本的重发').toBe(true);

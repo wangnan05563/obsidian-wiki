@@ -8,6 +8,7 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
+import { waitForProgress, NO_TIMER_CHAIN } from './helpers/waitForProgress';
 
 // Node 环境无 localStorage/sessionStorage，localVault 需要，提供内存实现（沿用 userConfig-isolation 测试）。
 class MemStorage {
@@ -122,7 +123,9 @@ describe('输入框偏好 store（会话隔离行为）', () => {
     s.applyForUser('storeIbB');
     expect(s.userId).toBe('storeIbB');
     expect(s.settings.fontSize).toBe(14); // 同步重置
-    await new Promise((r) => setTimeout(r, 0)); // 等待异步加载完成
+    // T02753：等 store 自己的加载完成标记（inputBoxSettings.ts:32 `ready`），
+    // 而不是 setTimeout(0) 赌「一轮宏任务就该加载完了」——IndexedDB 读要几轮宏任务并不由我们规定
+    await waitForProgress('切换账户后的异步加载已完成（ready 置位）', () => s.ready === true, NO_TIMER_CHAIN);
     expect(s.settings.fontSize).toBe(14);
 
     // storeIbA 的设置不被覆盖
