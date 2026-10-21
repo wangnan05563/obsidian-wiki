@@ -1,7 +1,6 @@
 ﻿import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { getApiDir } from '../utils/runtime.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // §11.2 断点续传：查询中断的 compile 任务列表。
@@ -12,28 +11,62 @@ import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.
 // §X-1 / §11.2 / §12.3-8 路由：query 步骤级追踪 + compile 续传/日志。
 // 默认挂 requireAuth（与 api 其余端点一致）：这些端点含用户问题、工具结果、编译产物，
 // 不应公开。前端 compile.ts / QueryTracePanel 均经 apiFetch 注入 token，登录态下无感。
-export function registerRunsRoute(app: FastifyInstance, stateDir: string, guards: IsolationGuards = createIsolationGuards()) {
+export function registerRunsRoute(
+  app: FastifyInstance,
+  stateDir: string,
+  guards: IsolationGuards = createIsolationGuards(),
+  // T02772：run-state 目录清单（生产由 index.ts 传入「规范 + 遗留」合并清单）。
+  // 默认只认传入的 stateDir：单测不传即只看自己造的临时目录，不会把真实用户目录读进断言。
+  runStateDirsOverride?: string[],
+) {
   // 日志目录与 state 目录同级：.harness/logs/
   const logDir = path.resolve(stateDir, '..', 'logs');
+  const dirs = runStateDirsOverride ?? [stateDir];
+
+  // 跨目录收集状态文件，按文件名（<runId>.json）去重，目录顺序即优先级。
+  // 为什么规范目录在前：写入合流后新状态一定落在规范目录，遗留目录只用于
+  // 补「升级前跑的那些存量运行」，同名时新数据不会被旧文件盖掉。
+  async function listStateFiles(): Promise<string[]> {
+    const byFileName = new Map<string, string>();
+    for (const dir of dirs) {
+      let names: string[];
+      try {
+        names = await fs.readdir(dir);
+      } catch {
+        // 目录不存在 = 这个来源没有运行记录，继续下一个
+        continue;
+      }
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue;
+        if (!byFileName.has(name)) byFileName.set(name, path.join(dir, name));
+      }
+    }
+    return [...byFileName.values()];
+  }
+
+  // 单 run 读取：按目录顺序返回第一个存在的 <runId>.json 内容，全无则 null。
+  // 调用方已对 runId 做过 UUID 校验，拼接目录不会越权读别的文件。
+  async function readStateFile(fileName: string): Promise<string | null> {
+    for (const dir of dirs) {
+      try {
+        return await fs.readFile(path.join(dir, fileName), 'utf8');
+      } catch {
+        // 该目录没有，试下一个
+      }
+    }
+    return null;
+  }
 
   app.get('/api/compile/runs', { preHandler: guards.requireAuth }, async (_request, reply) => {
     try {
       // 目录不存在时返回空列表：首次使用或清理后 state 目录尚未创建
       // 为什么不在这里 mkdir：state 目录由 compile 流程按需创建，查询接口不应有副作用
-      let files: string[];
-      try {
-        files = await fs.readdir(stateDir);
-      } catch (err: unknown) {
-        if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
-          return void reply.send({ runs: [] });
-        }
-        throw err;
-      }
+      // T02772：清单跨目录收集——升级前落在遗留目录里的运行同样该出现在「中断任务」列表
+      const files = await listStateFiles();
       const runs = [];
-      for (const f of files) {
-        if (!f.endsWith('.json')) continue;
+      for (const file of files) {
         try {
-          const raw = await fs.readFile(path.join(stateDir, f), 'utf8');
+          const raw = await fs.readFile(file, 'utf8');
           const state = JSON.parse(raw) as {
             runId: string;
             status: string;
@@ -91,26 +124,15 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string, guards
 
   // ──────────────────────────────────────────────────────────────
   // §X-1 步骤级追踪：只读 query trace 路由。
-  // query-run 状态由 harness 默认 FileStateStore 落在 api 进程 CWD 相对的
-  // .harness/state（即 getApiDir()/.harness/state），与 compile 的
-  // data/.harness/state 是不同目录，需独立读取。
-  // 该路由对前端"横切 X-1 步骤级追踪面板"提供每步耗时分解（llmMs/toolMs/tokens/toolNames），
-  // 直接定位 143s/282s 级长耗时瓶颈步骤。纯只读，无任何写副作用。
-  const queryStateDir = path.resolve(getApiDir(), '.harness', 'state');
-
+  // query-run 状态的目录口径见 utils/run-state-dirs.ts：历史上 harness 默认
+  // FileStateStore 按**进程 CWD** 落盘（开发模式即 api/.harness/state，本机实测 107 个），
+  // T02772 起写入合流到规范目录，读取仍跨「规范 + 遗留」合并——
+  // 否则换了目录，历史运行的步骤追踪会凭空消失。纯只读，无任何写副作用。
   // 列表：返回历史 query-run 摘要（runId / status / step / tokenUsed / startedAt / 总耗时），
   // 供面板选择某次运行进行下钻。仅读目录，无副作用。
   app.get('/api/query/runs', { preHandler: guards.requireAuth }, async (_request, reply) => {
     try {
-      let files: string[];
-      try {
-        files = await fs.readdir(queryStateDir);
-      } catch (err: unknown) {
-        if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
-          return void reply.send({ runs: [] });
-        }
-        throw err;
-      }
+      const files = await listStateFiles();
       const runs: Array<{
         runId: string;
         status: string;
@@ -119,10 +141,9 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string, guards
         startedAt: string;
         totalMs: number;
       }> = [];
-      for (const f of files) {
-        if (!f.endsWith('.json')) continue;
+      for (const file of files) {
         try {
-          const raw = await fs.readFile(path.join(queryStateDir, f), 'utf8');
+          const raw = await fs.readFile(file, 'utf8');
           const state = JSON.parse(raw) as {
             runId: string;
             status: string;
@@ -164,9 +185,10 @@ export function registerRunsRoute(app: FastifyInstance, stateDir: string, guards
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
         return void reply.code(400).send({ error: '无效的 runId' });
       }
-      const file = path.join(queryStateDir, `${runId}.json`);
+      const fileName = `${runId}.json`;
       try {
-        const raw = await fs.readFile(file, 'utf8');
+        const raw = await readStateFile(fileName);
+        if (raw === null) throw new Error('状态文件不存在');
         const state = JSON.parse(raw) as {
           runId: string;
           task: string;

@@ -40,12 +40,25 @@ function bytesToMb(bytes: number): number {
   return Math.round((bytes / BYTES_PER_MB) * 100) / 100;
 }
 
-export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, guards: IsolationGuards = createIsolationGuards()): void {
+export function registerCleanupRoute(
+  app: FastifyInstance,
+  vault: VaultService,
+  guards: IsolationGuards = createIsolationGuards(),
+  // T02772：run-state 目录清单。生产由 index.ts 传入「规范目录 + 遗留目录」的合并清单；
+  // 默认只认「与 vault 同级」这一个目录——fail-safe 取向：调用方漏传时是「少清一处」，
+  // 而不是「把用户真实目录算进删除清单」（单测都用临时目录，漏传即只碰临时目录）。
+  runStateDirsOverride?: string[],
+): void {
   const vaultPath = vault.getVaultPath();
   // .harness 与 vault 同级（与 index.ts stateDir 计算一致）
   const harnessDir = path.resolve(vaultPath, '..', '.harness');
   const compileCacheFile = path.join(harnessDir, 'compile-cache.json');
   const stateDir = path.join(harnessDir, 'state');
+  // 运行状态可能散在多个目录：写入侧历史上按进程 CWD 落盘，清理侧历史上只认这里，
+  // 两套口径的交集为空时就是本单的原始症状——卡面显示 0 个，磁盘上攒了 100+ 个。
+  // 默认只扫本目录（fail-safe）：合并清单由 index.ts 显式传入，
+  // 调用方漏传的后果是「少清一处」，而不是把用户真实目录算进删除清单。
+  const runStateDirs = runStateDirsOverride ?? [stateDir];
   const logsDir = path.join(harnessDir, 'logs');
   const rawDir = path.join(vaultPath, 'raw');
   // 审计日志：追加到 .harness/cleanup-audit.log（避免引入数据库依赖）
@@ -88,6 +101,28 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
     };
   }
 
+  // 跨目录合并统计（T02772，run_state 专用）：多个目录的文件数/体积相加，
+  // 最早时间取最小值。oldest 是 YYYY-MM-DD 字符串，字典序即时间序，排序取值即可。
+  async function statDirs(dirs: string[], pattern: RegExp): Promise<{ fileCount: number; sizeBytes: number; oldest: string | null }> {
+    const stats = await Promise.all(dirs.map((dir) => statDir(dir, pattern)));
+    let fileCount = 0;
+    let sizeBytes = 0;
+    for (const s of stats) {
+      fileCount += s.fileCount;
+      sizeBytes += s.sizeBytes;
+    }
+    const oldestList = stats.map((s) => s.oldest).filter((v): v is string => v !== null).sort();
+    return { fileCount, sizeBytes, oldest: oldestList[0] ?? null };
+  }
+
+  // 目录标注：遗留目录里的文件必须在结果里一眼看出「它不在规范目录」，
+  // 否则用户看到数量凭空变多，只会以为出现了新缺陷（T02772）。
+  // 规范目录取清单首项（index.ts 组装时保证 [0] 即写入侧规范目录）。
+  const canonicalStateDir = runStateDirs[0];
+  function isLegacyStateDir(dir: string): boolean {
+    return path.resolve(dir).toLowerCase() !== path.resolve(canonicalStateDir).toLowerCase();
+  }
+
   // 审计写入：JSONL 追加，失败不阻塞主流程（与闲鱼 _log_cleanup_action 一致）
   async function writeAudit(entry: Record<string, unknown>): Promise<void> {
     try {
@@ -117,8 +152,9 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
         // 文件不存在或解析失败
       }
 
-      // 运行状态
-      const stateStat = await statDir(stateDir, /\.json$/);
+      // 运行状态：跨「规范目录 + 遗留目录」合并计数（T02772）。
+      // 只报规范目录会显示 0 个，用户据此认为「无需清理」，而真实文件在另一个目录无限增长。
+      const stateStat = await statDirs(runStateDirs, /\.json$/);
       // 运行日志
       const logsStat = await statDir(logsDir, /\.log$/);
       // 原始资料存档（仅清理内部临时前缀文件，避免误删用户命名的源文件）
@@ -243,15 +279,22 @@ export function registerCleanupRoute(app: FastifyInstance, vault: VaultService, 
       }
     }
 
-    // 运行状态清理
+    // 运行状态清理：逐目录收集后再删（T02772）。
+    // 为什么要标出来源目录：预览列表是用户决定「要不要真删」的唯一依据，
+    // 把遗留目录的文件混在规范目录里报，用户无从知道自己清理的是两处历史产物。
     async function cleanupRunState(): Promise<void> {
-      const files = await listFiles(stateDir, /\.json$/);
-      if (files.length === 0) {
+      const collected: Array<{ file: string; dir: string }> = [];
+      for (const dir of runStateDirs) {
+        for (const file of await listFiles(dir, /\.json$/)) {
+          collected.push({ file, dir });
+        }
+      }
+      if (collected.length === 0) {
         if (dryRun) result.cleaned.push('[预览] 无运行状态文件');
         return;
       }
-      for (const f of files) {
-        await cleanupFile(f, `运行状态 ${path.basename(f)}`);
+      for (const { file, dir } of collected) {
+        await cleanupFile(file, `运行状态${isLegacyStateDir(dir) ? '（旧存放位置）' : ''} ${path.basename(file)}`);
       }
     }
 
