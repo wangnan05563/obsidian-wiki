@@ -1,6 +1,7 @@
 ﻿import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import { parseBookmarksHtml } from '../utils/bookmark-connector.js';
+import { getVaultRawDir } from '../utils/cleanup-surface.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 
 // FR-16-2 浏览器书签导入路由
@@ -48,7 +49,12 @@ export function registerBookmarkIngestRoute(app: FastifyInstance, vaultPath: str
       }
 
       // 保存 Markdown 到 raw/ 目录（后续由用户触发 compile）
-      const rawDir = vaultPath.replace(/[\\/]vault$/, '/raw');
+      // T02818：目录改走 utils/cleanup-surface 的 getVaultRawDir，与清理侧、vault.archiveRaw
+      // 同一个函数。原先这里自己拼 `vaultPath.replace(/[\\/]vault$/, '/raw')`，展开结果是
+      // `data/raw`（vault 的**兄弟**目录），而注释与响应文案说的是 vault 内的 raw/：
+      // 落盘在 vault 外，Browse 看不到、清理统计也永远数不到它（本机 `data/raw` 不存在，
+      // 说明这条路径从未真正落到预期位置）。
+      const rawDir = getVaultRawDir(vaultPath);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const rawFilename = `bookmarks-${timestamp}.md`;
       const rawPath = `${rawDir}/${rawFilename}`;

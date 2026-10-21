@@ -9,14 +9,19 @@
 // 不读 .harness/state 文件里的 status 字段：那个字段全仓从未写入过 'running'，
 // 按文件判活跃既会误判历史残留、也会漏掉刚起跑的任务（详见 activity.ts 头注释）。
 //
-// 为什么只拦 run_state 与 raw_archive 两类：
-//  - compile_cache：删了只是「下次编译全量重跑」，属可自愈的代价，且正在执行的编译
-//    已把缓存读进内存，删除不会让它失败（最坏是它结束时把文件又写回来，白占一次空间）。
-//  - run_logs：按 days 过滤，正在写的日志 mtime 必然新于 cutoff，天然删不到；
-//    真删到了被占用的旧日志也只会落进 errors[]，不影响任务本身。
+// 为什么拦 run_state、raw_archive 与 compile_cache 三类：
 //  - run_state：清理**不带 days 过滤**，会把目录里所有 json 无差别删掉，
 //    其中就包括进行中任务的续传基准 → 必须拦。
 //  - raw_archive：进行中/排队中的编译要读原件，删了这次编译拿不到输入 → 必须拦。
+//  - compile_cache（T02818 起纳入）：编译把缓存读进内存，删除不会让它失败，
+//    但它**结束时会把整份内存映射写回** compile-cache.json。于是「清理成功」的响应
+//    （"已删除编译缓存…下次编译将重新生成"）与磁盘事实相反——旧条目一条没少。
+//    原先这里判的是「代价可自愈，不拦」，漏掉的是"假回执"这一半：用户看到已删除，
+//    实际什么都没清掉，而且没有任何地方告诉他缓存回来了。写入方在运行中期落盘，
+//    T02774 的「起跑前先等清理」救不了它（等待发生在写入之前，写入却发生在删除之后），
+//    能闭合这个窗口的只有「有编译在跑就别删缓存」。
+//  - run_logs：按 days 过滤，正在写的日志 mtime 必然新于 cutoff，天然删不到；
+//    真删到了被占用的旧日志也只会落进 errors[]，不影响任务本身。
 import { activeActivities, foreignActiveActivities } from './activity.js';
 import type { ActivityRecord } from './cleanup-cross-process.js';
 import type { CleanupActiveState } from './types.js';
@@ -35,6 +40,12 @@ const BLOCK_RULES: BlockRule[] = [
     target: 'run_state',
     kind: 'compile',
     reason: '有编译任务正在进行：清理会删掉它的断点续传基准，这次编译会直接失败或从头重跑。',
+  },
+  {
+    // T02818：编译结束时会把整份内存缓存写回，删除窗口内的缓存清理必然被它盖回来
+    target: 'compile_cache',
+    kind: 'compile',
+    reason: '有编译任务正在进行：它在完成时会把编译缓存整体写回，这次清理会当场失效（报「已删除」而文件仍在）。',
   },
   {
     target: 'raw_archive',

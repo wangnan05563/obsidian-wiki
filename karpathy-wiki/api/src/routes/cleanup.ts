@@ -23,6 +23,10 @@ import {
   logsDirIn,
   stateDirIn,
 } from '../utils/harness-dirs.js';
+// T02818：删除面的文件名/目录口径收进 utils/cleanup-surface。这里原先有四处内联字面量
+// （raw_archive 正则各写一遍于统计与删除、raw 目录自己拼接），改一处就会让
+// 「卡面显示的数量」与「真正删掉的集合」分叉，也会让写入侧的判定无从对齐。
+import { getVaultRawDir, RAW_ARCHIVE_PATTERN, RUN_LOG_FILE_PATTERN, RUN_STATE_FILE_PATTERN } from '../utils/cleanup-surface.js';
 
 // 系统清理路由。
 //   GET  /api/cleanup/status   查询 4 类对象存储状态
@@ -96,7 +100,8 @@ export function registerCleanupRoute(
   // 调用方漏传的后果是「少清一处」，而不是把用户真实目录算进删除清单。
   const runStateDirs = runStateDirsOverride ?? [stateDir];
   const logsDirs = harnessDirs.map(logsDirIn);
-  const rawDir = path.join(vaultPath, 'raw');
+  // T02818：与写入侧（vault.archiveRaw、书签导入）共用同一个函数算出删除目标目录
+  const rawDir = getVaultRawDir(vaultPath);
   // 审计日志：追加到 .harness/cleanup-audit.log（避免引入数据库依赖）
   const auditLog = auditFileIn(harnessDir);
 
@@ -143,7 +148,7 @@ export function registerCleanupRoute(
   // 而不是两条代码路径碰巧算出同一个数——T02772 的缺陷正是「两套口径各算一套」。
   // sizeBytes/oldest 只在本函数内参与合并统计，不进响应体。
   async function statRunStateDir(dir: string): Promise<CleanupRunStateDir & { sizeBytes: number; oldest: string | null }> {
-    const s = await statDir(dir, /\.json$/);
+    const s = await statDir(dir, RUN_STATE_FILE_PATTERN);
     return {
       path: dir,
       fileCount: s.fileCount,
@@ -225,9 +230,9 @@ export function registerCleanupRoute(
       }));
       const runStateMerged = mergeDirStats(runStateStats);
       // 运行日志：同编译缓存逐根合并
-      const logsStat = mergeDirStats(await Promise.all(logsDirs.map((dir) => statDir(dir, /\.log$/))));
+      const logsStat = mergeDirStats(await Promise.all(logsDirs.map((dir) => statDir(dir, RUN_LOG_FILE_PATTERN))));
       // 原始资料存档（仅清理内部临时前缀文件，避免误删用户命名的源文件）
-      const rawStat = await statDir(rawDir, /^(wiki-batch-|wiki-compile-|input-).*/);
+      const rawStat = await statDir(rawDir, RAW_ARCHIVE_PATTERN);
 
       const status: CleanupStorageStatus = {
         // T02655：活跃任务快照。前端据此逐卡置灰；口径与 POST 守卫同源（cleanup-guard）。
@@ -473,7 +478,7 @@ export function registerCleanupRoute(
     async function cleanupRunState(): Promise<void> {
       const collected: Array<{ file: string; dir: string }> = [];
       for (const dir of runStateDirs) {
-        for (const file of await listFiles(dir, /\.json$/)) {
+        for (const file of await listFiles(dir, RUN_STATE_FILE_PATTERN)) {
           collected.push({ file, dir });
         }
       }
@@ -490,7 +495,7 @@ export function registerCleanupRoute(
     async function cleanupRunLogs(): Promise<void> {
       const collected: Array<{ file: string; dir: string }> = [];
       for (const dir of logsDirs) {
-        for (const file of await listFiles(dir, /\.log$/)) {
+        for (const file of await listFiles(dir, RUN_LOG_FILE_PATTERN)) {
           collected.push({ file, dir });
         }
       }
@@ -519,7 +524,7 @@ export function registerCleanupRoute(
 
     // 原始资料存档清理（按 days）
     async function cleanupRawArchive(): Promise<void> {
-      const files = await listFiles(rawDir, /^(wiki-batch-|wiki-compile-|input-).*/);
+      const files = await listFiles(rawDir, RAW_ARCHIVE_PATTERN);
       if (files.length === 0) {
         if (dryRun) result.cleaned.push('[预览] 无原始资料存档');
         return;
