@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url';
 import {
   NESTED_PAGE_DIRS,
   PAGE_DIRS,
+  PAGE_DIR_TO_TYPE,
+  TYPE_TO_PAGE_DIR,
   WRITABLE_DIRS,
   pageDepthError,
   flatPagePathHint,
@@ -199,5 +201,33 @@ describe('D · 单一来源与提示词同口径', () => {
     // MCP 侧同理：allowWrite 分支才判深度
     const tools = await read('api/src/mcp/tools.ts');
     expect(tools).toMatch(/if \(allowWrite\) \{[\s\S]*?pageDepthError\(norm\)/);
+  });
+
+  // T02797：写侧拒收 + 读侧归位是同一套口径的两半，检测/归位不得自带第二份目录清单，
+  //   否则 PAGE_DIRS 扩容时又会退回「一侧知道、一侧看不见」。
+  it('错位页检测与归位复用同一份目录口径，不自带页面目录字面量', async () => {
+    const scanner = await read('api/src/data-clean/misplaced-pages.ts');
+    const imported = scanner.match(/import \{([\s\S]*?)\} from '\.\.\/vault\/page-scope\.js'/);
+    expect(imported, '必须从 page-scope 取目录口径').toBeTruthy();
+    for (const name of ['PAGE_DIRS', 'NESTED_PAGE_DIRS', 'TYPE_TO_PAGE_DIR', 'isPageFile']) {
+      expect(imported![1], `检测应引用 ${name}`).toContain(name);
+    }
+    // 页面目录名只允许出现在注释里（说明成因时用）：不得出现「自带目录数组」的判断
+    expect(scanner, '不得自带页面目录清单').not.toMatch(/=\s*\['(?:entities|concepts|comparisons|queries|qa|solutions)'/);
+    expect(scanner, '媒体归档例外不得写死字面量').not.toMatch(/['"]queries\/media['"]/);
+    // 归位落点由反查表给出，而不是硬编码 entities/... 之类
+    expect(scanner).toContain('TYPE_TO_PAGE_DIR[type] ?? topDir');
+  });
+
+  it('TYPE_TO_PAGE_DIR 是 PAGE_DIR_TO_TYPE 的双射反量（有重复 type 时反查会静默丢一侧）', async () => {
+    const dirs = Object.keys(PAGE_DIR_TO_TYPE);
+    const types = Object.values(PAGE_DIR_TO_TYPE);
+    expect(new Set(types).size, '两个目录共用一个 type 时，先改映射再动本用例').toBe(types.length);
+    expect(new Set(dirs).size).toBe(dirs.length);
+    for (const d of dirs) expect(TYPE_TO_PAGE_DIR[PAGE_DIR_TO_TYPE[d]]).toBe(d);
+    for (const t of types) expect(PAGE_DIR_TO_TYPE[TYPE_TO_PAGE_DIR[t]]).toBe(t);
+    expect(Object.keys(TYPE_TO_PAGE_DIR).sort()).toEqual([...types].sort());
+    // 反查值必须仍是合法页面目录（否则归位会把页面搬进白名单外的目录）
+    for (const d of Object.values(TYPE_TO_PAGE_DIR)) expect(PAGE_DIRS).toContain(d);
   });
 });

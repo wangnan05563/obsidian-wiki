@@ -3,6 +3,8 @@ import type { AppConfig } from '../types.js';
 import { VaultService } from '../vault/vault-service.js';
 import { scanVault, archiveFiles, fixFrontmatter, mergeDuplicatePages, deleteFiles, precheckVault, batchRename, batchDedupPages } from '../data-clean/quality-scanner.js';
 import { deduplicatePages } from '../data-clean/dedup-engine.js';
+// T02797：子目录中的页面（存量错位页隐身）——检测只读、归位是破坏性动作
+import { detectMisplacedPages, promoteMisplacedPages } from '../data-clean/misplaced-pages.js';
 import { analyzeVaultForCleanup } from '../data-clean/ai-analysis-workflow.js';
 import { compareFiles, isValidVaultPath } from '../data-clean/diff-engine.js';
 import { SchedulerManager } from '../data-clean/scheduler-manager.js';
@@ -114,6 +116,32 @@ export function registerDataCleanRoute(app: FastifyInstance, vault: VaultService
   app.get('/api/data-clean/precheck', async (_req, reply) => {
     try {
       const result = await precheckVault(vault);
+      return void reply.send(result);
+    } catch (err) {
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ─── T02797 子目录中的页面 ─────────────────────────────────
+  // 为什么要单列一组端点而不塞进 /pages：错位页按口径**不算页面**（列表/统计/图谱都扫不到它），
+  //   混进同一张表会让本页「页面总数」与仪表盘重新对不上——那正是 T02472 修过的同源缺陷。
+  // GET 只读；POST 是破坏性动作，沿用本页既有约定：requireAdmin + dry_run 预览（默认 true）。
+  app.get('/api/data-clean/misplaced', async (_req, reply) => {
+    try {
+      return void reply.send(await detectMisplacedPages(vault));
+    } catch (err) {
+      return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/data-clean/misplaced/promote', { preHandler: guards.requireAdmin }, async (req, reply) => {
+    try {
+      const body = req.body as any;
+      if (!Array.isArray(body?.paths) || body.paths.length === 0) {
+        return void reply.code(400).send({ error: 'Invalid request: paths array required' });
+      }
+      // 落点由服务端按 frontmatter 的 type 重算，请求体只给待归位的现状路径
+      const result = await promoteMisplacedPages(vault, body.paths.map(String), body.dry_run ?? true);
       return void reply.send(result);
     } catch (err) {
       return void reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
