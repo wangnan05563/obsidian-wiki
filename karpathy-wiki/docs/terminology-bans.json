@@ -4,7 +4,8 @@
   "_rules": {
     "扫描口径": "逐行匹配整行原文；以 //、/*、*、<!-- 开头的整行豁免（修复说明必须能点名旧词）",
     "新增禁用词流程": "先改 docs/术语表.md 的对应分组，再在这里加一条 term/why，两侧用例即刻生效",
-    "豁免": "exempt 的键是扫描侧（frontend / api），值是相对各自 src 的正斜杠路径；豁免只用于「外部语境」这类有正当理由的整文件例外，不用于单行放行"
+    "豁免": "exempt 的键只能是扫描侧（frontend / api），值分两级，路径相对各自 src、正斜杠：files=整文件豁免 [{file,reason}]，lines=行级豁免 [{file,contains,reason}]。两级 reason 必填；lines.contains 必须在目标文件里唯一命中一行且该行确实含该禁用词，否则守护用例报错。",
+    "豁免粒度选择": "默认用 lines（行级）——整文件放行会让该文件其余用户可见文案一起失去守护（T02790）。只有确实整篇都是外部语境的文档型文件才允许 files，并在 reason 里写清为什么。"
   },
   "bans": [
     { "term": "知识库文档", "why": "知识库产物是「页面」（§2）" },
@@ -16,7 +17,19 @@
     {
       "term": "笔记",
       "why": "「笔记」只允许出现在外部语境（Obsidian 笔记 / 记事本）",
-      "exempt": { "frontend": ["views/Help.vue"] }
+      "exempt": {
+        "frontend": {
+          "files": [],
+          "lines": [
+            {
+              "file": "views/Help.vue",
+              "contains": "将外部资料（Obsidian 笔记、网页文章、技术文档）导入知识库",
+              "reason": "术语表 §2 外部语境：帮助页「使用场景」如实指外部真实对象 Obsidian 笔记，不是把知识库页面叫笔记（T02790 从整文件豁免收窄为行级）"
+            }
+          ]
+        },
+        "api": { "files": [], "lines": [] }
+      }
     },
     { "term": ">URI<", "why": "一律 URL（§5）" },
     { "term": "SEARCHING...", "why": "加载态用中文（§6）" },

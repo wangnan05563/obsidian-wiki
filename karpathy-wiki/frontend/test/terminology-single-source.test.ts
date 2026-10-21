@@ -14,14 +14,34 @@ import path from 'node:path';
 // 共享的是「哪些词禁用、为什么禁、谁可以豁免」这部分真正会分叉的数据。
 
 const SRC_DIR = path.resolve(__dirname, '../src');
+const API_SRC_DIR = path.resolve(__dirname, '../../api/src');
 const DOC_PATH = path.resolve(__dirname, '../../docs/术语表.md');
 const BANS_PATH = path.resolve(__dirname, '../../docs/terminology-bans.json');
+// 豁免登记里的路径相对各自 src，两侧守护都要能解析对方那一侧的登记（写错一侧就是死豁免）
+const SIDE_ROOTS: Record<string, string> = { frontend: SRC_DIR, api: API_SRC_DIR };
+
+interface LineExempt {
+  file: string;
+  // 行级豁免的定位片段：必须在目标文件里唯一命中一行，且该行确实含该禁用词
+  contains: string;
+  reason: string;
+}
+
+interface FileExempt {
+  file: string;
+  reason: string;
+}
+
+interface SideExempt {
+  files?: FileExempt[];
+  lines?: LineExempt[];
+}
 
 interface Ban {
   term: string;
   why: string;
-  // 允许出现的文件（相对各自 src，正斜杠）——外部语境豁免，见术语表 §2；按扫描侧分组
-  exempt?: Record<string, string[]>;
+  // 豁免按扫描侧分组（键只能是 frontend / api）；两级粒度见 docs/terminology-bans.json 的 _rules.豁免
+  exempt?: Record<string, SideExempt>;
 }
 
 interface BansFile {
@@ -36,6 +56,17 @@ function loadSharedBans(): Ban[] {
 }
 
 const BANS: Ban[] = loadSharedBans();
+
+// T02790：豁免有两级粒度。行级（lines）是默认选择——整文件放行会让该文件
+// 其余用户可见文案一起失去守护，与 T02705 要消灭的「静默分叉」同类，只是粒度更细。
+// 两侧守护用例必须用同一套判定口径，故本函数在 api/test/terminology-bans.test.ts 里有逐字一致的副本，
+// 由下方「两侧扫描实现不漂移」用例做一致性断言。
+export function isExempted(ban: Ban, side: 'frontend' | 'api', rel: string, text: string): boolean {
+  const exempt = ban.exempt?.[side];
+  if (!exempt) return false;
+  if (exempt.files?.some((e) => e.file === rel)) return true;
+  return (exempt.lines ?? []).some((e) => e.file === rel && text.includes(e.contains));
+}
 
 function collectSourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -58,13 +89,19 @@ interface Hit {
   text: string;
 }
 
-// 单行扫描口径：注释行豁免（见下），其余原样比对。抽出来是为了能被反向用例复用。
+// 整行注释豁免口径：修复说明必须能点名旧词，所以注释不参与扫描。
+// 与 isExempted 一样，两侧守护各留一份但由「实现逐字一致」用例锁死。
+export function isCommentLine(text: string): boolean {
+  return text.startsWith('//') || text.startsWith('/*') || text.startsWith('*') || text.startsWith('<!--');
+}
+
+// 单行扫描口径：注释行豁免（见上），其余原样比对。抽出来是为了能被反向用例复用。
 function scanLine(rel: string, raw: string, line: number): Hit[] {
   const text = raw.trim();
-  if (text.startsWith('//') || text.startsWith('/*') || text.startsWith('*') || text.startsWith('<!--')) return [];
+  if (isCommentLine(text)) return [];
   const hits: Hit[] = [];
   for (const ban of BANS) {
-    if (ban.exempt?.frontend?.includes(rel)) continue;
+    if (isExempted(ban, 'frontend', rel, text)) continue;
     if (text.includes(ban.term)) {
       hits.push({ file: rel, line, term: ban.term, why: ban.why, text: text.slice(0, 90) });
     }
@@ -113,7 +150,91 @@ describe('T02475 术语表守护（PRD X1）', () => {
     expect(scanLine('views/Demo.vue', `// 已把「知识库文档」改为「知识库页面」`, 1)).toEqual([]);
   });
 
+  it('豁免登记自审：只认 frontend/api 两侧、理由必填、登记的文件真实存在（T02790）', () => {
+    for (const ban of BANS) {
+      for (const [side, exempt] of Object.entries(ban.exempt ?? {})) {
+        expect(SIDE_ROOTS[side], `禁用词「${ban.term}」的豁免键「${side}」不是合法扫描侧（写错侧名 = 豁免永不生效）`).toBeDefined();
+        for (const entry of exempt.files ?? []) {
+          expect(entry.reason?.trim(), `「${ban.term}」在 ${side} 的整文件豁免 ${entry.file} 未写理由`).not.toBe('');
+          expect(
+            fs.existsSync(path.join(SIDE_ROOTS[side], entry.file)),
+            `「${ban.term}」的整文件豁免指向不存在的文件：${side}/${entry.file}`,
+          ).toBe(true);
+        }
+        for (const entry of exempt.lines ?? []) {
+          expect(entry.reason?.trim(), `「${ban.term}」在 ${side}/${entry.file} 的行级豁免未写理由`).not.toBe('');
+          expect(entry.contains?.trim(), `「${ban.term}」在 ${side}/${entry.file} 的行级豁免缺定位片段`).not.toBe('');
+          expect(
+            fs.existsSync(path.join(SIDE_ROOTS[side], entry.file)),
+            `「${ban.term}」的行级豁免指向不存在的文件：${side}/${entry.file}`,
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('行级豁免必须唯一命中，且命中的那行真的含禁用词（防豁免宽化成整文件放行）', () => {
+    for (const ban of BANS) {
+      for (const [side, exempt] of Object.entries(ban.exempt ?? {})) {
+        for (const entry of exempt.lines ?? []) {
+          const lines = fs
+            .readFileSync(path.join(SIDE_ROOTS[side], entry.file), 'utf8')
+            .split(/\r?\n/)
+            .map((raw) => raw.trim());
+          const matched = lines.filter((text) => text.includes(entry.contains));
+          expect(
+            matched.length,
+            `「${ban.term}」在 ${side}/${entry.file} 的定位片段命中 ${matched.length} 行，要求恰好 1 行（多行命中等于变相整文件放行）`,
+          ).toBe(1);
+          expect(matched[0], `「${ban.term}」的行级豁免指向的行并不含该禁用词：${side}/${entry.file}`).toContain(ban.term);
+          // 命中行必须是生效代码行：写在注释里本来就被豁免，登记它只会掩盖真实漏网
+          expect(isCommentLine(matched[0]), `「${ban.term}」的行级豁免指向注释行（本来就是豁免行）：${side}/${entry.file}`).toBe(
+            false,
+          );
+        }
+      }
+    }
+  });
+
+  it('「笔记」的豁免粒度已收窄：整文件通道不得再放行 Help.vue（T02790 回退锁）', () => {
+    const notes = BANS.find((b) => b.term === '笔记');
+    expect(notes?.exempt?.frontend?.files ?? [], '整文件豁免被重新启用——该文件其余用户可见文案会一起失去守护').toEqual([]);
+    expect(notes?.exempt?.frontend?.lines?.length, '行级豁免登记缺失').toBeGreaterThan(0);
+    // 后端没有任何「笔记」的正当外部语境：api 侧两级通道都必须为空
+    expect(notes?.exempt?.api?.files ?? [], '后端不应有整文件豁免').toEqual([]);
+    expect(notes?.exempt?.api?.lines ?? [], '后端不应有行级豁免').toEqual([]);
+  });
+
+  it('反向用例：行级豁免只放过声明的那一行，同文件下一行写旧词仍然红', () => {
+    const entry = BANS.find((b) => b.term === '笔记')?.exempt?.frontend?.lines?.[0];
+    expect(entry, '缺少行级豁免登记，本用例无从验证').toBeTruthy();
+    // 声明的那一行：绿
+    expect(scanLine(entry!.file, `content: '${entry!.contains}，建立可问答的知识图谱。',`, 189)).toEqual([]);
+    // 同文件相邻行写旧词：仍然红。把豁免改回整文件生效时，这一条必红
+    const extra = scanLine(entry!.file, `content: '这是本地笔记，先导入进来';`, 190);
+    expect(extra.map((h) => h.term)).toContain('笔记');
+  });
+
+  it('两侧豁免判定与注释口径的实现逐字一致（扫描口径不许各写一份）', () => {
+    const sides: Array<[string, string]> = [
+      ['frontend/test/terminology-single-source.test.ts', __dirname],
+      ['api/test/terminology-bans.test.ts', path.resolve(__dirname, '../../api/test')],
+    ];
+    const bodies = sides.map(([rel, dir]) => {
+      const src = fs.readFileSync(path.resolve(dir, path.basename(rel)), 'utf8');
+      const out: string[] = [];
+      for (const name of ['isExempted', 'isCommentLine']) {
+        const m = src.match(new RegExp(`export function ${name}\\([\\s\\S]*?\\n}`));
+        expect(m, `${rel} 缺少可比的 ${name} 实现`).not.toBeNull();
+        out.push(m![0].replace(/\s+/g, ' ').trim());
+      }
+      return out.join('\n');
+    });
+    expect(bodies[1], 'api 侧的豁免/注释判定口径已与前端漂移（共享的是清单，判定也必须同源）').toBe(bodies[0]);
+  });
+
   it('清单来自共享 JSON，两个守护用例都不再本地硬编码禁用词（T02705 防分叉）', () => {
+
     const shared = (JSON.parse(fs.readFileSync(BANS_PATH, 'utf8')) as BansFile).bans;
     expect(BANS.length, '本用例加载的条数必须等于共享清单条数').toBe(shared.length);
     expect(shared.length).toBeGreaterThanOrEqual(20);
