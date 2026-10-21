@@ -7,6 +7,9 @@ import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.
 // 为什么后端注入而非前端重算：knowledge_status 判定在 utils/knowledge-status.ts，前端无该逻辑，
 //   注入单一来源保证 Browse 角标与问答/健康检查三处取值一致。
 import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
+// T02731：公开媒体前缀与「合法嵌套目录」白名单同源——写盘深度校验放行 queries/media，
+// 这里也只服务同一前缀；两处各写一遍字面量时，改一处就会让「能写出去的文件伺服不出来」。
+import { NESTED_PAGE_DIRS } from '../vault/page-scope.js';
 
 // 注册文件管理路由。
 //   GET  /api/files/tree          获取 Vault 目录树
@@ -98,7 +101,7 @@ function mapVaultReadError(err: unknown): { status: number; message: string } {
 // 路径格式：GET /api/media/file/image-<uuid>.png → vault readFileBuffer('queries/media/image-<uuid>.png')
 // 仅服务 queries/media/ 子目录：生成的图像/视频统一归档于此，公开路由不暴露 queries/ 顶层
 // （避免误服务爬虫附件、用户文档等其它 vault 内容）；.md 文本仍被 BINARY_EXTENSIONS 拦截返回 400。
-const MEDIA_PREFIX = 'queries/media/';
+const MEDIA_PREFIX = `${NESTED_PAGE_DIRS[0]}/`;
 const MEDIA_PATH_RE = /^([a-zA-Z0-9_\-./]+)$/; // 防路径穿越：仅允许字母数字._-/.
 
 // 解析 RFC 7233 Range 头（bytes=start-end），返回有效区间或 null。

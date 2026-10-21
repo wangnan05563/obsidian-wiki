@@ -14,6 +14,8 @@ import { searchPages } from '../search-util.js';
 import {
   WRITABLE_DIRS as PAGE_WRITABLE_DIRS,
   READABLE_DIRS as PAGE_READABLE_DIRS,
+  pageDepthError,
+  flatPagePathHint,
 } from '../vault/page-scope.js';
 import {
   suggestTagsForPage,
@@ -63,6 +65,11 @@ function validateKbPath(rel: string, allowWrite: boolean): string {
   if (!top) throw new Error(`非法路径: ${rel}`);
   if (allowWrite) {
     if (!WRITABLE_DIRS.has(top)) throw new Error(`写入被拒绝，目录不在白名单: ${rel}`);
+    // T02731：目录白名单只看顶层，`concepts/entity/x.md` 这类「子目录里的页面」会照样落盘，
+    // 而全库枚举页面是 flat readdir → 这类页永远不进列表/统计/链接图/搜索（静默丢失）。
+    // 在工具边界就用与 VaultService.writeFile 同一份深度规则报错，让调用方拿到可纠正的文案。
+    const depthError = pageDepthError(norm);
+    if (depthError) throw new Error(depthError);
   } else if (!READABLE_DIRS.includes(top)) throw new Error(`读取被拒绝，目录不在白名单: ${rel}`);
   if (/(^|\/)\.\.(\/|$)/.test(norm)) throw new Error(`路径越界: ${rel}`);
   return norm;
@@ -201,7 +208,7 @@ const definitions: McpTool[] = [
   // ── 维护 / 增强类（8）──
   {
     name: 'vault_write_page',
-    description: '写入/覆盖知识库页面内容（Markdown，含 frontmatter），需存在于白名单目录。',
+    description: `写入/覆盖知识库页面内容（Markdown，含 frontmatter），需存在于白名单目录；${flatPagePathHint()}。`,
     write: true,
     inputSchema: {
       type: 'object',

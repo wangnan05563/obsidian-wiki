@@ -3,7 +3,7 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import { watch, type FSWatcher } from 'chokidar';
 // T02472 L1：页面口径（目录白名单 + 页面文件判定）单点定义，与数据清洗/统计接口共用
-import { PAGE_DIRS, isPageFile, WRITABLE_DIRS, INIT_DIRS } from './page-scope.js';
+import { PAGE_DIRS, isPageFile, WRITABLE_DIRS, INIT_DIRS, pageDepthError } from './page-scope.js';
 
 // 将底层 fs 读取错误包装为带 code 的 Error，保留准确文案（区分不存在/目录/权限/其它）。
 // 为什么需要：路由层需按 HTTP 状态码分流（目录→400、权限→403、不存在→404、其它→500），
@@ -385,6 +385,13 @@ export class VaultService {
     const allowed = WRITE_ALLOWED_DIRS.has(top) || WRITE_ALLOWED_FILES.has(relativePath.replaceAll('\\', '/'));
     if (!allowed) {
       throw new Error(`写入被拒绝，路径不在白名单: ${relativePath}`);
+    }
+    // T02731：白名单只比顶层目录，拦不住 `concepts/entity/x.md` 这类「目录里再套子目录」的错位页。
+    // 错位页会被所有 flat readdir 跳过（列表/统计/链接图/搜索/体检都看不见），等于静默丢失，
+    // 故在唯一的写盘入口拒绝并给出可直接回给 LLM 的纠正文案（工具层抛错会作为 tool 结果回喂，AI 可改写路径重试）。
+    const depthError = pageDepthError(relativePath);
+    if (depthError) {
+      throw new Error(depthError);
     }
     await fs.mkdir(path.dirname(full), { recursive: true });
     // Buffer 直接写入避免 utf8 编码破坏二进制数据；string 保持 utf8 编码

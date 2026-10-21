@@ -5,7 +5,7 @@ import type { ToolDefinition, HarnessConfig, StepResult } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
 // T02686：目录集合取自 page-scope 单一来源
-import { TITLE_DEDUPE_DIRS, PAGE_DIR_TO_TYPE, pageDirsSlash } from '../vault/page-scope.js';
+import { TITLE_DEDUPE_DIRS, PAGE_DIR_TO_TYPE, pageDirsSlash, flatPagePathHint } from '../vault/page-scope.js';
 import type { CompileInput, ProgressEvent, AppConfig } from '../types.js';
 import { RunLogger } from '../run-logger.js';
 import { CompileCache } from '../compile-cache.js';
@@ -198,10 +198,10 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
     },
     {
       name: 'write_file',
-      description: `写入 Wiki 页面（含 frontmatter）。仅允许 ${pageDirsSlash()}/ 目录。`,
+      description: `写入 Wiki 页面（含 frontmatter）。仅允许 ${pageDirsSlash()}/ 目录；${flatPagePathHint()}（否则页面不会被知识库索引到）。`,
       parameters: objSchema(
         {
-          path: { type: 'string', description: '页面相对路径，如 concepts/llm-wiki.md' },
+          path: { type: 'string', description: `页面相对路径，形如 concepts/llm-wiki.md（${flatPagePathHint()}）` },
           content: { type: 'string', description: '页面完整内容（含 frontmatter）' },
         },
         ['path', 'content'],

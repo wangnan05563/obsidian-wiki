@@ -88,3 +88,47 @@ export const VAULT_DIR_SETS: Record<string, string[]> = {
   init: INIT_DIRS,
   titleDedupe: TITLE_DEDUPE_DIRS,
 };
+
+// ============================================================
+// T02731：页面路径「深度」口径（顶层目录之后不得再有子目录）。
+// 为什么与目录清单放在一起：可写白名单只看顶层目录（`concepts/entity/x.md` 的顶层是
+//   concepts，照样通过），于是一条 AI 写入把页面塞进了二层子目录。而全库枚举页面都是
+//   对 PAGE_DIRS 逐个 flat readdir + `endsWith('.md')` 过滤（listPages / 链接图 / 统计 /
+//   搜索 / 体检 / 标签），子目录名不以 .md 结尾被直接跳过 —— 页面落了盘却永远不会出现在
+//   任何列表里，也解析不出 [[引用]]，表现为「投递交数正常但知识库查无此页」的静默丢失。
+// 因此深度规则必须和白名单同源，写盘入口（VaultService.writeFile）只判一次即可覆盖
+//   编译 / 体检修复 / QQ 导入 / MCP / 前端编辑全部写入方（工具层注释即写明「工具层无需重复校验」）。
+// ============================================================
+
+/**
+ * 顶层目录之后允许再多一层的「嵌套目录」白名单。
+ * 唯一成员 queries/media 的由来：生图/视频/pptx 产物统一归档在此，
+ * routes/files.ts 的公开媒体路由只服务该前缀（MEDIA_PREFIX 由本集合派生，不另写一遍），
+ * 二进制文件与 .md 归档同处一层，属刻意设计而非错位。
+ */
+export const NESTED_PAGE_DIRS: string[] = ['queries/media'];
+
+/**
+ * 校验页面路径深度，返回 null 表示合法，否则返回可直接回给 AI/用户的报错文案。
+ * 规则：`<可写顶层目录>/<文件名>` 两段；NESTED_PAGE_DIRS 下的 `<目录>/<子目录>/<文件名>` 三段。
+ * 为什么返回文案而不是抛异常：写盘入口与 MCP 工具层都要用同一句话，异常只在调用方各自包装。
+ */
+export function pageDepthError(relativePath: string): string | null {
+  const norm = relativePath.replaceAll('\\', '/');
+  const segments = norm.split('/').filter((s) => s.length > 0);
+  // 一段（vault 根下的 index.md/log.md 等白名单文件）与两段（常规页面）都合法
+  if (segments.length <= 2) return null;
+  if (segments.length === 3 && NESTED_PAGE_DIRS.includes(`${segments[0]}/${segments[1]}`)) return null;
+  return (
+    `写入被拒绝：知识库页面必须直接放在顶层目录下，不要在目录里再建子目录。` +
+    `正确形如 ${pageDirsSlash()}/<文件名>.md（当前路径：${norm}）`
+  );
+}
+
+/**
+ * 面向 LLM 的路径写法提示：写盘工具的 description 用它，与 pageDepthError 同口径。
+ * 为什么单列：校验会拒写，但提示词落后于校验时 LLM 会反复撞同一堵墙（T02686 的「qa 写不进去」即同类）。
+ */
+export function flatPagePathHint(): string {
+  return '路径必须是「顶层目录/文件名.md」两段，不要在目录里再建子目录';
+}
