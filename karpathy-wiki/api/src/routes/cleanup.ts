@@ -10,6 +10,8 @@ import type {
 import type { VaultService } from '../vault/vault-service.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
 import { currentActiveState, evaluateCleanupGuard, guardErrorMessage } from '../cleanup-guard.js';
+// T02774：真实清理的独占锁（把「守卫通过 ~ 删除完成」的窗口封成机制上的零）
+import { acquireCleanup, type CleanupHandle } from '../cleanup-mutex.js';
 
 // 系统清理路由。
 //   GET  /api/cleanup/status   查询 4 类对象存储状态
@@ -204,10 +206,14 @@ export function registerCleanupRoute(
     // T02655 活跃任务硬拦截：仅在真实删除模式下判定。
     // 为什么不拦预览：预览不删任何文件，拦它反而让用户看不到「会删哪些」，
     // 阻碍他做「要不要真删」的判断。
-    // 残留窗口（如实记录）：GET status 与本守卫之间、以及本守卫与删除动作之间，
-    // 任务仍可能刚起跑（毫秒级窗口）。此前是「整场编译期间都可能误删」，
-    // 现在收窄为「恰好在删除窗口内起跑的任务」；彻底闭环需要清理与编译互斥，
-    // 已建派生单跟进，不在本单扩大改动面。
+    //
+    // T02774 起窗口已闭合（原先这里写的是「毫秒级残留窗口，彻底闭环需清理与编译互斥」）：
+    // 守卫判定与取得独占锁在**同一个同步块**内、中间没有任何 await，
+    // 而所有会读写被清理对象的起跑点（withCompileLock / 内联问答 / StreamRunManager）
+    // 都先 `await awaitCleanupIdle()` 再登记活跃——清理持锁期间不可能有新任务起跑。
+    // 单向优先级：已开始的清理先做完，后来的任务排队（等待不拒绝，任务只是晚一点起跑）。
+    // 不互锁：清理不会等任务（判到活跃直接 409），任务只等清理，两条等待链不成环。
+    let cleanupHandle: CleanupHandle | null = null;
     if (!dryRun) {
       const verdict = evaluateCleanupGuard(target);
       if (verdict.blocked.length > 0) {
@@ -232,6 +238,33 @@ export function registerCleanupRoute(
         });
         return void reply.code(409).send(blocked);
       }
+
+      // 紧跟守卫：拿不到锁说明上一次真实清理还在删（本进程同时只允许一个清理）。
+      // 这里同样是 409 而非排队——两个清理请求并发意味着用户点了两次「真删」，
+      // 让第二个静默排队反而会出现「同一目标被连删两次」的困惑结果。
+      const handle = acquireCleanup();
+      if (!handle) {
+        const active = currentActiveState();
+        const reason = '上一次真实清理仍在进行中（同一时刻只允许一次删除），本次已拒绝执行。';
+        const blocked: CleanupBlockedResponse = {
+          error: reason,
+          code: 'cleanup_blocked_by_concurrent_cleanup',
+          target,
+          blocked: [],
+          reasons: [reason],
+          active,
+        };
+        await writeAudit({
+          ts: new Date().toISOString(),
+          target,
+          days,
+          dry_run: false,
+          blocked_by_concurrent_cleanup: true,
+          active,
+        });
+        return void reply.code(409).send(blocked);
+      }
+      cleanupHandle = handle;
     }
 
     const result: CleanupResult = {
@@ -381,26 +414,35 @@ export function registerCleanupRoute(
       if (totalFreedBytes > 0) {
         result.total_freed_mb = Math.max(MIN_REPORTED_MB, bytesToMb(totalFreedBytes));
       }
-
-      // 审计写入（dry_run 模式也记录，便于回溯预览操作）
-      await writeAudit({
-        ts: new Date().toISOString(),
-        target,
-        days,
-        dry_run: dryRun,
-        cleaned_count: result.count,
-        error_count: result.errors.length,
-        total_freed_mb: result.total_freed_mb ?? 0,
-        cleaned_items: result.cleaned.slice(0, 20),
-        errors: result.errors.slice(0, 5),
-      });
-
-      return void reply.send(result);
     } catch (err: unknown) {
-      // 兜底：未预期异常返回 500
+      // 兜底：未预期异常返回 500（finally 仍会释放锁，异常路径不得把锁留在持有态）
       return void reply.code(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      cleanupHandle?.release();
     }
+
+    // 审计写入（dry_run 模式也记录，便于回溯预览操作）。
+    // 位置在 try 之后：deferredTasks() 只有等 release() 放行排队任务之后才是完整计数，
+    // 写在 try 里会恒为 0，「完成清理时曾有任务排队等待」这条台账口径就失去意义（T02774 验收）。
+    await writeAudit({
+      ts: new Date().toISOString(),
+      target,
+      days,
+      dry_run: dryRun,
+      cleaned_count: result.count,
+      error_count: result.errors.length,
+      total_freed_mb: result.total_freed_mb ?? 0,
+      cleaned_items: result.cleaned.slice(0, 20),
+      errors: result.errors.slice(0, 5),
+      // T02774：台账据此区分三种情形——预览（locked=false）、被拦（另一条分支带 blocked_* 标记）、
+      // 以及真实删除完成时有多少任务在排队等待。
+      cleanup_locked: cleanupHandle !== null,
+      cleanup_deferred_tasks: cleanupHandle?.deferredTasks() ?? 0,
+      cleanup_held_ms: cleanupHandle?.heldMs() ?? 0,
+    });
+
+    return void reply.send(result);
   });
 }

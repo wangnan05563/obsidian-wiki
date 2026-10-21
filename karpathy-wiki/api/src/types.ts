@@ -1006,12 +1006,16 @@ export interface CleanupStorageStatus {
   };
 }
 
-// 真实删除被活跃任务拦截时的 409 响应体（T02655）。
+// 真实删除被拦截时的 409 响应体（T02655 / T02774）。
 // 为什么用结构化原因而不是只回一句 error：前端要把「谁在跑、为什么拦、我该等什么」
 // 分开呈现（error 给人看，blocked[] 给判定用，reasons[] 按目标逐条说明代价）。
+// 两种 code 的语义不同，前端文案也不同：
+//  - cleanup_blocked_by_active_task：有编译/问答在跑，blocked[] 列出被拦目标（可据此置灰）；
+//  - cleanup_blocked_by_concurrent_cleanup：上一次真实清理还在删（T02774 的互斥），
+//    与「目标是否安全」无关，故 blocked[] 恒为空——前端不能套用置灰逻辑。
 export interface CleanupBlockedResponse {
   error: string;
-  code: 'cleanup_blocked_by_active_task';
+  code: 'cleanup_blocked_by_active_task' | 'cleanup_blocked_by_concurrent_cleanup';
   target: string;
   blocked: string[];
   reasons: string[];
