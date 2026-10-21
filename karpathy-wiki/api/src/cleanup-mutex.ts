@@ -87,6 +87,16 @@ export function isCleanupInProgress(): boolean {
 }
 
 /**
+ * T02835：队列现场读数（持有数 + 挂起等待者数）。
+ * 为什么单独导出：用例原先靠「等 5ms 再看 started 有没有变」抢时序窗口，机器负载一高就误判。
+ * 等待者计数是**机制事实**——任务确实挂在那条链上，可等它出现后再断言负向结论，
+ * 竞态就换成了确定性挂点。只读，不参与任何放行判定。
+ */
+export function cleanupQueueStats(): { held: number; waiters: number } {
+  return { held, waiters: waiters.length };
+}
+
+/**
  * 任务起跑点调用：清理进行中就等它做完。
  * 循环而非单次判断——被放行后仍可能有新的清理抢先持有锁，
  * 那时本任务必须继续等，否则「清理期间绝不新建任务」这条不变式会出现空档。

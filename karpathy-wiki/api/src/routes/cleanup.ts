@@ -70,6 +70,13 @@ function mergeDirStats(list: DirStats[]): DirStats {
   };
 }
 
+export type CleanupTestHooks = {
+  // T02835：仅测试可用的「真实删除前」挂点。为什么不是让用例去轮询 isCleanupInProgress()：
+  // 原先用例靠 400×1ms 忙等去「赶上」删除窗口，高负载下事件循环被挤压，窗口根本观测不到——
+  // 红的是时序而不是机制（互斥本身没错）。屏障把「已持锁、尚未 unlink」变成一个可 await 的事件。
+  beforeDelete?: (info: { target: string; dryRun: boolean }) => Promise<void> | void;
+};
+
 export function registerCleanupRoute(
   app: FastifyInstance,
   vault: VaultService,
@@ -83,6 +90,8 @@ export function registerCleanupRoute(
   // 合并清单由 index.ts 显式传入——调用方漏传的后果是「少清一处」，
   // 而不是把用户别的目录算进删除清单。
   harnessDirsOverride?: string[],
+  // T02835：测试钩子。生产调用方（index.ts）不传，缺省即完全不改变删除时序。
+  testHooks?: CleanupTestHooks,
 ): void {
   const vaultPath = vault.getVaultPath();
   // T02809：`.harness` 及其中各类产物改走 utils/harness-dirs 的统一口径。
@@ -431,6 +440,14 @@ export function registerCleanupRoute(
       errors: [],
       count: 0,
     };
+
+    // T02835：真实删除前给测试一个可 await 的挂点（此刻进程内锁与跨进程标记都已持有，
+    // 还没执行任何 unlink）。生产不传钩子，条件短路即零开销、零时序变化。
+    // 为什么必须在这里而不是删除循环内部：用例要证明的是「清理持锁期间任务不起跑」，
+    // 挂点必须在删除真正开始之前——落在循环里就成了「已经删了一部分」的另一种巧合。
+    if (!dryRun && testHooks?.beforeDelete) {
+      await testHooks.beforeDelete({ target, dryRun });
+    }
 
     const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
     let totalFreedBytes = 0;
