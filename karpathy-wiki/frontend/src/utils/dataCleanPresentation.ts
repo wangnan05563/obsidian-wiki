@@ -1,7 +1,7 @@
 // wiki三期 T02472（PRD §16 L1/L2/L3）：数据清洗页口径与表格交互的纯展示逻辑。
 // 抽到本文件的原因：分类判定、搜索过滤、排序、分页、跨页选择合并都是可断言的纯函数，
 // 与页面耦合后无法单测（本项目测试约定不挂载 SFC）。
-import type { PageQualityScore } from '../types';
+import type { MisplacedPage, PageQualityScore } from '../types';
 
 // ─────────── L1 总页数口径 ───────────
 // 与后端 api/src/vault/page-scope.ts 的 PAGE_DIRS 保持一致：两处任何一侧改动都会重新引入
@@ -217,4 +217,34 @@ export function mergeSelection(currentSelection: string[], pageRowPaths: string[
 /** 已选统计：把「选中 N 个」翻译成用户能判断后果的话 */
 export function selectionSummary(count: number): string {
   return count === 0 ? '未选择页面' : `已选 ${count} 个页面`;
+}
+
+// ─────────── T02797 子目录中的页面 ───────────
+// 这类页面不在上面的表格与「页面总数」里：全库枚举按顶层目录平铺扫描，扫不到子目录，
+// 所以它既进不了列表也解析不出引用。单列一块，是为了不把「索引不到的页」并进总数口径
+// （那会重新制造「本页 N 个 / 仪表盘 M 个」的矛盾，T02472 已修过一次）。
+export const MISPLACED_ISSUE_TEXT = '页面在子目录里，知识库索引不到';
+
+export const MISPLACED_WHY_TEXT =
+  '这些是写盘深度校验上线前落进子目录的存量页面：知识库的列表、搜索、统计与图谱只认「顶层目录/文件名」这一层，' +
+  '子目录里的页面读得到却进不了索引，引用它的链接也点不开。归位只改落点，正文一字不动。';
+
+/** 可自动归位的条目：有冲突的（目标位置已有同名/同标题页面）不在此列，须人工先决定并页 */
+export function promotableMisplaced(items: MisplacedPage[]): MisplacedPage[] {
+  return items.filter((i) => !i.conflict);
+}
+
+/** 冲突条目（只报不动手） */
+export function conflictedMisplaced(items: MisplacedPage[]): MisplacedPage[] {
+  return items.filter((i) => !!i.conflict);
+}
+
+/** 区块标题右侧的一句话状态：0 个时不写「一切正常」，直接说明这一类不存在 */
+export function misplacedSummaryText(items: MisplacedPage[]): string {
+  if (items.length === 0) return '没有落在子目录里的页面';
+  const conflict = conflictedMisplaced(items).length;
+  const auto = items.length - conflict;
+  return conflict === 0
+    ? `${items.length} 个页面，全部可直接归位`
+    : `${items.length} 个页面，其中 ${auto} 个可直接归位、${conflict} 个目标位置已有页面需人工确认`;
 }

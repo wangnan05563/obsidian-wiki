@@ -148,7 +148,9 @@ function hasValidFrontmatter(parsed: matter.GrayMatterFile<string>): boolean {
 // 把传入路径解析为 vault 内的绝对路径，并阻止越权访问 vault 之外的文件。
 // 前端 data-clean 页传的是 vault 相对路径（如 concepts/foo.md），后端需拼回绝对路径才能
 // fs.unlink / fs.rename；若传入已是绝对路径则原样使用（path.join 会忽略前面的 base）。
-function resolveVaultPath(vault: VaultService, p: string): string {
+// T02797 起对外导出：错位页归位同样需要 unlink 原路径，这道防线只留一份实现
+//   （再抄一遍 `startsWith(base + path.sep)` 就是「两处判断、漏一处越权」的同源缺陷）。
+export function resolveVaultPath(vault: VaultService, p: string): string {
   const base = path.resolve(vault.getVaultPath());
   const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(base, p);
   if (abs !== base && !abs.startsWith(base + path.sep)) {

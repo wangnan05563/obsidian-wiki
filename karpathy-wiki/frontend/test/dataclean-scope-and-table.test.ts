@@ -2,13 +2,15 @@
 //   L1 总页数口径与仪表盘同源；L2 评分卡改成可操作的问题分类；L3 表格搜索/排序/分页/跨页选择。
 // 约定：被测逻辑全部是 frontend/src/utils/dataCleanPresentation.ts 的纯函数（本项目不挂载 SFC）。
 import { describe, expect, it } from 'vitest';
-import type { PageQualityScore } from '../src/types';
+import type { MisplacedPage, PageQualityScore } from '../src/types';
 import {
   ISSUE_CATEGORIES,
+  MISPLACED_ISSUE_TEXT,
   PAGE_SIZE_OPTIONS,
   PAGE_SCOPE_DIRS,
   PAGE_TOTAL_HINT,
   SHORT_WORDS_MIN,
+  conflictedMisplaced,
   buildIssueContext,
   categoryCounts,
   categoryMeta,
@@ -16,8 +18,10 @@ import {
   defaultTableQuery,
   filterPages,
   mergeSelection,
+  misplacedSummaryText,
   pageIssueKeys,
   problemCount,
+  promotableMisplaced,
   selectionSummary,
   slicePage,
   sortPages,
@@ -183,5 +187,41 @@ describe('L3 搜索 / 排序 / 分页', () => {
 
   it('每页条数提供 50/100/200 三档', () => {
     expect(PAGE_SIZE_OPTIONS).toEqual([50, 100, 200]);
+  });
+});
+
+// T02797：子目录中的页面（存量错位页）在前端的展示口径。
+// 这块的逻辑只有「哪些能自动归位 / 哪些要人工确认」一条判断，其余是文案；
+// 文案单独断言是为了让术语表守护之外再钉一次：这一类必须称「页面」，且必须说清后果。
+describe('子目录中的页面展示（T02797）', () => {
+  const item = (over: Partial<MisplacedPage> & { path: string }): MisplacedPage => ({
+    title: over.path.split('/').pop()!.replace(/\.md$/, ''),
+    type: '',
+    suggestedPath: over.path,
+    conflict: null,
+    ...over,
+  });
+
+  it('问题文案按任务口径原样呈现，不出现「文档/条目」那类别名', () => {
+    expect(MISPLACED_ISSUE_TEXT).toBe('页面在子目录里，知识库索引不到');
+  });
+
+  it('有冲突的条目不进批量归位，只单独列出', () => {
+    const items = [
+      item({ path: 'concepts/entity/a.md', suggestedPath: 'entities/a.md', type: 'entity' }),
+      item({ path: 'concepts/sub/b.md', suggestedPath: 'concepts/b.md', conflict: '目标位置已有同名页面：concepts/b.md' }),
+    ];
+    expect(promotableMisplaced(items).map((m) => m.path)).toEqual(['concepts/entity/a.md']);
+    expect(conflictedMisplaced(items).map((m) => m.path)).toEqual(['concepts/sub/b.md']);
+  });
+
+  it('空集合不写「一切正常」；有冲突时把「可自动 / 需人工」两个数都说出来', () => {
+    expect(misplacedSummaryText([])).toBe('没有落在子目录里的页面');
+    expect(misplacedSummaryText([item({ path: 'qa/sub/x.md', suggestedPath: 'qa/x.md' })])).toContain('全部可直接归位');
+    const mixed = [
+      item({ path: 'qa/sub/x.md', suggestedPath: 'qa/x.md' }),
+      item({ path: 'qa/sub/y.md', suggestedPath: 'qa/y.md', conflict: '目标目录已有同标题页面：qa/y.md' }),
+    ];
+    expect(misplacedSummaryText(mixed)).toBe('2 个页面，其中 1 个可直接归位、1 个目标位置已有页面需人工确认');
   });
 });

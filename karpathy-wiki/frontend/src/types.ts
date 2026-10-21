@@ -1243,6 +1243,25 @@ export interface MergeResult {
   dryRun: boolean;
 }
 
+// T02797：子目录中的页面（写盘深度校验上线前的存量错位，flat 扫描看不见）。
+// 与后端 api/src/types.ts 的 MisplacedPage 字段逐字相同，并在 docs/mirror-types.json 登记；
+// 字段名漂移的后果是 T02773 那一类缺陷：接口返回正常、显示被静默吃掉。
+export interface MisplacedPage {
+  path: string;
+  title: string;
+  type: string;
+  suggestedPath: string;
+  conflict: string | null;
+}
+
+// 一键归位结果：promoted 在 dryRun 下是「将要执行」的预览，skipped 是规则上不该自动动的
+export interface MisplacedPromoteResult {
+  promoted: Array<{ from: string; to: string }>;
+  skipped: Array<{ path: string; reason: string }>;
+  errors: string[];
+  dryRun: boolean;
+}
+
 // 预检门禁结果：是否通过、扫描文件数、错误与警告列表、是否阻断
 export interface PrecheckResult {
   passed: boolean;

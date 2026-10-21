@@ -809,6 +809,29 @@ export interface MergeResult {
   archiveResult?: { archived: string[]; errors: string[] };
 }
 
+// T02797：存量错位页面（写在页面目录的子目录里，被 flat readdir 跳过 → 列表/搜索/统计/图谱一律看不见）。
+// 检测独立于 scanVault 输出：错位页本身不在「页面总数」口径内，把它们混进同一张表会让本页总数
+//   与仪表盘重新对不上（T02472 的同源缺陷），所以单列一条契约。
+// suggestedPath：按 frontmatter type 反查（page-scope.TYPE_TO_PAGE_DIR）得出的正确落点；
+//   type 缺失或未知时留在原顶层目录，只补掉多余的子目录层级。
+// conflict：非 null 表示归位会把两页并成一个，此时只报冲突、不自动并页（人工确认后自行处理）。
+export interface MisplacedPage {
+  path: string;
+  title: string;
+  type: string;
+  suggestedPath: string;
+  conflict: string | null;
+}
+
+// 归位结果：promoteMisplacedPages 返回（dryRun=true 时 promoted 是「将要执行」的预览）
+// skipped 与 errors 分开：前者是「按规则不该自动动」（已归位/有冲突），后者是「动手失败」
+export interface MisplacedPromoteResult {
+  promoted: Array<{ from: string; to: string }>;
+  skipped: Array<{ path: string; reason: string }>;
+  errors: string[];
+  dryRun: boolean;
+}
+
 // 预检结果：precheckVault 返回的编码/frontmatter 健康检查
 export interface PrecheckResult {
   scannedFiles: number;

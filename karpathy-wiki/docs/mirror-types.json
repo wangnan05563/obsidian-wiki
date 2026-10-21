@@ -103,6 +103,16 @@
       ]
     },
     {
+      "name": "MisplacedPage",
+      "verdict": "aligned",
+      "reason": "T02797 子目录中的页面检测项：conflict 两侧都是 string|null，任何一侧改名都会把「目标位置已有同标题页面」的提示吃掉（正是 T02773 的形态）"
+    },
+    {
+      "name": "MisplacedPromoteResult",
+      "verdict": "aligned",
+      "reason": "T02797 一键归位响应体：promoted/skipped/errors/dryRun 四个键逐字一致，skipped 与 errors 分列（规则上不该自动动 vs 动手失败）"
+    },
+    {
       "name": "PageQualityScore",
       "verdict": "aligned",
       "reason": "页面质量分响应体"

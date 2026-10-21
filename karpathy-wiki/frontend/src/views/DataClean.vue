@@ -18,17 +18,22 @@ import { loadAiUserConfigForPreset, type AiUserConfig } from '../services/userCo
 import { AUTO_MODEL, resolveAutoPresetForUser } from '../utils/autoModel';
 import {
   ISSUE_CATEGORIES,
+  MISPLACED_ISSUE_TEXT,
+  MISPLACED_WHY_TEXT,
   PAGE_SIZE_OPTIONS,
   PAGE_TOTAL_HINT,
   buildIssueContext,
   categoryCounts,
   categoryMeta,
   categoryPaths,
+  conflictedMisplaced,
   defaultTableQuery,
   filterPages,
   mergeSelection,
+  misplacedSummaryText,
   pageIssueKeys,
   problemCount,
+  promotableMisplaced,
   selectionSummary,
   slicePage,
   sortPages,
@@ -36,7 +41,7 @@ import {
   type IssueKey,
   type TableQuery,
 } from '../utils/dataCleanPresentation';
-import type { PageQualityScore, DeduplicateResult, DuplicatePair, MergeResult, PrecheckResult, DiffResult, AiCleanAnalysisResult, AiAnalysisRenameItem } from '../types';
+import type { PageQualityScore, DeduplicateResult, DuplicatePair, MergeResult, PrecheckResult, DiffResult, AiCleanAnalysisResult, AiAnalysisRenameItem, MisplacedPage, MisplacedPromoteResult } from '../types';
 
 const pages = ref<PageQualityScore[]>([]);
 // 重复对：从 any 收敛为 DuplicatePair，避免运行时访问 undefined 字段
@@ -52,6 +57,12 @@ const selectedPages = ref<string[]>([]);
 // 永久删除端点为 requireAdmin，非管理员禁用按钮并提示
 const { isAdmin } = usePermission();
 const precheckResult = ref<PrecheckResult | null>(null);
+// T02797：子目录中的页面（存量错位页）。单列一条状态而不是塞进 pages：
+// 上面的表格与「页面总数」按顶层目录平铺扫描，本来就读不到它们，混进来会让两个总数再次对不上。
+const misplaced = ref<MisplacedPage[]>([]);
+const misplacedBusy = ref(false);
+const misplacedAuto = computed(() => promotableMisplaced(misplaced.value));
+const misplacedConflicted = computed(() => conflictedMisplaced(misplaced.value));
 
 // 差异对比抽屉状态
 const diffDrawerVisible = ref(false);
@@ -220,6 +231,8 @@ async function loadPages() {
     const res = await apiFetch(`${API_BASE}/data-clean/pages`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     pages.value = await res.json();
+    // T02797：错位页检测与主表格同一时机刷新（它不在 pages 里，不带上就永远不会更新）
+    await loadMisplaced();
     scanProgress.value = `已加载 ${pages.value.length} 个页面，其中 ${problemPages.value} 个有可处理的问题`;
     ElMessage.success('页面数据加载成功');
   } catch (err) {
@@ -232,6 +245,64 @@ async function loadPages() {
       if (res.ok) { pages.value = await res.json(); scanProgress.value = '重试成功'; ElMessage.success('重试成功'); }
     } catch { ElMessage.warning('重试也失败 — 请检查服务状态'); }
   } finally { loading.value = false; }
+}
+
+// T02797：检测「子目录中的页面」。这块读不出来不影响主表格，所以只提示、不把整页判成加载失败。
+async function loadMisplaced() {
+  try {
+    const res = await apiFetch(`${API_BASE}/data-clean/misplaced`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: unknown = await res.json();
+    misplaced.value = Array.isArray(data) ? (data as MisplacedPage[]) : [];
+  } catch (err) {
+    ElMessage.warning(`子目录页面的检测未完成：${err instanceof Error ? err.message : '接口不可用'}`);
+  }
+}
+
+/**
+ * 一键归位：POST 到服务端重算落点后读写删（正文不改），冲突项由后端跳过并说明原因。
+ * 这里不自行拼目标路径——落点只有服务端按页面声明的 type 反查才知道，前端拼出来的会漂移。
+ */
+async function promoteMisplaced(paths: string[]) {
+  if (paths.length === 0) return;
+  if (!isAdmin.value) {
+    ElMessage.warning('归位会移动页面文件，需要管理员账户');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将 ${paths.length} 个页面从子目录搬回正确的顶层目录，正文内容不改；目标位置已有同名或同标题页面的会被跳过。`,
+      '归位确认',
+      { confirmButtonText: '归位', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  misplacedBusy.value = true;
+  scanProgress.value = '正在归位子目录中的页面...';
+  try {
+    const res = await apiFetch(`${API_BASE}/data-clean/misplaced/promote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths, dry_run: false }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result: MisplacedPromoteResult = await res.json();
+    if (result.promoted.length === 0) {
+      ElMessage.warning(result.skipped[0]?.reason || '没有可归位的页面');
+    } else {
+      const tail = result.skipped.length > 0 ? `，${result.skipped.length} 个需人工确认` : '';
+      ElMessage.success(`已把 ${result.promoted.length} 个页面搬回顶层目录${tail}`);
+    }
+    if (result.errors.length > 0) ElMessage.error(`部分归位失败：${result.errors.join('；')}`);
+    // loadPages 内部会一并刷新错位检测（归位后这块必须立刻变干净，否则用户以为没生效）
+    await loadPages();
+  } catch (err) {
+    scanProgress.value = '归位失败';
+    ElMessage.error(err instanceof Error ? err.message : '归位失败');
+  } finally {
+    misplacedBusy.value = false;
+  }
 }
 
 async function runDeduplication() {
@@ -642,6 +713,51 @@ onMounted(() => loadPages());
         :type="precheckResult.passed ? 'success' : 'warning'"
         :description="`扫描 ${precheckResult.scannedFiles} 个文件 · ${precheckResult.errors.length} 个错误 · ${precheckResult.warnings.length} 个警告`"
         show-icon closable style="margin-bottom:16px" />
+
+      <!-- T02797 子目录中的页面：写盘深度校验上线前的存量错位。
+           上方表格与「页面总数」本来就扫不到它们（列表按顶层目录平铺读），所以单列一块；
+           归位只改落点不动正文，目标位置已有同名/同标题页面时只报冲突、不自动并页。 -->
+      <div v-if="misplaced.length > 0" class="misplaced-block">
+        <div class="misplaced-head">
+          <div class="misplaced-titles">
+            <div class="misplaced-title">{{ MISPLACED_ISSUE_TEXT }}（{{ misplaced.length }} 个）</div>
+            <div class="misplaced-meta">{{ misplacedSummaryText(misplaced) }}</div>
+          </div>
+          <el-button
+            type="warning"
+            size="small"
+            :loading="misplacedBusy"
+            :disabled="!isAdmin || misplacedAuto.length === 0 || misplacedBusy"
+            :data-tip="isAdmin
+              ? (misplacedAuto.length === 0 ? '全部页面目标位置都已有内容，需要人工确认后逐条处理' : `把这 ${misplacedAuto.length} 个页面搬回正确的顶层目录，正文内容不改`)
+              : '这一步会移动页面文件，需要管理员账户'"
+            @click="promoteMisplaced(misplacedAuto.map((m) => m.path))"
+          >一键归位 ({{ misplacedAuto.length }})</el-button>
+        </div>
+        <p class="misplaced-why">{{ MISPLACED_WHY_TEXT }}</p>
+        <ul class="misplaced-list">
+          <li v-for="m in misplaced" :key="m.path" class="misplaced-row">
+            <code class="misplaced-from">{{ m.path }}</code>
+            <span class="misplaced-arrow" aria-hidden="true">→</span>
+            <code class="misplaced-to">{{ m.suggestedPath }}</code>
+            <template v-if="m.conflict">
+              <el-tag type="danger" size="small">需人工确认</el-tag>
+              <span class="misplaced-conflict">{{ m.conflict }}</span>
+            </template>
+            <el-button
+              v-else
+              size="small"
+              text
+              :disabled="!isAdmin || misplacedBusy"
+              :data-tip="isAdmin ? '只把这一个搬回去' : '需要管理员账户'"
+              @click="promoteMisplaced([m.path])"
+            >归位这一个</el-button>
+          </li>
+        </ul>
+        <p v-if="misplacedConflicted.length > 0" class="misplaced-note">
+          有 {{ misplacedConflicted.length }} 个页面的目标位置已经有内容，批量归位会跳过它们——需要并页请到下方「运行重复检测」后逐条确认，这里不替你做合并决定。
+        </p>
+      </div>
       
       <div v-if="scanProgress" class="progress-bar" :class="{ success: !loading && !scanProgress.includes('failed') && !scanProgress.includes('Failed') }">{{ scanProgress }}</div>
       
@@ -1171,6 +1287,92 @@ onMounted(() => loadPages());
   z-index: 1;
   margin: -10px 0 18px;
   font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+/* T02797 子目录中的页面：一块「读得到却进不了索引」的存量错位，配色沿用告警一档 */
+.misplaced-block {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  background: var(--bg-scene);
+  border: 1px solid var(--accent-pink-a20, rgba(255, 100, 180, 0.2));
+  border-radius: var(--radius-card);
+}
+
+.misplaced-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.misplaced-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  color: var(--text-main);
+}
+
+.misplaced-meta {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.misplaced-why {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-soft);
+}
+
+.misplaced-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.misplaced-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--accent-purple-a15);
+}
+
+.misplaced-from,
+.misplaced-to {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.misplaced-from {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.misplaced-to {
+  color: var(--text-main);
+}
+
+.misplaced-arrow {
+  color: var(--text-dim);
+}
+
+.misplaced-conflict {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.misplaced-note {
+  margin: 10px 0 0;
   font-size: 12px;
   color: var(--text-soft);
 }

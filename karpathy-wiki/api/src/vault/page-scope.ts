@@ -69,6 +69,19 @@ export const PAGE_DIR_TO_TYPE: Record<string, string> = {
 };
 
 /**
+ * type → 页面目录 的反向映射（由 PAGE_DIR_TO_TYPE 派生，不另写一遍）。
+ * 为什么单列（T02797）：存量错位页的归位要把「页面自己声明的 type」翻译成「正确落点」——
+ *   T02731 实测的错位正是 `type: entity` 被写进了 `concepts/entity/`，按目录名猜只会回到错的那个目录，
+ *   按 type 反查才指得出 `entities/`。反向量若手写第二份，PAGE_DIR_TO_TYPE 扩容时它就会落后，
+ *   归位随之把新目录的页面搬到别处去。
+ * 口径前提：PAGE_DIR_TO_TYPE 的 value 当前互不相同，反查是一对一；
+ *   若将来两个目录共用一个 type，这里会静默保留后者——由 vault-page-depth.test.ts 的双射守护拦住。
+ */
+export const TYPE_TO_PAGE_DIR: Record<string, string> = Object.fromEntries(
+  Object.entries(PAGE_DIR_TO_TYPE).map(([dir, type]) => [type, dir]),
+);
+
+/**
  * 页面目录的正则交替串（`entities|concepts|...`）。
  * discover.ts 与 tags.ts 各写过一遍同样的 6 目录白名单正则，新目录加入 PAGE_DIRS 时
  * 忘记同步的那一侧会把合法页面判成「Invalid path」→ 400。
