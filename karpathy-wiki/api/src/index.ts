@@ -13,6 +13,9 @@ import { setupSpaStatic } from './spa-static.js';
 import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 import { VaultService } from './vault/vault-service.js';
 import { HarnessAdapter, resolveSubAgents } from './engine/harness-adapter.js';
+// T02772：运行状态落盘目录合流（写入规范目录，读取回退遗留目录）
+import { createRunStateStore } from './engine/run-state-store.js';
+import { getRunStateDirs, getCanonicalRunStateDir, getCanonicalRunStateDirFromVault } from './utils/run-state-dirs.js';
 import { registerCompileRoute } from './routes/compile.js';
 import { registerQueryRoute, registerQueryArchiveRoute } from './routes/query.js';
 import { registerHealthCheckRoute } from './routes/health-check.js';
@@ -258,6 +261,15 @@ export async function buildApp(): Promise<BuiltApp> {
   // （隔离上下文独立检索/研读知识库，返回聚焦结论）。亦可在运行时经 updateConfig 切换。
   const subAgentsConfig = resolveSubAgents(config.enableSubAgents);
 
+  // T02772：run-state 目录清单在此一次组装，写入（stateStore）、续传/追踪读取（runs 路由）
+  // 与清理（cleanup 路由）共用同一份，避免三处各算一套又算不一致。
+  // 清单首项 = 写入侧规范目录（getDataDir()/.harness/state）；次项 = 与 vault 同级的历史口径
+  // （用户把 vault 配到别处时两者不同值，两处都得算进清理范围）；
+  // 其后是遗留目录（进程 CWD / api 目录），即历史上状态文件的真实落点。
+  const runStateDirs = getRunStateDirs({
+    primaryDirs: [getCanonicalRunStateDir(), getCanonicalRunStateDirFromVault(vault.getVaultPath())],
+  });
+
   const adapter = new HarnessAdapter(
     {
       llm: {
@@ -268,6 +280,12 @@ export async function buildApp(): Promise<BuiltApp> {
       },
       tools: [],
       budget: config.budget,
+      // T02772：显式注入 stateStore。不传时 harness 会用默认 FileStateStore，
+      // 其目录是相对**进程 CWD** 的 `.harness/state`——开发模式落到 api/ 下、
+      // SEA 模式取决于用户从哪个目录起进程（甚至可能是只读安装目录），
+      // 导致清理与续传读取都追不上实际写入位置。这里把写入钉到规范目录，
+      // 并保留「读不到就回退遗留目录」，使升级前的历史运行仍可断点续传。
+      stateStore: createRunStateStore(runStateDirs),
     },
     vault,
     config.healthCheck.staleDays,
@@ -470,8 +488,10 @@ export async function buildApp(): Promise<BuiltApp> {
   registerSchemaRoutes(app, vault, isolationGuards);
   registerConfigRoute(app, adapter, isolationGuards);
   // §11.2 断点续传：查询中断任务列表（完整 resume 待详细设计）
-  const stateDir = path.join(getDataDir(), '.harness', 'state');
-  registerRunsRoute(app, stateDir, isolationGuards);
+  // T02772：stateDir 即 runStateDirs 首项（规范目录），清单整体传给路由，
+  // 这样升级前写在遗留目录里的运行仍能在「中断任务/步骤追踪」里看到。
+  const stateDir = runStateDirs[0];
+  registerRunsRoute(app, stateDir, isolationGuards, runStateDirs);
   // 历史会话后端持久化（dataDir/conversations/）默认关闭（对应「会话不存服务端、仅本地维护」核心需求）。
   // 仅当 sessionPersistence.conversationsPersist === true 才注册 /api/conversations 路由，
   // 后端将历史会话落盘 data/conversations/；默认 false 即服务端不暴露任何会话 CRUD 端点（FR-RM-04/FR-RM-08）。
@@ -489,7 +509,8 @@ export async function buildApp(): Promise<BuiltApp> {
   registerVaultRoute(app, vault, isolationGuards);
 
   registerAiRoute(app, adapter, isolationGuards);
-  registerCleanupRoute(app, vault, isolationGuards);
+  // T02772：传入合并后的 run-state 目录清单，清理才能既覆盖规范目录也覆盖遗留目录
+  registerCleanupRoute(app, vault, isolationGuards, runStateDirs);
 registerDataCleanRoute(app, vault, isolationGuards);
   // QQ 聊天记录导入子系统（SRS §6.1 路由族）
 
