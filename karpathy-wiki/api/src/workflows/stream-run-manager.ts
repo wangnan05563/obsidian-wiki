@@ -14,6 +14,8 @@ import type { AnswerChunk } from '../types.js';
 import { withSessionLock } from '../session-lock.js';
 // T02655：run 生命周期登记活跃任务，供系统清理（POST /api/cleanup）真实删除前的硬拦截判定
 import { beginActivity } from '../activity.js';
+// T02774：清理独占锁——run 起跑前等待真实清理结束（单向优先级，任务排队而非被拒）
+import { awaitCleanupIdle } from '../cleanup-mutex.js';
 
 // 联网搜索引用结构（与 query.ts 中 webRefs 字段同构）
 export interface WebRef {
@@ -105,7 +107,9 @@ class StreamRunManager {
       evictTimer: null,
       ttlMs,
       cancelController: opts.cancelSignal,
-      releaseActivity: beginActivity('query'),
+      // T02774：活跃登记推迟到 runTask 真正起跑前（等清理结束），此处不预登记——
+      // 否则「还在排队等清理」的 run 会被算成活跃任务，把后续清理误拦成 409。
+      // 与 compile-queue.ts 同口径：只有已开始触碰文件的任务才算活跃。
     };
     this.runs.set(runId, entry);
 
@@ -158,6 +162,10 @@ class StreamRunManager {
     };
 
     const runTask = async (): Promise<void> => {
+      // T02774：真实清理进行中 → 排队等它做完，再登记活跃并开始产出。
+      // 顺序不可颠倒：先等锁再登记，登记的正是「接下来会触碰 run-state / 线程记忆」这件事。
+      await awaitCleanupIdle();
+      entry.releaseActivity = beginActivity('query');
       try {
         await iterate();
         // iterate 正常 resolve 且未走 done/error 分支（二者均已 return）→ producer 自然耗尽。

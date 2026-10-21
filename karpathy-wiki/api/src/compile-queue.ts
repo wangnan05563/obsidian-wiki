@@ -6,6 +6,9 @@
 // 不拒绝请求，按到达顺序串行执行。
 
 import { beginActivity } from './activity.js';
+// T02774：清理独占锁。登记活跃之前先等「没有真实清理正在进行」，
+// 把 T02655 遗留的「守卫通过 ~ 删除完成」毫秒级窗口从机制上封掉（不是靠时序运气）。
+import { awaitCleanupIdle } from './cleanup-mutex.js';
 
 let chain: Promise<unknown> = Promise.resolve();
 
@@ -16,7 +19,12 @@ export function withCompileLock<T>(task: () => Promise<T>): Promise<T> {
   // 为什么登记在这里：compile / compile/resume / compile/batch / 体检批量修复 / prompts / qq-ingest
   // 全部经 withCompileLock，这里是唯一收口点；登记在路由层会漏掉其中若干入口。
   // 只统计「已开始执行」的任务：排队中的请求尚未触碰任何文件，不应阻塞清理。
+  //
+  // T02774 的等待放在 beginActivity **之前**（而不是之后）：清理持锁期间本任务既不计入
+  // active.compile（否则后来的清理会被自己这类「还没动手」的任务误拦），也不得触碰任何文件。
+  // 等待同样发生在 compile 链上，因此「前一个编译 → 清理 → 后一个编译」的串行顺序仍然成立。
   const run = async (): Promise<T> => {
+    await awaitCleanupIdle();
     const release = beginActivity('compile');
     try {
       return await task();

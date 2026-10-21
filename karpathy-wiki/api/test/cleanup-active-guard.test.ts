@@ -46,6 +46,23 @@ function stubGuards(): IsolationGuards {
   return { enabled: false, requireAuth: passThrough, requireAdmin: passThrough };
 }
 
+/**
+ * 等到某一类活跃计数达到期望值。
+ * 为什么需要它（T02774）：起跑点现在先 `await awaitCleanupIdle()` 再 `beginActivity(...)`
+ * ——顺序是这套互斥成立的前提（先登记的化，一个还没碰文件、只是排队等清理的任务会把后续清理误拦成 409）。
+ * 代价是「登记」不再发生在调用帧内，本文件原先靠单帧微任务的时序假设因此不再成立。
+ * 这里等的是「机制生效」，不是「等一个大概」：超时即抛错，计数不对照样红。
+ */
+async function waitActive(kind: 'compile' | 'query', expected: number): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (activeActivities()[kind] === expected) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(
+    `等待 ${kind} 活跃计数变为 ${expected} 超时（当前 ${JSON.stringify(activeActivities())}）`,
+  );
+}
+
 describe('T02655 activity 计数', () => {
   beforeEach(() => {
     __resetActivitiesForTest();
@@ -90,7 +107,7 @@ describe('T02655 activity 计数', () => {
     });
 
     // 第一个还在跑：活跃数必须是 1（不是 2——p2 只是排队，没碰任何文件）
-    await Promise.resolve();
+    await waitActive('compile', 1);
     expect(activeActivities().compile).toBe(1);
     expect(secondStarted).toBe(false);
 
@@ -182,6 +199,9 @@ describe('T02655 问答 run 的活跃登记（streamRunManager 接线）', () =>
       governor: null,
       cancelSignal: controller,
     });
+    // T02774：登记改在 runTask 内「等清理结束」之后发生（start() 的同步段不再登记，
+    // 否则排队等清理的 run 会被当成活跃任务、把后续清理误拦）→ 等它真的计上再断言。
+    await waitActive('query', 1);
     expect(activeActivities().query).toBe(1);
     expect(isActivityBusy('query')).toBe(true);
 
@@ -198,12 +218,16 @@ describe('T02655 问答 run 的活跃登记（streamRunManager 接线）', () =>
       producer: () =>
         (async function* () {
           yield { runId, text: 'only' };
+          // 留一个「已登记但还没结束」的可观测窗口：这条 run 若一帧内就跑完，
+          // 计数从 0 到 0，「登记过」这件事根本没法断言（T02774 后登记不再同步发生在 start() 帧内）
+          await new Promise((r) => setTimeout(r, 30));
           yield { runId, done: true, refs: [], webRefs: [] };
         })(),
       onDone: async () => ({ threadId: 't', sessionId: 's', messageIndex: 0 }),
       governor: null,
       cancelSignal: controller,
     });
+    await waitActive('query', 1);
     expect(activeActivities().query).toBe(1);
     await waitReleased(runId);
     expect(activeActivities().query).toBe(0);

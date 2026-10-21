@@ -19,6 +19,8 @@ import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 // T02655：问答执行期登记「活跃任务」，供系统清理真实删除前的硬拦截
 import { beginActivity } from '../activity.js';
+// T02774：真实清理进行中时问答排队等待（清理与问答互斥的单向优先级）
+import { awaitCleanupIdle } from '../cleanup-mutex.js';
 
 // 解析线程上下文：校验 threadId + 加载历史记忆 + 上下文治理
 // 提取为独立函数降低 S3776 认知复杂度
@@ -301,6 +303,9 @@ export function registerQueryRoute(
 
     // T02655：内联（非可恢复）路径的活跃登记——可恢复路径由 StreamRunManager 在 run 终态登记/释放，
     // 两条路径必须各自覆盖，否则 enableResumableStream=false 时清理接口看不到在跑的问答。
+    // T02774：登记前先等真实清理结束（与 compile 同口径）。问答会写 run-state 与线程记忆，
+    // 在清理删除窗口内起跑同样会留下「刚写完就被删」的空档。
+    await awaitCleanupIdle();
     const releaseInlineQuery = beginActivity('query');
 
     try {
