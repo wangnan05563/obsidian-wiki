@@ -417,6 +417,15 @@ export interface McpServerEntry {
   // RPC 超时（ms），per-server 覆盖 tools.mcpTimeoutMs
   timeoutMs?: number;
   enabled: boolean;
+  // 懒加载触发关键词（小写匹配，任一命中即启用）——后端 scene-router 用，
+  // 前端必须一起镜像：配置保存是整份回传，镜像里没有的键在 JSON 模式重建后会丢
+  triggerKeywords?: string[];
+  // 懒加载占位工具（后端 registry 据此注册占位工具，避免预先握手）
+  placeholderTools?: Array<{
+    name: string;
+    description: string;
+    parameters?: object;
+  }>;
 }
 
 export interface CliToolEntry {

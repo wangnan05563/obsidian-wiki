@@ -95,7 +95,7 @@ export function registerHealthCheckRoute(
   // 且无法暂停/取消，597 项只能「跑完或白跑」。现改为 POST 立即返回 jobId，
   // 由 BatchFixJobManager 在后台串行执行并逐项落盘，事件走独立订阅端点。
   app.post('/api/health-check/fix/batch', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const body = request.body as Partial<BatchFixRequest> & { issueKeys?: string[] };
+    const body = request.body as Partial<BatchFixRequest>;
     if (!body || !Array.isArray(body.items) || body.items.length === 0) {
       return void reply.code(400).send({ error: '请求体须有非空 items 数组' });
     }

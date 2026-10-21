@@ -1,0 +1,159 @@
+{
+  "_about": "前后端手工镜像类型的契约登记表（可执行部分）。api/src/types.ts 与 frontend/src/types.ts 各写一份同名类型，两侧 tsconfig 的 include 都只有自己的 src/**/*，跨服务契约的字段名错配编译器永远看不见——本表把它变成可执行规则，由 api/test/mirror-types-contract.test.ts 用 TypeScript Compiler API 解析两份源码后逐条比对。",
+  "_source": "T02773（清理响应字段名错配）→ T02802（通用契约守护）；清点口径为 AST，不用正则",
+  "_rules": {
+    "扫描口径": "解析两侧 types.ts 的全部 interface 与 type 别名声明，字段名取自属性/方法签名（含 extends 链与交叉类型的成员），字符串字面量联合另按 literals 比对；类型引用可解析到本文件内的别名/接口则内联展开",
+    "verdict": "aligned=两侧字段集合必须逐字相同；frontend-superset=前端多字段，必须把 frontendOnly 逐字登记；api-superset=后端多字段，必须登记 apiOnly；unrelated=同名但确非同一契约（须写明理由并锁住差异集合）",
+    "新增镜像类型": "两侧出现同名类型而本表没有登记 → 守护直接红。必须在对齐与裁剪之间显式选一个并写 reason，不允许靠 review 提醒",
+    "跨名镜像": "同一条契约但两侧起名的类型不同（如 FixInput/FixRequest），登记成 { api, frontend } 一条 pair；这类配对靠人工发现，守护只保证登记后不再漂移",
+    "范围": "只覆盖两份 types.ts；两侧其他文件里的类型镜像不在守护面内（docs/wiki三期 技术债台账记有此限制）"
+  },
+  "types": [
+    {
+      "name": "BatchFixProgressEvent",
+      "verdict": "aligned",
+      "reason": "SSE 事件体（extends FixProgressEvent，父类字段一并比对）"
+    },
+    {
+      "name": "BatchFixRequest",
+      "verdict": "aligned",
+      "reason": "T02802 清点修掉的错配：issueKeys 是契约的一部分，api 侧原先缺这个字段、只在路由里用 `& { issueKeys?: string[] }` 就地补，两侧镜像仍然分叉"
+    },
+    {
+      "name": "CleanupActiveState",
+      "verdict": "aligned",
+      "reason": "清理运行状态响应体"
+    },
+    {
+      "name": "CleanupBlockedResponse",
+      "verdict": "aligned",
+      "reason": "清理被守卫拦截时的响应体"
+    },
+    {
+      "name": "CleanupResult",
+      "verdict": "aligned",
+      "reason": "T02773 的真实缺陷：后端曾写 totalFreedMb、前端读 total_freed_mb，「释放 X MB」永不显示。已由本登记表与 api/test/cleanup-freed-contract.test.ts 双向锁住"
+    },
+    {
+      "name": "CleanupStorageStatus",
+      "verdict": "aligned",
+      "reason": "清理存储状态响应体（注意：T02773 排查时的临时正则把这里误判成后端缺 runState/runLogs，本表由 AST 解析复核为一致）"
+    },
+    {
+      "name": "CliToolEntry",
+      "verdict": "aligned",
+      "reason": "CLI 工具配置项（配置读写双向往返）"
+    },
+    {
+      "name": "DeduplicateResult",
+      "verdict": "aligned",
+      "reason": "去重响应体"
+    },
+    {
+      "name": "DiffLine",
+      "verdict": "aligned",
+      "reason": "diff 行响应体"
+    },
+    {
+      "name": "DiffResult",
+      "verdict": "aligned",
+      "reason": "diff 响应体"
+    },
+    {
+      "name": "DuplicatePair",
+      "verdict": "aligned",
+      "reason": "重复页对响应体"
+    },
+    {
+      "name": "FixProgressEvent",
+      "verdict": "aligned",
+      "reason": "SSE 事件体，前端按字段名取值渲染进度"
+    },
+    {
+      "name": "HealthReport",
+      "verdict": "aligned",
+      "reason": "体检报告响应体，前端逐字段渲染"
+    },
+    {
+      "name": "KnowledgeStatus",
+      "verdict": "aligned",
+      "reason": "字符串字面量联合：两侧字面量集合也必须逐字相同（守护比较 literals 而非字段名）"
+    },
+    {
+      "name": "LlmPreset",
+      "verdict": "aligned",
+      "reason": "模型预设配置项"
+    },
+    {
+      "name": "McpServerEntry",
+      "verdict": "aligned",
+      "reason": "T02802 清点修掉的丢数据路径：triggerKeywords/placeholderTools 只有后端镜像有，前端 JSON 编辑模式按名重建 stdio 条目时把它们清掉，而保存是整份配置回传"
+    },
+    {
+      "name": "MergeResult",
+      "verdict": "aligned",
+      "reason": "合并响应体"
+    },
+    {
+      "name": "MultimodalOutput",
+      "verdict": "frontend-superset",
+      "reason": "有意裁剪（前端为渲染超集）：pptxUrl 由前端把 ppt 事件的下载地址映射进卡片形状（frontend/src/views/Query.vue 构造 MultimodalOutput），后端 multimodal 事件不发这个键；卡片用 v-if 隐藏下载按钮，不是 T02773 那种吃掉显示",
+      "frontendOnly": [
+        "pptxUrl"
+      ]
+    },
+    {
+      "name": "PageQualityScore",
+      "verdict": "aligned",
+      "reason": "页面质量分响应体"
+    },
+    {
+      "name": "PrecheckResult",
+      "verdict": "aligned",
+      "reason": "预检响应体"
+    },
+    {
+      "name": "RefAuthority",
+      "verdict": "aligned",
+      "reason": "字符串字面量联合：同 KnowledgeStatus，权威度等级少一档就是显示与判定口径分叉"
+    },
+    {
+      "name": "SceneRule",
+      "verdict": "aligned",
+      "reason": "场景规则配置项"
+    },
+    {
+      "name": "SkillDetail",
+      "verdict": "aligned",
+      "reason": "AI 伙伴详情"
+    },
+    {
+      "name": "SkillImportResult",
+      "verdict": "aligned",
+      "reason": "AI 伙伴导入结果"
+    },
+    {
+      "name": "SkillMeta",
+      "verdict": "aligned",
+      "reason": "AI 伙伴列表项"
+    },
+    {
+      "name": "ToolsConfig",
+      "verdict": "aligned",
+      "reason": "工具配置整体（前端表单整份回传，缺键即丢配置）"
+    },
+    {
+      "name": "VideoTaskResult",
+      "verdict": "aligned",
+      "reason": "异步视频任务响应体"
+    }
+  ],
+  "pairs": [
+    {
+      "api": "FixInput",
+      "frontend": "FixRequest",
+      "verdict": "aligned",
+      "reason": "同名比对照不到的一对：批量修复请求体里的 items 元素，后端叫 FixInput、前端叫 FixRequest，字段集合必须逐字相同"
+    }
+  ]
+}
