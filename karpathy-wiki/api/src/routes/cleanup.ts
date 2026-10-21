@@ -6,6 +6,7 @@ import type {
   CleanupResult,
   CleanupStorageStatus,
   CleanupBlockedResponse,
+  CleanupRunStateDir,
 } from '../types.js';
 import type { VaultService } from '../vault/vault-service.js';
 import { type IsolationGuards, createIsolationGuards } from '../middleware/auth.js';
@@ -103,18 +104,31 @@ export function registerCleanupRoute(
     };
   }
 
-  // 跨目录合并统计（T02772，run_state 专用）：多个目录的文件数/体积相加，
-  // 最早时间取最小值。oldest 是 YYYY-MM-DD 字符串，字典序即时间序，排序取值即可。
-  async function statDirs(dirs: string[], pattern: RegExp): Promise<{ fileCount: number; sizeBytes: number; oldest: string | null }> {
-    const stats = await Promise.all(dirs.map((dir) => statDir(dir, pattern)));
-    let fileCount = 0;
-    let sizeBytes = 0;
-    for (const s of stats) {
-      fileCount += s.fileCount;
-      sizeBytes += s.sizeBytes;
+  // 单个 run-state 目录的统计（T02772 合并计数 + T02808 目录清单）。
+  // 为什么合并计数改为由逐目录结果求和，而不是另写一个合并函数：
+  // 「运行状态卡计数 = 高级面板各目录计数之和」这条验收从此是结构上的恒等式，
+  // 而不是两条代码路径碰巧算出同一个数——T02772 的缺陷正是「两套口径各算一套」。
+  // sizeBytes/oldest 只在本函数内参与合并统计，不进响应体。
+  async function statRunStateDir(dir: string): Promise<CleanupRunStateDir & { sizeBytes: number; oldest: string | null }> {
+    const s = await statDir(dir, /\.json$/);
+    return {
+      path: dir,
+      fileCount: s.fileCount,
+      sizeMb: bytesToMb(s.sizeBytes),
+      role: isLegacyStateDir(dir) ? 'legacy' : 'canonical',
+      exists: await directoryExists(dir),
+      sizeBytes: s.sizeBytes,
+      oldest: s.oldest,
+    };
+  }
+
+  async function directoryExists(dir: string): Promise<boolean> {
+    try {
+      return (await fs.stat(dir)).isDirectory();
+    } catch {
+      // 不存在与无权限都按「没有这个位置」处理：统计侧本来就把 readdir 失败当 0 个文件
+      return false;
     }
-    const oldestList = stats.map((s) => s.oldest).filter((v): v is string => v !== null).sort();
-    return { fileCount, sizeBytes, oldest: oldestList[0] ?? null };
   }
 
   // 目录标注：遗留目录里的文件必须在结果里一眼看出「它不在规范目录」，
@@ -154,9 +168,24 @@ export function registerCleanupRoute(
         // 文件不存在或解析失败
       }
 
-      // 运行状态：跨「规范目录 + 遗留目录」合并计数（T02772）。
+      // 运行状态：逐目录统计后合并（T02772 合并计数 + T02808 目录清单随状态返回）。
       // 只报规范目录会显示 0 个，用户据此认为「无需清理」，而真实文件在另一个目录无限增长。
-      const stateStat = await statDirs(runStateDirs, /\.json$/);
+      // 清单顺序与 getRunStateDirs() 一致（首项 = 写入侧规范目录），前端不做重排也不改写路径，
+      // 页面显示的路径与后端真正扫的路径因此是同一个字符串。
+      const runStateStats = await Promise.all(runStateDirs.map((dir) => statRunStateDir(dir)));
+      const runStateDirsResult: CleanupRunStateDir[] = runStateStats.map((s) => ({
+        path: s.path,
+        fileCount: s.fileCount,
+        sizeMb: s.sizeMb,
+        role: s.role,
+        exists: s.exists,
+      }));
+      // oldest 是 YYYY-MM-DD 字符串，字典序即时间序，排序取首个即可
+      const runStateSizeBytes = runStateStats.reduce((n, s) => n + s.sizeBytes, 0);
+      const runStateOldest = runStateStats
+        .map((s) => s.oldest)
+        .filter((v): v is string => v !== null)
+        .sort()[0] ?? null;
       // 运行日志
       const logsStat = await statDir(logsDir, /\.log$/);
       // 原始资料存档（仅清理内部临时前缀文件，避免误删用户命名的源文件）
@@ -171,9 +200,10 @@ export function registerCleanupRoute(
           entryCount: compileCacheEntries,
         },
         runState: {
-          fileCount: stateStat.fileCount,
-          sizeMb: bytesToMb(stateStat.sizeBytes),
-          oldest: stateStat.oldest,
+          fileCount: runStateStats.reduce((n, s) => n + s.fileCount, 0),
+          sizeMb: bytesToMb(runStateSizeBytes),
+          oldest: runStateOldest,
+          dirs: runStateDirsResult,
         },
         runLogs: {
           fileCount: logsStat.fileCount,

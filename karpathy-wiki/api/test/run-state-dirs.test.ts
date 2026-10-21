@@ -158,4 +158,13 @@ describe('T02772 生产接线（源码级锁）', () => {
     expect(cleanupSrc).toMatch(/const runStateDirs = runStateDirsOverride \?\? \[stateDir\];/);
     expect(runsSrc).toMatch(/const dirs = runStateDirsOverride \?\? \[stateDir\];/);
   });
+
+  it('T02808：目录角色判定复用 isLegacyStateDir，不再另写一份「哪个是规范目录」', () => {
+    // 清单随状态返回后，「规范/遗留」就有了第二个消费方。两处各算一套的话，
+    // 高级面板标「当前存放位置」而清理预览标「旧存放位置」会同屏矛盾（T02843 同族症状）。
+    const cleanupSrc = readFileSync(path.resolve(__dirname, '..', 'src', 'routes', 'cleanup.ts'), 'utf8');
+    expect(cleanupSrc).toMatch(/role: isLegacyStateDir\(dir\) \? 'legacy' : 'canonical'/);
+    // 目录清单里的路径必须是 getRunStateDirs 的返回项原文（不 resolve 成别的写法、不相对化）
+    expect(cleanupSrc).toMatch(/path: dir,/);
+  });
 });

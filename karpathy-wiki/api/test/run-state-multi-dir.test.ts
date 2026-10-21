@@ -203,6 +203,50 @@ describe('T02772 清理与读取跨 run-state 目录', () => {
     await expect(fs.stat(path.join(legacy, `${RUN_L1}.json`))).rejects.toThrow();
   });
 
+  // T02808：把「到底扫了哪几个位置」随状态返回，页面才能列出与后端逐字一致的清单。
+  // 断言全部用注入的目录清单（boot([canonical, legacy, …])），不碰真实 CWD——
+  // 那正是本单验收要求的「用例可复用注入方式」。
+  it('runState.dirs 逐字等于注入的目录清单：路径、计数、角色、是否存在一一对应', async () => {
+    const missing = path.join(tempRoot, 'nowhere', 'state');
+    await writeState(canonical, RUN_C1, 1024 * 1024);
+    await writeState(legacy, RUN_L1, 1024 * 1024);
+    await writeState(legacy, RUN_L2, 1024 * 1024);
+    await boot([canonical, legacy, missing]);
+
+    const body = await status();
+    const dirs = body.runState.dirs as Array<Record<string, unknown>>;
+    // 顺序也不改：首项必须是写入侧规范目录，前端据此标「当前存放位置」
+    expect(dirs.map((d) => d.path)).toEqual([canonical, legacy, missing]);
+    expect(dirs.map((d) => d.fileCount)).toEqual([1, 2, 0]);
+    expect(dirs.map((d) => d.role)).toEqual(['canonical', 'legacy', 'legacy']);
+    expect(dirs.map((d) => d.exists)).toEqual([true, true, false]);
+    expect(dirs.map((d) => d.sizeMb)).toEqual([1, 2, 0]);
+    // 验收：「运行状态」卡计数 = 高级面板各目录计数之和
+    expect(dirs.reduce((n, d) => n + (d.fileCount as number), 0)).toBe(body.runState.fileCount);
+    expect(body.runState.sizeMb).toBe(dirs.reduce((n, d) => n + (d.sizeMb as number), 0));
+  });
+
+  it('规范目录为空、遗留目录有文件时，dirs 仍把空位置列出来（用户要能看出「清完不会再来自这里」）', async () => {
+    await writeState(legacy, RUN_L1, 1000);
+    await boot([canonical, legacy]);
+
+    const dirs = (await status()).runState.dirs as Array<Record<string, unknown>>;
+    expect(dirs).toHaveLength(2);
+    expect(dirs[0]).toEqual({ path: canonical, fileCount: 0, sizeMb: 0, role: 'canonical', exists: false });
+    expect(dirs[1].fileCount).toBe(1);
+    expect(dirs[1].exists).toBe(true);
+  });
+
+  it('只认单目录（漏传清单的 fail-safe 默认）时 dirs 也只有一项，且标为当前存放位置', async () => {
+    await writeState(legacy, RUN_L1, 1000);
+    await boot();
+
+    const body = await status();
+    expect(body.runState.dirs).toEqual([
+      { path: canonical, fileCount: 0, sizeMb: 0, role: 'canonical', exists: false },
+    ]);
+  });
+
   it('步骤追踪列表跨目录合并：历史运行不因换了写入目录而从面板消失', async () => {
     await writeState(canonical, RUN_C1, 500);
     await writeState(legacy, RUN_L1, 500);
@@ -288,6 +332,12 @@ describe('T02772 真实目录只读复核（不写不删）', () => {
     try {
       const body = (await app.inject({ method: 'GET', url: '/api/cleanup/status' })).json() as Record<string, any>;
       expect(body.runState.fileCount).toBe(expected);
+      // T02808：真实机器上，接口给的目录清单必须与 getRunStateDirs() 逐字同值同序——
+      // 高级面板显示的就是这份清单，任何「前端自己再算一遍目录」的写法都会在这里露出来。
+      expect(body.runState.dirs.map((d: Record<string, any>) => d.path)).toEqual(dirs);
+      expect(body.runState.dirs.map((d: Record<string, any>) => d.fileCount).reduce((a: number, b: number) => a + b, 0)).toBe(expected);
+      expect(body.runState.dirs[0].role).toBe('canonical');
+      expect(body.runState.dirs.filter((d: Record<string, any>) => d.role === 'legacy').length).toBe(dirs.length - 1);
     } finally {
       await app.close();
     }

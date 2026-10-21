@@ -47,7 +47,15 @@ function statusOf(over: Partial<CleanupStorageStatus> = {}): CleanupStorageStatu
   return {
     active: idle,
     compileCache: { exists: true, sizeMb: 1.2, entryCount: 42 },
-    runState: { fileCount: 3, sizeMb: 0.1, oldest: '2026-09-01' },
+    runState: {
+      fileCount: 3,
+      sizeMb: 0.1,
+      oldest: '2026-09-01',
+      // T02808：与卡计数成对（各目录计数之和 = fileCount）
+      dirs: [
+        { path: '/tmp/wiki-data/.harness/state', fileCount: 3, sizeMb: 0.1, role: 'canonical', exists: true },
+      ],
+    },
     runLogs: { fileCount: 12, sizeMb: 4.5, oldest: '2026-08-11' },
     rawArchive: { fileCount: 7, sizeMb: 2.2, oldest: '2026-07-30' },
     ...over,

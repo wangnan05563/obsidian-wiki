@@ -35,6 +35,16 @@
       "reason": "T02773 的真实缺陷：后端曾写 totalFreedMb、前端读 total_freed_mb，「释放 X MB」永不显示。已由本登记表与 api/test/cleanup-freed-contract.test.ts 双向锁住"
     },
     {
+      "name": "CleanupRunStateDir",
+      "verdict": "aligned",
+      "reason": "T02808 新增契约：清理状态随 runState 返回真实扫描的目录清单（路径/计数/体积/角色/是否存在）。前端「高级」面板直接展示 path，字段名错配会让面板静默空掉，必须同源"
+    },
+    {
+      "name": "CleanupRunStateRole",
+      "verdict": "aligned",
+      "reason": "T02808：目录角色只有规范/遗留两档，判据在后端 isLegacyStateDir；少一档前端文案就取不到值，按字面量集合比对锁住"
+    },
+    {
       "name": "CleanupStorageStatus",
       "verdict": "aligned",
       "reason": "清理存储状态响应体（注意：T02773 排查时的临时正则把这里误判成后端缺 runState/runLogs，本表由 AST 解析复核为一致）"

@@ -4,7 +4,7 @@
 // 全写在模板字符串里（且写的是 .harness/*.json、SHA-256、JSONL、resume 这类实现词），
 // 既没法在浏览器外锁住，也没法保证页级预览开关和 4 张卡的说法一致。
 // 收敛成纯函数后：措辞单一来源，页级开关的行为分支可以用单测穷举。
-import type { CleanupActiveState, CleanupStorageStatus, CleanupTarget } from '../types';
+import type { CleanupActiveState, CleanupRunStateDir, CleanupRunStateRole, CleanupStorageStatus, CleanupTarget } from '../types';
 
 /** S5：菜单名 = 页标题 = 帮助文档条目名，不再叫含糊的「系统清理」 */
 export const CLEANUP_PAGE_TITLE = '缓存与日志清理';
@@ -190,4 +190,44 @@ export function confirmText(title: string): string {
 /** 「高级」面板：技术细节集中一处，主界面不再出现 .harness / SHA-256 / JSONL / resume */
 export function advancedRows(): { title: string; path: string; note: string }[] {
   return CLEANUP_CARDS.map((c) => ({ title: c.title, path: c.techPath, note: c.techNote }));
+}
+
+/**
+ * T02808：运行状态目录角色的唯一措辞。
+ * 后端给的是事实（role），这里给的是说法——「旧存放位置」与清理预览里的条目标注同一措辞，
+ * 用户在两处看到的是同一个词，不会以为「遗留」和「旧存放位置」是两个概念。
+ */
+export const RUN_STATE_ROLE_TEXT: Record<CleanupRunStateRole, string> = {
+  canonical: '当前存放位置',
+  legacy: '旧存放位置',
+};
+
+export interface RunStateDirRow {
+  /** 后端 getRunStateDirs() 返回的绝对路径原文，不重排、不相对化、不美化 */
+  path: string;
+  roleText: string;
+  /** 计数行：目录不存在时说「还没有这个位置」，与「有目录但 0 个文件」分开 */
+  countText: string;
+  legacy: boolean;
+}
+
+/**
+ * T02808：「高级」面板里的运行状态真实目录清单。
+ * 顺序沿用后端清单（首项即写入侧规范目录），前端不做任何重排——
+ * 「页面显示的目录 = 后端真正扫的目录」这条一致性只能靠不改走来维持。
+ */
+export function runStateDirRows(dirs: CleanupRunStateDir[]): RunStateDirRow[] {
+  return dirs.map((d) => ({
+    path: d.path,
+    roleText: RUN_STATE_ROLE_TEXT[d.role],
+    countText: d.exists ? `${d.fileCount} 个文件 · ${d.sizeMb.toFixed(2)} MB` : '还没有这个位置',
+    legacy: d.role === 'legacy',
+  }));
+}
+
+/** 遗留目录里确实还有文件时的一句话说明；没有则返回空串（模板据此不渲染） */
+export function legacyRunStateHint(dirs: CleanupRunStateDir[]): string {
+  const n = dirs.filter((d) => d.role === 'legacy').reduce((sum, d) => sum + d.fileCount, 0);
+  if (n === 0) return '';
+  return `其中 ${n} 个在旧存放位置：那是进度文件改存到统一目录之前留下的，清完不会再增加。`;
 }
