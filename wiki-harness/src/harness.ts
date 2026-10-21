@@ -50,7 +50,8 @@ export class Harness {
 
   constructor(private config: HarnessConfig) {
     this.llm = new OpenAICompatibleAdapter(config.llm);
-    // 未提供 stateStore 时回退到文件存储
+    // 未提供 stateStore 时回退到文件存储；目录仍要由宿主给（绝对实参或 WIKI_HARNESS_STATE_DIR），
+    // 给不出即在构造期失败，不会静默往进程 CWD 写状态（T02811）。
     this.stateStore = config.stateStore ?? new FileStateStore();
     this.hooks = new HookManager(config.hooks ?? {}, config.interceptors ?? {});
     this.tools = config.tools;
