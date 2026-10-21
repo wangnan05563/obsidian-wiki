@@ -17,7 +17,8 @@
 //  - run_state：清理**不带 days 过滤**，会把目录里所有 json 无差别删掉，
 //    其中就包括进行中任务的续传基准 → 必须拦。
 //  - raw_archive：进行中/排队中的编译要读原件，删了这次编译拿不到输入 → 必须拦。
-import { activeActivities } from './activity.js';
+import { activeActivities, foreignActiveActivities } from './activity.js';
+import type { ActivityRecord } from './cleanup-cross-process.js';
 import type { CleanupActiveState } from './types.js';
 
 // 'all' 展开后的具体目标（与路由分发保持一致）
@@ -47,12 +48,14 @@ const BLOCK_RULES: BlockRule[] = [
   },
 ];
 
-/** 读取当前活跃任务快照，并算出被拦目标（前端置灰与后端守卫共用同一口径）。 */
-export function currentActiveState(): CleanupActiveState {
-  const counts = activeActivities();
+/** 按「活跃数 → 被拦目标/原因」算快照；进程内与跨进程合并后共用这一份口径。 */
+function buildActiveState(
+  counts: { compile: number; query: number },
+  reasonSuffix = '',
+): CleanupActiveState {
   const blockedReasons = BLOCK_RULES.filter((rule) =>
     rule.kind === 'compile' ? counts.compile > 0 : counts.query > 0,
-  ).map((rule) => ({ target: rule.target, reason: rule.reason }));
+  ).map((rule) => ({ target: rule.target, reason: rule.reason + reasonSuffix }));
   return {
     compile: counts.compile,
     query: counts.query,
@@ -61,6 +64,32 @@ export function currentActiveState(): CleanupActiveState {
     // 原文原因：前端置灰提示直接引用，不再各写一份措辞（避免两套口径漂移）
     blockedReasons,
   };
+}
+
+/** 读取当前活跃任务快照，并算出被拦目标（前端置灰与后端守卫共用同一口径）。 */
+export function currentActiveState(): CleanupActiveState {
+  return buildActiveState(activeActivities());
+}
+
+/**
+ * T02817：并入**其它进程**声明的活跃数后的快照。
+ * 为什么要单独一份：activity.ts 的计数在进程内存里，桌面端实例与手工 dev 实例并存时
+ * 各自的清理守卫都读不到对方——「B 正在编译，A 的真实删除照样放行」这条破口就是这么来的。
+ * 措辞后缀让排查时一眼分清「被本进程拦」与「被另一进程拦」（T02817 验收口径）。
+ */
+export async function activeStateAcrossProcesses(): Promise<CleanupActiveState> {
+  const local = activeActivities();
+  const foreign = await foreignActiveActivities();
+  const counts = { compile: local.compile + foreign.compile, query: local.query + foreign.query };
+  if (foreign.compile + foreign.query === 0) return buildActiveState(counts);
+  return buildActiveState(counts, foreignSuffix(foreign.instances));
+}
+
+/** 「另一实例」的点名后缀：pid + 实例标识，让人不用猜是谁拦的。 */
+function foreignSuffix(instances: ActivityRecord[]): string {
+  if (instances.length === 0) return '';
+  const who = instances.map((i) => `pid ${i.pid} @ ${i.instance}`).join('、');
+  return `（来自另一服务实例：${who}）`;
 }
 
 export interface CleanupGuardVerdict {
@@ -82,7 +111,14 @@ export function evaluateCleanupGuard(
     const busy = rule.kind === 'compile' ? active.compile > 0 : active.query > 0;
     if (!busy || !targets.includes(rule.target)) continue;
     blocked.add(rule.target);
-    if (!reasons.includes(rule.reason)) reasons.push(rule.reason);
+    // T02817：文案取 active.blockedReasons 里的这一条，而不是 rule.reason。
+    // 跨进程合并时后缀「（来自另一服务实例：pid …）」只写在快照里，
+    // 直接用 rule.reason 会把「到底是谁拦的」这个信息在响应体里丢掉——用户只看到
+    // 「有编译任务正在进行」，而本进程一个编译也没有，无从排查。
+    const reason =
+      active.blockedReasons.find((r) => r.target === rule.target && r.reason.startsWith(rule.reason))
+        ?.reason ?? rule.reason;
+    if (!reasons.includes(reason)) reasons.push(reason);
   }
   return {
     blocked: ALL_CLEANUP_TARGETS.filter((t) => blocked.has(t)),
@@ -91,11 +127,17 @@ export function evaluateCleanupGuard(
 }
 
 /** 供 409 响应体使用的一句话摘要（error 字段）：前端直接展示，不再拼字符串。 */
-export function guardErrorMessage(target: string, verdict: CleanupGuardVerdict): string {
+export function guardErrorMessage(
+  target: string,
+  verdict: CleanupGuardVerdict,
+  active: CleanupActiveState = currentActiveState(),
+): string {
+  // T02817：计数同样取自传入的快照。原先这里另读一次 currentActiveState()（进程内口径），
+  // 另一实例在跑、本进程空闲时会退化成含糊的「存在进行中任务（活跃任务）」，
+  // 与 reasons 里精确到 pid 的点名自相矛盾。
   const busy: string[] = [];
-  const snapshot = currentActiveState();
-  if (snapshot.compile > 0) busy.push(`${snapshot.compile} 个编译`);
-  if (snapshot.query > 0) busy.push(`${snapshot.query} 个问答`);
+  if (active.compile > 0) busy.push(`${active.compile} 个编译`);
+  if (active.query > 0) busy.push(`${active.query} 个问答`);
   return `存在进行中任务（${busy.join('、') || '活跃任务'}），已拦截真实删除：${verdict.blocked
     .map((t) => targetLabel(t))
     .join('、')}。请先停止或等待任务结束，或改用「仅预览」。`;

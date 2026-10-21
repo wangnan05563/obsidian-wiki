@@ -13,7 +13,7 @@
 import type { AnswerChunk } from '../types.js';
 import { withSessionLock } from '../session-lock.js';
 // T02655：run 生命周期登记活跃任务，供系统清理（POST /api/cleanup）真实删除前的硬拦截判定
-import { beginActivity } from '../activity.js';
+import { beginActivity, confirmActivityStart } from '../activity.js';
 // T02774：清理独占锁——run 起跑前等待真实清理结束（单向优先级，任务排队而非被拒）
 import { awaitCleanupIdle } from '../cleanup-mutex.js';
 
@@ -164,8 +164,16 @@ class StreamRunManager {
     const runTask = async (): Promise<void> => {
       // T02774：真实清理进行中 → 排队等它做完，再登记活跃并开始产出。
       // 顺序不可颠倒：先等锁再登记，登记的正是「接下来会触碰 run-state / 线程记忆」这件事。
-      await awaitCleanupIdle();
-      entry.releaseActivity = beginActivity('query');
+      // T02817：登记落盘后回读另一实例的删除标记；恰好被对方抢到删除权就收回登记、重新排队。
+      let activityStarted = false;
+      while (!activityStarted) {
+        await awaitCleanupIdle();
+        const candidate = beginActivity('query');
+        if (await confirmActivityStart(candidate)) {
+          entry.releaseActivity = candidate;
+          activityStarted = true;
+        }
+      }
       try {
         await iterate();
         // iterate 正常 resolve 且未走 done/error 分支（二者均已 return）→ producer 自然耗尽。

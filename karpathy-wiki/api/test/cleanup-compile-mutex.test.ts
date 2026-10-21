@@ -443,7 +443,12 @@ describe('T02774 起跑点接线锁（漏接一处等于整套互斥失效）', 
 
   it('清理路由：守卫判定与抢锁之间没有 await（窗口不靠运气闭合）', () => {
     const src = readSrc('src/routes/cleanup.ts');
-    const guardIdx = src.indexOf('evaluateCleanupGuard(target)');
+    // T02817 起判定输入是「本进程 + 其它进程」合并的快照；仍锁死这一点，
+    // 否则有人会把守卫改回只读进程内计数，跨进程那半边保护当场失效且无人报警。
+    expect(src.indexOf('const active0 = await activeStateAcrossProcesses();')).toBeLessThan(
+      src.indexOf('evaluateCleanupGuard(target, active0)'),
+    );
+    const guardIdx = src.indexOf('evaluateCleanupGuard(target, active0)');
     const acquireIdx = src.indexOf('acquireCleanup()');
     expect(guardIdx).toBeGreaterThan(-1);
     expect(acquireIdx).toBeGreaterThan(guardIdx);
@@ -454,7 +459,9 @@ describe('T02774 起跑点接线锁（漏接一处等于整套互斥失效）', 
 
   it('清理路由：release 位于 finally（异常路径不得把锁留在持有态）', () => {
     const src = readSrc('src/routes/cleanup.ts');
-    const releaseIdx = src.indexOf('cleanupHandle?.release()');
+    // 用 lastIndexOf：T02817 之后「抢标记失败」和「抢到标记后判到任务」两个分支也各自
+    // 提前释放锁（那里必须放，否则拒绝一次就把锁永久留着），全文首个 release 不再是 finally 那一个。
+    const releaseIdx = src.lastIndexOf('cleanupHandle?.release()');
     expect(releaseIdx).toBeGreaterThan(-1);
     // release 必须在 finally 而不是 try 尾部：500 兜底分支若绕过释放，
     // 这把锁会永久持有，从此全站编译/问答都排队 —— 比没有互斥更糟
