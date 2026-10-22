@@ -116,11 +116,18 @@ export class BatchFixJobManager {
   private readonly jobs = new Map<string, JobEntry>();
   // 串行落盘：同一 job 的并发写入互相覆盖，排队保证后写生效
   private writeChain: Promise<void> = Promise.resolve();
+  // T02888：进程启动时的过期快照回收，公开成 Promise 供测试确定性等待
+  readonly startupPrune: Promise<void>;
 
   constructor(jobsDir: string, adapter: EngineAdapter) {
     this.jobsDir = jobsDir;
     this.statsFile = path.join(jobsDir, 'stats.json');
     this.adapter = adapter;
+    // T02888：快照回收原来只在下一次批量修复起跑时发生——用过一次就不再用的用户，
+    // 终态快照会一直留在盘上，而清理页四类目标都不扫 batch-fix（看不到也删不掉）。
+    // 快照是「断点续传/恢复」语义（与 run-state 同族），不并入清理删除面，
+    // 改由管理器自己在启动时按同一 TTL 回收，不依赖用户再次使用该功能。
+    this.startupPrune = this.pruneOldSnapshots().catch(() => undefined);
   }
 
   /** 启动一次批量修复：立即返回快照，实际执行在后台排队（withCompileLock 与 compile 互斥）。 */
@@ -522,7 +529,8 @@ export class BatchFixJobManager {
     return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
   }
 
-  private async pruneOldSnapshots(): Promise<void> {
+  // 公开给测试与启动路径（T02888）：按 TTL 回收过期快照与残留临时文件。
+  async pruneOldSnapshots(): Promise<void> {
     const files = await this.listSnapshotFiles();
     const now = Date.now();
     for (const f of files) {
