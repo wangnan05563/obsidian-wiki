@@ -176,3 +176,50 @@ export function formatElapsed(ms: number): string {
   const s = seconds % 60;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
+
+// ===== 「展开全部」虚拟滚动窗口计算（T02606）=====
+// 为什么需要：T02606 真机量测（真实 vault 体检报告，展开后 778 行，系统 Chrome 1440×900，
+// 3 轮中位数）显示点「展开全部」首帧 1354ms（主线程 long task 871+471ms），展开后真实滚轮
+// 只有 18fps、步进滚动 11fps（60 帧里 61 个 long task、共 5266ms），重复展开一次 1078ms。
+// Top-20 与「加载更多 200」是同一量级问题的临时缓解，「展开全部」没有上限保护。
+// 这里只做纯计算（不碰 DOM），组件负责取 scrollTop/视口高与行高。
+export const VIRTUAL_MIN_ROWS = 60;
+export const VIRTUAL_OVERSCAN_ROWS = 8;
+
+export interface VirtualWindowInput {
+  count: number;
+  // 列表自身被滚出视口的距离（>=0），不是页面 scrollTop
+  scrollTop: number;
+  viewportHeight: number;
+  rowHeight: number;
+  rowGap: number;
+  overscan?: number;
+}
+
+export interface VirtualWindow {
+  start: number;
+  end: number;
+  pitch: number;
+  totalHeight: number;
+}
+
+// 行数很少时不做窗口化：多一层滚动监听与绝对定位反而更贵，且 DOM 里留全量更利于查找
+export function shouldVirtualize(count: number, min = VIRTUAL_MIN_ROWS): boolean {
+  return count > min;
+}
+
+export function computeVirtualWindow(input: VirtualWindowInput): VirtualWindow {
+  const rowHeight = Math.max(1, input.rowHeight);
+  const rowGap = Math.max(0, input.rowGap);
+  const pitch = rowHeight + rowGap;
+  // 末行没有下间距：总高 = count*pitch - gap
+  const totalHeight = input.count > 0 ? input.count * pitch - rowGap : 0;
+  const overscan = Math.max(0, input.overscan ?? VIRTUAL_OVERSCAN_ROWS);
+  const scrolled = Math.min(Math.max(0, input.scrollTop), Math.max(0, totalHeight));
+  const first = Math.floor(scrolled / pitch);
+  const visibleRows = Math.ceil(Math.max(0, input.viewportHeight) / pitch) + 1;
+  const start = Math.max(0, Math.min(first - overscan, input.count));
+  const end = Math.min(input.count, start + visibleRows + overscan * 2);
+  return { start, end, pitch, totalHeight };
+}
+

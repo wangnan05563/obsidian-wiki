@@ -1,14 +1,16 @@
 <script setup lang="ts">
-// 体检问题行列表（T02466 / PRD R-F1）
+// 体检问题行列表（T02466 / PRD R-F1；T02606 接入虚拟窗口）
 // ------------------------------------------------------------------
 // 为什么独立组件：原 Health.vue 为 4 类问题各手写一段行 markup，加搜索/多选/折叠时
 // 需要改 4 处、极易漏改。行渲染收敛到这里后，扁平列表与「按目录聚合」的分组列表共用
 // 同一套行，新增交互只改一处。
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElCheckbox, ElButton } from 'element-plus';
 import { Link, EditPen } from '@element-plus/icons-vue';
+import { computeVirtualWindow, shouldVirtualize, VIRTUAL_OVERSCAN_ROWS } from '../utils/healthList';
 import type { IssueRow } from '../utils/healthList';
 
-defineProps<{
+const props = defineProps<{
   rows: IssueRow[];
   selected: Set<string>;
   fixingKey: string;
@@ -33,15 +35,131 @@ function fixTip(row: IssueRow): string {
   }
   return `修正断链 - 调用一次 LLM，处理 ${row.path} 中的 [[${row.target}]]：创建缺失页面或改写链接`;
 }
+
+// 行完整文本（定高单行会把长路径/长缺失页名截断，hover 与读屏仍可取全）
+function rowTitle(row: IssueRow): string {
+  return row.kind === 'broken' ? `${row.path} ⟶ [[${row.target}]]` : row.path;
+}
+
+// ===== 虚拟窗口（T02606）=====
+// 为什么自实现而不用 el-auto-resizer/el-virtual-list：EP 虚拟列表要求自带固定高度的
+// 滚动盒，接进来会把「4 类问题顺着页面滚动」变成 4 个内部滚动框，改变阅读与多选动线。
+// 这里只裁 DOM 数量，滚动主体、搜索/聚合/多选语义全部不变。
+// 前提：行等高——`.issue-item` 定高、`.broken-target` 单行截断，所以「等距 + 绝对定位」
+// 能精确对齐；行高与行间距不写死在 JS 里，挂载后从 CSS 计算值实测（改主题字号不会错位）。
+const rootEl = ref<HTMLElement | null>(null);
+const scrollTop = ref(0);
+const viewportH = ref(0);
+const rowHeight = ref(46);
+const rowGap = ref(8);
+let rafId = 0;
+let lastStart = -1; // 上次算出的窗口起始行，用于跳过无谓重渲染
+
+const virtualized = computed(() => shouldVirtualize(props.rows.length));
+const windowInfo = computed(() =>
+  computeVirtualWindow({
+    count: props.rows.length,
+    scrollTop: scrollTop.value,
+    viewportHeight: viewportH.value,
+    rowHeight: rowHeight.value,
+    rowGap: rowGap.value,
+  }),
+);
+const visibleRows = computed(() =>
+  virtualized.value
+    ? props.rows.slice(windowInfo.value.start, windowInfo.value.end)
+    : props.rows,
+);
+// 未窗口化时保持原布局（flex + gap），只做行数折叠；窗口化时容器用总高占位
+const listStyle = computed(() =>
+  virtualized.value ? { height: `${windowInfo.value.totalHeight}px` } : {},
+);
+function rowStyle(idx: number): Record<string, string> {
+  if (!virtualized.value) return {};
+  return { top: `${(windowInfo.value.start + idx) * windowInfo.value.pitch}px` };
+}
+
+// 窗口槽位 key：虚拟模式下按「槽位」而非 row.key 作 key。
+// 为什么不用 row.key：滚动时窗口整体位移，row.key 全变会让 Vue 卸载旧行、重建 34 行
+// 的 el-checkbox/el-button 实例（实测每次滚动跳 26 行时反而比不优化更卡）。槽位 key
+// 让同一批组件实例只更新 props——行本身无内部状态，全部由 props 派生，可安全复用。
+const slotKeys = computed(() =>
+  virtualized.value
+    ? visibleRows.value.map((_, i) => `slot-${i}`)
+    : visibleRows.value.map((r) => r.key),
+);
+
+function measureGeometry(): void {
+  const el = rootEl.value;
+  if (!el) return;
+  const cs = getComputedStyle(el);
+  const gap = parseFloat(cs.rowGap || cs.gap || '');
+  if (Number.isFinite(gap) && gap >= 0) rowGap.value = gap;
+  const first = el.querySelector<HTMLElement>('.issue-item');
+  if (first && first.offsetHeight > 0) rowHeight.value = first.offsetHeight;
+}
+
+function updateScrollState(): void {
+  const el = rootEl.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  viewportH.value = window.innerHeight || document.documentElement.clientHeight || 0;
+  // 列表顶相对视口顶为负 → 已被滚出的距离；为正 → 尚未进入视口，从 0 起算
+  const scrolled = Math.max(0, -rect.top);
+  // 窗口起始行未变则不写回：避免细粒度滚动每次都触发一轮重渲染
+  const pitch = Math.max(1, rowHeight.value + rowGap.value);
+  const start = Math.max(0, Math.floor(scrolled / pitch) - VIRTUAL_OVERSCAN_ROWS);
+  if (start === lastStart && scrolled === scrollTop.value) return;
+  if (start !== lastStart) lastStart = start;
+  scrollTop.value = scrolled;
+}
+
+// 滚动事件在内部滚动容器（MAIN.content）上不冒泡，用捕获阶段监听统一接管
+function onScrollOrResize(): void {
+  if (rafId) return;
+  rafId = requestAnimationFrame(() => {
+    rafId = 0;
+    updateScrollState();
+  });
+}
+
+onMounted(() => {
+  nextTick(() => {
+    measureGeometry();
+    updateScrollState();
+  });
+  window.addEventListener('scroll', onScrollOrResize, { capture: true, passive: true });
+  window.addEventListener('resize', onScrollOrResize);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', onScrollOrResize, { capture: true });
+  window.removeEventListener('resize', onScrollOrResize);
+  if (rafId) cancelAnimationFrame(rafId);
+});
+
+// 行数变化（折叠/加载更多/展开全部/搜索）后重测：窗口区间与总高都要跟着新行数走
+watch(
+  () => props.rows.length,
+  () => {
+    lastStart = -1;
+    nextTick(() => {
+      measureGeometry();
+      updateScrollState();
+    });
+  },
+);
 </script>
 
 <template>
-  <div class="issue-list">
+  <div ref="rootEl" class="issue-list" :class="{ 'is-virtual': virtualized }" :style="listStyle">
     <div
-      v-for="row in rows"
-      :key="row.key"
+      v-for="(row, idx) in visibleRows"
+      :key="slotKeys[idx]"
       class="issue-item"
       :class="[row.kind, jobStates[row.key] ? `is-${jobStates[row.key]}` : '']"
+      :style="rowStyle(idx)"
+      :title="rowTitle(row)"
     >
       <el-checkbox
         v-if="row.fixable"
@@ -86,15 +204,36 @@ function fixTip(row: IssueRow): string {
   gap: 8px;
 }
 
+/* 虚拟窗口：容器按 totalHeight 占位，行脱离文档流按 index*pitch 定位。
+   只改定位，不改行样式——扁平视图与「按目录聚合」共用同一套行。 */
+.issue-list.is-virtual {
+  position: relative;
+}
+
+.issue-list.is-virtual .issue-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* transition: all 会把 top 一起补间：滚动时窗口换行会看到整列滑动。
+     这里显式只留视觉属性，位置变化瞬时生效。 */
+  transition: background-color 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
+}
+
+/* 等高行是虚拟窗口精确对齐的前提：定高 + 单行截断（完整文本走 title/读屏） */
 .issue-item {
   display: flex;
   align-items: center;
   gap: 10px;
+  height: var(--health-row-height, 46px);
   padding: 9px 14px;
   background: var(--accent-purple-a08);
   border: 1px solid var(--accent-purple-a20);
   border-radius: var(--radius-input);
   font-size: 13px;
+  /* 隔离滚动期的样式/布局重算（T02606 实测：展开全量平滑滚动 longtask 总时长大幅下降）。
+     行内没有需要越界绘制的子节点：悬浮提示由 directives/tip 挂到 document.body 且 position:fixed，
+     不是本行的后代，所以 paint containment 不会把它裁掉。 */
+  contain: layout style paint;
   transition: all 0.25s ease;
 }
 
@@ -130,6 +269,16 @@ function fixTip(row: IssueRow): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 缺失页名过长时曾把行撑成两行（65px），破坏虚拟窗口的等距假设 */
+.row-path,
+.broken-target {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .row-check {
