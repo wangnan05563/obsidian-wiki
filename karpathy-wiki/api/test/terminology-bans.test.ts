@@ -155,13 +155,18 @@ describe('T02705 术语表守护扩到后端用户可见文案', () => {
 
   it('豁免只用于外部语境，且按侧生效（前端的豁免不能漏到后端）', () => {
     const notes = BANS.find((b) => b.term === '笔记');
-    expect(notes?.exempt?.frontend?.lines?.map((e) => e.file), '前端行级豁免登记缺失').toContain('views/Help.vue');
+    // T02824 补同步：T02784 把帮助文档数据迁到 helpDocSections.ts，「笔记」行级豁免随迁
+    expect(notes?.exempt?.frontend?.lines?.map((e) => e.file), '前端行级豁免登记缺失').toContain(
+      'utils/helpDocSections.ts',
+    );
     // 后端没有任何「笔记」的正当外部语境：api 侧两级通道都不得开口，命中即红
     expect(notes?.exempt?.api?.files ?? [], '后端不应有整文件豁免').toEqual([]);
     expect(notes?.exempt?.api?.lines ?? [], '后端不应有行级豁免').toEqual([]);
     expect(scanLine('services/y.ts', `return 'Obsidian 笔记'`, 1).map((h) => h.term)).toContain('笔记');
     // 前端那一行的豁免不会漏给后端：同一 rel 文本在后端侧仍然红
-    expect(isExempted(notes as Ban, 'api', 'views/Help.vue', '将外部资料（Obsidian 笔记）导入知识库')).toBe(false);
+    expect(isExempted(notes as Ban, 'api', 'utils/helpDocSections.ts', '将外部资料（Obsidian 笔记）导入知识库')).toBe(
+      false,
+    );
   });
 
   it('豁免登记自审：只认 frontend/api 两侧、理由必填、登记的文件真实存在（T02790）', () => {
