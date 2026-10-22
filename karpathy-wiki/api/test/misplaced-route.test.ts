@@ -64,6 +64,25 @@ describe('GET /api/data-clean/misplaced', () => {
   });
 });
 
+describe('GET /api/data-clean/precheck（T02843 同屏口径）', () => {
+  it('预检响应里这一类的数量与 GET /misplaced 完全一致（两个端点不得各算各的）', async () => {
+    await writeStray('concepts/legacy/precheck-route.md', '预检接线取证页', 'concept');
+    const misplacedRes = await app.inject({ method: 'GET', url: '/api/data-clean/misplaced' });
+    const precheckRes = await app.inject({ method: 'GET', url: '/api/data-clean/precheck' });
+    expect(misplacedRes.statusCode).toBe(200);
+    expect(precheckRes.statusCode).toBe(200);
+
+    const items = misplacedRes.json();
+    const body = precheckRes.json();
+    const lines = (body.warnings as string[]).filter((w) => w.includes('知识库索引不到'));
+    expect(lines, '预检结论必须带上这一类，否则同屏仍是两个口径').toHaveLength(1);
+    expect(Number(lines[0].match(/^(\d+)\s/)?.[1]), '两处数量').toBe(items.length);
+    expect(items.length, '前置：本 vault 里确实有错位页').toBeGreaterThan(0);
+    // 这一类不是错误：编译门与「预检通过」的语义不因它翻转（只有解析错误才 blocked）
+    expect(body.blocked).toBe(false);
+  });
+});
+
 describe('POST /api/data-clean/misplaced/promote', () => {
   it('paths 缺失 → 400，不动盘', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/data-clean/misplaced/promote', payload: {} });
