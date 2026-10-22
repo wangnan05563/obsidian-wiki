@@ -28,11 +28,19 @@ export interface McpMergeResult {
  * 合并策略（与 Config.vue 的 JSON 编辑模式口径一致）：
  *  1. 非 stdio（sse/http）条目原样保留——JSON 模式不编辑这些类型；
  *  2. stdio 条目以 JSON 为权威源重建：JSON 里没有的同名 stdio 视为已删除；
+ *     唯一例外是禁用态（T02834）：Claude Desktop 格式没有 enabled 键，serializeMcpToJson
+ *     从不把禁用条目写进 JSON——它「不在 JSON 里」是格式限制而非用户删除动作，
+ *     按名字丢弃会让「切到 JSON 再切回」静默删掉禁用服务器。故 JSON 未提及的禁用态
+ *     stdio 原样带回（含 timeoutMs 等懒加载键）；JSON 里出现的名字仍以 JSON 为权威
+ *     （同名重建为 enabled:true，即 JSON 模式可以重新启用一个禁用服务器）。
  *  3. 重建时按 name 从旧条目带回 JSON 格式里不存在的那三个键；
  *  4. JSON 里的名字若撞上现存非 stdio 条目，报错并原样返回（不静默删远程服务器）。
  */
 export function mergeMcpJsonIntoServers(existing: McpServerEntry[], parsed: McpJsonFile): McpMergeResult {
-  const servers = existing.filter((s) => s.transport !== 'stdio');
+  const jsonNames = new Set(Object.keys(parsed.mcpServers ?? {}));
+  const servers = existing.filter(
+    (s) => s.transport !== 'stdio' || (s.enabled === false && !jsonNames.has(s.name)),
+  );
   const remoteNames = new Set(servers.map((s) => s.name));
   const previousByName = new Map(existing.map((s) => [s.name, s]));
   for (const [name, cfg] of Object.entries(parsed.mcpServers ?? {})) {
