@@ -2145,6 +2145,12 @@ function switchToMcpJsonMode(): void {
   mcpJsonText.value = serializeMcpToJson(toolsForm.value.mcpServers);
   mcpJsonError.value = '';
   mcpEditMode.value = 'json';
+  // T02834：「看不见」不能是「被删除」的前奏——禁用态 stdio 不写进 JSON（Claude Desktop 格式无
+  // enabled 键），切走前点名条数，避免用户把「JSON 里没有」误读成「已被删除」
+  const hidden = toolsForm.value.mcpServers.filter((s) => s.transport === 'stdio' && s.enabled === false).length;
+  if (hidden > 0) {
+    ElMessage.info(`${hidden} 个已禁用的服务器不会出现在 JSON 中（Claude Desktop 格式限制），切回表单模式时将原样保留`);
+  }
 }
 
 // 切换回表单模式时尝试 parse JSON 并合并到表单
@@ -2163,8 +2169,9 @@ function applyMcpJsonToForm(): boolean {
   mcpJsonError.value = '';
   const text = mcpJsonText.value.trim();
   if (!text) {
-    // 空文本视为清空所有 stdio server
-    toolsForm.value.mcpServers = toolsForm.value.mcpServers.filter(s => s.transport !== 'stdio');
+    // 空文本视为清空所有启用的 stdio server；禁用态 stdio 本就不在 JSON 里（T02834），
+    // 「清空」不能顺带走删不掉它们——与 mergeMcpJsonIntoServers 的豁免口径一致
+    toolsForm.value.mcpServers = toolsForm.value.mcpServers.filter(s => s.transport !== 'stdio' || s.enabled === false);
     return true;
   }
   let parsed: McpJsonFile;
