@@ -20,6 +20,8 @@ export const STORAGE_KEYS = {
   MSG_FEEDBACK_PREFIX: 'msg-feedback-',
   /** FloatingChat 面板展开状态持久化（FloatingChat.vue） */
   FLOATING_CHAT_OPEN: 'floatingChatOpen',
+  /** FloatingChat FAB 一次性红点引导：首次展开面板后置 true，红点不再出现（FloatingChat.vue，REQ-007/N8） */
+  FLOATING_CHAT_GUIDE_SEEN: 'floatingChatGuideSeen',
   /** 认证 token（auth store），仅存非敏感会话 token，用户信息存内存 */
   AUTH_TOKEN: 'authToken',
   /** 多输出模式多选偏好持久化（query store），用户偏好的 thinking/tool_call/answer/multimodal 可见性 */
