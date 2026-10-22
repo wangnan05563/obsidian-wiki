@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { menuItems, menuGroupDefs, groupMenuItems } from '../src/config/menu';
+import { DOC_SECTIONS } from '../src/utils/helpDocSections';
 import { parseHashView, formatViewHash } from '../src/composables/useHashView';
 import { dirBarWidth } from '../src/utils/dirBar';
 import { topNGraphData } from '../src/utils/graphTopN';
@@ -476,29 +477,35 @@ describe('P0-11 [T1/REQ-035] 内网穿透启动失败可见可循', () => {
 });
 
 describe('P0-12 [D1x/REQ-037] 帮助文档路径与实名一致', () => {
+  // T02784：章节数据迁至 utils/helpDocSections（Help.vue 只渲染）；
+  // 直达按钮文案经 tabLabel('<tab key>') 模板拼接，故对文案只查前缀与拼接键，实名比对由 help-doc-code-sync 承担
   it('「前往：配置中心 → AI 服务」的每一段都是页面上真实存在的名字', () => {
-    const help = readSrc('views/Help.vue');
+    const help = readSrc('utils/helpDocSections.ts');
     const actions = [
-      ...help.matchAll(/action: \{ label: '([^']+)', view: '([^']+)'(?:, tab: '([^']+)')? \}/g),
+      ...help.matchAll(
+        /action: \{ label: (`[^`]+`|'[^']+'), view: '([^']+)'(?:, tab: '([^']+)')? \}/g,
+      ),
     ];
     expect(actions.length).toBeGreaterThan(0);
     for (const a of actions) {
-      const [, label, view, tab] = a;
-      const segs = label.replace(/^前往：/, '').split(' → ');
+      const [, rawLabel, view, tab] = a;
       const menu = menuItems.find((m) => m.key === view);
       expect(menu, `文档里的 view "${view}" 必须是菜单 key`).toBeTruthy();
-      expect(segs[0]).toBe(menu?.label); // 第一段 = 菜单实名
+      expect(rawLabel.startsWith('`前往：') || rawLabel.startsWith(`'${'前往：'}`)).toBe(true);
       if (tab) {
         expect(configTabNames()).toContain(tab); // 第二段必须是配置中心真实 tab
-        expect(segs[1]).toBe(allConfigTabs().find((t) => t.name === tab)?.label);
+        // 文案里拼进来的 tab key 必须与本 action 的 tab 同一个（防止文案与落点各说一套）
+        const keyInLabel = rawLabel.match(/tabLabel\('([^']+)'\)/)?.[1];
+        expect(keyInLabel, `直达按钮文案应经 tabLabel('${tab}') 拼接`).toBe(tab);
       }
     }
   });
 
   it('文档不再出现内部实现词（用户照做也找不到按钮的那类词）', () => {
-    const help = readSrc('views/Help.vue');
+    // T02784：改查渲染后的章节数据（阶段词经 STEP_LABEL 转实名后才进文档）
+    const rendered = JSON.stringify(DOC_SECTIONS);
     for (const w of ['read_schema', 'generate_page', 'update_index']) {
-      expect(help).not.toContain(w);
+      expect(rendered).not.toContain(w);
     }
   });
 });

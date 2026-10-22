@@ -22,9 +22,9 @@
           "files": [],
           "lines": [
             {
-              "file": "views/Help.vue",
+              "file": "utils/helpDocSections.ts",
               "contains": "将外部资料（Obsidian 笔记、网页文章、技术文档）导入知识库",
-              "reason": "术语表 §2 外部语境：帮助页「使用场景」如实指外部真实对象 Obsidian 笔记，不是把知识库页面叫笔记（T02790 从整文件豁免收窄为行级）"
+              "reason": "术语表 §2 外部语境：帮助页「使用场景」如实指外部真实对象 Obsidian 笔记，不是把知识库页面叫笔记（T02790 从整文件豁免收窄为行级；T02784 文档数据迁至 helpDocSections.ts，豁免随迁）"
             }
           ]
         },
