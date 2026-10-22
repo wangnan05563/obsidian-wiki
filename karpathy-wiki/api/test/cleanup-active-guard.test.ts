@@ -149,13 +149,14 @@ describe('T02655 cleanup-guard 拦截口径', () => {
 
   // T02818：compile_cache 从「放行」改为「拦」。放行时的口径写的是"代价可自愈"，漏掉的是
   // 编译结束会把整份内存缓存写回——删除窗口内的清理会当场失效，响应却报「已删除」。
-  it('编译进行中：拦 compile_cache、run_state 与 raw_archive，只放行 run_logs', () => {
+  // T02897：run_logs 同样从「放行」改为「拦」——原先的安全边界押在删除条件永远看 mtime 上，
+  // 日志写入发生在编译运行中期，起跑点等待救不到，唯一机制是拦截规则。
+  it('编译进行中：四类全部拦（run_state/raw_archive/compile_cache/run_logs）', () => {
     const active = snapshot(1, 0);
     expect(evaluateCleanupGuard('run_state', active).blocked).toEqual(['run_state']);
     expect(evaluateCleanupGuard('raw_archive', active).blocked).toEqual(['raw_archive']);
     expect(evaluateCleanupGuard('compile_cache', active).blocked).toEqual(['compile_cache']);
-    // run_logs 仍放行：它带 days 过滤，正在写的日志 mtime 必然新于 cutoff（前提锁见矩阵测试）
-    expect(evaluateCleanupGuard('run_logs', active).blocked).toEqual([]);
+    expect(evaluateCleanupGuard('run_logs', active).blocked).toEqual(['run_logs']);
   });
 
   it('问答进行中：只拦 run_state', () => {
@@ -168,7 +169,7 @@ describe('T02655 cleanup-guard 拦截口径', () => {
 
   it('target=all：展开后任一子目标被拦即命中，并列出被拦子目标', () => {
     const verdict = evaluateCleanupGuard('all', snapshot(2, 1));
-    expect(verdict.blocked).toEqual(['compile_cache', 'run_state', 'raw_archive']);
+    expect(verdict.blocked).toEqual(['compile_cache', 'run_state', 'run_logs', 'raw_archive']);
     // 原因去重且不泄露无关目标
     expect(verdict.reasons.length).toBeGreaterThan(0);
     expect(verdict.reasons.filter((r) => r.includes('原始资料'))).toHaveLength(1);
@@ -405,7 +406,7 @@ describe('T02655 清理路由级硬拦截', () => {
     expect(res.statusCode).toBe(200);
     const status = res.json() as CleanupStorageStatus;
     expect(status.active.compile).toBe(1);
-    expect(status.active.blockedTargets).toEqual(['compile_cache', 'run_state', 'raw_archive']);
+    expect(status.active.blockedTargets).toEqual(['compile_cache', 'run_state', 'run_logs', 'raw_archive']);
     expect(status.active.blockedReasons.every((r) => r.reason.length > 0)).toBe(true);
     release();
   });

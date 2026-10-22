@@ -85,14 +85,14 @@ const MATRIX: MatrixEntry[] = [
   {
     file: 'run-logger.ts',
     writes: 'RunLogger.ensureDir/log → fs.mkdir/appendFile',
-    verdict: 'timewindow',
+    verdict: 'wired',
     surface: 'run_logs',
     samples: [path.join(logsDirIn(HARNESS), 'run-id.log')],
     reason:
-      '位置在删除面内，靠 run_logs 的 days 过滤保护：日志按 runId 分文件、每写一次 mtime 就刷新一次，'
-      + '正在写的文件必然新于 cutoff。写入方本身也在互斥链上（RunLogger 唯一构造点在 compile-workflow，'
-      + '整体经 withCompileLock）。真删到被占用的旧日志只会落 errors[]（Windows 上不允许多余打开句柄），'
-      + '不影响任务本身。前提锁：见 mtime 与「先收集后删除」两条用例。',
+      'T02897 起判 wired（原 timewindow）：日志按 runId 分文件、编译全程持续追加，写入发生在运行中期，'
+      + '起跑点的等待救不到——唯一能闭合的是拦截规则。run_logs 已纳入 BLOCK_RULES（有编译在跑就 409），'
+      + '与 compile_cache 的写回同族。前提锁：见「先收集后删除」与 mtime 两条用例（后者仍是 days 功能语义）。'
+      + '真删到被占用的旧日志只会落 errors[]（Windows 上不允许多余打开句柄），不影响任务本身。',
   },
   {
     file: 'vault/vault-service.ts',
@@ -276,15 +276,15 @@ const MATRIX: MatrixEntry[] = [
   },
   {
     file: 'mcp/tools.ts',
-    writes: 'write_page/edit_page → vault.writeFile、delete_page → fs.unlink',
-    verdict: 'timewindow',
+    writes: 'write_page/edit_page/create_page → vault.writeFile、ingest_raw → vault.archiveRaw',
+    verdict: 'wired',
     surface: 'raw_archive',
     samples: [path.join(VAULT, 'raw', 'input-by-mcp.md')],
     reason:
       'MCP 写页工具能用任意相对路径落盘，包括 vault/raw/input-*.md（样本就是这种最坏形状：目录与文件名'
-      + '两条条件全命中）。判「不接线」的依据只有 days 过滤：新写入 mtime=now，cutoff 至少 1 天前。'
-      + '这条比 bookmark-ingest（靠文件名）弱，所以 mtime 源码锁一旦失效，本条必须先改成 wired。'
-      + '注：它也不需要 withCompileLock —— 页面写入不构成 index.md/log.md 追加竞态的入口。',
+      + '两条条件全命中）。T02897 起判 wired（原 timewindow）：接线在 routes/mcp-route.ts 的 tools/call '
+      + '分发处——所有 write:true 工具在执行前 await awaitCleanupIdle()（T02774 同款起跑点等待），'
+      + '删除窗口内的写入不再依赖 days 过滤。样本覆盖 ingest_raw（archiveRaw → raw/ 正牌写入方）。',
   },
   {
     file: 'qq-ingest/qq-extract-workflow.ts',
@@ -302,14 +302,16 @@ const MATRIX: MatrixEntry[] = [
   },
   {
     file: 'routes/files.ts',
-    writes: 'PUT 页面保存 → vault.writeFile(query.path)',
-    verdict: 'timewindow',
+    writes: 'PUT 页面保存 → awaitCleanupIdle 后 vault.writeFile(query.path)',
+    verdict: 'wired',
     surface: 'raw_archive',
     samples: [path.join(VAULT, 'raw', 'input-9999999999999.md')],
     reason:
-      'Browse/编辑器能往任意 vault 路径写，含 raw/input-*.md。与 mcp/tools.ts 同判：days 过滤保护当场保存的文件。'
+      'Browse/编辑器能往任意 vault 路径写，含 raw/input-*.md。T02897 起判 wired（原 timewindow）：'
+      + 'PUT handler 在写盘前 await awaitCleanupIdle()（T02774 同款起跑点等待），保存与清理互斥，'
+      + '不再依赖「刚保存的文件 mtime 必然新于 cutoff」这条时间边界。'
       + '卡面问的「保存时顺手往 raw/ 落临时件」的答案就在这里——**存在**这样的路径（任意路径 + 内部前缀名），'
-      + '但它落不到删除窗口内：清理只删 cutoff 之前的文件，而保存必然把 mtime 推到 now。',
+      + '但保存会先等清理做完，不会落在删除窗口内。',
   },
   {
     file: 'routes/prompts.ts',
@@ -497,6 +499,12 @@ describe('T02818 分类可复现：判定为「面外」的写入必须实测落
 
 describe('T02818 分类可复现：判定为「面内但靠 days 过滤」的写入必须真能命中那个面', () => {
   const timed = MATRIX.filter((e) => e.verdict === 'timewindow');
+  // T02897：timewindow 类清零——「安全只剩时间」不是机制，是押注删除条件永远看 mtime。
+  // 三个原 timewindow 条目全部升级为 wired（拦截规则 / 起跑点等待），再有新增写入口
+  // 不许判回 timewindow，必须接线或落到面外。
+  it('timewindow 类已清零：出现新条目即红', () => {
+    expect(timed.map((e) => e.file)).toEqual([]);
+  });
   for (const entry of timed) {
     it(`${entry.file} 的落点命中 ${entry.surface}（保护只剩时间，见 mtime 锁）`, () => {
       expect(entry.surface, `${entry.file} 判 timewindow 却没写命中的面`).toBeTruthy();
@@ -599,5 +607,23 @@ describe('T02818 互斥接线锁（删掉一处 await / 拆掉一条规则就变
     // 产物名由 harness-dirs 定义，surface 判定转引它，两处不许各写一份
     expect(readSrc('src/utils/cleanup-surface.ts')).toContain('COMPILE_CACHE_BASENAME');
     expect(COMPILE_CACHE_BASENAME).toBe('compile-cache.json');
+  });
+
+  it('T02897 接线锁：run_logs 纳入编译期拦截 + 任意路径写盘的起跑点先等清理', () => {
+    // run-logger 条目的闭合方式：拦截规则（写入在运行中期，等待救不到）
+    const guard = readSrc('src/cleanup-guard.ts');
+    expect((guard.match(/target: 'run_logs'/g) ?? []).length).toBe(1);
+    // mcp 写工具与编辑器保存的闭合方式：起跑点等待（写盘前 awaitCleanupIdle）。
+    // 锁定完整语句行而非子串——被 if(false) 之类守卫短路的残骸不应通过锁
+    // （T02897 探针实测：indexOf 子串匹配会被这类变异骗过）。
+    const mcp = readSrc('src/routes/mcp-route.ts');
+    const mcpWait = mcp.search(/^\s*if \(tool\?\.write\) await awaitCleanupIdle\(\);\s*$/m);
+    expect(mcpWait, 'mcp-route 丢了写工具的清理等待').toBeGreaterThan(-1);
+    expect(mcpWait).toBeLessThan(mcp.indexOf('await callTool('));
+    expect(mcp).toMatch(/tool\?\.write/);
+    const files = readSrc('src/routes/files.ts');
+    const filesWait = files.search(/^\s*await awaitCleanupIdle\(\);\s*$/m);
+    expect(filesWait, 'files.ts 丢了保存前的清理等待').toBeGreaterThan(-1);
+    expect(filesWait).toBeLessThan(files.indexOf('await vault.writeFile'));
   });
 });
