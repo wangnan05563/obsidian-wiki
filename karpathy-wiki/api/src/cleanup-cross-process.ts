@@ -272,3 +272,102 @@ export async function readForeignActivities(
 
 /** 清理标记文件的 basename 与目录形态，供「清理面不得删到协调文件」的结构锁使用。 */
 export const COORDINATION_BASENAMES = [CLEANUP_MARKER_BASENAME, `${ACTIVITY_DIR_BASENAME}/`] as const;
+
+// ──────────────────────────────────────────────────────────────
+// C. 崩溃残留回收（T02896）
+// ------------------------------------------------------------------
+// 读取侧早已按「pid 死亡 / 心跳超时 / 不可解析」过滤陈旧条目，功能不会坏；
+// 但写侧没有回收通道：进程被强杀时 finally 不执行，它的 <pid>.json 永久留在目录里，
+// cleanup.lock 也只会在下一次有人抢标时被顺带 purge。本函数在服务启动时跑一次，
+// 把死条目删掉、活条目一根手指都不碰。
+// 为什么回收不放清理路由的删除面：这两样是**实时协调**产物，不是可清理的存储占用，
+// 删除面接线锁（cleanup-cross-process.test.ts「存放位置与接线锁」）另有人守着。
+// ──────────────────────────────────────────────────────────────
+
+export interface CoordinationPruneEntry {
+  kind: 'cleanup_lock' | 'activity';
+  /** activity 条目对应 pid；cleanup_lock 也有 pid；解析不出来为 null */
+  pid: number | null;
+  file: string;
+  reason: 'pid_dead' | 'too_old' | 'unreadable';
+}
+
+export interface PruneCoordinationOptions {
+  markerFile: string;
+  activityDir: string;
+  selfPid?: number;
+  now?: number;
+  ttlMs?: number;
+  maxAgeMs?: number;
+  isPidAlive?: (pid: number) => boolean;
+  /** 每实际回收一条回调一次；审计落盘由调用方决定（本层不依赖审计实现） */
+  onPruned?: (entry: CoordinationPruneEntry) => Promise<void> | void;
+}
+
+/**
+ * 回收崩溃残留的协调文件：activity/<pid>.json 中 pid 已死或心跳超时（或不可解析）的条目、
+ * cleanup.lock 中陈旧标记（同 readCleanupMarker 的 stale 判定）。返回实际删除清单。
+ * 并发安全说明：mark 侧（claimCleanupMarker）对陈旧标记同样是「读→删→重试」，本函数
+ * 在 rm 前复核文件内容与判定时一致才删——把「读到陈旧、删时已被别人换成新标记」的窗口
+ * 压到与 claim 自身的 rm 同量级；activity 条目按 pid 分文件、写方只写自己那份，无此竞态。
+ */
+export async function pruneStaleCoordinationFiles(opts: PruneCoordinationOptions): Promise<CoordinationPruneEntry[]> {
+  const selfPid = opts.selfPid ?? process.pid;
+  const now = opts.now ?? Date.now();
+  const alive = opts.isPidAlive ?? pidAlive;
+  const removed: CoordinationPruneEntry[] = [];
+
+  // 1) cleanup.lock：复用 readCleanupMarker 的判定（busy / 本进程遗留一律不动）
+  try {
+    const rawBefore = await fs.readFile(opts.markerFile, 'utf8');
+    const read = await readCleanupMarker(opts.markerFile, {
+      selfPid,
+      now,
+      maxAgeMs: opts.maxAgeMs,
+      isPidAlive: alive,
+    });
+    if (read.state === 'stale' && (await fs.readFile(opts.markerFile, 'utf8').catch(() => null)) === rawBefore) {
+      await fs.rm(opts.markerFile, { force: true });
+      const entry: CoordinationPruneEntry = {
+        kind: 'cleanup_lock',
+        pid: read.marker?.pid ?? null,
+        file: opts.markerFile,
+        reason: (read.reason ?? 'unreadable') as CoordinationPruneEntry['reason'],
+      };
+      removed.push(entry);
+      await opts.onPruned?.(entry);
+    }
+  } catch {
+    /* 主文件不存在或读不到：无残留可回收 */
+  }
+
+  // 2) activity/<pid>.json：与 readForeignActivities 同口径（本进程的那份不动；
+  //    .tmp 跳过——写方 tmp+rename 中途删 tmp 会让写方 rename 失败）。
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(opts.activityDir);
+  } catch {
+    /* 目录还不存在：无残留 */
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json') || name.includes('.tmp')) continue;
+    const file = path.join(opts.activityDir, name);
+    const pid = Number(name.slice(0, -'.json'.length));
+    if (!Number.isFinite(pid) || pid === selfPid) continue;
+    let reason: CoordinationPruneEntry['reason'] | null = null;
+    try {
+      const rec = JSON.parse(await fs.readFile(file, 'utf8')) as Partial<ActivityRecord>;
+      if (typeof rec.updatedAt !== 'number') reason = 'unreadable';
+      else if (now - rec.updatedAt > (opts.ttlMs ?? DEFAULT_ACTIVITY_TTL_MS)) reason = 'too_old';
+      else if (!alive(pid)) reason = 'pid_dead';
+    } catch {
+      reason = 'unreadable';
+    }
+    if (!reason) continue;
+    await fs.rm(file, { force: true }).catch(() => undefined);
+    const entry: CoordinationPruneEntry = { kind: 'activity', pid, file, reason };
+    removed.push(entry);
+    await opts.onPruned?.(entry);
+  }
+  return removed;
+}
