@@ -40,11 +40,51 @@ function measure(): void {
   hasTarget.value = true;
 }
 
+// ===== 卡片定位（T02882 视口收敛） =====
+// 缺陷：卡片 top 曾恒为「目标框下沿 + 12」，目标元素很高（如占满整屏的清理卡）时
+//   卡片整体落到视口之外，步进/完成按钮鼠标永远点不到，用户只能点遮罩跳过。
+// 口径：优先目标下沿，放不下翻转到目标上沿，两侧都放不下贴视口下沿收敛；
+//   top/left 一律 clamp 进 [EDGE, 视口-卡片-EDGE]，footer 永远可达。
+const cardRef = ref<HTMLElement | null>(null);
+// 实测卡片高度（随步骤文案变化）；首帧未测得前用保守常量兜底
+const cardHeight = ref(0);
+const CARD_WIDTH = 280;
+const EDGE = 12;
+const GAP = 12;
+
+async function measureCard(): Promise<void> {
+  await nextTick();
+  cardHeight.value = cardRef.value?.offsetHeight ?? 0;
+}
+
+const cardStyle = computed(() => {
+  if (!hasTarget.value) return {};
+  const h = cardHeight.value || 240;
+  const vh = window.innerHeight;
+  const vw = window.innerWidth;
+  const b = box.value;
+  const below = b.top + b.height + GAP;
+  const above = b.top - h - GAP;
+  let top = below;
+  if (below + h > vh - EDGE) {
+    top = above >= EDGE ? above : below;
+  }
+  const maxTop = Math.max(EDGE, vh - h - EDGE);
+  top = Math.min(Math.max(top, EDGE), maxTop);
+  const maxLeft = Math.max(EDGE, vw - CARD_WIDTH - EDGE);
+  const left = Math.min(Math.max(b.left, EDGE), maxLeft);
+  return { top: `${top}px`, left: `${left}px` };
+});
+
 // 折中：跟随滚动/缩放用 passive 监听 + rAF 计算，减少主线程抖动
 let raf = 0;
 function scheduleMeasure(): void {
   if (raf) return;
-  raf = requestAnimationFrame(() => { raf = 0; measure(); });
+  raf = requestAnimationFrame(() => {
+    raf = 0;
+    measure();
+    void measureCard();
+  });
 }
 
 // 步骤切换/引导显隐变化后延迟一帧测量（等 DOM 稳定）
@@ -53,6 +93,7 @@ watch(
   async () => {
     await nextTick();
     scheduleMeasure();
+    await measureCard();
   },
 );
 
@@ -110,17 +151,15 @@ watch(() => guide.visible, (v) => { if (!v) stopAutoPlay(); });
         :style="{ top: box.top + 'px', left: box.left + 'px', width: box.width + 'px', height: box.height + 'px' }"
       ></div>
 
-      <!-- 气泡说明卡：展示当前步骤文案与步进控制 -->
+      <!-- 气泡说明卡：展示当前步骤文案与步进控制（top/left 由 cardStyle 做视口收敛，T02882） -->
       <div
+        ref="cardRef"
         class="guide-card"
         :class="{
           'pos-center': !hasTarget || guide.currentStep?.placement === 'center',
           [`pos-${guide.currentStep?.placement ?? 'top'}`]: hasTarget && guide.currentStep?.placement !== 'center',
         }"
-        :style="hasTarget ? {
-          top: (box.top + box.height + 12) + 'px',
-          left: box.left + 'px',
-        } : {}"
+        :style="cardStyle"
         @click.stop
       >
         <header class="guide-card-head">
@@ -196,6 +235,9 @@ watch(() => guide.visible, (v) => { if (!v) stopAutoPlay(); });
   border-radius: 12px;
   box-shadow: 0 12px 32px var(--accent-purple-a20, rgba(124, 77, 255, 0.15));
   color: var(--text-base, #2b2f36);
+  /* T02882：视口极矮时的最后防线——卡片自身可滚，footer 不被推出视口 */
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
 }
 
 .guide-card.pos-center {
