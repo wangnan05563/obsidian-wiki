@@ -10,6 +10,7 @@ import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
 // T02731：公开媒体前缀与「合法嵌套目录」白名单同源——写盘深度校验放行 queries/media，
 // 这里也只服务同一前缀；两处各写一遍字面量时，改一处就会让「能写出去的文件伺服不出来」。
 import { NESTED_PAGE_DIRS } from '../vault/page-scope.js';
+import { awaitCleanupIdle } from '../cleanup-mutex.js';
 
 // 注册文件管理路由。
 //   GET  /api/files/tree          获取 Vault 目录树
@@ -344,6 +345,10 @@ export function registerFilesRoutes(
       return void reply.code(400).send({ error: '请求体须有 content 字段' });
     }
     try {
+      // T02897：编辑器保存可写任意 vault 路径（含 raw/input-*，目录与文件名两条面条件可同时
+      // 命中 raw_archive 删除面）。起跑点先等清理空闲（T02774 同款），写入与删除的互斥
+      // 不再依赖 days 过滤（mtime 恰好挡住）这条时间边界。
+      await awaitCleanupIdle();
       await vault.writeFile(query.path, body.content);
       // 文件变更后使目录树与页面列表缓存同时失效（写后即刷）
       filesTreeCache = null;

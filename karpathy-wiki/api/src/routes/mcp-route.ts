@@ -18,6 +18,7 @@ import { parseRequest, success, failure, ErrCodes, isNotification, isBatch } fro
 import type { JsonRpcRequest } from '../mcp/json-rpc.js';
 import { listTools, callTool, getTool } from '../mcp/tools.js';
 import type { McpToolContext } from '../mcp/tools.js';
+import { awaitCleanupIdle } from '../cleanup-mutex.js';
 
 const PROTOCOL_VERSION = '2025-03-26';
 // 自定义鉴权错误码（非标准库，仅供客户端区分授权失败）
@@ -80,6 +81,11 @@ export function registerMcpRoute(
     if (tool ? !toolAllowed(tool.write, a) : !(a.openAll || a.isUser || a.isAdmin)) {
       return reply.code(401).send(deny(id, '未授权：缺少有效凭据或该工具需要更高级别权限'));
     }
+    // T02897：写工具的起跑点先等清理空闲（T02774 同款等待）。写工具里既有 raw/ 的正牌
+    // 写入方（vault_ingest_raw → archiveRaw），也有任意路径落盘（vault_write_page/create_page
+    // 能写出 raw/input-*，目录与文件名两条面条件同时命中）。等「本进程+跨进程」清理空闲后再写，
+    // 写入与删除的互斥就不再依赖 days 过滤（mtime 恰好挡住）这条时间边界。
+    if (tool?.write) await awaitCleanupIdle();
     const ctx: McpToolContext = { vault, adapter, config };
     const result = await callTool(toolName, params.arguments, ctx);
     return reply.send(success(id, result));

@@ -36,10 +36,12 @@ const idle: CleanupActiveState = { compile: 0, query: 0, blockedTargets: [], blo
 const compileBusy: CleanupActiveState = {
   compile: 1,
   query: 0,
-  blockedTargets: ['run_state', 'raw_archive'],
+  // T02897：run_logs 纳入编译期拦截（与后端 BLOCK_RULES 同步——四类全拦）
+  blockedTargets: ['run_state', 'raw_archive', 'run_logs'],
   blockedReasons: [
     { target: 'run_state', reason: '有编译任务正在进行：清理会删掉它的断点续传基准，这次编译会直接失败或从头重跑。' },
     { target: 'raw_archive', reason: '有编译任务正在进行：它要读的原始资料存档可能在这次清理里被删掉。' },
+    { target: 'run_logs', reason: '有编译任务正在进行：它的运行日志正在被持续写入，这次清理会威胁正在写的日志。' },
   ],
 };
 
@@ -90,7 +92,8 @@ describe('T02655 置灰判定：只信后端 active', () => {
 
   it('未被拦的两类与无活跃任务时不拦', () => {
     expect(blockedTipFor('compile_cache', compileBusy)).toBeNull();
-    expect(blockedTipFor('run_logs', compileBusy)).toBeNull();
+    // T02897：run_logs 已纳入编译期拦截，取的是后端原文原因
+    expect(blockedTipFor('run_logs', compileBusy)).toContain('日志');
     expect(blockedTipFor('run_state', idle)).toBeNull();
   });
 
@@ -185,6 +188,11 @@ describe('T02655 Cleanup.vue 组件层', () => {
     const runState = buttonOf(wrapper, '有任务进行中');
     expect(runState, '运行状态卡应出现「有任务进行中」禁用按钮').toBeTruthy();
     expect(runState!.attributes('disabled')).toBeDefined();
+    // T02897：运行日志卡同样置灰（编译全程在追加日志）——禁用态按钮统一显示
+    // 「有任务进行中」，被拦三张卡（运行状态/原始资料/运行日志）共三枚该标签按钮。
+    const busyButtons = buttonsOf(wrapper).filter((b) => b.text().includes('有任务进行中'));
+    expect(busyButtons.length).toBe(3);
+    for (const b of busyButtons) expect(b.attributes('disabled')).toBeDefined();
     // 未列入拦截范围的编译缓存仍应可点（否则就是整页拦，用户会以为功能坏了）
     expect(buttonOf(wrapper, '清理编译缓存')?.attributes('disabled')).toBeUndefined();
   });

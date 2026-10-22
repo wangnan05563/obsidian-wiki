@@ -20,8 +20,10 @@
 //    实际什么都没清掉，而且没有任何地方告诉他缓存回来了。写入方在运行中期落盘，
 //    T02774 的「起跑前先等清理」救不了它（等待发生在写入之前，写入却发生在删除之后），
 //    能闭合这个窗口的只有「有编译在跑就别删缓存」。
-//  - run_logs：按 days 过滤，正在写的日志 mtime 必然新于 cutoff，天然删不到；
-//    真删到了被占用的旧日志也只会落进 errors[]，不影响任务本身。
+//  - run_logs（T02897 起纳入）：日志按 runId 分文件持续追加，写入方在编译互斥链上。
+//    原先判「days 过滤天然删不到，不拦」——那是把安全边界押在删除条件永远看 mtime 上：
+//    按条数/大小/清空入口任何一种改动都会让它变成「刚写完就被删」。与 compile_cache 同理，
+//    写入发生在运行中期，起跑点的等待救不到，能闭合的只有「有编译在跑就别删日志」。
 import { activeActivities, foreignActiveActivities } from './activity.js';
 import type { ActivityRecord } from './cleanup-cross-process.js';
 import type { CleanupActiveState } from './types.js';
@@ -51,6 +53,13 @@ const BLOCK_RULES: BlockRule[] = [
     target: 'raw_archive',
     kind: 'compile',
     reason: '有编译任务正在进行：它要读的原始资料存档可能在这次清理里被删掉。',
+  },
+  {
+    // T02897：编译全程在向 .harness/logs/<runId>.log 追加，删除条件一旦不再看 mtime，
+    // 正在写的日志就成了「刚写完就被删」的入口——与 compile_cache 的写回同族，纳入拦截。
+    target: 'run_logs',
+    kind: 'compile',
+    reason: '有编译任务正在进行：它的运行日志正在被持续写入，这次清理会威胁正在写的日志。',
   },
   {
     target: 'run_state',
