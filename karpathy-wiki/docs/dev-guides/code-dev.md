@@ -49,7 +49,7 @@
 **解决方案：**
 - 统一使用 `Get-Content` 读取 + `$lines -join "`r`n"` 写入
 - 或在修改后始终运行 `git diff` 确认变更范围
-- 修改完成后立即运行 `tsc --noEmit` 验证
+- 修改完成后立即运行 `tsc --noEmit` 验证（api 侧改动另跑 `npm run typecheck:test` 覆盖 test 目录）
 
 ### 2.2 正则表达式精确匹配失败
 

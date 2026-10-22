@@ -64,7 +64,7 @@ function createTestConfig(vaultPath: string): AppConfig {
     tunnel: {
       provider: 'cloudflare', localPort: 0, cpolarAuthtoken: '', binaryPath: '',
       autoStart: false, tunnelMode: 'quick', tunnelName: '', tunnelId: '',
-      credentialsFile: '', hostname: '', certFile: '',
+      credentialsFile: '', hostname: '', certFile: '', pathPrefix: '',
     },
     qq: DEFAULT_QQ_CONFIG,
     batch: { allowedExtensions: ['md', 'txt'], maxBatchSize: 5, maxFileSizeMb: 10 },
@@ -291,7 +291,7 @@ describe('路由层集成测试：QQ 导入子系统', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       try {
-        const rawId = await seedRawFile(vault, 'extract-test', { chatName: '抽取测试', messages: ['有价值的长消息内容用于抽取'] });
+        const rawId = await seedRawFile(vault, '抽取测试', { messages: ['有价值的长消息内容用于抽取'] });
         const app = await buildApp(vault, config);
         try {
           const res = await app.inject({ method: 'POST', url: `/api/qq-ingest/extract/${rawId}` });

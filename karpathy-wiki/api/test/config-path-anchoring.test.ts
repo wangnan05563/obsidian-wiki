@@ -47,7 +47,7 @@ describe('A · 非 SEA 定根：相对值按 api 目录 resolve，绝对值原�
   });
 
   it('空串不落盘语义保留：logging.logFilePath=\'\' 定根后仍为 \'\'', () => {
-    const cfg = fixture({ logging: { logFilePath: '' } });
+    const cfg = fixture({ logging: { level: 'info', enableRequestLog: false, logFilePath: '' } });
     anchorConfigPaths(cfg, { sea: false });
     expect(cfg.logging!.logFilePath).toBe('');
   });

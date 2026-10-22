@@ -9,8 +9,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // 判 0.0.0.0 为保留地址而失败。打桩后两个分支都能确定性覆盖，且额外补上
 // 「域名解析到私网地址必须拦截」这条 DNS-rebinding/sinkhole 场景（此前无覆盖）。
 const dnsMock = vi.hoisted(() => ({
-  resolve4: vi.fn<(hostname: string) => Promise<string[]>>(async () => ['93.184.216.34']),
-  resolve6: vi.fn<(hostname: string) => Promise<string[]>>(async () => []),
+  resolve4: vi.fn<[string], Promise<string[]>>(async () => ['93.184.216.34']),
+  resolve6: vi.fn<[string], Promise<string[]>>(async () => []),
 }));
 
 vi.mock('node:dns', () => ({ promises: dnsMock }));

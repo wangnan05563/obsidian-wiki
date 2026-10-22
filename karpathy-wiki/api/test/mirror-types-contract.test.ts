@@ -93,7 +93,8 @@ function propertyLiterals(members: ts.NodeArray<ts.TypeElement>): string[] {
   return out;
 }
 
-function literalTexts(node: ts.TypeNode): string[] | null {
+function literalTexts(node: ts.TypeNode | undefined): string[] | null {
+  if (!node) return null;
   const parts = node.kind === K.UnionType ? (node as ts.UnionTypeNode).types : [node];
   const out: string[] = [];
   for (const p of parts) {
@@ -142,8 +143,8 @@ export function parseTypeFile(file: string): Map<string, TypeShape> {
         notes: [`union(${parts.length} 分支) 只取公共字段`, ...parts.flatMap((p) => p.notes)],
       };
     }
-    if (node.kind === K.TypeReference && ts.isIdentifier(node.typeName)) {
-      const name = node.typeName.text;
+    if (node.kind === K.TypeReference && ts.isIdentifier((node as ts.TypeReferenceNode).typeName)) {
+      const name = ((node as ts.TypeReferenceNode).typeName as ts.Identifier).text;
       if (!decls.has(name)) return { fields: [], literals: [], notes: [`引用外部/内置类型 ${name}`] };
       if (seen.has(name)) return { fields: [], literals: [], notes: [`循环引用 ${name}`] };
       const r = shapeOfDecl(name);

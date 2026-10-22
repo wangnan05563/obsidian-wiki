@@ -7,7 +7,7 @@
 //   见 test/health-check-abort.test.ts（mock utils/sse）。
 // T02466 起批量修复改为后台作业：POST 返回 202+jobId，执行与请求解耦，故断言改为
 //   「先拿 jobId → 轮询快照到终态 → 再读事件端点」，事件序列与改造前保持一致语义。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,11 +28,13 @@ const REPORT: HealthReport = {
 };
 
 // ===== 可编程 adapter 桩 =====
+// 字段用 Mock<any, any>：具体签名的 mock（如 Mock<[], Promise<HealthReport>>）
+// 对 Mock<any[], unknown> 不可赋（mockImplementation 参数逆变），any 双向兼容。
 interface AdapterStub {
   adapter: EngineAdapter;
-  healthCheck: ReturnType<typeof vi.fn>;
-  fix: ReturnType<typeof vi.fn>;
-  markReviewed: ReturnType<typeof vi.fn>;
+  healthCheck: Mock<any, any>;
+  fix: Mock<any, any>;
+  markReviewed: Mock<any, any>;
 }
 
 /** fixFor(eventsMap): 按 target 键返回不同事件序列/异常，覆盖多问题批处理 */

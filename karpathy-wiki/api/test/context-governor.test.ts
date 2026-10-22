@@ -8,8 +8,8 @@ import {
   extractiveCompress,
   DEFAULT_GOVERNOR_CONFIG,
   type ContextGovernorConfig,
-  type HistoryMessage,
 } from '../src/engine/context-governor.js';
+import type { HistoryMessage } from '../src/engine/thread-memory-store.js';
 
 function mk(role: 'user' | 'assistant', content: string, ts = '2026-01-01T00:00:00.000Z'): HistoryMessage {
   return { role, content, ts };

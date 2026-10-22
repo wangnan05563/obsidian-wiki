@@ -29,7 +29,7 @@ vi.mock('pptxgenjs', () => {
       author = '';
       title = '';
       constructor() {
-        (h.instances as Array<Record<string, unknown>>).push(this);
+        (h.instances as Array<Record<string, unknown>>).push(this as unknown as Record<string, unknown>);
       }
       defineLayout(opts: unknown) {
         (this as Record<string, unknown>).__layout = opts;

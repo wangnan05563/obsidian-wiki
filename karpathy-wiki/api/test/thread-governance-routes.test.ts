@@ -114,7 +114,7 @@ describe('POST /api/threads/:id/compact —— 存储层折叠', () => {
     // 持久化生效：再次读取保持一致
     const after = await store.getMemory(id);
     expect(after?.entries.length).toBe(12);
-    expect(after?.summary.length).toBeGreaterThan(0);
+    expect(after?.summary?.length).toBeGreaterThan(0);
   });
 
   it('支持自定义 keepRecent', async () => {

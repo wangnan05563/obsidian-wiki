@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { resolveSpaRoot, resolveSpaAsset } from '../src/spa-resolver.js';
 
 let tmp: string;
-let cwdSpy: ReturnType<typeof vi.spyOn>;
+let cwdSpy: MockInstance<any, any>;
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'spa-resolver-'));
   // resolveSpaRoot 还会检查 process.cwd()/public 等绝对候选目录，
