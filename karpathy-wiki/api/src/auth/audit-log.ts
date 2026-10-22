@@ -13,6 +13,38 @@ import type { AuditLogEntry, AuditAction } from './types.js';
 let logFilePath: string | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
 
+// T02782 保留窗口：审计日志只追加，但不是无界——写入侧按行数上限轮转，
+// 超限保留最近 AUDIT_RETENTION_LINES 条（登录限流被触发时 429 也会写审计，
+// 无上界会随时间无界增长，与「所有可增长产物都要有明确口径」的治理方向冲突）。
+// 为什么写入侧轮转而非纳入 POST /api/cleanup：审计留痕不应依赖用户记得去清，
+// 自动窗口让 data/audit.log 体积有可验证的上界；「整段清空」反而削弱审计价值。
+export const AUDIT_RETENTION_LINES = 10_000;
+// 字节快速闸（≈1 万条 × 300B 的余量）：未超闸不做读全文件的重活
+const AUDIT_ROTATION_BYTES = 4 * 1024 * 1024;
+// 检查按写入次数摊销：每次写入只递增计数，满 ROTATION_CHECK_EVERY 次才 stat 一次
+const ROTATION_CHECK_EVERY = 200;
+let writesSinceCheck = 0;
+
+// 执行一次保留窗口检查（写入路径按计数摊销调用；测试可直接调）。
+// 返回是否实际发生了轮转。
+export async function enforceAuditRetention(maxLines: number = AUDIT_RETENTION_LINES): Promise<boolean> {
+  if (!logFilePath) return false;
+  try {
+    const stat = await fs.stat(logFilePath);
+    if (stat.size < AUDIT_ROTATION_BYTES) return false;
+    const content = await fs.readFile(logFilePath, 'utf8');
+    const lines = content.split('\n').filter(Boolean);
+    if (lines.length <= maxLines) return false;
+    const kept = lines.slice(-maxLines).join('\n') + '\n';
+    await fs.writeFile(logFilePath, kept, 'utf8');
+    return true;
+  } catch (err) {
+    // 轮转失败不阻断写入主流程（下轮写入计数归零后还会再查）
+    console.error('[audit] 保留窗口轮转失败:', err);
+    return false;
+  }
+}
+
 // 初始化审计日志文件路径（确保目录存在）
 export async function initAuditLog(filePath: string): Promise<void> {
   logFilePath = filePath;
@@ -42,6 +74,11 @@ export function writeAuditLog(entry: AuditLogEntry): void {
     try {
       const line = JSON.stringify(entry) + '\n';
       await fs.appendFile(logFilePath!, line, 'utf8');
+      // T02782：摊销式保留窗口检查
+      if (++writesSinceCheck >= ROTATION_CHECK_EVERY) {
+        writesSinceCheck = 0;
+        await enforceAuditRetention();
+      }
     } catch (err) {
       console.error('[audit] 写入审计日志失败:', err);
     }
@@ -101,4 +138,5 @@ export async function flushAuditLog(): Promise<void> {
 export function resetAuditLog(): void {
   logFilePath = null;
   writeQueue = Promise.resolve();
+  writesSinceCheck = 0;
 }

@@ -1,7 +1,7 @@
 ﻿import { API_BASE } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { UserInfo, LoginRequest, LoginResponse, RegisterRequest, CreateUserRequest, UpdateUserRequest, AuthPermission, AuthRole } from '../types';
+import type { UserInfo, LoginRequest, LoginResponse, RegisterRequest, CreateUserRequest, UpdateUserRequest, AuthPermission, AuthRole, AuditLogResponse } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
 import { unlock as unlockVault, lock as lockVault, restoreKeyFromSession } from '../services/localVault';
 // 账户切换 / 登出时主动作废上一用户的会话作用域与聊天窗口（FR-RM-06 主动防御层）：
@@ -359,6 +359,30 @@ export const useAuthStore = defineStore('auth', () => {
     adminError.value = '';
   }
 
+  // T02782：审计日志（GET /api/auth/audit-log，仅管理员）。失败原因进 auditError，
+  // 与 adminError 分开：面板的失败不该干扰用户列表的报错位。
+  const auditError = ref('');
+  async function fetchAuditLog(): Promise<AuditLogResponse | null> {
+    if (!isAdmin.value) return null;
+    auditError.value = '';
+    try {
+      const res = await authFetch(`${API_BASE}/auth/audit-log`);
+      if (res.ok) {
+        try {
+          return (await res.json()) as AuditLogResponse;
+        } catch {
+          auditError.value = '审计日志响应解析失败';
+          return null;
+        }
+      }
+      auditError.value = await readAdminError(res, '加载审计日志失败');
+      return null;
+    } catch (err) {
+      auditError.value = err instanceof Error ? err.message : String(err);
+      return null;
+    }
+  }
+
   // T02453：强制改密成功后清除本地标记（后端已同步清除，此处让 UI 立即收起对话框）
   function clearMustChangePassword(): void {
     if (user.value) {
@@ -399,5 +423,8 @@ export const useAuthStore = defineStore('auth', () => {
     createUser,
     updateUser,
     deleteUser,
+    // T02782 审计日志面板（用户管理页）
+    auditError,
+    fetchAuditLog,
   };
 });

@@ -109,15 +109,17 @@ describe('T02698 用户管理章节 = 页面规则同源', () => {
     expect(text).not.toContain('启用 / 禁用开关');
   });
 
-  it('审计日志口径如实：只追加不清理、应用内暂无审计页', async () => {
+  it('审计日志口径如实：保留窗口 + 应用内有审计面板（T02782 落地后口径）', async () => {
     const wrapper = mountHelp();
     await flushPromises();
     const text = usersSectionText(wrapper);
-    expect(text).toContain('只追加不自动清理');
-    expect(text).toContain('暂无审计页面');
-    expect(text).toContain('最近 1000 条');
-    // 场景段不许再承诺「在页面上审计账户状态」
-    expect(text).not.toContain('审计账户启用状态');
+    // T02782：写入侧保留窗口（最近 1 万条）+ 用户管理页「审计日志」面板
+    expect(text).toContain('保留最近 1 万条');
+    expect(text).toContain('审计日志');
+    expect(text).toContain('用户管理」页点「审计日志」');
+    // 旧口径：应用内无审计页面（T02782 已补面板，这句话会变成错误描述）
+    expect(text).not.toContain('暂无审计页面');
+    expect(text).not.toContain('只追加不自动清理');
   });
 });
 
