@@ -4,7 +4,7 @@
 //  1) 纯函数：空闲判定 / 形态分派。
 //  2) 端口等待：旧实例还在监听时必须等到超时，释放后必须立刻放行。
 //  3) 路由：confirm 门、活跃任务门、202 响应形状。
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import net from 'node:net';
 import path from 'node:path';
@@ -113,7 +113,7 @@ describe('waitPortFree：子实例不能抢在旧实例退出前 listen', () => 
 
 describe('POST /api/restart：三道门', () => {
   let app: FastifyInstance;
-  let perform: ReturnType<typeof vi.fn>;
+  let perform: Mock<any, any>;
   let afterRestart: ReturnType<typeof vi.fn>;
 
   async function build(performImpl: () => RestartMode = () => 'packaged'): Promise<void> {

@@ -156,7 +156,7 @@ describe('validateRegistrationInput 纯校验', () => {
   it('非法用户名（含空格/特殊字符）返回 400', () => {
     const r = validateRegistrationInput({ username: 'bad name!', password: 'Str0ng#Pass' });
     expect(r.ok).toBe(false);
-    expect(r.status).toBe(400);
+    if (!r.ok) expect(r.status).toBe(400);
   });
 
   it('密码过短返回 400', () => {
@@ -166,7 +166,7 @@ describe('validateRegistrationInput 纯校验', () => {
   it('确认密码不一致返回 400', () => {
     const r = validateRegistrationInput({ username: 'gooduser', password: 'Str0ng#Pass', confirmPassword: 'Other#1234' });
     expect(r.ok).toBe(false);
-    expect(r.status).toBe(400);
+    if (!r.ok) expect(r.status).toBe(400);
   });
 
   it('合法输入返回 ok', () => {

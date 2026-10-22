@@ -27,7 +27,7 @@ const serverWebSearch = {
 };
 
 const serverTools = {
-  mcpServers: [{ id: 'shared-s1' }],
+  mcpServers: [{ name: 'shared-s1', transport: 'stdio' as const, enabled: true }],
   cliTools: [],
   scenes: [],
   routerMode: 'keyword' as const,
@@ -83,7 +83,7 @@ describe('applyPerRequestOverride（BYOK 按用户隔离覆盖）', () => {
   it('toolsConfig 用户维度整体替换服务端共享 MCP/CLI（落实工具隔离）', () => {
     const userTools = {
       mcpServers: [],
-      cliTools: [{ name: 'user-cli' }],
+      cliTools: [{ name: 'user-cli', command: 'user-cli', description: '用户侧工具', enabled: true }],
       scenes: [],
       routerMode: 'auto' as const,
     };

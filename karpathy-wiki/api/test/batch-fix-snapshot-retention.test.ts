@@ -24,7 +24,8 @@ import Fastify, { type FastifyInstance, type preHandlerHookHandler } from 'fasti
 import { BatchFixJobManager } from '../src/workflows/batch-fix-job.js';
 import { registerCleanupRoute, rotateAuditLog } from '../src/routes/cleanup.js';
 import { deletedSurfaceOf } from '../src/utils/cleanup-surface.js';
-import type { EngineAdapter, VaultService } from '../src/types.js';
+import type { EngineAdapter } from '../src/types.js';
+import type { VaultService } from '../src/vault/vault-service.js';
 
 const stubAdapter = {} as EngineAdapter;
 const stubVault = (vaultPath: string): VaultService => ({ getVaultPath: () => vaultPath }) as unknown as VaultService;

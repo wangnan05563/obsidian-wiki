@@ -21,7 +21,7 @@
 
 ### 1.2 审查工具
 
-- TypeScript 编译器：`tsc --noEmit -p karpathy-wiki/api/tsconfig.json`
+- TypeScript 编译器：`tsc --noEmit -p karpathy-wiki/api/tsconfig.json`；测试目录另跑 `npm run typecheck:test`（`tsc -p tsconfig.test.json`，覆盖 `api/test` 与 `api/scripts`——基础 tsconfig 只 include src，测试的类型错误只有它才暴露，T02903）
 - 静态分析：`rg` 搜索潜在硬编码
 - 运行时测试：启动服务验证配置变更
 

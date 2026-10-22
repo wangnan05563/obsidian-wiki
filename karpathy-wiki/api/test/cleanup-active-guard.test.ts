@@ -122,7 +122,7 @@ describe('T02655 activity 计数', () => {
     expect(activeActivities().compile).toBe(1);
     expect(secondStarted).toBe(false);
 
-    releaseFirst?.();
+    (releaseFirst as unknown as () => void)();
     await Promise.all([p1, p2]);
     expect(secondStarted).toBe(true);
     expect(activeActivities().compile).toBe(0);

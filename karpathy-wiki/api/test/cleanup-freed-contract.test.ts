@@ -13,7 +13,7 @@
 //   D) 锁住前端确实读这个键、且存在性判断仍是 !== undefined
 //      （0 是合法值，被 lint 的 S7735「auto-fix」改成 truthy 判断就会重新吃掉显示）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import fs from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
@@ -69,7 +69,7 @@ describe('T02773 清理响应体字段契约（真实请求）', () => {
     return file;
   }
 
-  async function post(payload: Record<string, unknown>): Promise<Response> {
+  async function post(payload: Record<string, unknown>): Promise<LightMyRequestResponse> {
     if (!app) throw new Error('路由未注册');
     return app.inject({ method: 'POST', url: '/api/cleanup', payload });
   }

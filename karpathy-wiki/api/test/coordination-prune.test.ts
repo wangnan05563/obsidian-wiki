@@ -73,7 +73,9 @@ describe('T02896 回收只删死条目，活条目不动', () => {
     const removed = await pruneStaleCoordinationFiles({
       markerFile: cleanupMarkerFileIn(harness),
       activityDir,
-      onPruned: async (e) => pruned.push(e),
+      onPruned: async (e): Promise<void> => {
+        pruned.push(e);
+      },
     });
 
     try {
