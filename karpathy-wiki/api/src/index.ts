@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
+import { mkdir, appendFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { execSync, spawn } from 'node:child_process';
@@ -17,9 +18,9 @@ import { HarnessAdapter, resolveSubAgents } from './engine/harness-adapter.js';
 // T02772：运行状态落盘目录合流（写入规范目录，读取回退遗留目录）
 import { createRunStateStore } from './engine/run-state-store.js';
 import { getRunStateDirs, getCanonicalRunStateDir, getCanonicalRunStateDirFromVault } from './utils/run-state-dirs.js';
-import { getHarnessDirs, getHarnessDirFromVault, getCanonicalHarnessDir } from './utils/harness-dirs.js';
+import { getHarnessDirs, getHarnessDirFromVault, getCanonicalHarnessDir, auditFileIn } from './utils/harness-dirs.js';
 // T02817：跨进程清理/活跃协调
-import { activityDirIn, cleanupMarkerFileIn, setCoordinationPaths } from './cleanup-cross-process.js';
+import { activityDirIn, cleanupMarkerFileIn, pruneStaleCoordinationFiles, setCoordinationPaths } from './cleanup-cross-process.js';
 // T02622：受控重启的拉起/等待端口
 import { awaitPortReleaseForRestart, RESTART_EXIT_DELAY_MS } from './restart.js';
 import { registerCompileRoute } from './routes/compile.js';
@@ -34,7 +35,7 @@ import { registerRunsRoute } from './routes/runs.js';
 import { registerSearchRoute, registerWebSearchRoute } from './routes/search.js';
 import { registerVaultRoute } from './routes/vault.js';
 import { registerAiRoute } from './routes/ai.js';
-import { registerCleanupRoute } from './routes/cleanup.js';
+import { registerCleanupRoute, rotateAuditLog, AUDIT_ROTATE_BYTES } from './routes/cleanup.js';
 import { registerDataCleanRoute } from './routes/data-clean.js';
 import { registerQqIngestRoute } from './routes/qq-ingest.js';
 import { registerUrlIngestRoute } from './routes/url-ingest.js';
@@ -302,6 +303,32 @@ export async function buildApp(): Promise<BuiltApp> {
     activityDir: activityDirIn(harnessDirs[0]),
     instance: `pid ${process.pid} @ :${config.server.port}`,
   });
+
+  // T02896：启动即回收崩溃残留的协调文件（死 pid 的 activity/<pid>.json、陈旧 cleanup.lock）。
+  // 只删「pid 已死或心跳超时」的条目，活条目不碰（判定复用读取侧同款口径）；回收逐条落
+  // cleanup-audit.log（字段 coordination_stale_pruned，与 T02817 的 cleanup_marker_stale_purged
+  // 同族，便于区分「启动自查回收」与「别人抢标时顺带回收」）。失败静默：回收是卫生动作，
+  // 不能因为目录读不到而挡启动。
+  {
+    const coordinationAuditFile = auditFileIn(harnessDirs[0]);
+    void pruneStaleCoordinationFiles({
+      markerFile: cleanupMarkerFileIn(harnessDirs[0]),
+      activityDir: activityDirIn(harnessDirs[0]),
+      onPruned: async (entry) => {
+        try {
+          await mkdir(harnessDirs[0], { recursive: true });
+          await rotateAuditLog(coordinationAuditFile, AUDIT_ROTATE_BYTES);
+          await appendFile(
+            coordinationAuditFile,
+            `${JSON.stringify({ ts: new Date().toISOString(), coordination_stale_pruned: true, ...entry })}\n`,
+            'utf8',
+          );
+        } catch {
+          /* 审计失败不影响回收 */
+        }
+      },
+    }).catch(() => undefined);
+  }
 
   const adapter = new HarnessAdapter(
     {
