@@ -41,6 +41,9 @@ import RefsList from '../RefsList.vue';
 // FR-21 引用溯源（T01754/56）：移动端正文角标解析 + 底部抽屉浮层
 import CitationText from '../CitationText.vue';
 import CitationModal from '../CitationModal.vue';
+// T02824：FR-QRY-06 移动端消息级朗读——与桌面共用 ttsStore，TtsController 自带
+// 固定定位浮现逻辑（仅 state !== 'idle' 时显示），这里只需挂载一次
+import TtsController from '../TtsController.vue';
 import StateBlock from '../StateBlock.vue';
 import FollowupsChips from '../FollowupsChips.vue';
 import SessionStatusIcon from '../SessionStatusIcon.vue';
@@ -1075,6 +1078,7 @@ onBeforeUnmount(() => {
       drawer
       @open-page="handleCitationOpenPage"
     />
+    <TtsController />
   </div>
 </template>
 

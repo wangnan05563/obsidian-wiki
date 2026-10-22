@@ -4,10 +4,13 @@ import path from 'node:path';
 import { MOBILE_TABS } from '../src/config/mobileTabs';
 
 // T02794：移动端组件目录不得存在零引用组件。
+// T02824：扩面到 components/ 根目录（含全部子目录）——孤儿不止长在 mobile/：
+// TtsController.vue 曾完整可用却零挂载（PRD FR-QRY-06 明确要求接线），在旧口径下
+// 守护只扫 mobile/，根目录死组件要等人工走查才发现。扩面后接线类回归立即变红。
 //
 // 为什么要落成守护用例，而不是「看到孤儿就删一次」：
-//  1. 死组件会让每一轮口径普查反复多付一次判断成本——T02720 扫 `components/mobile/*.vue`
-//     的 StateBlock 变体时，必须先判断「这条命中是不是死代码」，判断本身无人记账。
+//  1. 死组件会让每一轮口径普查反复多付一次判断成本——T02720 扫 `components/**/*.vue`
+//     的变体时，必须先判断「这条命中是不是死代码」，判断本身无人记账。
 //  2. 更危险的是假绿：孤儿件自带面向用户的静态短句（`开发中 · 预计 M2–M5 上线`），
 //     它不在任何渲染路径上，术语与三态守护扫不到真实后果；一旦被人重新接线，
 //     那些从未走过守护的文案会直接进用户界面。
@@ -19,7 +22,8 @@ import { MOBILE_TABS } from '../src/config/mobileTabs';
 // 两者任一命中即算「已接线」——宁可漏报孤儿，也不误报在用组件。
 
 const SRC_DIR = path.resolve(__dirname, '../src');
-const MOBILE_DIR = path.join(SRC_DIR, 'components', 'mobile');
+const COMPONENTS_DIR = path.join(SRC_DIR, 'components');
+const MOBILE_DIR = path.join(COMPONENTS_DIR, 'mobile');
 
 /** 已知并登记的孤儿白名单：条目必须写明「为什么允许」与对应处置单号，否则视为违规。 */
 const ALLOWED_ORPHANS: Array<{ name: string; why: string }> = [];
@@ -48,6 +52,8 @@ const CORPUS = collect(SRC_DIR, ['.vue', '.ts']).map((file) => ({
 }));
 
 const MOBILE_FILES = collect(MOBILE_DIR, ['.vue']).sort();
+// T02824：孤儿扫描覆盖 components/ 全目录（根 + 子目录），mobile/ 是其子集
+const ALL_COMPONENT_FILES = collect(COMPONENTS_DIR, ['.vue']).sort();
 
 /** 该组件名在 src 内（排除自身文件）的引用处相对路径清单 */
 function referencesOf(componentName: string, selfFile: string): string[] {
@@ -64,7 +70,8 @@ function referencesOf(componentName: string, selfFile: string): string[] {
 
 describe('T02794 移动端组件目录零引用守护', () => {
   it('扫描到足量文件（守护不是空跑）', () => {
-    expect(MOBILE_FILES.length).toBeGreaterThanOrEqual(6);
+    expect(ALL_COMPONENT_FILES.length).toBeGreaterThanOrEqual(30);
+    expect(ALL_COMPONENT_FILES.length).toBeGreaterThan(MOBILE_FILES.length);
     expect(CORPUS.length).toBeGreaterThan(100);
   });
 
@@ -78,13 +85,13 @@ describe('T02794 移动端组件目录零引用守护', () => {
     }
   });
 
-  it('components/mobile 下每个组件都至少被引用一次', () => {
+  it('components 下每个组件（含根目录）都至少被引用一次', () => {
     const orphans: string[] = [];
-    for (const file of MOBILE_FILES) {
+    for (const file of ALL_COMPONENT_FILES) {
       const name = path.basename(file).replace(/\.vue$/, '');
       if (ALLOWED_ORPHANS.some((a) => a.name === name)) continue;
       if (referencesOf(name, file).length === 0) {
-        orphans.push(`${name}.vue（零引用；如属刻意保留，请登记进 ALLOWED_ORPHANS 并写明处置单号）`);
+        orphans.push(`${path.relative(COMPONENTS_DIR, file).replace(/\\/g, '/')}（零引用；如属刻意保留，请登记进 ALLOWED_ORPHANS 并写明处置单号）`);
       }
     }
     expect(orphans).toEqual([]);
@@ -92,10 +99,10 @@ describe('T02794 移动端组件目录零引用守护', () => {
 
   it('白名单条目必须仍在用（防止登记后组件被删而条目长存）', () => {
     for (const allowed of ALLOWED_ORPHANS) {
-      const file = path.join(MOBILE_DIR, `${allowed.name}.vue`);
-      expect(fs.existsSync(file), `白名单里的 ${allowed.name}.vue 已不存在，条目应删除`).toBe(true);
+      const file = ALL_COMPONENT_FILES.find((f) => path.basename(f) === `${allowed.name}.vue`);
+      expect(file, `白名单里的 ${allowed.name}.vue 已不存在，条目应删除`).toBeTruthy();
       expect(allowed.why.length, `${allowed.name} 的豁免必须写明理由`).toBeGreaterThan(0);
-      expect(referencesOf(allowed.name, file).length, `${allowed.name} 已接线，应从白名单移除`).toBe(0);
+      expect(referencesOf(allowed.name, file!), `${allowed.name} 已接线，应从白名单移除`).toHaveLength(0);
     }
   });
 
