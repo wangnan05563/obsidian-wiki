@@ -131,7 +131,7 @@ export async function detectMisplacedPages(vault: VaultService): Promise<Misplac
 }
 
 /** 与「页面质量清洗」页那块标题逐字同源的短语（frontend/src/utils/dataCleanPresentation.ts 的 MISPLACED_ISSUE_TEXT） */
-const MISPLACED_ISSUE_PHRASE = '页面在子目录里，知识库索引不到';
+export const MISPLACED_ISSUE_PHRASE = '页面在子目录里，知识库索引不到';
 
 /**
  * T02843：预检结论里这一类的写法。数量只能从 detectMisplacedPages 的返回值出——

@@ -1,7 +1,7 @@
 // wiki三期 T02472（PRD §16 L1/L2/L3）：数据清洗页口径与表格交互的纯展示逻辑。
 // 抽到本文件的原因：分类判定、搜索过滤、排序、分页、跨页选择合并都是可断言的纯函数，
 // 与页面耦合后无法单测（本项目测试约定不挂载 SFC）。
-import type { MisplacedPage, PageQualityScore } from '../types';
+import type { MisplacedPage, PageQualityScore, PrecheckResult } from '../types';
 
 // ─────────── L1 总页数口径 ───────────
 // 与后端 api/src/vault/page-scope.ts 的 PAGE_DIRS 保持一致：两处任何一侧改动都会重新引入
@@ -247,4 +247,21 @@ export function misplacedSummaryText(items: MisplacedPage[]): string {
   return conflict === 0
     ? `${items.length} 个页面，全部可直接归位`
     : `${items.length} 个页面，其中 ${auto} 个可直接归位、${conflict} 个目标位置已有页面需人工确认`;
+}
+
+// T02907：预检卡按类聚合展示。482 条警告直出会刷屏，只显示服务端给的分类计数；
+// 前端不做字符串前缀解析（服务端 warningCategories 同一次扫描出数）。
+// 「misplaced」类的文案与下方错位块标题（MISPLACED_ISSUE_TEXT）逐字同源，同屏说两句话就是矛盾。
+export function precheckCategoryLines(result: PrecheckResult): string[] {
+  const categories = result.warningCategories ?? [];
+  return categories.map((c) => {
+    const label = c.key === 'misplaced' ? MISPLACED_ISSUE_TEXT : c.label;
+    return `${label}：${c.count}`;
+  });
+}
+
+/** 预检 toast 的分类摘要：把「K 个警告」翻译成看得见的构成，无分类时回退纯计数 */
+export function precheckToastSummary(result: PrecheckResult): string {
+  const lines = precheckCategoryLines(result);
+  return lines.length > 0 ? `（${lines.join('，')}）` : '';
 }

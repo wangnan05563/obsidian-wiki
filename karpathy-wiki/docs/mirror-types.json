@@ -130,7 +130,12 @@
     {
       "name": "PrecheckResult",
       "verdict": "aligned",
-      "reason": "预检响应体"
+      "reason": "T02907 预检响应体：新增 warningCategories（PrecheckWarningCategory）两侧镜像——分类计数是界面展示源，缺一侧就是「条数与内容对不上」"
+    },
+    {
+      "name": "PrecheckWarningCategory",
+      "verdict": "aligned",
+      "reason": "T02907 预检分类计数项：key 是字面量联合（bom/unresolvedLink/misplaced），前端按 key 映射自己的文案；label 两侧漂移会让同屏两句话分叉"
     },
     {
       "name": "RefAuthority",

@@ -832,6 +832,15 @@ export interface MisplacedPromoteResult {
   dryRun: boolean;
 }
 
+// 预检警告的按类聚合：服务端出分类与数量，前端不做字符串前缀解析（T02907——
+// 482 条警告直出会刷屏，「路径里含冒号」「文案改动」都不该成为隐性破功点）。
+export interface PrecheckWarningCategory {
+  // 稳定键（前端按 key 定样式/定位），label 为可直接展示的中文文案
+  key: 'bom' | 'unresolvedLink' | 'misplaced';
+  label: string;
+  count: number;
+}
+
 // 预检结果：precheckVault 返回的编码/frontmatter 健康检查
 export interface PrecheckResult {
   scannedFiles: number;
@@ -839,6 +848,8 @@ export interface PrecheckResult {
   warnings: string[];
   errors: string[];
   blocked: boolean;
+  // 按类聚合的警告计数（T02907 起）：与 warnings 同一次扫描出数，不是二次解析
+  warningCategories: PrecheckWarningCategory[];
 }
 
 // 定时扫描计划：scheduler-manager 持久化到 JSON 的调度配置

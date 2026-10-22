@@ -20,6 +20,8 @@ import {
   mergeSelection,
   misplacedSummaryText,
   pageIssueKeys,
+  precheckCategoryLines,
+  precheckToastSummary,
   problemCount,
   promotableMisplaced,
   selectionSummary,
@@ -223,5 +225,44 @@ describe('子目录中的页面展示（T02797）', () => {
       item({ path: 'qa/sub/y.md', suggestedPath: 'qa/y.md', conflict: '目标目录已有同标题页面：qa/y.md' }),
     ];
     expect(misplacedSummaryText(mixed)).toBe('2 个页面，其中 1 个可直接归位、1 个目标位置已有页面需人工确认');
+  });
+});
+
+// T02907：预检分类计数的展示口径。misplaced 行必须用前端自己的短语（不透传服务端 label），
+// 否则同屏「预检分类行」与「错位块标题」两句话又会漂移（T02843 起就是同源约定）。
+describe('预检分类计数展示（T02907）', () => {
+  const result = (categories: Array<{ key: string; label: string; count: number }>) => ({
+    scannedFiles: 245,
+    passed: false,
+    warnings: [],
+    errors: [],
+    blocked: false,
+    warningCategories: categories,
+  });
+
+  it('每类一行「label：count」，misplaced 行用前端短语、不看服务端 label', () => {
+    const lines = precheckCategoryLines(result([
+      { key: 'bom', label: '页面带 UTF-8 BOM', count: 1 },
+      { key: 'unresolvedLink', label: '未解析双链（目标页还没建）', count: 478 },
+      { key: 'misplaced', label: '服务端说法（不得透传）', count: 3 },
+    ]));
+    expect(lines).toEqual([
+      '页面带 UTF-8 BOM：1',
+      '未解析双链（目标页还没建）：478',
+      `${MISPLACED_ISSUE_TEXT}：3`,
+    ]);
+  });
+
+  it('无分类字段（旧响应体）时给空数组、toast 摘要为空串——不渲染也不报错', () => {
+    expect(precheckCategoryLines({ scannedFiles: 1, passed: true, warnings: [], errors: [], blocked: false } as never)).toEqual([]);
+    expect(precheckToastSummary(result([]))).toBe('');
+    expect(precheckCategoryLines(result([]))).toEqual([]);
+  });
+
+  it('toast 摘要：有分类时括号拼接，无分类时不拖尾巴', () => {
+    expect(precheckToastSummary(result([
+      { key: 'misplaced', label: 'x', count: 3 },
+      { key: 'bom', label: 'y', count: 1 },
+    ]))).toBe(`（${MISPLACED_ISSUE_TEXT}：3，y：1）`);
   });
 });
