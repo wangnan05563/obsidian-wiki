@@ -68,6 +68,8 @@ import {
   savePendingRestart,
   type PendingRestartEntry,
 } from '../utils/configPendingRestart';
+// T02622（PRD §10 C1）：受控重启通道——服务端做了空闲判定与延迟退出，前端按 bootId 确认结果
+import { blockedSummary, requestRestart, waitForBootChange, type RestartActiveState } from '../utils/restartService';
 import ConfigSideNav from '../components/ConfigSideNav.vue';
 import ConfigEffectTag from '../components/ConfigEffectTag.vue';
 import AppModal from '../components/AppModal.vue';
@@ -189,6 +191,66 @@ async function copyRestartGuide(): Promise<void> {
 function markRestarted(): void {
   pendingRestart.value = [];
   ElMessage.success('已清除待重启标记（请确认服务确实重启过，否则改动仍未落地）');
+}
+
+// ===== T02622 / PRD §10 C1：一键重启（A 方案）=====
+// 成功口径是 bootId 变了，而不是「POST 回了 202」——202 只代表服务端接受，
+// 旧进程还没退。弹窗同时承担「进行中 / 被拒绝 / 未重启」三种状态，避免只弹 toast 说不清。
+const restarting = ref(false);
+const restartNotice = ref('');
+const restartError = ref('');
+const restartBlocked = ref<RestartActiveState | null>(null);
+
+async function restartServiceNow(): Promise<void> {
+  if (restarting.value) return;
+  try {
+    await ElMessageBox.confirm(
+      '重启会中断当前所有连接。服务端会先检查是否有编译/问答在跑，有则拒绝重启。确认现在重启？',
+      '一键重启服务',
+      { confirmButtonText: '确认重启', cancelButtonText: '再等等', type: 'warning' },
+    );
+  } catch {
+    return; // 用户取消
+  }
+
+  restarting.value = true;
+  restartNotice.value = '正在请求服务重启…';
+  restartError.value = '';
+  restartBlocked.value = null;
+  showRestartGuide.value = true;
+  try {
+    const result = await requestRestart();
+    if (result.kind === 'blocked') {
+      restartNotice.value = '';
+      restartBlocked.value = result.active;
+      restartError.value = `${result.message}（${blockedSummary(result.active)}）`;
+      ElMessage.warning('有任务在跑，重启被拒绝：详情见弹窗');
+      return;
+    }
+    if (result.kind === 'error') {
+      restartNotice.value = '';
+      restartError.value = result.message;
+      return;
+    }
+
+    restartNotice.value = '服务端已接受重启，正在等待新进程上线…';
+    const wait = await waitForBootChange(result.bootId);
+    if (wait.kind === 'changed') {
+      // bootId 变了才是真重启：此时清单里的改动都已生效，可以安全清除并刷新
+      pendingRestart.value = [];
+      restartNotice.value = '服务已重启，正在刷新页面…';
+      ElMessage.success('服务已重启');
+      window.setTimeout(() => window.location.reload(), 800);
+      return;
+    }
+    restartNotice.value = '';
+    restartError.value = '15 秒内没检测到服务重启（bootId 未变化），改动仍未生效。请按下方指引手动重启。';
+  } catch (err) {
+    restartNotice.value = '';
+    restartError.value = `重启失败：${(err as Error).message}`;
+  } finally {
+    restarting.value = false;
+  }
 }
 
 // Edge 神经语音可用音色列表（与后端 EDGE_TTS_VOICES 一致，与 MessageToolbar 保持一致）
@@ -2807,8 +2869,9 @@ async function importConfig() {
           </ul>
         </div>
         <div class="pending-actions">
+          <button v-if="isAdmin" type="button" class="neon-btn-primary pending-btn" :disabled="restarting" @click="restartServiceNow">{{ restarting ? '重启中…' : '一键重启' }}</button>
           <button type="button" class="neon-btn pending-btn" @click="showRestartGuide = true">怎么重启</button>
-          <button type="button" class="neon-btn-primary pending-btn" @click="markRestarted">我已重启，清除</button>
+          <button type="button" class="neon-btn pending-btn" @click="markRestarted">我已重启，清除</button>
         </div>
       </div>
       <div class="config-layout">
@@ -4887,9 +4950,9 @@ async function importConfig() {
       </div>
     </div>
 
-    <!-- T02467（PRD §10 C1）：重启指引。为什么没有「一键重启」按钮：-->
-    <!-- 服务端自杀式重启会打断正在跑的编译/批量作业，且没有外部守护进程保证一定能拉起来， -->
-    <!-- 因此这里给「照做即可」的步骤清单 + 用户确认已重启后清除标记，而不是伪造一个安全假象。 -->
+    <!-- T02467 + T02622（PRD §10 C1）：重启指引与受控重启入口。
+         服务端的三道门（确认 / 空闲判定 / 延迟退出）不替代这里的手动路径：
+         装机版自拉起失败、开发模式没有监听进程时都会超时，界面必须如实说「没重启」并给步骤。 -->
     <AppModal v-model="showRestartGuide" title="这些改动需要重启服务" width="560px">
       <div class="restart-guide">
         <p class="restart-guide-lead">以下改动已写入配置文件，但运行时还在用旧值：</p>
@@ -4899,15 +4962,23 @@ async function importConfig() {
             <span class="restart-guide-reason">{{ item.reason }}</span>
           </li>
         </ul>
+        <p v-if="restartNotice" class="restart-guide-notice" role="status">{{ restartNotice }}</p>
+        <p v-if="restartError" class="restart-guide-alert" role="alert">
+          {{ restartError }}
+          <span v-if="restartBlocked" class="restart-guide-blocked">
+            （编译 {{ restartBlocked.compile }} · 问答 {{ restartBlocked.query }}）
+          </span>
+        </p>
         <pre class="restart-guide-steps">{{ restartGuide }}</pre>
         <p class="restart-guide-note">
-          重启前请确认没有正在进行的编译或批量任务；重启后本条清单会自动失效，无需重复操作。
+          一键重启会先检查是否有正在进行的编译或批量任务，有则拒绝并列名；重启成功后本清单会自动清除。
         </p>
       </div>
       <template #footer>
-        <el-button size="small" @click="showRestartGuide = false">知道了</el-button>
-        <el-button size="small" @click="copyRestartGuide">复制指引</el-button>
-        <el-button size="small" type="primary" @click="markRestarted">我已重启，清除</el-button>
+        <el-button size="small" :disabled="restarting" @click="showRestartGuide = false">知道了</el-button>
+        <el-button size="small" :disabled="restarting" @click="copyRestartGuide">复制指引</el-button>
+        <el-button size="small" :disabled="restarting" @click="markRestarted">我已手动重启，清除</el-button>
+        <el-button v-if="isAdmin" size="small" type="primary" :loading="restarting" @click="restartServiceNow">立即重启服务</el-button>
       </template>
     </AppModal>
   </div>
@@ -5131,6 +5202,32 @@ async function importConfig() {
   display: block;
   color: var(--text-muted, #6b7280);
   line-height: 1.5;
+}
+
+/* 重启进行中 / 被拒绝 / 未重启：三种状态都要留在弹窗里，不能只弹 toast */
+.restart-guide-notice,
+.restart-guide-alert {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.restart-guide-notice {
+  color: var(--warning-accent, var(--warning, #d29922));
+  background: var(--warning-accent-soft, rgba(210, 153, 34, 0.1));
+  border: 1px solid var(--warning-accent-border, rgba(210, 153, 34, 0.35));
+}
+
+.restart-guide-alert {
+  color: var(--danger, #f85149);
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+}
+
+.restart-guide-blocked {
+  opacity: 0.85;
 }
 
 .restart-guide-steps {
