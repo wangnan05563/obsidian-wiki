@@ -264,9 +264,10 @@ describe('T02475 术语表守护（PRD X1）', () => {
   });
 
   it('菜单实名与帮助条目名同词（§3 一致性）', () => {
-    // menu.ts 是菜单名单一来源；帮助页若另起一套词，本用例即失败
+    // menu.ts 是菜单名单一来源；帮助文档若另起一套词，本用例即失败。
+    // T02784 起章节数据在 utils/helpDocSections.ts（Help.vue 只渲染）。
     const menuSrc = fs.readFileSync(path.join(SRC_DIR, 'config/menu.ts'), 'utf8');
-    const helpSrc = fs.readFileSync(path.join(SRC_DIR, 'views/Help.vue'), 'utf8');
+    const helpSrc = fs.readFileSync(path.join(SRC_DIR, 'utils/helpDocSections.ts'), 'utf8');
     const menuNames = [...menuSrc.matchAll(/label:\s*'([^']+)'/g)].map((m) => m[1]);
     expect(menuNames.length).toBeGreaterThanOrEqual(15);
     for (const name of ['体检中心', '配置中心', '投递资料', '页面质量清洗', '缓存与日志清理']) {
