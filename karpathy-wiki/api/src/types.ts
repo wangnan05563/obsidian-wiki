@@ -1007,19 +1007,21 @@ export interface CleanupActiveState {
 // 前端「高级」面板的「当前存放位置 / 旧存放位置」文案按这一档取，两侧不得各写一套判断。
 export type CleanupRunStateRole = 'canonical' | 'legacy';
 
-// 「运行状态」一类对象实际扫描的目录（T02808）。
+// 「运行状态」一类对象实际扫描的目录（T02808 / T02887 推广到四类清理目标）。
 // 为什么要把目录清单随状态一起返回：清理页原先只报一个合并后的数字，用户看不出这些文件
 // 落在几个位置、其中多少是升级前的历史落点，也就无法判断「清完会不会再来」。
-// path 逐字取自 getRunStateDirs() 的返回项（不做相对化、不做美化），
+// path 逐字取自后端真实扫描的目录/根（不做相对化、不做美化），
 // 页面显示的路径与后端真实扫描路径因此是同一个字符串。
 export interface CleanupRunStateDir {
   path: string;
-  // 目录内 *.json 的个数，口径与合并计数一致（同一个 statDir 调用）
+  // 该位置内的对象个数。口径随目标而变（T02887）：run-state/run-logs/raw 是文件数，
+  // compile-cache 是缓存文件里的条目数——与各自卡面计数同口径，保证
+  // 「卡面计数 = 各目录计数之和」逐类成立。
   fileCount: number;
   sizeMb: number;
   role: CleanupRunStateRole;
-  // 目录本身是否存在：false 时 fileCount 必为 0，前端据此区分
-  // 「这个位置还没有目录」与「目录在、但里面是空的」
+  // 该位置是否存在。compile-cache 指缓存文件、其余指目录：false 时 fileCount 必为 0，
+  // 前端据此区分「这个位置还没有产物」与「位置在、但里面是空的」
   exists: boolean;
 }
 
@@ -1033,6 +1035,8 @@ export interface CleanupStorageStatus {
     exists: boolean;
     sizeMb: number;
     entryCount: number;
+    // T02887：entryCount = dirs 各项之和（同一批逐根统计求和得出）
+    dirs: CleanupRunStateDir[];
   };
   // 运行状态：.harness/state/*.json
   runState: {
@@ -1048,12 +1052,16 @@ export interface CleanupStorageStatus {
     fileCount: number;
     sizeMb: number;
     oldest: string | null;
+    // T02887：fileCount = dirs 各项之和
+    dirs: CleanupRunStateDir[];
   };
   // 原始资料存档：vault/raw/ 下内部临时前缀文件（wiki-batch-*/wiki-compile-*/input-*）
   rawArchive: {
     fileCount: number;
     sizeMb: number;
     oldest: string | null;
+    // T02887：raw 目录单一写入口径，清单恒为单项 canonical
+    dirs: CleanupRunStateDir[];
   };
 }
 

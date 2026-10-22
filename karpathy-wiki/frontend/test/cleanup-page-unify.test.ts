@@ -8,7 +8,6 @@ import {
   CLEANUP_CARDS,
   CLEANUP_PAGE_TIP,
   CLEANUP_PAGE_TITLE,
-  advancedRows,
   buildPreviewBanner,
   cardOf,
   cleanupButtonState,
@@ -23,7 +22,13 @@ function statusOf(over: Partial<CleanupStorageStatus> = {}): CleanupStorageStatu
   return {
     // T02655：默认「无活跃任务」；被拦分支的用例在 cleanup-active-guard.test.ts 里显式覆盖
     active: { compile: 0, query: 0, blockedTargets: [], blockedReasons: [] },
-    compileCache: { exists: true, sizeMb: 1.2, entryCount: 42 },
+    compileCache: {
+      exists: true,
+      sizeMb: 1.2,
+      entryCount: 42,
+      // T02887：四类目标都带真实目录清单（卡计数 = 各目录计数之和）
+      dirs: [{ path: 'D:/wiki/karpathy-wiki/data/.harness', fileCount: 42, sizeMb: 1.2, role: 'canonical', exists: true }],
+    },
     runState: {
       fileCount: 3,
       sizeMb: 0.1,
@@ -34,8 +39,18 @@ function statusOf(over: Partial<CleanupStorageStatus> = {}): CleanupStorageStatu
         { path: 'D:/wiki/karpathy-wiki/api/.harness/state', fileCount: 2, sizeMb: 0.05, role: 'legacy', exists: true },
       ],
     },
-    runLogs: { fileCount: 12, sizeMb: 4.5, oldest: '2026-08-11' },
-    rawArchive: { fileCount: 7, sizeMb: 2.2, oldest: '2026-07-30' },
+    runLogs: {
+      fileCount: 12,
+      sizeMb: 4.5,
+      oldest: '2026-08-11',
+      dirs: [{ path: 'D:/wiki/karpathy-wiki/data/.harness/logs', fileCount: 12, sizeMb: 4.5, role: 'canonical', exists: true }],
+    },
+    rawArchive: {
+      fileCount: 7,
+      sizeMb: 2.2,
+      oldest: '2026-07-30',
+      dirs: [{ path: 'D:/wiki/karpathy-wiki/data/vault/raw', fileCount: 7, sizeMb: 2.2, role: 'canonical', exists: true }],
+    },
     ...over,
   };
 }
@@ -93,8 +108,8 @@ describe('S2 预览开关收敛为页级单开关', () => {
 describe('S4 无可清对象时按钮转「无需清理」禁用态', () => {
   it('计数为 0 → 禁用 + 说明原因，不再给一个点了没反应的按钮', () => {
     const empty = statusOf({
-      compileCache: { exists: false, sizeMb: 0, entryCount: 0 },
-      runState: { fileCount: 0, sizeMb: 0, oldest: null },
+      compileCache: { exists: false, sizeMb: 0, entryCount: 0, dirs: [] },
+      runState: { fileCount: 0, sizeMb: 0, oldest: null, dirs: [] },
     });
     const cache = cleanupButtonState('compileCache', empty, true);
     expect(cache.disabled).toBe(true);
@@ -140,15 +155,14 @@ describe('S3 措辞：主界面讲人话，技术细节只在「高级」里', (
     }
   });
 
-  it('高级面板把 4 类的真实路径与技术说明收在一处', () => {
-    const rows = advancedRows();
-    expect(rows).toHaveLength(4);
-    expect(rows.map((r) => r.path)).toEqual([
+  it('techPath 保留为「扫描口径」说明；实际位置改由 status 各卡 dirs 提供（T02887）', () => {
+    expect(CLEANUP_CARDS.map((c) => c.techPath)).toEqual([
       '.harness/compile-cache.json',
       '.harness/state/*.json',
       '.harness/logs/*.log',
       'vault/raw/input-*.md',
     ]);
+    expect(CLEANUP_CARDS.every((c) => c.techNote.length > 0)).toBe(true);
   });
 
   it('cardOf 按 key 取元数据，未知 key 直接抛错而不是静默兜底', () => {

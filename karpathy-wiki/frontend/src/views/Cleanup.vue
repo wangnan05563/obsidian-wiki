@@ -11,15 +11,14 @@ import {
   CLEANUP_CARDS,
   CLEANUP_PAGE_TIP,
   CLEANUP_PAGE_TITLE,
-  advancedRows,
   buildPreviewBanner,
   cardOf,
   cleanupButtonState,
   confirmText,
-  legacyRunStateHint,
+  legacyDirHint,
   modeChip,
   previewSwitchHint,
-  runStateDirRows,
+  storageDirRows,
   type CleanupCardKey,
 } from '../utils/cleanupPresentation';
 
@@ -48,12 +47,22 @@ const showAdvanced = ref(false);
 const cards = CLEANUP_CARDS;
 const bannerText = computed(() => buildPreviewBanner(preview.value));
 const chip = computed(() => modeChip(preview.value));
-const advanced = computed(() => advancedRows());
-// T02808：「运行状态」原先只报一个合并数字，看不出这些文件落在几个位置、其中多少是历史落点。
-// 路径与计数一律直接取后端 status.runState.dirs（即 getRunStateDirs() 的真实清单），
-// 前端不重排也不改写字符串，页面显示的位置与后端真正扫描的位置因此始终是同一个值。
-const runStateDirs = computed(() => runStateDirRows(status.value?.runState.dirs ?? []));
-const legacyRunStateHintText = computed(() => legacyRunStateHint(status.value?.runState.dirs ?? []));
+// T02887：「高级」面板从「一张静态示意表 + 只有运行状态有真实清单」扩成四类目标各有真实清单。
+// 路径与计数一律直接取后端 status 各卡的 dirs（即后端真正扫描的位置清单），
+// 前端不重排也不改写字符串；techPath 示意降级为口径说明，不再冒充实际位置。
+const dirGroups = computed(() =>
+  CLEANUP_CARDS.map((card) => {
+    const dirs = status.value?.[card.key]?.dirs ?? [];
+    return {
+      key: card.key,
+      title: card.title,
+      techPath: card.techPath,
+      techNote: card.techNote,
+      rows: storageDirRows(dirs),
+      hint: legacyDirHint(card.key, dirs),
+    };
+  }),
+);
 
 // T02655：把「现在到底有没有任务在跑」摆在页顶。
 // 为什么还要额外摆一行：卡面置灰只在「有文件可删」时才生效，用户容易把
@@ -226,23 +235,22 @@ onMounted(() => {
       </div>
 
       <div v-if="showAdvanced" class="advanced-panel" id="cleanup-advanced">
-        <div v-for="row in advanced" :key="row.path" class="advanced-row">
-          <span class="advanced-title">{{ row.title }}</span>
-          <code class="advanced-path">{{ row.path }}</code>
-          <span class="advanced-note">{{ row.note }}</span>
-        </div>
-
-        <!-- T02808：运行状态真实扫描的位置。三态走 StateBlock（与本页结果区同一出口）：
-             状态没回来 → 加载；回来了 → 逐目录列路径与计数；取不到状态 → 失败重试 -->
-        <div class="advanced-group" id="cleanup-advanced-dirs">
-          <div class="advanced-title dirs-title">运行状态实际位置</div>
+        <!-- T02887：四类目标各一组——真实目录清单为主体，示意路径降级为口径说明 -->
+        <div
+          v-for="group in dirGroups"
+          :key="group.key"
+          class="advanced-group"
+          :id="'cleanup-advanced-dirs-' + group.key"
+        >
+          <div class="advanced-title dirs-title">{{ group.title }}实际位置</div>
+          <div class="advanced-note dirs-caliber">扫描口径：{{ group.techPath }}（{{ group.techNote }}）</div>
           <template v-if="status">
-            <div v-for="dir in runStateDirs" :key="dir.path" class="advanced-row">
+            <div v-for="dir in group.rows" :key="dir.path" class="advanced-row">
               <span :class="['dir-role', dir.legacy ? 'dir-legacy' : 'dir-canonical']">{{ dir.roleText }}</span>
               <code class="advanced-path">{{ dir.path }}</code>
               <span class="advanced-note">{{ dir.countText }}</span>
             </div>
-            <div v-if="legacyRunStateHintText" class="advanced-note dirs-hint">{{ legacyRunStateHintText }}</div>
+            <div v-if="group.hint" class="advanced-note dirs-hint">{{ group.hint }}</div>
           </template>
           <StateBlock v-else-if="loadingStatus" state="loading" compact loading-text="正在统计各位置的文件数…" />
           <StateBlock v-else state="error" compact error-text="目录位置还没取到" retry-label="重新加载" @retry="loadStatus" />
@@ -700,6 +708,13 @@ onMounted(() => {
 .dirs-hint {
   color: var(--text-soft);
   font-size: 12px;
+  line-height: 1.6;
+}
+
+/* T02887：techPath 降级后的口径说明行——说明扫描模式，不冒充实际位置 */
+.dirs-caliber {
+  color: var(--text-dim);
+  font-size: 11px;
   line-height: 1.6;
 }
 

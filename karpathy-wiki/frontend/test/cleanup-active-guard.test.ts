@@ -46,7 +46,13 @@ const compileBusy: CleanupActiveState = {
 function statusOf(over: Partial<CleanupStorageStatus> = {}): CleanupStorageStatus {
   return {
     active: idle,
-    compileCache: { exists: true, sizeMb: 1.2, entryCount: 42 },
+    compileCache: {
+      exists: true,
+      sizeMb: 1.2,
+      entryCount: 42,
+      // T02887：四类目标都带真实目录清单（卡计数 = 各目录计数之和）
+      dirs: [{ path: '/tmp/wiki-data/.harness', fileCount: 42, sizeMb: 1.2, role: 'canonical', exists: true }],
+    },
     runState: {
       fileCount: 3,
       sizeMb: 0.1,
@@ -56,8 +62,18 @@ function statusOf(over: Partial<CleanupStorageStatus> = {}): CleanupStorageStatu
         { path: '/tmp/wiki-data/.harness/state', fileCount: 3, sizeMb: 0.1, role: 'canonical', exists: true },
       ],
     },
-    runLogs: { fileCount: 12, sizeMb: 4.5, oldest: '2026-08-11' },
-    rawArchive: { fileCount: 7, sizeMb: 2.2, oldest: '2026-07-30' },
+    runLogs: {
+      fileCount: 12,
+      sizeMb: 4.5,
+      oldest: '2026-08-11',
+      dirs: [{ path: '/tmp/wiki-data/.harness/logs', fileCount: 12, sizeMb: 4.5, role: 'canonical', exists: true }],
+    },
+    rawArchive: {
+      fileCount: 7,
+      sizeMb: 2.2,
+      oldest: '2026-07-30',
+      dirs: [{ path: '/tmp/wiki-data/vault/raw', fileCount: 7, sizeMb: 2.2, role: 'canonical', exists: true }],
+    },
     ...over,
   };
 }

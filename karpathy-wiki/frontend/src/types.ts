@@ -871,16 +871,19 @@ export interface CleanupBlockedResponse {
   active: CleanupActiveState;
 }
 
-// 运行状态目录（T02808，与后端 CleanupRunStateDir 对齐）
-// path 是后端 getRunStateDirs() 返回的绝对路径原文；页面直接展示它，
+// 运行状态目录（T02808，与后端 CleanupRunStateDir 对齐；T02887 推广到四类清理目标）
+// path 是后端真实扫描的目录/根的绝对路径原文；页面直接展示它，
 // 于是「页面显示的清单」与「后端真正扫的清单」不可能各写一份。
 export type CleanupRunStateRole = 'canonical' | 'legacy';
 
 export interface CleanupRunStateDir {
   path: string;
+  // 口径随目标而变：run-state/run-logs/raw 是文件数，compile-cache 是缓存条目数，
+  // 与各自卡面计数同口径（卡面计数 = 各目录计数之和）
   fileCount: number;
   sizeMb: number;
   role: CleanupRunStateRole;
+  // compile-cache 指缓存文件、其余指目录；false 时 fileCount 必为 0
   exists: boolean;
 }
 
@@ -892,6 +895,8 @@ export interface CleanupStorageStatus {
     exists: boolean;
     sizeMb: number;
     entryCount: number;
+    // T02887：entryCount = dirs 各项之和
+    dirs: CleanupRunStateDir[];
   };
   runState: {
     fileCount: number;
@@ -904,11 +909,15 @@ export interface CleanupStorageStatus {
     fileCount: number;
     sizeMb: number;
     oldest: string | null;
+    // T02887：fileCount = dirs 各项之和
+    dirs: CleanupRunStateDir[];
   };
   rawArchive: {
     fileCount: number;
     sizeMb: number;
     oldest: string | null;
+    // T02887：raw 目录单一写入口径，清单恒为单项 canonical
+    dirs: CleanupRunStateDir[];
   };
 }
 

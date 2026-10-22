@@ -187,13 +187,14 @@ export function confirmText(title: string): string {
   return `确认清理${title}？此操作不可撤销。若有编译或问答任务正在进行，后端会直接拒绝这次删除。`;
 }
 
-/** 「高级」面板：技术细节集中一处，主界面不再出现 .harness / SHA-256 / JSONL / resume */
-export function advancedRows(): { title: string; path: string; note: string }[] {
-  return CLEANUP_CARDS.map((c) => ({ title: c.title, path: c.techPath, note: c.techNote }));
-}
-
 /**
- * T02808：运行状态目录角色的唯一措辞。
+ * T02808 建立时的「高级」面板是一张静态示意表（techPath 写死 `.harness/…`），
+ * T02887 起四类目标都随状态返回真实目录清单，示意路径降级为「口径说明」：
+ * 它描述的是后端按什么口径扫描（文件名模式），不再冒充「实际位置」——
+ * 实际位置一律以 status 各卡的 dirs 为准，见 storageDirRows。
+ */
+/**
+ * 运行状态目录角色的唯一措辞（T02808 建立，T02887 起四类目标共用）。
  * 后端给的是事实（role），这里给的是说法——「旧存放位置」与清理预览里的条目标注同一措辞，
  * 用户在两处看到的是同一个词，不会以为「遗留」和「旧存放位置」是两个概念。
  */
@@ -202,21 +203,21 @@ export const RUN_STATE_ROLE_TEXT: Record<CleanupRunStateRole, string> = {
   legacy: '旧存放位置',
 };
 
-export interface RunStateDirRow {
-  /** 后端 getRunStateDirs() 返回的绝对路径原文，不重排、不相对化、不美化 */
+export interface StorageDirRow {
+  /** 后端返回的绝对路径原文，不重排、不相对化、不美化 */
   path: string;
   roleText: string;
-  /** 计数行：目录不存在时说「还没有这个位置」，与「有目录但 0 个文件」分开 */
+  /** 计数行：位置不存在时说「还没有这个位置」，与「位置在但 0 个对象」分开 */
   countText: string;
   legacy: boolean;
 }
 
 /**
- * T02808：「高级」面板里的运行状态真实目录清单。
- * 顺序沿用后端清单（首项即写入侧规范目录），前端不做任何重排——
+ * T02808：「高级」面板里各卡的真实目录清单。
+ * 顺序沿用后端清单（首项即写入侧规范位置），前端不做任何重排——
  * 「页面显示的目录 = 后端真正扫的目录」这条一致性只能靠不改走来维持。
  */
-export function runStateDirRows(dirs: CleanupRunStateDir[]): RunStateDirRow[] {
+export function storageDirRows(dirs: CleanupRunStateDir[]): StorageDirRow[] {
   return dirs.map((d) => ({
     path: d.path,
     roleText: RUN_STATE_ROLE_TEXT[d.role],
@@ -225,9 +226,20 @@ export function runStateDirRows(dirs: CleanupRunStateDir[]): RunStateDirRow[] {
   }));
 }
 
-/** 遗留目录里确实还有文件时的一句话说明；没有则返回空串（模板据此不渲染） */
-export function legacyRunStateHint(dirs: CleanupRunStateDir[]): string {
+/**
+ * T02887：遗留位置里确实还有产物时的一句话说明；没有则返回空串（模板据此不渲染）。
+ * 说明文案按卡取——运行状态提的是「进度文件」，编译缓存/运行日志各有各的历史落点缘由，
+ * 一句话通吃会让用户对不上号。
+ */
+const LEGACY_HINT_SUBJECT: Partial<Record<CleanupCardKey, string>> = {
+  compileCache: '那是编译缓存改存到统一目录之前留下的，',
+  runState: '那是进度文件改存到统一目录之前留下的，',
+  runLogs: '那是运行日志改存到统一目录之前留下的，',
+};
+
+export function legacyDirHint(key: CleanupCardKey, dirs: CleanupRunStateDir[]): string {
   const n = dirs.filter((d) => d.role === 'legacy').reduce((sum, d) => sum + d.fileCount, 0);
   if (n === 0) return '';
-  return `其中 ${n} 个在旧存放位置：那是进度文件改存到统一目录之前留下的，清完不会再增加。`;
+  const subject = LEGACY_HINT_SUBJECT[key] ?? '';
+  return `其中 ${n} 个在旧存放位置：${subject}清完不会再增加。`;
 }
