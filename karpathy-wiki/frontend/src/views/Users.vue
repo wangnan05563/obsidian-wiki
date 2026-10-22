@@ -6,7 +6,8 @@ import AppModal from '../components/AppModal.vue';
 // T02476（PRD X2/X8）：加载/失败态统一走 StateBlock，失败可原地重试
 import StateBlock from '../components/StateBlock.vue';
 import { useAuthStore } from '../stores/auth';
-import type { UserInfo, AuthRole, CreateUserRequest } from '../types';
+import type { UserInfo, AuthRole, CreateUserRequest, AuditLogEntry } from '../types';
+import { auditActionLabel } from '../utils/labels';
 import {
   PASSWORD_RULE,
   SEED_ACCOUNT_HINT,
@@ -335,6 +336,42 @@ function timeTitle(iso?: string): string {
   return absoluteTime(iso);
 }
 
+// ===== T02782 审计日志面板：GET /api/auth/audit-log 的应用内出口（此前只有接口没有界面） =====
+const auditVisible = ref(false);
+const auditLoading = ref(false);
+const auditLoadError = ref('');
+const auditEntries = ref<AuditLogEntry[]>([]);
+const auditActionFilter = ref('');
+const auditUserFilter = ref('');
+
+async function openAudit() {
+  auditVisible.value = true;
+  await loadAudit();
+}
+
+async function loadAudit() {
+  auditLoading.value = true;
+  auditLoadError.value = '';
+  const res = await authStore.fetchAuditLog();
+  if (res) {
+    auditEntries.value = res.entries;
+  } else {
+    auditLoadError.value = authStore.auditError || '加载审计日志失败';
+  }
+  auditLoading.value = false;
+}
+
+const auditActions = computed(() => [...new Set(auditEntries.value.map((e) => e.action))]);
+const auditAccounts = computed(() => [...new Set(auditEntries.value.map((e) => e.username || '(匿名)'))]);
+const auditAccountOf = (e: AuditLogEntry): string => e.username || '(匿名)';
+const filteredAudit = computed(() =>
+  auditEntries.value.filter(
+    (e) =>
+      (!auditActionFilter.value || e.action === auditActionFilter.value) &&
+      (!auditUserFilter.value || auditAccountOf(e) === auditUserFilter.value),
+  ),
+);
+
 onMounted(loadUsers);
 </script>
 
@@ -352,6 +389,7 @@ onMounted(loadUsers);
           <!-- U6：原来是只有「+」的图标按钮，看不出是干什么的 -->
           <el-button class="neon-btn" :icon="Plus" data-tip="新建用户 - 创建新账户并分配角色" @click="openCreate">新建用户</el-button>
           <el-button class="neon-btn secondary" :icon="Refresh" :loading="loading" data-tip="重新拉取用户列表" @click="loadUsers">刷新</el-button>
+          <el-button class="neon-btn secondary" data-tip="查看登录 / 登出 / 越权 / 用户管理的审计记录" @click="openAudit">审计日志</el-button>
         </div>
       </div>
 
@@ -607,6 +645,71 @@ onMounted(loadUsers);
           <el-button class="neon-btn" :icon="Check" :loading="submitting" data-tip="保存 - 保存该用户的角色/状态与密码修改" @click="submitEdit">保存</el-button>
         </div>
       </template>
+    </AppModal>
+
+    <!-- T02782 审计日志面板：时间/动作/账户/IP/结果五列 + 按动作与账户筛选 -->
+    <AppModal v-model="auditVisible" title="审计日志（最近 1000 条）" width="860px">
+      <div class="audit-tools">
+        <el-select v-model="auditActionFilter" placeholder="全部动作" clearable style="width: 150px" data-tip="按动作类型筛选">
+          <el-option v-for="a in auditActions" :key="a" :label="auditActionLabel(a)" :value="a" />
+        </el-select>
+        <el-select v-model="auditUserFilter" placeholder="全部账户" clearable style="width: 170px" data-tip="按账户筛选">
+          <el-option v-for="u in auditAccounts" :key="u" :label="u" :value="u" />
+        </el-select>
+        <span class="filter-count">筛出 {{ filteredAudit.length }} / {{ auditEntries.length }} 条</span>
+        <el-button size="small" text :icon="Refresh" data-tip="重新拉取审计日志" @click="loadAudit">刷新</el-button>
+      </div>
+      <StateBlock v-if="auditLoading" state="loading" :skeleton-rows="4" loading-text="正在读取审计日志…" />
+      <StateBlock
+        v-else-if="auditLoadError"
+        state="error"
+        :error-text="auditLoadError"
+        retry-label="重新加载"
+        @retry="loadAudit()"
+      />
+      <el-table v-else :data="filteredAudit" height="420" stripe size="small" style="width: 100%">
+        <el-table-column prop="ts" label="时间" width="150">
+          <template #default="{ row }">
+            <el-tooltip :content="absoluteTime(row.ts)" placement="top">
+              <span class="td-date">{{ timeText(row.ts) }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column prop="action" label="动作" width="110">
+          <template #default="{ row }">{{ auditActionLabel(row.action) }}</template>
+        </el-table-column>
+        <el-table-column prop="username" label="账户" width="130">
+          <template #default="{ row }">
+            <span class="user-name">{{ auditAccountOf(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="ip" label="IP" width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="td-date">{{ row.ip || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="result" label="结果" width="80">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.result === 'success' ? 'success' : 'danger'" effect="plain">
+              {{ row.result === 'success' ? '成功' : '失败' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="resource" label="资源" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="td-date">{{ row.resource || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="message" label="说明" min-width="130" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="td-date">{{ row.message || '—' }}</span>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <span class="table-empty">暂无审计记录</span>
+        </template>
+      </el-table>
+      <p class="audit-hint">审计日志只追加，写入侧自动保留最近 1 万条（超出后最旧的记录被轮转淘汰）。</p>
     </AppModal>
   </div>
 </template>
@@ -905,6 +1008,25 @@ onMounted(loadUsers);
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* T02782 审计面板：筛选条 + 保留口径说明 */
+.audit-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.audit-tools .filter-count {
+  flex: 1;
+}
+
+.audit-hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 /* 霓虹按钮：与缓存与日志清理/页面质量清洗页统一风格 */
