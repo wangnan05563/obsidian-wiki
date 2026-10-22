@@ -22,6 +22,9 @@ import QueryTracePanel from '../components/QueryTracePanel.vue';
 import ModelSelector from '../components/ModelSelector.vue';
 import RefsList from '../components/RefsList.vue';
 import MessageToolbar from '../components/MessageToolbar.vue';
+// T02824：消息级朗读（FR-QRY-06）——MessageToolbar 的朗读按钮驱动 ttsStore，
+// 底部迷你控制器随 state 浮现（TtsController 自带 v-if，idle 时不占位）
+import TtsController from '../components/TtsController.vue';
 // FR-09-2 多模态输出卡片：渲染 mindmap/faq/timeline 结构化输出
 import MultimodalOutputCard from '../components/MultimodalOutputCard.vue';
 // T00265：消息气泡右下角上下文占用徽章（圆环进度 + 悬浮详情 + 压缩）
@@ -2001,6 +2004,7 @@ onBeforeUnmount(() => {
       :query="citeQuery"
       @open-page="handleCitationOpenPage"
     />
+    <TtsController />
   </div>
 </template>
 
