@@ -26,6 +26,18 @@ import {
   restartKeysForChange,
   valueChangedForConfigKey,
 } from '../utils/config-effects.js';
+// T02622：受控重启（A 方案）。空闲口径与清理守卫同源，拉起方按打包/dev 分两条通道。
+import { activeStateAcrossProcesses } from '../cleanup-guard.js';
+import { performRestart, restartRefusal, RESTART_EXIT_DELAY_MS, type RestartMode } from '../restart.js';
+
+/** 由 index.ts 注入：bootId 供前端确认「真的换了进程」，afterRestart 负责延迟关停旧实例。 */
+export interface RestartController {
+  bootId(): string;
+  /** 打包通道：延迟执行优雅 shutdown；dev 通道由 watcher 杀旧进程，这里不做事 */
+  afterRestart(mode: RestartMode): void;
+  /** 覆盖拉起动作（测试用，避免真的动源码/拉进程）；默认走 restart.ts 的形态分派 */
+  perform?: () => RestartMode;
+}
 
 // PUT 请求体字段名 → config-effects 登记 key 的映射。
 // 为什么要显式声明：登记表按「用户可感知的配置项」组织，路由按「请求体字段」组织，
@@ -53,6 +65,7 @@ async function readConfigForCompare(): Promise<AppConfig | null> {
 //   GET  /api/config                  读取当前配置（API Key 字段脱敏）
 //   PUT  /api/config                  仅校验反馈，不落盘（向后兼容保留）
 //   POST /api/config/reload           §12.3-7 热加载：重读 config.json 并将可热更新字段应用到 adapter
+//   POST /api/restart                 T02622：受控重启（确认 + 空闲判定 + 先回 202 再退出）
 //   GET  /api/config/effects          T02467 字段生效登记表（即时/热加载/需重启），前端徽标与待重启汇总的可信源
 //   PUT  /api/config/budget           保存运行参数（maxSteps/tokenBudget）+ 同步 adapter
 //   PUT  /api/config/health-check     保存健康检查阈值（staleDays）+ 同步 adapter
@@ -63,6 +76,7 @@ export function registerConfigRoute(
   app: FastifyInstance,
   adapter: HarnessAdapter,
   guards: IsolationGuards = createIsolationGuards(),
+  restart: RestartController,
 ) {
   app.get('/api/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
     const config = await loadConfig();
@@ -132,6 +146,43 @@ export function registerConfigRoute(
       requireRestart,
       restartHints: restartHints(requireRestart),
     });
+  });
+
+  // T02622 / PRD §10 C1「一键重启」的受控通道（A 方案）。
+  // 三道门缺一不可：
+  //  1) confirm 显式确认：这不是「保存」，是让服务退出再起来，误触/误 curl 的代价是切断所有人；
+  //  2) 空闲判定：有编译/问答在跑就拒绝并列名（口径与清理守卫同源，跨进程合并）；
+  //  3) 先回 202 再退出：浏览器必须拿到响应才能开始轮询 /health 的 bootId。
+  // 为什么不是 delayed SIGTERM：Windows 上 process.kill(pid,'SIGTERM') 是 TerminateProcess，
+  // SIGTERM 处理器不会执行；这里改成由 index.ts 注入的优雅 shutdown（停隧道/工具/日志 flush），
+  // 语义与 Ctrl+C 一致，只是延迟一点执行。
+  app.post('/api/restart', { preHandler: guards.requireAdmin }, async (request, reply) => {
+    const body = (request.body ?? {}) as { confirm?: unknown };
+    if (body.confirm !== true) {
+      return void reply.code(400).send({
+        code: 'restart_confirm_required',
+        error: '重启会中断所有连接：请在确认后调用（confirm: true）',
+      });
+    }
+    const active = await activeStateAcrossProcesses();
+    const refusal = restartRefusal(active);
+    if (refusal) return void reply.code(409).send(refusal);
+
+    const mode = (restart.perform ?? performRestart)();
+    const payload = {
+      ok: true,
+      mode,
+      bootId: restart.bootId(),
+      pid: process.pid,
+      delayMs: RESTART_EXIT_DELAY_MS,
+      note:
+        mode === 'packaged'
+          ? '新实例正在拉起；页面会轮询 bootId，换进程后自动刷新。'
+          : '已触发开发模式的监听重跑；页面会轮询 bootId 确认，若 15 秒内没变化请手动重启。',
+    };
+    reply.code(202).send(payload);
+    // 必须在 send 之后：旧实例要先把 202 交出去，再关自己
+    restart.afterRestart(mode);
   });
 
   // GET /api/config/effects：字段生效登记表（T02467 / REQ-032 单一可信源）。

@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerConfigRoute } from '../src/routes/config.js';
+import type { RestartController } from '../src/routes/config.js';
 import { ConfigMigrationError } from '../src/config.js';
 import { resolveSubAgents } from '../src/engine/harness-adapter.js';
 import type { AppConfig } from '../src/types.js';
@@ -71,7 +72,9 @@ function createAdapterSpy(): HarnessAdapter & { updateConfig: ReturnType<typeof 
 
 async function buildApp(adapter: HarnessAdapter): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-  registerConfigRoute(app, adapter);
+  // T02622：重启控制器是必填依赖（生产由 index.ts 注入真实 shutdown），测试给桩。
+  const restart: RestartController = { bootId: () => 'test-boot', afterRestart: () => {} };
+  registerConfigRoute(app, adapter, undefined, restart);
   await app.ready();
   return app;
 }

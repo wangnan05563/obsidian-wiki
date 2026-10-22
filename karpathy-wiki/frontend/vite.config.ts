@@ -37,6 +37,13 @@ export default defineConfig({
         timeout: 0,
         proxyTimeout: 0,
       },
+      // /health 是根级路由（不在 /api 下），但页面 base 是 /wiki/：
+      // 重启确认要轮询它比对 bootId，开发模式下没有这条代理会 404。
+      '/wiki/health': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/wiki/, ''),
+      },
     },
   },
   build: {

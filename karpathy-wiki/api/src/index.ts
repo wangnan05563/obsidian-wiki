@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { execSync, spawn } from 'node:child_process';
 import multipart from '@fastify/multipart';
@@ -19,6 +20,8 @@ import { getRunStateDirs, getCanonicalRunStateDir, getCanonicalRunStateDirFromVa
 import { getHarnessDirs, getHarnessDirFromVault, getCanonicalHarnessDir } from './utils/harness-dirs.js';
 // T02817：跨进程清理/活跃协调
 import { activityDirIn, cleanupMarkerFileIn, setCoordinationPaths } from './cleanup-cross-process.js';
+// T02622：受控重启的拉起/等待端口
+import { awaitPortReleaseForRestart, RESTART_EXIT_DELAY_MS } from './restart.js';
 import { registerCompileRoute } from './routes/compile.js';
 import { registerQueryRoute, registerQueryArchiveRoute } from './routes/query.js';
 import { registerHealthCheckRoute } from './routes/health-check.js';
@@ -76,6 +79,11 @@ import { IS_SEA, getApiDir, getDataDir, getUserDataPath } from './utils/runtime.
 
 // 向后兼容别名：IS_PACKAGED 语义 = 打包模式（SEA 或 pkg），等价于 IS_SEA
 const IS_PACKAGED = IS_SEA;
+
+// T02622：进程身份。前端靠 bootId 判断「重启后是不是新进程」——/health 只回 {ok:true}
+// 时无法区分「旧实例还没死」与「新实例已经起来」，那就会把没重启成功报成成功。
+const BOOT_ID = randomUUID();
+const STARTED_AT = new Date().toISOString();
 
 /**
  * 加载 .env 文件环境变量（pkg 打包模式需要手动加载）
@@ -242,6 +250,10 @@ export async function buildApp(): Promise<BuiltApp> {
 
   // pkg 打包模式：清理残留端口
   if (IS_PACKAGED) {
+    // T02622：受控重启拉起的子实例先等旧实例交出端口。旧实例要先回 202 再退出，
+    // 这段时间套接字仍被占着；直接 listen 会 EADDRINUSE 让「重启」变成「起不来」。
+    // 不能只靠下面的 cleanupPort 兜底：它是 taskkill /F /T，会把优雅重启变成硬杀。
+    await awaitPortReleaseForRestart(config.server.port);
     console.log('[启动] Karpathy-Wiki 打包模式，清理残留端口...');
     cleanupPort(config.server.port);
   }
@@ -507,7 +519,16 @@ export async function buildApp(): Promise<BuiltApp> {
   registerGraphRoute(app, vault);
   registerStatsRoute(app, vault);
   registerSchemaRoutes(app, vault, isolationGuards);
-  registerConfigRoute(app, adapter, isolationGuards);
+  // T02622：受控重启。shutdown 在本函数后半段才定义，用可变引用接上；
+  // 只有打包通道需要自己关停——dev 通道由 tsx watch 杀旧进程（自己退出会让 watch 不再重跑，实测）。
+  let shutdownOnRestart: (() => void) | null = null;
+  registerConfigRoute(app, adapter, isolationGuards, {
+    bootId: () => BOOT_ID,
+    afterRestart: (mode) => {
+      if (mode !== 'packaged') return;
+      setTimeout(() => { shutdownOnRestart?.(); }, RESTART_EXIT_DELAY_MS);
+    },
+  });
   // §11.2 断点续传：查询中断任务列表（完整 resume 待详细设计）
   // T02772：stateDir 即 runStateDirs 首项（规范目录），清单整体传给路由，
   // 这样升级前写在遗留目录里的运行仍能在「中断任务/步骤追踪」里看到。
@@ -596,7 +617,20 @@ registerDataCleanRoute(app, vault, isolationGuards);
   }
 
 
-  app.get('/health', async () => ({ ok: true }));
+  const healthPayload = () => ({
+    ok: true,
+    // T02622：重启确认口径。前端等 bootId 变化，而不是等端口重新可连——
+    // 「连上了」可能只是旧实例还没退出，把它当成重启成功就是假成功。
+    bootId: BOOT_ID,
+    pid: process.pid,
+    mode: IS_PACKAGED ? 'packaged' : 'dev',
+    startedAt: STARTED_AT,
+  });
+  app.get('/health', async () => healthPayload());
+  // 页面 base 是 /wiki/，前端轮询的是 /wiki/health；而 SPA 的 /wiki/* 通配会把
+  // 未命中磁盘文件的路径回成 index.html，前端解析不到 bootId 就会永远判「没重启」。
+  // 额外给一个同源别名（Tailscale 剥掉 /wiki 前缀后仍走上面的 /health）。
+  app.get('/wiki/health', async () => healthPayload());
 
   // SPA 静态资源托管（提取为独立函数降低 main 认知复杂度）
   await setupSpaStatic(app);
@@ -624,6 +658,7 @@ registerDataCleanRoute(app, vault, isolationGuards);
     }
     process.exit(0);
   };
+  shutdownOnRestart = () => { void shutdown('restart'); };
   return { app, config, shutdown };
 }
 
