@@ -19,7 +19,7 @@ import matter from 'gray-matter';
 import { NESTED_PAGE_DIRS, PAGE_DIRS } from '../src/vault/page-scope.js';
 import { VaultService } from '../src/vault/vault-service.js';
 import { precheckVault } from '../src/data-clean/quality-scanner.js';
-import { detectMisplacedPages, misplacedPrecheckWarning } from '../src/data-clean/misplaced-pages.js';
+import { detectMisplacedPages, misplacedPrecheckWarning, MISPLACED_ISSUE_PHRASE } from '../src/data-clean/misplaced-pages.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -157,5 +157,57 @@ describe('D · 同屏文案同源', () => {
     const after = await detectMisplacedPages(vault);
     expect(after.map((m) => m.path)).not.toContain(stray);
     expect(misplacedWarnings((await precheckVault(vault)).warnings)[0]).toBe(misplacedPrecheckWarning(after));
+  });
+});
+
+// T02907：预检卡只显条数不显内容——界面读 warningCategories 聚合，不再数 warnings 逐条。
+// 分类计数必须与 warnings 同一次扫描出数（同源），零类不上榜（否则空库也挂一排 0）。
+describe('E · T02907 分类计数（warningCategories）', () => {
+  it('misplaced 类计数与 detectMisplacedPages 同数，label 与前端块标题逐字同源', async () => {
+    const result = await precheckVault(vault);
+    const detected = await detectMisplacedPages(vault);
+    const misplacedCat = result.warningCategories.find((c) => c.key === 'misplaced');
+    expect(misplacedCat, '错位页存在时 misplaced 分类必须在场').toBeTruthy();
+    expect(misplacedCat!.count).toBe(detected.length);
+    // 与前端错位块标题逐字同源（D 组锁的是 warnings 字符串，这里锁的是界面实际读的分类 label）
+    const presentation = await fs.readFile(
+      path.join(repoRoot, 'frontend', 'src', 'utils', 'dataCleanPresentation.ts'),
+      'utf8',
+    );
+    const phrase = presentation.match(/MISPLACED_ISSUE_TEXT\s*=\s*'([^']+)'/)![1];
+    expect(misplacedCat!.label).toBe(MISPLACED_ISSUE_PHRASE);
+    expect(misplacedCat!.label).toBe(phrase);
+  });
+
+  it('BOM 与未解析双链按扫描计数器出数，且与 warnings 逐条数一致', async () => {
+    // 绕过口径限制：vault.writeFile 只收顶层页面目录内的 .md，BOM/断链页是合法顶层页面
+    await vault.writeFile(
+      'entities/bom-link-page.md',
+      '\uFEFF---\ntitle: BOM与断链页\ntype: entity\n---\n\n正文 [[不存在甲]] 和 [[不存在乙]]\n',
+    );
+    try {
+      const result = await precheckVault(vault);
+      const bomCat = result.warningCategories.find((c) => c.key === 'bom');
+      const linkCat = result.warningCategories.find((c) => c.key === 'unresolvedLink');
+      expect(bomCat, '带 BOM 的页面存在时 bom 分类必须在场').toBeTruthy();
+      expect(bomCat!.count, 'bom 计数').toBe(1);
+      expect(bomCat!.label).toBe('页面带 UTF-8 BOM');
+      expect(linkCat, '两条断链存在时 unresolvedLink 分类必须在场').toBeTruthy();
+      expect(linkCat!.count, 'unresolvedLink 计数按链接条数（不按文件数）').toBe(2);
+      // 计数不是凭空造的：与 warnings 逐条数同源
+      expect(result.warnings.filter((w) => w.includes('UTF-8 BOM'))).toHaveLength(1);
+      expect(result.warnings.filter((w) => w.includes('Unresolved link'))).toHaveLength(2);
+    } finally {
+      await fs.rm(path.join(vaultDir, 'entities', 'bom-link-page.md'), { force: true });
+    }
+  });
+
+  it('计数为 0 的分类不上榜（空库不挂一排 0）', async () => {
+    // 本库此时尚有错位页（A 组造的存量），misplaced 在场是对的；这里只锁「零计数不上榜」
+    const result = await precheckVault(vault);
+    const keys = result.warningCategories.map((c) => c.key);
+    expect(keys).not.toContain('bom');
+    expect(keys).not.toContain('unresolvedLink');
+    expect(result.warningCategories.every((c) => c.count > 0), '全部计数非零').toBe(true);
   });
 });

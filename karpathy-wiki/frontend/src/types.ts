@@ -1293,6 +1293,13 @@ export interface MisplacedPromoteResult {
   dryRun: boolean;
 }
 
+// 预检警告的按类聚合：服务端出分类与数量，前端不做字符串前缀解析（T02907）
+export interface PrecheckWarningCategory {
+  key: 'bom' | 'unresolvedLink' | 'misplaced';
+  label: string;
+  count: number;
+}
+
 // 预检门禁结果：是否通过、扫描文件数、错误与警告列表、是否阻断
 export interface PrecheckResult {
   passed: boolean;
@@ -1300,6 +1307,8 @@ export interface PrecheckResult {
   errors: string[];
   warnings: string[];
   blocked: boolean;
+  // 按类聚合的警告计数（T02907 起）：与 warnings 同一次扫描出数，不是二次解析
+  warningCategories: PrecheckWarningCategory[];
 }
 
 // AI 智能清洗分析结果（/api/data-clean/ai-analyze 返回，与后端 AiCleanAnalysis* 对齐）

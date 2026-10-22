@@ -32,6 +32,8 @@ import {
   mergeSelection,
   misplacedSummaryText,
   pageIssueKeys,
+  precheckCategoryLines,
+  precheckToastSummary,
   problemCount,
   promotableMisplaced,
   selectionSummary,
@@ -333,10 +335,12 @@ async function runPrecheck() {
     // 非空断言：fetch 成功返回 json 后 precheckResult.value 一定非 null
     // 局部变量避免后续重复访问 .value，同时让 TS 在 if 分支内窄化
     const result = precheckResult.value!;
+    // T02907：toast 摘要带上分类计数（如「N 个页面在子目录里，知识库索引不到」），不止给警告总数
+    const summary = precheckToastSummary(result);
     if (result.passed) {
-      ElMessage.success(`预检通过：扫描 ${result.scannedFiles} 个文件，${result.warnings.length} 个警告`);
+      ElMessage.success(`预检通过：扫描 ${result.scannedFiles} 个文件，${result.warnings.length} 个警告${summary}`);
     } else {
-      ElMessage.warning(`预检发现 ${result.errors.length} 个错误，${result.warnings.length} 个警告`);
+      ElMessage.warning(`预检发现 ${result.errors.length} 个错误，${result.warnings.length} 个警告${summary}`);
     }
   } catch (err) {
     scanProgress.value = '预检失败';
@@ -708,11 +712,15 @@ onMounted(() => loadPages());
       <p v-if="pages.length > 0 && healthy" class="healthy-note">这一批页面没有上面五类问题，无需批量处理。</p>
       
       <!-- 预检结果 -->
+      <!-- T02907：警告不只给总数，分类计数逐行展示（与错位块同一句话衔接，数字来自同一次扫描的计数器） -->
       <el-alert v-if="precheckResult"
         :title="precheckResult.passed ? 'Vault 预检：通过' : 'Vault 预检：发现问题'"
         :type="precheckResult.passed ? 'success' : 'warning'"
-        :description="`扫描 ${precheckResult.scannedFiles} 个文件 · ${precheckResult.errors.length} 个错误 · ${precheckResult.warnings.length} 个警告`"
-        show-icon closable style="margin-bottom:16px" />
+        show-icon closable style="margin-bottom:16px">
+        <!-- el-alert 的描述区只认默认插槽（#description 不渲染） -->
+        <div>扫描 {{ precheckResult.scannedFiles }} 个文件 · {{ precheckResult.errors.length }} 个错误 · {{ precheckResult.warnings.length }} 个警告</div>
+        <div v-for="line in precheckCategoryLines(precheckResult)" :key="line" class="precheck-category-line">{{ line }}</div>
+      </el-alert>
 
       <!-- T02797 子目录中的页面：写盘深度校验上线前的存量错位。
            上方表格与「页面总数」本来就扫不到它们（列表按顶层目录平铺读），所以单列一块；
@@ -1289,6 +1297,13 @@ onMounted(() => loadPages());
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-soft);
+}
+
+/* T02907 预检分类计数行：与卡片口径说明同档的小字 */
+.precheck-category-line {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 /* T02797 子目录中的页面：一块「读得到却进不了索引」的存量错位，配色沿用告警一档 */

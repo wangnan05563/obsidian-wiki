@@ -7,8 +7,8 @@ import { PAGE_DIRS, PAGE_DIR_TO_TYPE, isPageFile } from "../vault/page-scope.js"
 import { resolveVaultPath } from "./vault-path.js";
 // T02843：预检结论必须报出「页面在子目录里索引不到」这一类，与页面质量清洗页下方那块同口径。
 //   检测函数只有 detectMisplacedPages 一份，这里引用它，不重写第二份判断。
-import { detectMisplacedPages, misplacedPrecheckWarning } from "./misplaced-pages.js";
-import type { PageQualityScore, DuplicatePair, MergeResult, PrecheckResult } from "../types.js";
+import { detectMisplacedPages, misplacedPrecheckWarning, MISPLACED_ISSUE_PHRASE } from "./misplaced-pages.js";
+import type { PageQualityScore, DuplicatePair, MergeResult, PrecheckResult, PrecheckWarningCategory } from "../types.js";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
@@ -471,7 +471,12 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
     errors: [],
     warnings: [],
     blocked: false,
+    warningCategories: [],
   };
+  // T02907：分类计数与 warnings 同一次扫描出数（不是事后按前缀解析字符串——
+  // 路径含冒号、文案改动都会让解析悄悄破功）。482 条直出会刷屏，前端只读这里的聚合。
+  let bomCount = 0;
+  let unresolvedLinkCount = 0;
 
   const allPages: PageQualityScore[] = [];
   const dirs = PAGE_DIRS;
@@ -509,6 +514,7 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
       // Check encoding / BOM
       if (content.charCodeAt(0) === 0xFEFF) { // NOSONAR
         result.warnings.push(`${page.path}: Contains UTF-8 BOM`);
+        bomCount++;
         page.metadata.hasBom = true;
       }
 
@@ -527,6 +533,7 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
         if (target && !validPageNames.has(target)) {
           // Only warn, not block  dangling links may be intentional placeholders
           result.warnings.push(`${page.path}: Unresolved link [[${link.slice(2, -2)}]]`);
+          unresolvedLinkCount++;
         }
       }
     } catch (err) {
@@ -542,6 +549,14 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
   if (misplaced.length > 0) {
     result.warnings.push(misplacedPrecheckWarning(misplaced));
   }
+
+  // 分类聚合只报非零类；misplaced 的 label 直接用与前端块标题逐字同源的短语（T02843 D 组口径）
+  const categories: PrecheckWarningCategory[] = [
+    { key: 'bom', label: '页面带 UTF-8 BOM', count: bomCount },
+    { key: 'unresolvedLink', label: '未解析双链（目标页还没建）', count: unresolvedLinkCount },
+    { key: 'misplaced', label: MISPLACED_ISSUE_PHRASE, count: misplaced.length },
+  ];
+  result.warningCategories = categories.filter((c) => c.count > 0);
 
   result.passed = result.errors.length === 0;
   return result;
