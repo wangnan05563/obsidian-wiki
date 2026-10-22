@@ -151,21 +151,59 @@ export function registerCleanupRoute(
     };
   }
 
-  // 单个 run-state 目录的统计（T02772 合并计数 + T02808 目录清单）。
+  // 单个目录的统计行（T02772 合并计数 + T02808 目录清单 + T02887 推广到四类目标）。
   // 为什么合并计数改为由逐目录结果求和，而不是另写一个合并函数：
-  // 「运行状态卡计数 = 高级面板各目录计数之和」这条验收从此是结构上的恒等式，
+  // 「卡面计数 = 高级面板各目录计数之和」这条验收从此是结构上的恒等式，
   // 而不是两条代码路径碰巧算出同一个数——T02772 的缺陷正是「两套口径各算一套」。
   // sizeBytes/oldest 只在本函数内参与合并统计，不进响应体。
-  async function statRunStateDir(dir: string): Promise<CleanupRunStateDir & { sizeBytes: number; oldest: string | null }> {
-    const s = await statDir(dir, RUN_STATE_FILE_PATTERN);
+  async function statDirRow(
+    dir: string,
+    pattern: RegExp,
+    isLegacy: (dir: string) => boolean,
+  ): Promise<CleanupRunStateDir & { sizeBytes: number; oldest: string | null }> {
+    const s = await statDir(dir, pattern);
     return {
       path: dir,
       fileCount: s.fileCount,
       sizeMb: bytesToMb(s.sizeBytes),
-      role: isLegacyStateDir(dir) ? 'legacy' : 'canonical',
+      role: isLegacy(dir) ? 'legacy' : 'canonical',
       exists: await directoryExists(dir),
       sizeBytes: s.sizeBytes,
       oldest: s.oldest,
+    };
+  }
+
+  // 响应体只留公开字段（sizeBytes/oldest 是合并统计的中间量）
+  function toPublicRow(s: CleanupRunStateDir & { sizeBytes: number; oldest: string | null }): CleanupRunStateDir {
+    return { path: s.path, fileCount: s.fileCount, sizeMb: s.sizeMb, role: s.role, exists: s.exists };
+  }
+
+  // 编译缓存按根逐个统计（T02887）。fileCount 与卡面 entryCount 同口径——
+  // 是这个根缓存文件里的条目数，不是文件个数；exists 指「这个根的缓存文件在不在」，
+  // 目录在但还没编译过时面板报 0 条，与「还没有这个位置」区分开。
+  async function statCompileCacheRow(dir: string): Promise<CleanupRunStateDir & { sizeBytes: number; oldest: string | null }> {
+    const file = compileCacheFileIn(dir);
+    let exists = false;
+    let sizeBytes = 0;
+    let entries = 0;
+    try {
+      const stat = await fs.stat(file);
+      exists = true;
+      sizeBytes = stat.size;
+      const raw = await fs.readFile(file, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      entries = Object.keys(parsed).length;
+    } catch {
+      // 文件不存在或解析失败：按「这个位置还没有缓存」报 0
+    }
+    return {
+      path: dir,
+      fileCount: entries,
+      sizeMb: bytesToMb(sizeBytes),
+      role: isLegacyHarnessDir(dir) ? 'legacy' : 'canonical',
+      exists,
+      sizeBytes,
+      oldest: null,
     };
   }
 
@@ -206,42 +244,44 @@ export function registerCleanupRoute(
 
   app.get('/api/cleanup/status', async (_req, reply) => {
     try {
-      // 编译缓存：逐目录取存在的文件后合并（T02809）。
+      // 编译缓存：逐根统计（T02809 合并 + T02887 目录清单）。
       // 写入侧历史上按进程 CWD 落盘，只认一个根时「缓存卡显示 0MB、磁盘上另有一处」
       // 与 T02772 的运行状态卡是同一形态的缺陷。
-      let compileCacheExists = false;
-      let compileCacheSize = 0;
-      let compileCacheEntries = 0;
-      for (const file of compileCacheFiles) {
-        try {
-          const stat = await fs.stat(file);
-          compileCacheExists = true;
-          compileCacheSize += stat.size;
-          const raw = await fs.readFile(file, 'utf8');
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          compileCacheEntries += Object.keys(parsed).length;
-        } catch {
-          // 文件不存在或解析失败
-        }
-      }
+      const compileCacheStats = await Promise.all(harnessDirs.map((dir) => statCompileCacheRow(dir)));
+      const compileCacheRows: CleanupRunStateDir[] = compileCacheStats.map(toPublicRow);
+      const compileCacheExists = compileCacheStats.some((s) => s.exists);
+      const compileCacheSize = compileCacheStats.reduce((n, s) => n + s.sizeBytes, 0);
+      const compileCacheEntries = compileCacheStats.reduce((n, s) => n + s.fileCount, 0);
 
       // 运行状态：逐目录统计后合并（T02772 合并计数 + T02808 目录清单随状态返回）。
       // 只报规范目录会显示 0 个，用户据此认为「无需清理」，而真实文件在另一个目录无限增长。
       // 清单顺序与 getRunStateDirs() 一致（首项 = 写入侧规范目录），前端不做重排也不改写路径，
       // 页面显示的路径与后端真正扫的路径因此是同一个字符串。
-      const runStateStats = await Promise.all(runStateDirs.map((dir) => statRunStateDir(dir)));
-      const runStateDirsResult: CleanupRunStateDir[] = runStateStats.map((s) => ({
-        path: s.path,
-        fileCount: s.fileCount,
-        sizeMb: s.sizeMb,
-        role: s.role,
-        exists: s.exists,
-      }));
+      const runStateStats = await Promise.all(
+        runStateDirs.map((dir) => statDirRow(dir, RUN_STATE_FILE_PATTERN, isLegacyStateDir)),
+      );
+      const runStateDirsResult: CleanupRunStateDir[] = runStateStats.map(toPublicRow);
       const runStateMerged = mergeDirStats(runStateStats);
-      // 运行日志：同编译缓存逐根合并
-      const logsStat = mergeDirStats(await Promise.all(logsDirs.map((dir) => statDir(dir, RUN_LOG_FILE_PATTERN))));
-      // 原始资料存档（仅清理内部临时前缀文件，避免误删用户命名的源文件）
+      // 运行日志：同编译缓存逐根统计（T02887 补目录清单）。
+      // 角色判的是「这一行所属的 .harness 根」而不是 logs 子目录本身——
+      // logs 永远是根的子目录，直接比根会整列误判成遗留。
+      const logsStats = await Promise.all(
+        logsDirs.map((dir) => statDirRow(dir, RUN_LOG_FILE_PATTERN, (d) => isLegacyHarnessDir(path.dirname(d)))),
+      );
+      const logsRows: CleanupRunStateDir[] = logsStats.map(toPublicRow);
+      const logsStat = mergeDirStats(logsStats);
+      // 原始资料存档（仅清理内部临时前缀文件，避免误删用户命名的源文件）。
+      // raw 目录只有一份写入口径，没有历史落点，清单恒为单项 canonical（T02887）。
       const rawStat = await statDir(rawDir, RAW_ARCHIVE_PATTERN);
+      const rawRows: CleanupRunStateDir[] = [
+        {
+          path: rawDir,
+          fileCount: rawStat.fileCount,
+          sizeMb: bytesToMb(rawStat.sizeBytes),
+          role: 'canonical',
+          exists: await directoryExists(rawDir),
+        },
+      ];
 
       const status: CleanupStorageStatus = {
         // T02655：活跃任务快照。前端据此逐卡置灰；口径与 POST 守卫同源（cleanup-guard）。
@@ -252,6 +292,8 @@ export function registerCleanupRoute(
           exists: compileCacheExists,
           sizeMb: bytesToMb(compileCacheSize),
           entryCount: compileCacheEntries,
+          // T02887：entryCount = dirs 各项之和（同一批逐根统计求和得出）
+          dirs: compileCacheRows,
         },
         runState: {
           fileCount: runStateMerged.fileCount,
@@ -263,11 +305,15 @@ export function registerCleanupRoute(
           fileCount: logsStat.fileCount,
           sizeMb: bytesToMb(logsStat.sizeBytes),
           oldest: logsStat.oldest,
+          // T02887：fileCount = dirs 各项之和（同一批逐根统计求和得出）
+          dirs: logsRows,
         },
         rawArchive: {
           fileCount: rawStat.fileCount,
           sizeMb: bytesToMb(rawStat.sizeBytes),
           oldest: rawStat.oldest,
+          // T02887：raw 目录单一口径，清单恒单项 canonical
+          dirs: rawRows,
         },
       };
       return void reply.send(status);

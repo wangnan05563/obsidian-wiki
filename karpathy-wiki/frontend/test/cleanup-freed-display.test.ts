@@ -48,7 +48,13 @@ function wireResult(over: Record<string, unknown> = {}): Record<string, unknown>
 
 const status: CleanupStorageStatus = {
   active: { compile: 0, query: 0, blockedTargets: [], blockedReasons: [] },
-  compileCache: { exists: true, sizeMb: 0.4, entryCount: 12 },
+  compileCache: {
+    exists: true,
+    sizeMb: 0.4,
+    entryCount: 12,
+    // T02887：四类目标都带真实目录清单（卡计数 = 各目录计数之和）
+    dirs: [{ path: '/data/.harness', fileCount: 12, sizeMb: 0.4, role: 'canonical', exists: true }],
+  },
   runState: {
     fileCount: 2,
     sizeMb: 0.1,
@@ -56,8 +62,18 @@ const status: CleanupStorageStatus = {
     // T02808：卡计数与目录清单成对（各目录计数之和 = fileCount）
     dirs: [{ path: '/data/.harness/state', fileCount: 2, sizeMb: 0.1, role: 'canonical', exists: true }],
   },
-  runLogs: { fileCount: 9, sizeMb: 4.5, oldest: '2026-08-11' },
-  rawArchive: { fileCount: 3, sizeMb: 2.2, oldest: '2026-07-30' },
+  runLogs: {
+    fileCount: 9,
+    sizeMb: 4.5,
+    oldest: '2026-08-11',
+    dirs: [{ path: '/data/.harness/logs', fileCount: 9, sizeMb: 4.5, role: 'canonical', exists: true }],
+  },
+  rawArchive: {
+    fileCount: 3,
+    sizeMb: 2.2,
+    oldest: '2026-07-30',
+    dirs: [{ path: '/data/vault/raw', fileCount: 3, sizeMb: 2.2, role: 'canonical', exists: true }],
+  },
 };
 
 function makeResponse(data: unknown, httpStatus = 200) {

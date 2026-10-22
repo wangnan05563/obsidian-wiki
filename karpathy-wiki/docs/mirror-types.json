@@ -37,17 +37,17 @@
     {
       "name": "CleanupRunStateDir",
       "verdict": "aligned",
-      "reason": "T02808 新增契约：清理状态随 runState 返回真实扫描的目录清单（路径/计数/体积/角色/是否存在）。前端「高级」面板直接展示 path，字段名错配会让面板静默空掉，必须同源"
+      "reason": "T02808 新增契约、T02887 推广到四类目标：清理状态随各卡返回真实扫描的目录清单（路径/计数/体积/角色/是否存在）。前端「高级」面板直接展示 path，字段名错配会让面板静默空掉，必须同源"
     },
     {
       "name": "CleanupRunStateRole",
       "verdict": "aligned",
-      "reason": "T02808：目录角色只有规范/遗留两档，判据在后端 isLegacyStateDir；少一档前端文案就取不到值，按字面量集合比对锁住"
+      "reason": "T02808：目录角色只有规范/遗留两档（T02887 起四类目标共用），判据在后端 isLegacyStateDir / isLegacyHarnessDir；少一档前端文案就取不到值，按字面量集合比对锁住"
     },
     {
       "name": "CleanupStorageStatus",
       "verdict": "aligned",
-      "reason": "清理存储状态响应体（注意：T02773 排查时的临时正则把这里误判成后端缺 runState/runLogs，本表由 AST 解析复核为一致）"
+      "reason": "清理存储状态响应体（注意：T02773 排查时的临时正则把这里误判成后端缺 runState/runLogs，本表由 AST 解析复核为一致）。T02887：compileCache/runLogs/rawArchive 与 runState 一样带 dirs 目录清单，卡面计数 = 各目录计数之和"
     },
     {
       "name": "CliToolEntry",

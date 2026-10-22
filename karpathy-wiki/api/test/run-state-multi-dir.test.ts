@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { registerCleanupRoute } from '../src/routes/cleanup.js';
 import { registerRunsRoute } from '../src/routes/runs.js';
+import { compileCacheFileIn } from '../src/utils/harness-dirs.js';
 import {
   getCanonicalRunStateDir,
   getCanonicalRunStateDirFromVault,
@@ -301,6 +302,113 @@ describe('T02772 清理与读取跨 run-state 目录', () => {
   });
 });
 
+// T02887：编译缓存/运行日志/原始资料补目录清单后，「卡面计数 = 各目录计数之和」
+// 这条恒等式要逐卡成立，清单的路径/角色/存在性也要逐字可对。
+describe('T02887 四类目标的目录清单与计数恒等式', () => {
+  let tempRoot = '';
+  let vaultPath = '';
+  let harness = '';
+  let legacyHarness = '';
+  let app: FastifyInstance | null = null;
+
+  beforeEach(async () => {
+    __resetActivitiesForTest();
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wiki-cleanup-dirs-'));
+    vaultPath = path.join(tempRoot, 'data', 'vault');
+    harness = path.join(tempRoot, 'data', '.harness');
+    legacyHarness = path.join(tempRoot, 'api', '.harness');
+    await fs.mkdir(path.join(vaultPath, 'raw'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    if (app) await app.close();
+    app = null;
+    if (tempRoot) await fs.rm(tempRoot, { recursive: true, force: true });
+    tempRoot = '';
+  });
+
+  async function boot(harnessDirs?: string[]): Promise<void> {
+    app = Fastify();
+    registerCleanupRoute(app, stubVault(vaultPath), stubGuards(), undefined, harnessDirs);
+    await app.ready();
+  }
+
+  async function status(): Promise<Record<string, any>> {
+    if (!app) throw new Error('路由未注册');
+    const res = await app.inject({ method: 'GET', url: '/api/cleanup/status' });
+    return res.json() as Record<string, any>;
+  }
+
+  it('compileCache：entryCount = 各根缓存条目之和，遗留根标 legacy', async () => {
+    await fs.mkdir(harness, { recursive: true });
+    await fs.writeFile(compileCacheFileIn(harness), JSON.stringify({ a: 1, b: 2 }), 'utf8');
+    await fs.mkdir(legacyHarness, { recursive: true });
+    await fs.writeFile(compileCacheFileIn(legacyHarness), JSON.stringify({ c: 3 }), 'utf8');
+    await boot([harness, legacyHarness]);
+
+    const body = await status();
+    expect(body.compileCache.entryCount).toBe(3);
+    const dirs = body.compileCache.dirs as Array<Record<string, unknown>>;
+    expect(dirs.map((d) => d.path)).toEqual([harness, legacyHarness]);
+    expect(dirs.map((d) => d.fileCount)).toEqual([2, 1]);
+    expect(dirs.map((d) => d.role)).toEqual(['canonical', 'legacy']);
+    expect(dirs.map((d) => d.exists)).toEqual([true, true]);
+    expect(dirs.reduce((n, d) => n + (d.fileCount as number), 0)).toBe(body.compileCache.entryCount);
+  });
+
+  it('compileCache：还没生成缓存的根 exists=false 且计 0（目录在 ≠ 缓存在）', async () => {
+    await fs.mkdir(harness, { recursive: true });
+    await boot();
+
+    const body = await status();
+    expect(body.compileCache.exists).toBe(false);
+    expect(body.compileCache.dirs).toEqual([
+      { path: harness, fileCount: 0, sizeMb: 0, role: 'canonical', exists: false },
+    ]);
+  });
+
+  it('runLogs：fileCount = 各根日志文件数之和，缺失根列出且计 0', async () => {
+    await fs.mkdir(path.join(harness, 'logs'), { recursive: true });
+    await fs.writeFile(path.join(harness, 'logs', 'run-a.log'), 'a', 'utf8');
+    await fs.mkdir(path.join(legacyHarness, 'logs'), { recursive: true });
+    await fs.writeFile(path.join(legacyHarness, 'logs', 'run-b.log'), 'b', 'utf8');
+    const missing = path.join(tempRoot, 'nowhere', '.harness');
+    await boot([harness, legacyHarness, missing]);
+
+    const body = await status();
+    expect(body.runLogs.fileCount).toBe(2);
+    const dirs = body.runLogs.dirs as Array<Record<string, unknown>>;
+    expect(dirs.map((d) => d.path)).toEqual([
+      path.join(harness, 'logs'),
+      path.join(legacyHarness, 'logs'),
+      path.join(missing, 'logs'),
+    ]);
+    expect(dirs.map((d) => d.fileCount)).toEqual([1, 1, 0]);
+    expect(dirs.map((d) => d.role)).toEqual(['canonical', 'legacy', 'legacy']);
+    expect(dirs.map((d) => d.exists)).toEqual([true, true, false]);
+    expect(dirs.reduce((n, d) => n + (d.fileCount as number), 0)).toBe(body.runLogs.fileCount);
+  });
+
+  it('rawArchive：单一 canonical 项，fileCount 与该项相等（用户命名的源文件不计入）', async () => {
+    await fs.writeFile(path.join(vaultPath, 'raw', 'input-1.md'), 'a', 'utf8');
+    await fs.writeFile(path.join(vaultPath, 'raw', 'input-2.md'), 'b', 'utf8');
+    await fs.writeFile(path.join(vaultPath, 'raw', '用户自己命名的文件.md'), 'keep', 'utf8');
+    await boot();
+
+    const body = await status();
+    expect(body.rawArchive.fileCount).toBe(2);
+    expect(body.rawArchive.dirs).toEqual([
+      {
+        path: path.join(vaultPath, 'raw'),
+        fileCount: 2,
+        sizeMb: body.rawArchive.sizeMb,
+        role: 'canonical',
+        exists: true,
+      },
+    ]);
+  });
+});
+
 // 只读复核：拿本机真实目录跑一次不变量断言（临时目录里的用例证明不了「口径与实际相符」）。
 // 为什么不断言具体数字：真实数量随用户使用情况变化；这里锁的是
 // 「接口报的数 = 独立重算的数」这条不变量——修复前它必然不成立（接口只数规范目录，
@@ -338,6 +446,13 @@ describe('T02772 真实目录只读复核（不写不删）', () => {
       expect(body.runState.dirs.map((d: Record<string, any>) => d.fileCount).reduce((a: number, b: number) => a + b, 0)).toBe(expected);
       expect(body.runState.dirs[0].role).toBe('canonical');
       expect(body.runState.dirs.filter((d: Record<string, any>) => d.role === 'legacy').length).toBe(dirs.length - 1);
+      // T02887：四类目标的恒等式在真实数据上同样成立（compile-cache 的 fileCount 口径是条目数）
+      expect(body.compileCache.entryCount).toBe(body.compileCache.dirs.reduce((n: number, d: Record<string, any>) => n + d.fileCount, 0));
+      expect(body.runLogs.fileCount).toBe(body.runLogs.dirs.reduce((n: number, d: Record<string, any>) => n + d.fileCount, 0));
+      expect(body.runLogs.dirs.length).toBeGreaterThan(0);
+      expect(body.rawArchive.dirs).toHaveLength(1);
+      expect(body.rawArchive.dirs[0].role).toBe('canonical');
+      expect(body.rawArchive.fileCount).toBe(body.rawArchive.dirs[0].fileCount);
     } finally {
       await app.close();
     }
