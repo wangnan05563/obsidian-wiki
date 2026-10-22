@@ -46,6 +46,13 @@ const props = defineProps<{ inQueryPage?: boolean }>();
 
 // 面板展开状态持久化：用户刷新页面后保留偏好
 const isOpen = ref(localStorage.getItem(STORAGE_KEYS.FLOATING_CHAT_OPEN) === 'true');
+// REQ-007/N8 FAB 一次性红点引导：未展开过面板时 FAB 上显示红点，首次展开后永久消失
+const guideDotVisible = ref(localStorage.getItem(STORAGE_KEYS.FLOATING_CHAT_GUIDE_SEEN) !== 'true');
+function markGuideSeen() {
+  if (!guideDotVisible.value) return;
+  guideDotVisible.value = false;
+  localStorage.setItem(STORAGE_KEYS.FLOATING_CHAT_GUIDE_SEEN, 'true');
+}
 const inputQuestion = ref('');
 const chatBodyRef = ref<HTMLDivElement | null>(null);
 let abortController: AbortController | null = null;
@@ -472,6 +479,8 @@ function setOpen(open: boolean) {
   isOpen.value = open;
   localStorage.setItem(STORAGE_KEYS.FLOATING_CHAT_OPEN, String(open));
   if (open) {
+    // 首次展开即视为已看过 FAB 引导，红点永久消失（REQ-007/N8 一次性红点口径）
+    markGuideSeen();
     nextTick(() => scrollToBottom());
   }
 }
@@ -494,6 +503,8 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 
 onMounted(async () => {
   globalThis.addEventListener('keydown', handleGlobalKeydown);
+  // 老用户（面板默认展开偏好）不显示红点：首次挂载即已处于展开态时直接标记已看过引导
+  if (isOpen.value) markGuideSeen();
   // FR-RM-09：加载本地会话列表 + 断点续答（重载后恢复上次活跃会话并在需要时自动续答）。
   // FloatingChat 与 Query 互斥挂载，刷新后若首屏落在非 Query 页，必须由本组件完成恢复。
   try {
@@ -752,6 +763,8 @@ onBeforeUnmount(() => {
       title="点击展开问答面板"
     >
       <RobotAvatar :size="40" :floating="false" />
+      <!-- REQ-007/N8 一次性红点引导：未展开过面板时提示入口存在，首次展开后消失 -->
+      <span v-if="guideDotVisible" class="fab-guide-dot" data-testid="fab-guide-dot"></span>
     </button>
   </transition>
 
@@ -790,6 +803,25 @@ onBeforeUnmount(() => {
 
 .float-btn:hover {
   transform: scale(1.1);
+}
+
+/* REQ-007/N8 一次性红点引导：右上角小圆点 + 呼吸动画，首次展开面板后不再渲染 */
+.fab-guide-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--el-color-danger, #f56c6c);
+  box-shadow: 0 0 6px rgba(245, 108, 108, 0.7);
+  animation: fab-dot-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes fab-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.65; }
 }
 
 /* §5.2 Query 页面时悬浮按钮移到左下角，避免遮挡右侧发送按钮 */
