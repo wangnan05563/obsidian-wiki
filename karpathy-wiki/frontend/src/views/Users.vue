@@ -438,9 +438,12 @@ onMounted(loadUsers);
         </div>
 
         <!-- U4：原来是一坨原生 <table>，表头不可排序、无斑马纹，与页面质量清洗页的表格两套样式 -->
+        <!-- 布局修复：users-card 是 overflow 裁剪的纵向 flex，固定区块不压缩、表格区 flex:1 内部滚动（固定表头） -->
+        <div class="users-table-wrap">
         <el-table
           :data="pagedRows"
           row-key="id"
+          height="100%"
           style="width: 100%"
           stripe
           :default-sort="{ prop: 'username', order: 'ascending' }"
@@ -505,6 +508,7 @@ onMounted(loadUsers);
             <span v-else class="table-empty">没有匹配「{{ query.keyword }}」的账户，换个关键词或清空筛选</span>
           </template>
         </el-table>
+        </div>
 
         <div v-if="users.length > 0" class="table-foot">
           <el-pagination
@@ -619,7 +623,8 @@ onMounted(loadUsers);
 
 .users-card {
   position: relative;
-  overflow: hidden;
+  /* x 向仍裁剪（装饰块旋转溢出），y 向兜底滚动：极矮视口下固定区块超高时不至于内容被裁没 */
+  overflow: hidden auto;
   padding: 24px;
   /* flex: 1 让卡片填满 .users-page 剩余高度，
      替代原无高度约束导致内容少时底部留白 */
@@ -627,6 +632,21 @@ onMounted(loadUsers);
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 布局修复（用户反馈：提示被截断、列表无法滚动）：
+   纵向 flex 卡片内容超高时子项默认被 flex 压缩——alert 文案被裁、表格行被切且无滚动。
+   固定区块（头部/统计/警示/搜索条/分页）一律禁压缩；空间消化交给 .users-table-wrap（flex:1 内部滚动）。 */
+.users-card > * {
+  flex-shrink: 0;
+}
+
+.users-table-wrap {
+  position: relative;
+  z-index: 1;
+  /* 覆盖上面的 >* 禁压缩规则（同等特异性后者胜出）：表格区是弹性消化区 */
+  flex: 1 1 0;
+  min-height: 160px;
 }
 
 /* 卡片右下角装饰光晕：与缓存与日志清理/页面质量清洗页一致 */
@@ -650,12 +670,15 @@ onMounted(loadUsers);
   z-index: 1;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 20px;
 }
 
 .head-text {
-  flex: 1;
+  flex: 1 1 auto;
+  /* 防止 flex 收缩把标题压成一字一行（中文 min-content 即单字宽）导致竖排 */
+  min-width: max-content;
 }
 
 /* 头部标题：与缓存与日志清理/页面质量清洗页统一字号/字重/字距 */

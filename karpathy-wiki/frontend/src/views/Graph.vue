@@ -1182,10 +1182,22 @@ watch(loading, () => {
   flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 14px;
+  /* 纵向 flex 卡片内的固定区块禁止压缩：空间不足时由画布区（flex:1）消化 */
+  flex-shrink: 0;
+}
+
+/* 其余横条（提示/引导/小屏降级/图例）同样禁止被 flex 压缩裁剪 */
+.graph-hint,
+.graph-tour,
+.degrade-bar,
+.legend-bar {
+  flex-shrink: 0;
 }
 
 .head-text {
-  flex: 1;
+  flex: 1 1 auto;
+  /* 防止 flex 收缩把标题压成一字一行（中文 min-content 即单字宽），导致头部竖排撑高、画布无空间 */
+  min-width: max-content;
 }
 
 .head-tag {
