@@ -1012,7 +1012,9 @@ onMounted(() => {
 }
 
 .head-text {
-  flex: 1;
+  flex: 1 1 auto;
+  /* 防止 flex 收缩把标题压成一字一行（中文 min-content 即单字宽）导致竖排 */
+  min-width: max-content;
 }
 
 .head-title {
