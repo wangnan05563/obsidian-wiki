@@ -543,7 +543,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="tunnel-page" v-loading="loading">
+  <div class="tunnel-page">
     <!-- 页面级标题（T01728：与其他视图 head-text 结构对齐，此前直接以「隧道状态」卡片开头缺页头） -->
     <div class="tunnel-head fade-up">
       <div class="head-text">
@@ -551,6 +551,9 @@ onBeforeUnmount(() => {
         <p class="head-tip">将本地知识库服务通过隧道暴露到公网，支持 Cloudflare / Tailscale</p>
       </div>
     </div>
+    <!-- T02721：首载尚无内容时走 StateBlock（与全站首屏一致），不用 v-loading 把整页蒙住 -->
+    <StateBlock v-if="loading" state="loading" loading-text="正在读取穿透配置…" />
+    <template v-else>
     <!-- 状态卡片 -->
     <div class="glass-card">
       <h2 class="card-title">隧道状态</h2>
@@ -947,6 +950,7 @@ onBeforeUnmount(() => {
         <li>开机自启开启后，服务启动时自动建立隧道</li>
       </ol>
     </div>
+    </template>
   </div>
 </template>
 

@@ -10,7 +10,9 @@
 //   - 点击遮罩默认【不】关闭（避免表单/长任务误关），ESC 始终可关闭，右上角统一关闭按钮；
 //   - 内容区统一限制 70vh 内滚动；进场 220ms / 退场 180ms。
 //
-// 兼容：对外仍暴露 title / width / loading / close / open，迁移时只需替换标签名。
+// 兼容：对外仍暴露 title / width / close / open，迁移时只需替换标签名。
+// T02721：不再提供 loading 遮罩 prop——弹窗内容各自的加载态由内容自己用 StateBlock 表达，
+// 避免同一块内容被「外层蒙层 + 内层骨架」两层加载态同时描述。
 import { computed } from 'vue';
 
 const props = withDefaults(
@@ -24,8 +26,6 @@ const props = withDefaults(
     variant?: 'dialog' | 'drawer';
     /** 抽屉宽度（百分比或像素），仅 variant=drawer 生效 */
     size?: string;
-    /** 内容区加载态（遮罩 spinner） */
-    loading?: boolean;
     /** 点击遮罩是否关闭（默认 false，防误关） */
     closeOnClickModal?: boolean;
     closeOnPressEscape?: boolean;
@@ -37,7 +37,6 @@ const props = withDefaults(
     width: '560px',
     variant: 'dialog',
     size: '60%',
-    loading: false,
     closeOnClickModal: false,
     closeOnPressEscape: true,
     showClose: true,
@@ -74,7 +73,7 @@ const visible = computed({
     @close="emit('close')"
     @opened="emit('open')"
   >
-    <div v-loading="loading" class="app-modal-body">
+    <div class="app-modal-body">
       <slot />
     </div>
     <template v-if="$slots.footer" #footer>
@@ -97,7 +96,7 @@ const visible = computed({
     @close="emit('close')"
     @opened="emit('open')"
   >
-    <div v-loading="loading" class="app-modal-body">
+    <div class="app-modal-body">
       <slot />
     </div>
     <template v-if="$slots.footer" #footer>
