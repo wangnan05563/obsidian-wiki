@@ -314,4 +314,50 @@ describe('T02476 加载态/空态方言守护（PRD X2 / X8）', () => {
     expect(/>[^<>]*\.\.\.</.test(templateOnly(sample))).toBe(true);
     expect(stateBlockUsages(`<template><StateBlock state="empty" empty-title="暂无内容" /></template>`)).toHaveLength(1);
   });
+
+  // T02721：加载态分两层——首载（内容尚不存在）走 StateBlock，已有内容上重载才用 v-loading 遮罩。
+  // 白名单是「已经论证过属于第二层」的站点；新增 v-loading 必须在这里登记理由，
+  // 否则过一段时间就会长回「整页蒙层 + 局部骨架」两套并存的旧局面。
+  it('v-loading 只允许登记过的「内容上重载」站点（首载必须走 StateBlock）', () => {
+    const allowed: Record<string, { ref: string; why: string }> = {
+      'views/Config.vue': {
+        ref: 'loadingQqConfig',
+        why: 'QQ 配置分区的表单已带默认值渲染，重新拉取期间遮罩是防止用户在旧值上编辑',
+      },
+      'views/Health.vue': {
+        ref: 'estimateLoading',
+        why: '批量修复确认弹窗已渲染占位数值，估算返回前遮罩是防止按空值启动',
+      },
+    };
+    const found: string[] = [];
+    for (const file of FILES) {
+      const rel = path.relative(SRC_DIR, file).replace(/\\/g, '/');
+      const template = templateOnly(fs.readFileSync(file, 'utf8'));
+      for (const m of template.matchAll(/v-loading="([^"]+)"/g)) {
+        found.push(`${rel} :: ${m[1]}`);
+        const rule = allowed[rel];
+        expect(
+          rule,
+          `${rel} 新增了 v-loading：首载请用 StateBlock state="loading"；确属「已有内容上重载」的，登记进本用例白名单并写明理由`,
+        ).toBeTruthy();
+        expect(m[1], `${rel} 的 v-loading 绑定对象与登记不符`).toBe(rule.ref);
+      }
+    }
+    for (const [rel, rule] of Object.entries(allowed)) {
+      expect(found, `白名单站点 ${rel} 已不再使用 v-loading（${rule.ref}），登记应删除`).toContain(`${rel} :: ${rule.ref}`);
+      expect(rule.why.length, `${rel} 的白名单条目必须写明为什么属于重载`).toBeGreaterThan(0);
+    }
+
+    // 首载误用已修：Tunnel 整页遮罩改页头 + StateBlock；AppModal 的 loading prop 无调用方已删除
+    const tunnel = fs.readFileSync(path.join(SRC_DIR, 'views/Tunnel.vue'), 'utf8');
+    expect(tunnel, 'Tunnel 不得回退成整页 v-loading 遮罩').not.toMatch(/v-loading="/);
+    expect(tunnel, 'Tunnel 首载必须由 StateBlock 承载').toMatch(/<StateBlock v-if="loading" state="loading"[^>]*\/>/);
+    expect(tunnel, 'Tunnel 首载文案要说清在加载什么').toContain('loading-text="正在读取穿透配置…"');
+
+    const modal = fs.readFileSync(path.join(SRC_DIR, 'components/AppModal.vue'), 'utf8');
+    expect(modal, 'AppModal 不得再提供 v-loading 遮罩').not.toMatch(/v-loading="/);
+    expect(/loading\?\s*:\s*boolean/.test(modal), 'AppModal 不应再暴露 loading prop（弹窗内容自己用 StateBlock）').toBe(
+      false,
+    );
+  });
 });
