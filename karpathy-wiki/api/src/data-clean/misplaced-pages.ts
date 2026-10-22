@@ -194,6 +194,17 @@ export async function promoteMisplacedPages(
       await fs.unlink(resolveVaultPath(vault, rel));
       result.promoted.push({ from: rel, to: item.suggestedPath });
       await pruneEmptyDirs(vault, rel);
+      // T02844：index.md 的定位是「内容目录，每页一行摘要」（搭建需求规格说明书 AC-01-3），
+      // 归位把页面重新带回库，须补登目录行——否则列表/搜索恢复了，目录索引那一侧仍然隐身。
+      // appendIndex 按 [[页面名]] 行首去重：重复归位、index 已有同名行都只会 skipped，不产生重复行。
+      // 登记失败不回滚归位（文件已安全落位），只把失败原因带回去。
+      try {
+        await vault.appendIndex(item.title, `错位归位：原位于 ${rel}`);
+      } catch (idxErr) {
+        result.errors.push(
+          `归位成功但目录索引登记失败 ${item.suggestedPath}：${idxErr instanceof Error ? idxErr.message : String(idxErr)}`,
+        );
+      }
     } catch (err) {
       result.errors.push(`归位失败 ${rel} → ${item.suggestedPath}：${err instanceof Error ? err.message : String(err)}`);
     }

@@ -197,3 +197,35 @@ describe('E · 落点与路径不可被调用方操纵', () => {
     expect(res.skipped).toHaveLength(3);
   });
 });
+
+describe('F · 目录索引补登（T02844：index.md 定位是「内容目录，每页一行摘要」）', () => {
+  it('真实归位后 index.md 追加一行摘要；dry_run 一律不动 index', async () => {
+    const idxBefore = await vault.readFile('index.md');
+    const rel = await writeStray('comparisons/legacy/idx.md', '索引补登页', 'comparison');
+
+    await promoteMisplacedPages(vault, [rel], true);
+    expect(await vault.readFile('index.md'), 'dry_run 只预览，index 不得被写').toBe(idxBefore);
+
+    const res = await promoteMisplacedPages(vault, [rel], false);
+    expect(res.errors).toEqual([]);
+    const idx = await vault.readFile('index.md');
+    expect(idx).toContain('- [[索引补登页]] — 错位归位：原位于 comparisons/legacy/idx.md');
+  });
+
+  it('index 已有同名行时去重不重复登记；重复归位同一页也不产生重复行', async () => {
+    const rel = await writeStray('entities/legacy/dup-idx.md', '重复登记页', 'entity');
+    await vault.appendIndex('重复登记页', '归位前已存在的摘要行');
+    expect((await vault.readFile('index.md')).match(/^- \[\[重复登记页\]\]/gm)).toHaveLength(1);
+
+    const res = await promoteMisplacedPages(vault, [rel], false);
+    expect(res.errors).toEqual([]);
+    const idx = await vault.readFile('index.md');
+    expect(idx.match(/^- \[\[重复登记页\]\]/gm), '同名行只保留一条').toHaveLength(1);
+    expect(idx).toContain('归位前已存在的摘要行');
+
+    // 页面已归位（不再错位），重复调用归位会 skip——这里验证的是 appendIndex 自身幂等口径：
+    // 同名再登记一次也不产生第二行（promote 重试 / 多入口登记同页的兜底）
+    await vault.appendIndex('重复登记页', '第二次登记');
+    expect((await vault.readFile('index.md')).match(/^- \[\[重复登记页\]\]/gm)).toHaveLength(1);
+  });
+});
