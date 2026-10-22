@@ -27,7 +27,7 @@
     {
       "name": "CleanupBlockedResponse",
       "verdict": "aligned",
-      "reason": "清理被守卫拦截时的响应体"
+      "reason": "清理被守卫拦截时的响应体；T02895 起三值 code 联合两侧镜像一致（属性级字面量进契约比对面）"
     },
     {
       "name": "CleanupResult",

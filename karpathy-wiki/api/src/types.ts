@@ -1074,6 +1074,8 @@ export interface CleanupStorageStatus {
 //    与「目标是否安全」无关，故 blocked[] 恒为空——前端不能套用置灰逻辑。
 //  - cleanup_blocked_by_other_process（T02817）：**另一个服务实例**正在真删。
 //    本进程的 held 看不见它，靠 `.harness/cleanup.lock` 才判得出来；blocked[] 同样恒为空。
+// T02895：三值联合已被前端镜像（契约测试的属性级字面量比对可见），前端按 code
+// 给差异化操作指引；error/reasons 仍由本侧生成、保持「发生了什么」的唯一来源。
 export interface CleanupBlockedResponse {
   error: string;
   code:

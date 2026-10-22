@@ -861,10 +861,17 @@ export interface CleanupActiveState {
   blockedReasons: { target: CleanupTarget; reason: string }[];
 }
 
-// 真实删除被活跃任务拦截时的 409 响应体（T02655，与后端 CleanupBlockedResponse 对齐）
+// 真实删除被拦截时的 409 响应体（T02655 / T02774 / T02817，与后端 CleanupBlockedResponse 对齐）。
+// code 三值语义（前端按 code 补差异化操作指引，error/reasons 仍由后端生成）：
+//  - cleanup_blocked_by_active_task：有编译/问答在跑，blocked[] 列出被拦目标；
+//  - cleanup_blocked_by_concurrent_cleanup：本进程上一次真实清理还在删，blocked[] 恒为空；
+//  - cleanup_blocked_by_other_process：另一个服务实例正在真删，blocked[] 恒为空。
 export interface CleanupBlockedResponse {
   error: string;
-  code: 'cleanup_blocked_by_active_task';
+  code:
+    | 'cleanup_blocked_by_active_task'
+    | 'cleanup_blocked_by_concurrent_cleanup'
+    | 'cleanup_blocked_by_other_process';
   target: string;
   blocked: string[];
   reasons: string[];
