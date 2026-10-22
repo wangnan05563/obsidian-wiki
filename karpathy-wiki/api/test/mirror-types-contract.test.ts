@@ -8,6 +8,9 @@
 //     ——对齐（aligned）或有意裁剪（*-superset / unrelated），新增未登记直接红；
 //   · 判定结果逐字比对，多一个字段少一个字段都要红；
 //   · 字符串字面量联合另按成员集合比对（少一档权威度同样是分叉）。
+// T02895 补盲区：字面量比对原先只覆盖「类型别名本身就是联合」（KnowledgeStatus），
+// 接口/对象字面量**属性级**的联合（CleanupBlockedResponse.code）不进比对面——
+// 后端三值、前端单值混了三轮没被发现。现把属性级字符串字面量联合也收进 literals。
 //
 // 解析口径用 TypeScript Compiler API 而不是正则：T02773 排查时那段临时正则把
 // CleanupStorageStatus 误判成「后端缺 runState/runLogs」（实际就在，是解析器被嵌套对象带偏），
@@ -79,6 +82,17 @@ function membersOfObjectLike(members: ts.NodeArray<ts.TypeElement>): string[] {
   return out;
 }
 
+// 属性级字符串字面量联合（如 code: 'a' | 'b'）也是契约面：两侧少一档就是分叉（T02895）。
+function propertyLiterals(members: ts.NodeArray<ts.TypeElement>): string[] {
+  const out: string[] = [];
+  for (const m of members) {
+    if (m.kind !== K.PropertySignature) continue;
+    const lits = literalTexts((m as ts.PropertySignature).type);
+    if (lits) out.push(...lits);
+  }
+  return out;
+}
+
 function literalTexts(node: ts.TypeNode): string[] | null {
   const parts = node.kind === K.UnionType ? (node as ts.UnionTypeNode).types : [node];
   const out: string[] = [];
@@ -103,13 +117,14 @@ export function parseTypeFile(file: string): Map<string, TypeShape> {
 
   function shapeOfNode(node: ts.TypeNode, seen: Set<string>): TypeShape {
     if (node.kind === K.TypeLiteral) {
-      return { fields: membersOfObjectLike((node as ts.TypeLiteralNode).members), literals: [], notes: [] };
+      const members = (node as ts.TypeLiteralNode).members;
+      return { fields: membersOfObjectLike(members), literals: propertyLiterals(members), notes: [] };
     }
     if (node.kind === K.IntersectionType) {
       const parts = (node as ts.IntersectionTypeNode).types.map((t) => shapeOfNode(t, seen));
       return {
         fields: sortedUnique(parts.flatMap((p) => p.fields)),
-        literals: [],
+        literals: sortedUnique(parts.flatMap((p) => p.literals)),
         notes: parts.flatMap((p) => p.notes),
       };
     }
@@ -120,9 +135,10 @@ export function parseTypeFile(file: string): Map<string, TypeShape> {
       const parts = (node as ts.UnionTypeNode).types.map((t) => shapeOfNode(t, seen));
       const [first, ...rest] = parts;
       const common = (first?.fields ?? []).filter((n) => rest.every((p) => p.fields.includes(n)));
+      const commonLits = (first?.literals ?? []).filter((l) => rest.every((p) => p.literals.includes(l)));
       return {
         fields: sortedUnique(common),
-        literals: [],
+        literals: sortedUnique(commonLits),
         notes: [`union(${parts.length} 分支) 只取公共字段`, ...parts.flatMap((p) => p.notes)],
       };
     }
@@ -145,7 +161,11 @@ export function parseTypeFile(file: string): Map<string, TypeShape> {
     if (!decl) return { fields: [], literals: [], notes: [`声明缺失 ${name}`] };
     const seen = new Set<string>([name]);
     if (ts.isInterfaceDeclaration(decl)) {
-      const acc: TypeShape = { fields: membersOfObjectLike(decl.members), literals: [], notes: [] };
+      const acc: TypeShape = {
+        fields: membersOfObjectLike(decl.members),
+        literals: propertyLiterals(decl.members),
+        notes: [],
+      };
       for (const clause of decl.heritageClauses ?? []) {
         for (const base of clause.types) {
           const baseName = base.expression.getText();
@@ -155,10 +175,12 @@ export function parseTypeFile(file: string): Map<string, TypeShape> {
           }
           const r = shapeOfDecl(baseName);
           acc.fields.push(...r.fields);
+          acc.literals.push(...r.literals);
           acc.notes.push(...r.notes.map((n) => `[via ${baseName}] ${n}`));
         }
       }
       acc.fields = sortedUnique(acc.fields);
+      acc.literals = sortedUnique(acc.literals);
       return acc;
     }
     return shapeOfNode(decl.type, seen);

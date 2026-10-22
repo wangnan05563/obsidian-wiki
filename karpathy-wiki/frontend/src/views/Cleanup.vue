@@ -96,6 +96,15 @@ function buttonState(key: CleanupCardKey) {
   return cleanupButtonState(key, status.value, preview.value);
 }
 
+// T02895：三种 409 拒绝码各自的「下一步做什么」。error/reasons（后端生成）回答「发生了什么」，
+// 这里只补操作指引，避免用户把「被拦」当成故障再点一次。Record 全覆盖三值——
+// 后端新增拒绝码时这里编译期即红，与 mirror-types-contract 的字面量比对互为两层。
+const BLOCKED_GUIDANCE: Record<CleanupBlockedResponse['code'], string> = {
+  cleanup_blocked_by_active_task: '等页顶「进行中任务」消失后再试，或先用「仅预览」查看将清理的内容。',
+  cleanup_blocked_by_concurrent_cleanup: '本页上一次真实删除还没结束，等它完成后再试，不要连续点击。',
+  cleanup_blocked_by_other_process: '另一个服务实例正在删除，去那边等结果即可，本页无需重复操作。',
+};
+
 async function loadStatus() {
   loadingStatus.value = true;
   try {
@@ -146,13 +155,15 @@ async function handleCleanup(key: CleanupCardKey) {
       const blocked = (await res.json().catch(() => null)) as CleanupBlockedResponse | null;
       const headline = blocked?.error ?? '后端检测到进行中的任务，已拦截这次真实删除。';
       const details = (blocked?.reasons ?? []).filter((r) => r !== headline);
+      // 响应体解析失败（blocked 为 null）时拿不到 code，指引只在有 code 时补
+      const guidance = blocked ? BLOCKED_GUIDANCE[blocked.code] : undefined;
       ElMessage.warning(headline);
       results.value[key] = {
         target: meta.target,
         days: forms[key].days,
         dry_run: false,
         cleaned: [],
-        errors: [headline, ...details],
+        errors: [headline, ...details, ...(guidance ? [guidance] : [])],
         count: 0,
       };
       // 立刻刷新：让页顶的「进行中任务」和卡面置灰跟上后端事实

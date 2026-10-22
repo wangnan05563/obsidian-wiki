@@ -238,4 +238,50 @@ describe('T02655 Cleanup.vue 组件层', () => {
     // 409 后重新拉状态 → 卡面跟上后端事实
     expect(buttonOf(wrapper, '有任务进行中')).toBeTruthy();
   });
+
+  // T02895：三种拒绝码前端各补一句「下一步做什么」——error 回答发生了什么，指引回答该干什么，
+  // 避免用户把「被拦」当故障连点。三值由 BLOCKED_GUIDANCE 的 Record 全覆盖，缺一档编译期即红；
+  // 这里锁的是「指引文案真的进结果区、且随 code 切换」。
+  async function mountAndTrigger409(code: string) {
+    const blockedBody = {
+      error: `拒绝样本（${code}）`,
+      code,
+      target: 'run_state',
+      blocked: [],
+      reasons: [],
+      active: statusOf().active,
+    };
+    const wrapper = await mountWithStatus(statusOf());
+    await wrapper.find('#cleanup-preview-switch').trigger('click');
+    await flushPromises();
+    const btn = buttonOf(wrapper, '清理运行状态');
+    vi.mocked(apiFetch).mockImplementation((url: string | URL | Request) => {
+      if (String(url).endsWith('/cleanup/status')) {
+        return Promise.resolve(makeResponse(statusOf()));
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 409,
+        json: () => Promise.resolve(blockedBody),
+      } as never);
+    });
+    await btn!.trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('409 code=other_process → 结果区给「去另一实例等结果」指引（T02895）', async () => {
+    const wrapper = await mountAndTrigger409('cleanup_blocked_by_other_process');
+    expect(wrapper.text()).toContain('另一个服务实例正在删除，去那边等结果即可');
+  });
+
+  it('409 code=concurrent_cleanup → 结果区给「等本页上一次删除完成」指引（T02895）', async () => {
+    const wrapper = await mountAndTrigger409('cleanup_blocked_by_concurrent_cleanup');
+    expect(wrapper.text()).toContain('本页上一次真实删除还没结束');
+  });
+
+  it('409 code=active_task → 结果区给「等任务消失/先预览」指引（T02895）', async () => {
+    const wrapper = await mountAndTrigger409('cleanup_blocked_by_active_task');
+    expect(wrapper.text()).toContain('等页顶「进行中任务」消失后再试');
+  });
 });
