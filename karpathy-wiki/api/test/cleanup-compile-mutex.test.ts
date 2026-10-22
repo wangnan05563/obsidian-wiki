@@ -41,7 +41,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { preHandlerHookHandler } from 'fastify';
 import { activeActivities, beginActivity, __resetActivitiesForTest } from '../src/activity.js';
-import { withCompileLock } from '../src/compile-queue.js';
+import { withCompileLock, queuedCompileCount } from '../src/compile-queue.js';
 import {
   acquireCleanup,
   awaitCleanupIdle,
@@ -229,6 +229,34 @@ describe('T02774 withCompileLock 与清理的单向优先级', () => {
     await expect(job).resolves.toBe('ok');
     expect(started).toBe(true);
     expect(activeActivities().compile).toBe(0);
+  });
+
+  it('queuedCompileCount 只数「已入队未起跑」的部分（T02622 重启守卫）', async () => {
+    // 背景：activity.ts 只统计已起跑任务，重启若只看 active 计数，会把排队中的编译请求
+    // 悄悄丢掉。这里断言差值的两端都对：队头在跑时不把队头算成排队，后来者必须算进排队。
+    let releaseHead: () => void = () => {};
+    const headGate = new Promise<void>((resolve) => {
+      releaseHead = resolve;
+    });
+    const head = withCompileLock(async () => {
+      await headGate;
+      return 'head';
+    });
+    await waitForProgress(
+      '队头任务已起跑',
+      () => activeActivities().compile === 1,
+      { ...NO_TIMER_CHAIN, progress: () => `compile=${activeActivities().compile} queued=${queuedCompileCount()}` },
+    );
+    expect(queuedCompileCount()).toBe(0);
+
+    const second = withCompileLock(async () => 'second');
+    // 第二个请求已同步挂在 chain 上（inFlight 已加），但尚未起跑
+    expect(activeActivities().compile).toBe(1);
+    expect(queuedCompileCount()).toBe(1);
+
+    releaseHead();
+    await Promise.all([head, second]);
+    expect(queuedCompileCount()).toBe(0);
   });
 
   it('排队仍串行：清理放行后多个任务按到达顺序执行，不并发', async () => {

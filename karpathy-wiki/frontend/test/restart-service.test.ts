@@ -43,12 +43,12 @@ describe('requestRestart：把服务端三种回答翻成界面动作', () => {
     expect(JSON.parse(init.body)).toEqual({ confirm: true });
   });
 
-  it('409 → blocked，编译/问答计数与拒绝原因一个不丢', async () => {
+  it('409 → blocked，编译/问答/排队计数与拒绝原因一个不丢', async () => {
     const send = vi.fn(async () =>
       jsonResponse(409, {
         code: 'restart_blocked_by_active_task',
         error: '有 1 个编译任务正在进行，已拒绝重启',
-        active: { compile: 1, query: 2, blockedReasons: ['1 个编译任务'] },
+        active: { compile: 1, query: 2, queuedCompile: 3, blockedReasons: ['1 个编译任务'] },
       }),
     ) as unknown as Send;
 
@@ -57,8 +57,8 @@ describe('requestRestart：把服务端三种回答翻成界面动作', () => {
     expect(result.kind).toBe('blocked');
     if (result.kind !== 'blocked') throw new Error('unreachable');
     expect(result.message).toContain('1 个编译任务');
-    expect(result.active).toEqual({ compile: 1, query: 2, blockedReasons: ['1 个编译任务'] });
-    expect(blockedSummary(result.active)).toBe('1 个编译任务、2 个问答');
+    expect(result.active).toEqual({ compile: 1, query: 2, queuedCompile: 3, blockedReasons: ['1 个编译任务'] });
+    expect(blockedSummary(result.active)).toBe('1 个编译任务、2 个问答、3 个编译排队');
   });
 
   it('400 → error：确认缺失等参数问题走错误态，而不是当成已接受', async () => {
@@ -148,10 +148,14 @@ describe('waitForBootChange：只认 bootId 变化', () => {
 
 describe('blockedSummary：零计数不出现「0 个编译」', () => {
   it('只有问答在跑时只报问答', () => {
-    expect(blockedSummary({ compile: 0, query: 1, blockedReasons: [] })).toBe('1 个问答');
+    expect(blockedSummary({ compile: 0, query: 1, queuedCompile: 0, blockedReasons: [] })).toBe('1 个问答');
+  });
+
+  it('只有排队、没有起跑时也必须报出来（否则用户以为「没任务」）', () => {
+    expect(blockedSummary({ compile: 0, query: 0, queuedCompile: 2, blockedReasons: [] })).toBe('2 个编译排队');
   });
 
   it('完全没有计数时给保守措辞而不是空串', () => {
-    expect(blockedSummary({ compile: 0, query: 0, blockedReasons: [] })).toBe('未知任务');
+    expect(blockedSummary({ compile: 0, query: 0, queuedCompile: 0, blockedReasons: [] })).toBe('未知任务');
   });
 });

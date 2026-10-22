@@ -35,19 +35,46 @@ function activeState(compile: number, query: number): CleanupActiveState {
 describe('restartRefusal：有活跃任务就不许重启', () => {
   it('空闲时放行', () => {
     expect(restartRefusal(activeState(0, 0))).toBeNull();
+    expect(restartRefusal(activeState(0, 0), 0)).toBeNull();
   });
 
-  it('编译任务在跑时拒绝，并带上计数（文案与清理守卫同源）', () => {
+  it('编译任务在跑时拒绝，并带上计数', () => {
     const refusal = restartRefusal(activeState(2, 0));
     expect(refusal?.code).toBe('restart_blocked_by_active_task');
-    expect(refusal?.active).toEqual({ compile: 2, query: 0, blockedReasons: [] });
-    expect(refusal?.error).toContain('存在进行中任务');
+    expect(refusal?.active).toEqual({ compile: 2, query: 0, queuedCompile: 0, blockedReasons: [] });
+    expect(refusal?.error).toContain('已拒绝重启');
     expect(refusal?.error).toContain('2 个编译');
   });
 
   it('问答在跑时同样拒绝', () => {
     const refusal = restartRefusal(activeState(0, 1));
     expect(refusal?.error).toContain('1 个问答');
+  });
+
+  it('只有排队中的编译也拒绝：它还没起跑，但重启同样会丢掉这次提交', () => {
+    const refusal = restartRefusal(activeState(0, 0), 2);
+    expect(refusal).not.toBeNull();
+    expect(refusal?.active).toEqual({ compile: 0, query: 0, queuedCompile: 2, blockedReasons: [] });
+    expect(refusal?.error).toContain('2 个编译在排队');
+  });
+
+  it('正在跑 + 排队同时存在时两项都点出来', () => {
+    const refusal = restartRefusal(activeState(1, 1), 3);
+    expect(refusal?.error).toContain('1 个编译');
+    expect(refusal?.error).toContain('1 个问答');
+    expect(refusal?.error).toContain('3 个编译在排队');
+  });
+
+  it('跨进程拦下时保留「来自另一实例」的归属', () => {
+    const active = activeState(0, 1);
+    active.blockedReasons = [{ target: 'run_state', reason: '有问答任务正在进行（来自另一服务实例：pid 999）' }];
+    const refusal = restartRefusal(active);
+    expect(refusal?.error).toContain('另一服务实例：pid 999');
+    expect(refusal?.active.blockedReasons).toEqual(['有问答任务正在进行（来自另一服务实例：pid 999）']);
+  });
+
+  it('文案不复用清理守卫的「已拦截真实删除」措辞', () => {
+    expect(restartRefusal(activeState(1, 0))?.error).not.toContain('删除');
   });
 });
 

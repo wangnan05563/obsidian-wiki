@@ -4966,7 +4966,7 @@ async function importConfig() {
         <p v-if="restartError" class="restart-guide-alert" role="alert">
           {{ restartError }}
           <span v-if="restartBlocked" class="restart-guide-blocked">
-            （编译 {{ restartBlocked.compile }} · 问答 {{ restartBlocked.query }}）
+            （编译 {{ restartBlocked.compile }} · 问答 {{ restartBlocked.query }}<template v-if="restartBlocked.queuedCompile > 0"> · 排队 {{ restartBlocked.queuedCompile }}</template>）
           </span>
         </p>
         <pre class="restart-guide-steps">{{ restartGuide }}</pre>

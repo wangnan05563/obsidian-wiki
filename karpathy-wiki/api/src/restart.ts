@@ -19,7 +19,6 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { evaluateCleanupGuard, guardErrorMessage } from './cleanup-guard.js';
 import type { CleanupActiveState } from './types.js';
 import { IS_SEA, getApiDir } from './utils/runtime.js';
 
@@ -37,22 +36,38 @@ export type RestartMode = 'packaged' | 'dev-watch';
 export interface RestartRefusal {
   code: 'restart_blocked_by_active_task';
   error: string;
-  active: Pick<CleanupActiveState, 'compile' | 'query' | 'blockedReasons'>;
+  active: Pick<CleanupActiveState, 'compile' | 'query'> & {
+    queuedCompile: number;
+    blockedReasons: string[];
+  };
 }
 
 /**
- * 有活跃任务就不许重启。口径与清理守卫同源（同一条 guardErrorMessage），
- * 避免「清理说有人正在编译、重启说一切空闲」这种自相矛盾的两种说法。
+ * 有活跃/排队任务就不许重启。
+ * 活跃口径与清理守卫同源（同一个 activeStateAcrossProcesses 快照），但文案不复用
+ * guardErrorMessage——那句是「已拦截真实删除 + 改用仅预览」，用在重启上会指错方向。
+ * 排队数单独计：activity.ts 只统计已起跑的任务，重启却会连排队中的请求一起丢掉。
  */
-export function restartRefusal(active: CleanupActiveState): RestartRefusal | null {
-  if (active.compile + active.query === 0) return null;
+export function restartRefusal(active: CleanupActiveState, queuedCompile = 0): RestartRefusal | null {
+  const running = active.compile + active.query;
+  if (running + queuedCompile === 0) return null;
+
+  const parts: string[] = [];
+  if (active.compile > 0) parts.push(`${active.compile} 个编译`);
+  if (active.query > 0) parts.push(`${active.query} 个问答`);
+  if (queuedCompile > 0) parts.push(`${queuedCompile} 个编译在排队`);
+  // 跨进程拦下时把「是谁」带上，否则本进程一个任务都没有却看到「存在进行中任务」无从排查
+  const foreign = [...new Set(active.blockedReasons.map((r) => r.reason))].filter((r) => r.includes('另一服务实例'));
+  const note = foreign.length > 0 ? `（${foreign.join('；')}）` : '';
+
   return {
     code: 'restart_blocked_by_active_task',
-    error: guardErrorMessage('all', evaluateCleanupGuard('all', active), active),
+    error: `存在进行中或排队任务（${parts.join('、')}）${note}，已拒绝重启：重启会中断这些任务。请等待结束或取消后再试。`,
     active: {
       compile: active.compile,
       query: active.query,
-      blockedReasons: active.blockedReasons,
+      queuedCompile,
+      blockedReasons: active.blockedReasons.map((r) => r.reason),
     },
   };
 }
