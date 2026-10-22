@@ -139,7 +139,7 @@ function openPage(path: string) {
 <template>
   <div class="mi-root">
     <!-- 页面标题 -->
-    <h1 class="mi-title">投递入库</h1>
+    <h1 class="mi-title">投递资料</h1>
 
     <!-- 方式切换 -->
     <div class="mi-seg" role="tablist">

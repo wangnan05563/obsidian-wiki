@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { MOBILE_TABS } from '../src/config/mobileTabs';
 
 // T02475（PRD X1 / N5 / I6 / Q8 / G3 / H6 / D2x）：术语表落地后的守护用例。
 // docs/术语表.md 是单一可信源，本用例把「禁用别名」变成可执行规则——
@@ -285,6 +286,35 @@ describe('T02475 术语表守护（PRD X1）', () => {
     expect(paths.length).toBeGreaterThan(0);
     for (const p of paths) {
       expect(tabLabels, `${p} 不是 configTabs 里的标签页实名`).toContain(p);
+    }
+  });
+
+  it('移动端主控件名 ∈ 术语表（T02706）', () => {
+    // 移动端 Tab 短名是用户每天点的主控件，必须能在 §3.1 查到它对应哪个桌面功能
+    // （或明确标注为移动端专属），否则「问答/浏览/投递」这类短标签会变成术语表外的黑话。
+    const md = fs.readFileSync(DOC_PATH, 'utf8');
+    const start = md.indexOf('### 3.1');
+    const end = md.indexOf('## 4.');
+    expect(start, '术语表缺少 §3.1 移动端 Tab 章节').toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const section = md.slice(start, end);
+
+    const menuSrc = fs.readFileSync(path.join(SRC_DIR, 'config/menu.ts'), 'utf8');
+    const menuNames = [...menuSrc.matchAll(/label:\s*'([^']+)'/g)].map((m) => m[1]);
+    // 名单与实现同源：MobileShell 必须引用 MOBILE_TABS，而不是再写一份数组
+    const shellSrc = fs.readFileSync(path.join(SRC_DIR, 'components/mobile/MobileShell.vue'), 'utf8');
+    expect(shellSrc).toContain('MOBILE_TABS');
+    expect(new Set(MOBILE_TABS.map((t) => t.label)).size, '移动端 Tab 短名重复').toBe(MOBILE_TABS.length);
+
+    for (const tab of MOBILE_TABS) {
+      const row = section.split('\n').find((line) => line.startsWith(`| ${tab.label} |`));
+      expect(row, `移动端 Tab「${tab.label}」未登记到术语表 §3.1`).toBeTruthy();
+      if (tab.desktopMenu) {
+        expect(menuNames, `移动端 Tab「${tab.label}」映射的「${tab.desktopMenu}」不是桌面菜单实名`).toContain(tab.desktopMenu);
+        expect(row).toContain(`| ${tab.desktopMenu} |`);
+      } else {
+        expect(row, `移动端专属 Tab「${tab.label}」未标注「移动端专属」`).toContain('移动端专属');
+      }
     }
   });
 });
