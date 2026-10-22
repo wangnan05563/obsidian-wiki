@@ -10,6 +10,7 @@ import MobileBrowse from './MobileBrowse.vue';
 import MobileIngest from './MobileIngest.vue';
 import MobileListen from './MobileListen.vue';
 import { useMobileTheme } from '../../composables/useMobileTheme';
+import { MOBILE_TABS } from '../../config/mobileTabs';
 
 // 移动端外壳：底部 5 Tab 导航 + 登录门 + 内容切换（SRS FR-MOB-NAV）。
 // 完全复用桌面端 stores/services，不引入 vue-router（与项目单 SPA 约定一致）。
@@ -43,15 +44,9 @@ watch(
   },
 );
 
-type TabKey = 'query' | 'browse' | 'listen' | 'ingest' | 'me';
+type TabKey = (typeof MOBILE_TABS)[number]['key'];
 
-const tabs: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'query', label: '问答', icon: 'query' },
-  { key: 'browse', label: '浏览', icon: 'browse' },
-  { key: 'listen', label: '聆听', icon: 'listen' },
-  { key: 'ingest', label: '投递', icon: 'ingest' },
-  { key: 'me', label: '我的', icon: 'me' },
-];
+const tabs = MOBILE_TABS;
 
 const activeTab = ref<TabKey>('query');
 

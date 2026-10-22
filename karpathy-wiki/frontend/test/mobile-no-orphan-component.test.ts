@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { MOBILE_TABS } from '../src/config/mobileTabs';
 
 // T02794：移动端组件目录不得存在零引用组件。
 //
@@ -102,9 +103,7 @@ describe('T02794 移动端组件目录零引用守护', () => {
     const shellFile = path.join(MOBILE_DIR, 'MobileShell.vue');
     const shell = fs.readFileSync(shellFile, 'utf8');
     const template = shell.slice(shell.indexOf('<template>'), shell.lastIndexOf('</template>'));
-    const union = shell.match(/type TabKey = ([^;]+);/);
-    expect(union, 'MobileShell 里应仍能解析出 TabKey 联合类型').toBeTruthy();
-    const keys = [...union![1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    const keys = MOBILE_TABS.map((tab) => tab.key);
     expect(keys.length).toBeGreaterThanOrEqual(4);
     const missing: string[] = [];
     for (const key of keys) {
@@ -114,12 +113,13 @@ describe('T02794 移动端组件目录零引用守护', () => {
     expect(missing, '这些 Tab 没有任何视图承载，用户点它会得到空白页').toEqual([]);
   });
 
-  it('底部 tabs 数组与 TabKey 取值集合一致（导航与渲染不脱节）', () => {
+  it('底部 tabs 名单来自 config/mobileTabs（导航与渲染不脱节）', () => {
     const shell = fs.readFileSync(path.join(MOBILE_DIR, 'MobileShell.vue'), 'utf8');
-    const union = shell.match(/type TabKey = ([^;]+);/);
-    const keys = [...union![1].matchAll(/'([^']+)'/g)].map((m) => m[1]).sort();
-    const tabsBlock = shell.slice(shell.indexOf('const tabs:'), shell.indexOf('const activeTab'));
-    const declared = [...tabsBlock.matchAll(/key: '([^']+)'/g)].map((m) => m[1]).sort();
-    expect(declared).toEqual(keys);
+    // T02706：Tab 短名收口到 MOBILE_TABS；若又在 MobileShell 里内联一份数组，
+    // 术语守护（移动端主控件名 ∈ 术语表）就会与实际导航脱节。
+    expect(shell).toContain('MOBILE_TABS');
+    expect(shell).toContain('const tabs = MOBILE_TABS;');
+    expect(shell, 'MobileShell 不应再内联 tabs 数组').not.toMatch(/const tabs:\s*\{/);
+    expect(MOBILE_TABS.map((tab) => tab.key).sort()).toEqual(['browse', 'ingest', 'listen', 'me', 'query']);
   });
 });
