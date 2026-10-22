@@ -16,6 +16,8 @@ export type RestartMode = 'packaged' | 'dev-watch';
 export interface RestartActiveState {
   compile: number;
   query: number;
+  /** 已入队但还没起跑的编译：重启同样会把它们丢掉 */
+  queuedCompile: number;
   blockedReasons: string[];
 }
 
@@ -66,6 +68,7 @@ export async function requestRestart(send: Send = apiFetch): Promise<RestartTrig
       active: {
         compile: asCount(active.compile),
         query: asCount(active.query),
+        queuedCompile: asCount(active.queuedCompile),
         blockedReasons: asReasons(active.blockedReasons),
       },
     };
@@ -133,5 +136,6 @@ export function blockedSummary(active: RestartActiveState): string {
   const parts: string[] = [];
   if (active.compile > 0) parts.push(`${active.compile} 个编译任务`);
   if (active.query > 0) parts.push(`${active.query} 个问答`);
+  if (active.queuedCompile > 0) parts.push(`${active.queuedCompile} 个编译排队`);
   return parts.length > 0 ? parts.join('、') : '未知任务';
 }
