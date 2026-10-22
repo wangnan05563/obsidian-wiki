@@ -51,6 +51,22 @@ const DEFAULT_DAYS = 30;
 const BYTES_PER_MB = 1024 * 1024;
 // 释放空间的上报下限（MB）：真删了文件就不报 0，见下方 result.total_freed_mb 处注释
 const MIN_REPORTED_MB = 0.01;
+// 审计日志滚动阈值：审计是永久追加、不参与四类清理（它是台账不是垃圾），
+// 不设上限会只增不减。按大小滚动，保留一代 .1 归档——再早的台账丢弃。
+export const AUDIT_ROTATE_BYTES = 1024 * 1024;
+
+// 审计日志按大小滚动：达到阈值就把主文件改名成 .1（顶掉上一代归档）。
+// 单独导出是为了让测试能用小阈值确定性验证滚动行为，而不必真的灌 1MB。
+export async function rotateAuditLog(auditLog: string, maxBytes: number): Promise<void> {
+  try {
+    const stat = await fs.stat(auditLog);
+    if (stat.size < maxBytes) return;
+    await fs.rm(auditLog + '.1', { force: true });
+    await fs.rename(auditLog, auditLog + '.1');
+  } catch {
+    // 主文件还不存在：无需滚动
+  }
+}
 
 // 移到模块顶层：纯函数无外部依赖，避免每次路由注册重建闭包
 function bytesToMb(bytes: number): number {
@@ -230,10 +246,12 @@ export function registerCleanupRoute(
     return path.resolve(dir).toLowerCase() !== path.resolve(harnessDir).toLowerCase();
   }
 
-  // 审计写入：JSONL 追加，失败不阻塞主流程（与闲鱼 _log_cleanup_action 一致）
+  // 审计写入：JSONL 追加，失败不阻塞主流程（与闲鱼 _log_cleanup_action 一致）。
+  // T02888：追加前按大小滚动（保留一代 .1 归档），审计文件不再只增不减。
   async function writeAudit(entry: Record<string, unknown>): Promise<void> {
     try {
       await fs.mkdir(harnessDir, { recursive: true });
+      await rotateAuditLog(auditLog, AUDIT_ROTATE_BYTES);
       await fs.appendFile(auditLog, JSON.stringify(entry) + '\n', 'utf8');
     } catch {
       // 审计失败不阻塞清理主流程
