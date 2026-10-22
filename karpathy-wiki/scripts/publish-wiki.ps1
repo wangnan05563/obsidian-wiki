@@ -11,6 +11,8 @@ param(
     [switch]$SkipDeploy,
     [switch]$SkipRestart,
     [switch]$PublishRelease,
+    # T02743：显式指定本次发布的正式 Release 说明文件（发布时落地为约定名 release-notes-<版本>.md）
+    [string]$ReleaseNotesFile = '',
     [switch]$DryRun
 )
 
@@ -91,6 +93,28 @@ if ($PublishRelease) {
         if ($relAsset) { $relAssetNote = "未找到与版本 $relVer 匹配的安装包，使用最新" }
     }
     if (-not $relVer -and $relAsset -and $relAsset.Name -match 'v?([0-9][0-9A-Za-z._-]*)\.exe$') { $relVer = $Matches[1] }
+
+    # T02743 发布说明解析：显式 -ReleaseNotesFile 优先（真实发布时落地为约定文件名）；
+    # 否则只认约定文件 release-notes-<VER>.md——缺失或仅剩 .auto.md（旧 git log 兜底产物）
+    # 一律视为「说明未备好」：正式发布阻断，DryRun 仅告警。不再用 git log 自动生成兜底。
+    $relNotes = $null; $relNotesIssue = $null; $relNotesNote = $null
+    if ($relVer) {
+        $relNotes = Join-Path $Root "$($p.release_notes_prefix)$relVer.md"
+        if ($ReleaseNotesFile) {
+            if (-not (Test-Path $ReleaseNotesFile)) {
+                $relNotesIssue = "指定的 -ReleaseNotesFile 不存在: $ReleaseNotesFile"
+            } else {
+                $relNotesNote = "已指定 -ReleaseNotesFile，发布时写入约定文件 $relNotes"
+            }
+        } elseif (-not (Test-Path $relNotes)) {
+            $autoNotes = Join-Path $Root "$($p.release_notes_prefix)$relVer.auto.md"
+            if (Test-Path $autoNotes) {
+                $relNotesIssue = "只有 git log 兜底产物 $autoNotes，缺少正式说明 $($p.release_notes_prefix)$relVer.md"
+            } else {
+                $relNotesIssue = "正式 Release 说明缺失: $($p.release_notes_prefix)$relVer.md（写好后放项目根，或用 -ReleaseNotesFile 指定）"
+            }
+        }
+    }
 }
 
 Write-LogBanner -Title "$($Config.project.name) 一键发布 [会话: $($script:LogSessionId)]"
@@ -112,6 +136,14 @@ if ($DryRun) {
             Write-Log "6) 发布 Release: $pyExe publish-release.py $($relAsset.Name) (GH_TAG=$relVer GH_DRY_RUN=1)" -Level INFO
         } else {
             Write-Log "6) 发布 Release: 解析失败 (python=$pyExe 资产=$(if ($relAsset) { $relAsset.Name } else { '无' }) 版本=$relVer)" -Level WARN
+        }
+        if ($relNotesIssue) {
+            Write-Log "[DRY-RUN] 发布说明未备好: $relNotesIssue" -Level WARN
+            Write-Log "[DRY-RUN] 正式发布将在此处阻断（不再用 git log 兜底）" -Level WARN
+        } elseif ($relNotesNote) {
+            Write-Log "   发布说明  : $relNotesNote" -Level INFO
+        } elseif ($relNotes) {
+            Write-Log "   发布说明  : $relNotes" -Level INFO
         }
     } else {
         Write-Log "6) 发布 Release: 未启用（加 -PublishRelease 开启；资产 $($p.release_asset_glob)）" -Level SKIP
@@ -212,16 +244,15 @@ if ($PublishRelease) {
     if (-not $relVer) { Write-Log "无法推导版本号（version_source 与资产文件名均未取到）" -Level ERROR -Step "6/6"; exit 1 }
     if ($relAssetNote) { Write-Log $relAssetNote -Level WARN -Step "6/6" }
 
-    # 说明文件：release-notes-<VER>.md 缺省按 git log 自动生成（提示替换为正式说明）
-    $relNotes = Join-Path $Root "$($p.release_notes_prefix)$relVer.md"
-    if (-not (Test-Path $relNotes)) {
-        $relNotes = Join-Path $Root "$($p.release_notes_prefix)$relVer.auto.md"
-        if (-not (Test-Path $relNotes)) {
-            $logLines = @(git -C $Root log --no-merges --oneline -20 2>$null)
-            $header = "# $($Config.project.name) $relVer`r`n`r`n自动生成的发布说明（来自 git 提交记录，发布前请替换为正式说明）：`r`n`r`n"
-            ($header + ($logLines -join "`r`n")) | Out-File -FilePath $relNotes -Encoding utf8
-            Write-Log "说明文件缺失，已按 git log 自动生成: $relNotes" -Level WARN -Step "6/6"
-        }
+    # T02743：说明未备好一律阻断，不再静默 git log 兜底；显式指定时在此落地为约定文件名
+    if ($relNotesIssue) {
+        Write-Log "发布阻断：$relNotesIssue" -Level ERROR -Step "6/6"
+        Write-Log "请先准备正式 Release 说明后重跑（可先用 -DryRun 预检）" -Level ERROR -Step "6/6"
+        exit 1
+    }
+    if ($ReleaseNotesFile) {
+        Copy-Item -Path $ReleaseNotesFile -Destination $relNotes -Force
+        Write-Log "说明文件已落地: $relNotes（来自 -ReleaseNotesFile）" -Level INFO -Step "6/6"
     }
 
     $env:GH_TAG = $relVer

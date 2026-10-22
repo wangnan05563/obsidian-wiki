@@ -22,6 +22,7 @@ echo ============================================================
 echo   Builds the SPA, deploys it, restarts prod server.
 echo   Options: -SkipInstall -SkipBuild -SkipDeploy
 echo            -SkipRestart -PublishRelease -DryRun
+echo            -ReleaseNotesFile ^<path^>  (formal release notes, T02743)
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8"
