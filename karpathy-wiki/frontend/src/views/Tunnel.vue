@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   CopyDocument, TopRight, VideoPlay, VideoPause, Link, RefreshRight, Close, Setting, MagicStick, Check, Key, CirclePlus, Connection,
   View,
@@ -21,6 +21,7 @@ import {
 } from '../utils/tunnelDiagnostics';
 import type {
   TunnelStatus,
+  TunnelProvider,
   TunnelConfigData,
   TunnelConfigBody,
   TunnelDownloadError,
@@ -46,6 +47,8 @@ const formPort = ref(0);
 const formBinaryPath = ref('');
 const formAutoStart = ref(false);
 const formTunnelMode = ref<'quick' | 'named'>('quick');
+// 用户已在下拉框上确认过的服务商：取消切换确认时用它把表单退回原样（T02637）
+const formProviderConfirmed = ref<TunnelProvider>('cloudflare');
 
 // ===== 错误状态 =====
 // 二进制下载失败时展示手动放置指引
@@ -87,6 +90,30 @@ const PROVIDER_DESC: Record<string, string> = {
   cpolar: '国内服务器稳定，需注册账号获取 authtoken。',
   tailscale: '免费固定 ts.net 地址，需预装 Tailscale 并登录。首次启用需浏览器授权。',
 };
+
+// ===== 未保存改动（T02637）=====
+// 表单是草稿，config 是已落盘的那一份。POST /tunnel/start 只读后端 config.json、不收请求体，
+// 所以「表单 ≠ 已保存」这个差值只能由界面说出来——以前靠切换下拉框时顺手写盘抹平，
+// 代价是用户没点保存也改了配置。现在「保存配置」是本页唯一的写盘入口。
+const dirtyFields = computed<string[]>(() => {
+  const saved = config.value;
+  if (!saved) return [];
+  const out: string[] = [];
+  if (formProvider.value !== saved.provider) out.push('Provider');
+  if (formTunnelMode.value !== saved.tunnelMode) out.push('隧道模式');
+  // authtoken 不回显明文，空串表示不修改：用户填了才算一项改动
+  if (formAuthtoken.value !== '') out.push('Authtoken');
+  if (formPort.value !== saved.localPort) out.push('本地端口');
+  if (formBinaryPath.value !== saved.binaryPath) out.push('程序路径');
+  if (formAutoStart.value !== saved.autoStart) out.push('开机自启');
+  return out;
+});
+const isDirty = computed(() => dirtyFields.value.length > 0);
+const runningProviderNote = computed(() => {
+  if (status.value?.status !== 'running' || !config.value || !isDirty.value) return '';
+  const p = status.value.provider;
+  return `当前运行的隧道还在跑已保存的 ${PROVIDER_LABELS[p] || p || '未知服务商'}，改动保存后还要停止并重新启动才会生效。`;
+});
 
 async function loadStatus() {
   try {
@@ -190,6 +217,8 @@ async function loadConfig() {
     formTunnelMode.value = data.tunnelMode;
     // authtoken 不回显明文，表单留空（空串=不修改）
     formAuthtoken.value = '';
+    // 表单已与已保存配置对齐，取消切换确认时该回到这里而不是回到更早的值
+    formProviderConfirmed.value = data.provider;
   } catch (err) {
     ElMessage.error('加载配置失败：' + (err as Error).message);
   } finally {
@@ -197,7 +226,39 @@ async function loadConfig() {
   }
 }
 
+// T02637：脏表单上点启动，既不能默默按旧配置启动（会出现「下拉框选 Tailscale、
+// 报错却是 cloudflared 下载失败」这种把用户指向错服务商的失败），也不能替他写盘。
+type UnsavedChoice = 'save-and-start' | 'start-as-saved' | 'abort';
+
+async function askUnsavedBeforeStart(): Promise<UnsavedChoice> {
+  const saved = config.value;
+  const savedLabel = PROVIDER_LABELS[saved?.provider ?? ''] ?? saved?.provider ?? '已保存的服务商';
+  try {
+    await ElMessageBox.confirm(
+      `有 ${dirtyFields.value.length} 项改动还没保存（${dirtyFields.value.join('、')}）。`
+      + `启动隧道读的是已保存配置，现在启动会按 ${savedLabel} 建立，用不上这些改动。`,
+      '配置未保存',
+      {
+        confirmButtonText: '保存并启动',
+        cancelButtonText: '按已保存配置启动',
+        type: 'warning',
+        distinguishCancelAndClose: true,
+      },
+    );
+    return 'save-and-start';
+  } catch (action) {
+    // cancel = 用户明确选择按已保存配置启动；close（右上角/ESC）= 不启动
+    return action === 'cancel' ? 'start-as-saved' : 'abort';
+  }
+}
+
 async function startTunnel() {
+  if (isDirty.value) {
+    const choice = await askUnsavedBeforeStart();
+    if (choice === 'abort') return;
+    // 保存没成功就不要接着启动：那样等于又按旧配置启一次，弹窗里给的承诺落空
+    if (choice === 'save-and-start' && !(await saveConfig())) return;
+  }
   starting.value = true;
   downloadError.value = null;
   authError.value = null;
@@ -248,7 +309,8 @@ async function stopTunnel() {
   }
 }
 
-async function saveConfig() {
+/** 本页唯一的写盘入口；返回值给「保存并启动」用，失败时不能继续启动 */
+async function saveConfig(): Promise<boolean> {
   saving.value = true;
   try {
     const body: TunnelConfigBody = {
@@ -270,28 +332,42 @@ async function saveConfig() {
     await loadConfig();
     // 自检针对已保存配置：provider / 端口 / 路径任一变化都会让答案过期，重跑一次
     void runPrereqCheck({ silent: true });
+    return true;
   } catch (err) {
     ElMessage.error('保存失败：' + (err as Error).message);
+    return false;
   } finally {
     saving.value = false;
   }
 }
 
-// 切换 Provider 时自动保存，避免用户以为切换了但后端仍用旧 provider 启动
-// 为什么自动保存：provider 是关键配置，切换后必须同步到 config.json，
-// 否则点击"启动隧道"时后端读 config.json 会用旧 provider，导致"选 Tailscale 却报 cloudflared 下载失败"
-async function onProviderChange() {
-  // 隧道运行中切换 provider：先停止当前隧道，避免旧 provider 继续占用
-  if (status.value?.status === 'running') {
-    try {
-      await apiFetch(`${API_BASE}/tunnel/stop`, { method: 'POST' });
-      await loadStatus();
-      ElMessage.info('已停止当前隧道，请手动启动新 Provider');
-    } catch {
-      // stop 失败不阻塞保存
-    }
+// 丢弃草稿，把表单拉回已保存的那一份
+async function revertForm() {
+  await loadConfig();
+  ElMessage.info('已放弃未保存的改动');
+}
+
+// T02637：切换服务商只改表单，不再顺手 saveConfig()——
+// 「换一下 Provider 看看说明」不等于「我要把配置改掉」，隐式写盘与「保存配置」按钮语义直接冲突。
+// 确认弹窗本身是 PRD R-F4 要求的（换服务商等于换域名，已分享出去的链接会失效），此前一直漏实现。
+async function onProviderChange(raw: unknown) {
+  const next = String(raw) as TunnelProvider;
+  const prev = formProviderConfirmed.value;
+  if (next === prev) return;
+  const stillRunning = status.value?.status === 'running' ? `当前运行的隧道仍在用 ${PROVIDER_LABELS[prev] || prev}，不会因此中断；要换成新服务商，需保存配置后停止并重新启动。` : '';
+  try {
+    await ElMessageBox.confirm(
+      `切换到 ${PROVIDER_LABELS[next] || next} 会换掉公网地址，已分享出去的链接会失效。`
+      + `这一步只是改表单，要点「保存配置」才会写入。${stillRunning}`,
+      '切换服务商',
+      { confirmButtonText: '继续切换', cancelButtonText: '不切换', type: 'warning' },
+    );
+  } catch {
+    // 用户没同意，下拉框退回原值：不能留下一个「看起来切了但没确认」的表单
+    formProvider.value = prev;
+    return;
   }
-  await saveConfig();
+  formProviderConfirmed.value = next;
 }
 
 function openUrl() {
@@ -632,6 +708,24 @@ onBeforeUnmount(() => {
     <!-- 配置卡片 -->
     <div class="glass-card" id="tunnel-config-card">
       <h2 class="card-title">穿透配置</h2>
+      <!-- T02637：改动停在表单里时界面必须说清楚——否则用户会以为下拉框一换配置就改了（旧行为正是这样） -->
+      <el-alert
+        v-if="isDirty"
+        id="tunnel-unsaved"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="unsaved-alert"
+      >
+        <template #title>{{ dirtyFields.length }} 项改动尚未保存（{{ dirtyFields.join('、') }}）</template>
+        <div class="unsaved-desc">
+          改动还在这个页面里，点「保存配置」才会写入配置并影响下次启动。{{ runningProviderNote }}
+        </div>
+        <div class="unsaved-actions">
+          <IconActionButton name="保存配置" desc="把这些改动写入穿透配置（Provider / 隧道模式 / Authtoken / 开机自启）" :icon="Check" size="small" variant="primary" :loading="saving" @click="saveConfig" />
+          <IconActionButton name="放弃修改" desc="丢弃未保存的改动，读回当前已保存的配置" :icon="RefreshRight" size="small" @click="revertForm" />
+        </div>
+      </el-alert>
       <div class="config-block">
         <!-- Provider 选择 -->
         <div class="config-row">
@@ -643,6 +737,7 @@ onBeforeUnmount(() => {
               <el-option label="Tailscale Funnel（免费固定地址）" value="tailscale" />
             </el-select>
             <div class="hint">{{ PROVIDER_DESC[formProvider] }}</div>
+            <div class="hint">切换服务商只改这个表单，要点下方「保存配置」才会写入配置。</div>
           </div>
         </div>
 
@@ -954,6 +1049,25 @@ onBeforeUnmount(() => {
 /* 包裹 disabled 按钮的容器：让图标按钮仍能水平对齐（disabled 原生按钮不触发 mouseover，data-tip 挂在此容器上） */
 .tunnel-action-wrap {
   display: inline-flex;
+}
+
+/* T02637：未保存提示条紧贴被改动的表单，又不至于把它推走 */
+.unsaved-alert {
+  margin: 12px 0 20px;
+}
+
+.unsaved-desc {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-soft, #ccc);
+}
+
+.unsaved-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
 }
 
 .config-block {

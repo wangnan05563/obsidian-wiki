@@ -506,7 +506,8 @@ const DOC_SECTIONS: DocSection[] = [
         title: '操作步骤',
         content: [
           '点击导航栏「内网穿透」进入页面',
-          '选择 Provider（推荐 Cloudflare quick 模式）',
+          '选择 Provider（推荐 Cloudflare quick 模式）——切换只改表单，不会自己写盘',
+          '按需改端口 / 程序路径 / 开机自启，点「保存配置」写入；页面上方若出现「N 项改动尚未保存」，说明还有改动没落盘',
           '看「前置条件自检」卡片，标红/标黄的项按它给的入口处理，处理完点「重新检测」',
           '点击「启动隧道」',
           '等待 5-15 秒获取公网 URL',
@@ -518,7 +519,7 @@ const DOC_SECTIONS: DocSection[] = [
       {
         type: 'note',
         title: '注意事项',
-        content: 'quick 模式每次重启 URL 都会变化；named 模式需先执行 cloudflared tunnel 三步向导（创建隧道、配置 credentials、绑定 hostname）。CORS 默认仅放行 localhost，tunnel 域名需手动加白。',
+        content: 'quick 模式每次重启 URL 都会变化；named 模式需先执行 cloudflared tunnel 三步向导（创建隧道、配置 credentials、绑定 hostname）。CORS 默认仅放行 localhost，tunnel 域名需手动加白。配置改动只有点「保存配置」才生效——带着未保存改动点「启动隧道」，会先问你「保存并启动」还是「按已保存配置启动」（启动读的是已保存的那一份）。切换 Provider 会换掉公网地址，已分享出去的链接随之失效；隧道正在运行时切换不会中断它，需保存后停止并重新启动才换服务商。',
         noteType: 'warning',
       },
     ],
