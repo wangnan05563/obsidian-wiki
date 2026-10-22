@@ -4,6 +4,10 @@ import matter from "gray-matter";
 import type { VaultService } from "../vault/vault-service.js";
 // T02472 L1：页面口径与链接图/统计接口共用同一份定义，避免「216 vs 245」两处总数矛盾
 import { PAGE_DIRS, PAGE_DIR_TO_TYPE, isPageFile } from "../vault/page-scope.js";
+import { resolveVaultPath } from "./vault-path.js";
+// T02843：预检结论必须报出「页面在子目录里索引不到」这一类，与页面质量清洗页下方那块同口径。
+//   检测函数只有 detectMisplacedPages 一份，这里引用它，不重写第二份判断。
+import { detectMisplacedPages, misplacedPrecheckWarning } from "./misplaced-pages.js";
 import type { PageQualityScore, DuplicatePair, MergeResult, PrecheckResult } from "../types.js";
 
 const MAX_RETRIES = 3;
@@ -145,19 +149,8 @@ function hasValidFrontmatter(parsed: matter.GrayMatterFile<string>): boolean {
   return !!(parsed.data?.type && parsed.data?.title);
 }
 
-// 把传入路径解析为 vault 内的绝对路径，并阻止越权访问 vault 之外的文件。
-// 前端 data-clean 页传的是 vault 相对路径（如 concepts/foo.md），后端需拼回绝对路径才能
-// fs.unlink / fs.rename；若传入已是绝对路径则原样使用（path.join 会忽略前面的 base）。
-// T02797 起对外导出：错位页归位同样需要 unlink 原路径，这道防线只留一份实现
-//   （再抄一遍 `startsWith(base + path.sep)` 就是「两处判断、漏一处越权」的同源缺陷）。
-export function resolveVaultPath(vault: VaultService, p: string): string {
-  const base = path.resolve(vault.getVaultPath());
-  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(base, p);
-  if (abs !== base && !abs.startsWith(base + path.sep)) {
-    throw new Error(`path escapes vault root: ${p}`);
-  }
-  return abs;
-}
+// 把传入路径解析为 vault 内的绝对路径并拦住越权访问：实现见 data-clean/vault-path.ts
+//   （T02843 起该防线移到中立模块，quality-scanner 与 misplaced-pages 从同一处取）
 
 //  Archive 
 export async function archiveFiles(
@@ -540,6 +533,14 @@ export async function precheckVault(vault: VaultService): Promise<PrecheckResult
       result.errors.push(`${page.path}: ${err instanceof Error ? err.message : String(err)}`);
       result.blocked = true;
     }
+  }
+
+  // T02843：预检逐顶层目录 flat readdir，本身就扫不到子目录里的页面——若这里不补一句，
+  // 页面上会出现「Vault 预检：通过」与「页面在子目录里，知识库索引不到（3 个）」同屏并存。
+  // 归为 warning 而非 error：它不阻断编译（blocked/passed 口径不变），但结论必须看得见、数量同源。
+  const misplaced = await detectMisplacedPages(vault);
+  if (misplaced.length > 0) {
+    result.warnings.push(misplacedPrecheckWarning(misplaced));
   }
 
   result.passed = result.errors.length === 0;

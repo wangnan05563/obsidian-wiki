@@ -219,6 +219,26 @@ describe('D · 单一来源与提示词同口径', () => {
     expect(scanner).toContain('TYPE_TO_PAGE_DIR[type] ?? topDir');
   });
 
+  // T02843：预检（quality-scanner）与错位检测（misplaced-pages）必须是同一份口径。
+  //   本单的成因正是「预检 flat readdir 看不见子目录页，却仍然宣称通过」——接上检测之后，
+  //   新的退化风险是有人在预检里再抄一份递归判断，例外清单就会只在一处生效。
+  it('预检引用同一份检测，不重写第二份；越权防线只有一处实现', async () => {
+    const scanner = await read('api/src/data-clean/quality-scanner.ts');
+    expect(scanner).toMatch(/import \{[^}]*detectMisplacedPages[^}]*\} from "\.\/misplaced-pages\.js"/);
+    // 第二份口径的特征：自带例外清单 / 自带递归收集 / 自带目录白名单字面量
+    expect(scanner, '预检不得自带嵌套例外清单（例外只认 page-scope 那一份）').not.toMatch(/NESTED_PAGE_DIRS/);
+    expect(scanner, '预检不得自带子目录递归收集').not.toMatch(/withFileTypes[\s\S]{0,200}isDirectory\(\)[\s\S]{0,200}readdir/);
+
+    // resolveVaultPath 这道越权防线全库只有一处定义（T02797 导出、T02843 移入中立模块破循环依赖）
+    const vaultPath = await read('api/src/data-clean/vault-path.ts');
+    expect(vaultPath.match(/export function resolveVaultPath/g), '定义只能有一份').toHaveLength(1);
+    expect(scanner, '预检侧不得再抄一遍越权判断').not.toContain('export function resolveVaultPath');
+    expect(scanner).toContain('from "./vault-path.js"');
+    const misplaced = await read('api/src/data-clean/misplaced-pages.ts');
+    expect(misplaced, '检测侧必须从中立模块取，不得回指 quality-scanner').toContain("from './vault-path.js'");
+    expect(misplaced).not.toMatch(/from '\.\/quality-scanner\.js'/);
+  });
+
   it('TYPE_TO_PAGE_DIR 是 PAGE_DIR_TO_TYPE 的双射反量（有重复 type 时反查会静默丢一侧）', async () => {
     const dirs = Object.keys(PAGE_DIR_TO_TYPE);
     const types = Object.values(PAGE_DIR_TO_TYPE);

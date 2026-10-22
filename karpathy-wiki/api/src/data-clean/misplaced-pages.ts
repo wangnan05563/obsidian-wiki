@@ -32,7 +32,7 @@ import {
   isPageFile,
   pageDirsSlash,
 } from '../vault/page-scope.js';
-import { resolveVaultPath } from './quality-scanner.js';
+import { resolveVaultPath } from './vault-path.js';
 
 /** 列出一个顶层页面目录下的**子目录**名（顶层 .md 是常规页面，不在本模块职责内） */
 async function listSubDirs(vault: VaultService, dirRel: string): Promise<string[]> {
@@ -128,6 +128,17 @@ export async function detectMisplacedPages(vault: VaultService): Promise<Misplac
     item.conflict = await findConflict(vault, item, items);
   }
   return items;
+}
+
+/** 与「页面质量清洗」页那块标题逐字同源的短语（frontend/src/utils/dataCleanPresentation.ts 的 MISPLACED_ISSUE_TEXT） */
+const MISPLACED_ISSUE_PHRASE = '页面在子目录里，知识库索引不到';
+
+/**
+ * T02843：预检结论里这一类的写法。数量只能从 detectMisplacedPages 的返回值出——
+ * 预检与错位块各算各的正是本单要消灭的「同屏矛盾」。
+ */
+export function misplacedPrecheckWarning(misplaced: MisplacedPage[]): string {
+  return `${misplaced.length} 个${MISPLACED_ISSUE_PHRASE}`;
 }
 
 /** 归位后清掉搬空的子目录（从最深一层往上，到顶层页面目录为止——顶层本身永远不动） */
