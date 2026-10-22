@@ -20,6 +20,9 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock('../src/utils/runtime.js', () => ({
   getDataDir: () => hoisted.getDir(),
+  // T02886：auth.ts 定根改走 toAbsVaultPath（内部调 getApiDir）；mock 指到临时目录下的 api/，
+  // 让 fixture 的 '../data/users.json' 仍解析进临时目录（保持测试隔离）
+  getApiDir: () => path.join(hoisted.getDir(), 'api'),
 }));
 
 vi.mock('../src/auth/session.js', async () => {

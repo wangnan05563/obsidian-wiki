@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
-import path from 'node:path';
 import type { AuthConfig, LoginRequest, RegisterRequest, CreateUserRequest, UpdateUserRequest, UserRecord } from '../auth/types.js';
 import { findUserByUsername, findUserById, listUsers, createUser, updateUser, deleteUser, updateLastLogin, initUserStore, validateRegistrationInput, validateNewPassword } from '../auth/user-store.js';
 import { verifyPassword, getSessionSecret } from '../auth/password.js';
@@ -9,7 +8,7 @@ import { initAuditLog, writeAuditLog, createAuditEntry, readAuditLog } from '../
 import { setupAuthMiddleware, requireAuth, requireAdmin, audit, DEFAULT_PUBLIC_PATHS } from '../middleware/auth.js';
 import { invalidateRoleCache } from '../auth/permission-cache.js';
 import { checkAuthRateLimit, clientIpFromRequest } from '../auth/auth-rate-limit.js';
-import { getDataDir } from '../utils/runtime.js';
+import { toAbsVaultPath } from '../utils/harness-dirs.js';
 
 // 认证路由模块
 // 提供：登录、登出、当前用户、权限列表、用户管理（管理员）、审计日志（管理员）
@@ -38,13 +37,12 @@ export async function initAuthModule(config: AuthConfig, vaultPath: string, loca
   permissionCacheTtlMs = config.permissionCacheTtlSec * 1000;
   localOnlyMode = localOnly;
 
-  // 解析 users.json / audit.log 的绝对路径
-  // config 中路径形如 '../data/users.json'，实际文件位于 data/ 目录下
-  // 用 getDataDir() 统一定位 data/ 目录，兼容开发模式（karpathy-wiki/data/）与 SEA 模式（exe/data/）
-  // 为什么取 basename：config 路径含 ../data/ 前缀，只需文件名部分拼接到 dataDir
-  const dataDir = getDataDir();
-  const usersFileAbs = path.join(dataDir, path.basename(config.usersFilePath));
-  auditLogPath = path.join(dataDir, path.basename(config.auditLogPath));
+  // 解析 users.json / audit.log 的绝对路径（T02886：复用 toAbsVaultPath 单一定根口径，
+  // 不再自建 getDataDir()+basename 第三份实现。loadConfig 已把配置里的相对路径定根为
+  // 绝对值（原样透传）；此处兜底测试/直调传入的相对值——按 api 目录 resolve，与
+  // '../data/users.json' 的历史落点（data/ 目录）同值）
+  const usersFileAbs = toAbsVaultPath(config.usersFilePath);
+  auditLogPath = toAbsVaultPath(config.auditLogPath);
 
   // 初始化用户存储（首次启动创建默认用户）
   await initUserStore(usersFileAbs, config.pbkdf2Iterations);
