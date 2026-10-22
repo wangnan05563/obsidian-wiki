@@ -129,6 +129,7 @@ const CASE_TIMEOUT_MS = 20_000;
 
 // T02753：等待实现已抽到 helpers/waitForProgress.ts（全站只有一份），本文件只保留自己的契约常量，
 // 下面的 waitFor 是给那些常量做默认值的薄适配层，不是第二套实现。
+// T02904-allow: 契约常量默认值薄适配层，内部直接转发 helpers/waitForProgress，非第二套等待实现
 const waitFor = (
   label: string,
   predicate: () => boolean,
