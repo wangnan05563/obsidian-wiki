@@ -8,7 +8,8 @@ import { DEFAULT_CLARIFY_CONFIG } from './workflows/clarify/clarify-types.js';
 // 路径解析统一走 runtime.ts，兼容开发模式（api/config.json）与 SEA 模式（exe/config.json）
 // 为什么移除 fileURLToPath + import.meta.url：SEA 模式下 __filename 指向构建时 bundle.cjs，
 // 用户机器不存在，派生的 API_SRC_DIR 不可用，导致 config.json 加载失败
-import { getUserDataPath, getUserDataDir, IS_SEA } from './utils/runtime.js';
+import { getUserDataPath, getUserDataDir, getApiDir, IS_SEA } from './utils/runtime.js';
+import { toAbsVaultPath } from './utils/harness-dirs.js';
 
 // 配置文件名。路径解析见 getConfigPath()
 const CONFIG_FILENAME = 'config.json';
@@ -439,9 +440,12 @@ export async function loadConfig(): Promise<AppConfig> {
   // 浅合并嵌套对象，避免下层数据丢失
   const merged = mergeConfigObjects(defaults, parsed);
 
-  // SEA 模式路径重写与首次落盘（提取为独立函数降低 loadConfig 认知复杂度）
+  // 路径定根（T02886）：SEA 与非 SEA 共用同一条通道，读盘后一次性把路径型字段钉成绝对值，
+  // 消除「实际落点随进程 CWD 漂移」。落盘可移植性由 persistConfigFile 还原相对写法保证。
+  anchorConfigPaths(merged, { sea: IS_SEA });
+
+  // SEA 模式首次落盘（提取为独立函数降低 loadConfig 认知复杂度）
   if (IS_SEA) {
-    applySeaRebase(merged);
     await writeSeaDefaultsIfNeeded(merged);
   }
 
@@ -469,29 +473,82 @@ function refreshConfigCache(data: AppConfig): void {
   configCache.loadedAt = Date.now();
 }
 
-// SEA 模式路径重写：把可写数据路径收敛到用户数据目录，避免落到 exe 同级（Program Files 不可写/卸载清除）
-// 为什么整体归一化：defaultConfig 中 vaultPath/auth/urlCrawl 等默认是相对路径（开发模式相对 api/），
-//   SEA 模式下这些相对基准（CWD）不可靠，必须改写为用户数据根目录下的绝对路径。
-// 绝对路径保留：尊重用户在配置中显式指定的绝对路径（如自定义 vault 位置）。
-function applySeaRebase(merged: AppConfig): void {
+// ===== 路径定根统一通道（T02886，取代原「仅 IS_SEA 时 applySeaRebase」） =====
+// 缺陷：开发模式配置里的相对值保持相对，实际落点由进程 CWD 决定——从仓库根起进程与
+//   从 api 目录起进程，vault 读写、清理 raw_archive 目标指到不同目录。
+// 锚点规则（与 utils/harness-dirs.toAbsVaultPath 同一条，无第二份实现）：
+//   - 已是绝对值：原样保留（尊重用户显式配置，含自定义 vault 位置）；
+//   - 相对值：SEA 按用户数据目录映射规范文件名（exe 同级可能不可写，沿用原 applySeaRebase
+//     语义）；非 SEA 按 api 目录 resolve（`../data/vault` 这类相对值写下时假定的基准）；
+//   - 空串：原样保留（logging.logFilePath 空=不落盘，不得被兜底成有值）。
+// 例外：logging.logFilePath 的消费基准是 api 目录的上一级（index.ts setupLoggerStream 的
+//   历史口径，用户现存日志在仓库根 logs/），非 SEA 分支沿用同一公式定根，不挪动现有落点。
+// 落盘可移植性由 persistConfigFile 保证：定根只发生在内存，config.json 仍存相对写法。
+export function anchorConfigPaths(merged: AppConfig, opts: { sea: boolean }): void {
   const dataDir = path.join(getUserDataDir(), 'data');
-  const rebase = (p: string | undefined, fallback: string): string =>
-    !p || path.isAbsolute(p) ? (p ?? fallback) : path.join(dataDir, fallback);
-
-  merged.vaultPath = rebase(merged.vaultPath, 'vault');
+  const std = (p: string | undefined, seaFallback: string): string => {
+    if (opts.sea) {
+      return !p || path.isAbsolute(p) ? (p ?? seaFallback) : path.join(dataDir, seaFallback);
+    }
+    if (!p) return p ?? '';
+    return path.isAbsolute(p) ? p : toAbsVaultPath(p);
+  };
+  // 消费基准 = getApiDir() 的上一级（见上方例外说明）；SEA 与 std 同口径
+  const repoLog = (p: string | undefined, seaFallback: string): string => {
+    if (opts.sea) return std(p, seaFallback);
+    if (!p) return p ?? '';
+    return path.isAbsolute(p) ? p : path.resolve(getApiDir(), '..', p);
+  };
+  merged.vaultPath = std(merged.vaultPath, 'vault');
   if (merged.auth) {
-    merged.auth.usersFilePath = rebase(merged.auth.usersFilePath, 'users.json');
-    merged.auth.auditLogPath = rebase(merged.auth.auditLogPath, 'audit.log');
+    merged.auth.usersFilePath = std(merged.auth.usersFilePath, 'users.json');
+    merged.auth.auditLogPath = std(merged.auth.auditLogPath, 'audit.log');
   }
   if (merged.urlCrawl) {
     if (merged.urlCrawl.logging) {
-      merged.urlCrawl.logging.logFilePath = rebase(merged.urlCrawl.logging.logFilePath, 'url-crawl.log');
+      merged.urlCrawl.logging.logFilePath = std(merged.urlCrawl.logging.logFilePath, 'url-crawl.log');
     }
-    merged.urlCrawl.incrementalStatePath = rebase(merged.urlCrawl.incrementalStatePath, 'url-crawl-state.json');
+    merged.urlCrawl.incrementalStatePath = std(merged.urlCrawl.incrementalStatePath, 'url-crawl-state.json');
   }
   if (merged.logging) {
-    merged.logging.logFilePath = rebase(merged.logging.logFilePath, 'api.log');
+    merged.logging.logFilePath = repoLog(merged.logging.logFilePath, 'api.log');
   }
+}
+
+// 落盘前把「定根通道产生的绝对路径」还原为相对写法（T02886 工单口径 3）：
+// 内存里定根、config.json 保留相对写法，配置不失可移植性，用户手改不受影响。
+// 还原基准与定根一一对应：vaultPath/usersFilePath/auditLogPath/urlCrawl 的 logFilePath、
+//   incrementalStatePath 按 api 目录（toAbsVaultPath 的锚）；logging.logFilePath 按 api 的
+//   上一级（repoLog 的锚）——两段都叫 logFilePath，靠所在对象区分（logging 段有 level 键）。
+// 只还原「定根树内」的值（std 字段在 karpathy-wiki 根下、logging.logFilePath 在仓库根下），
+//   用户显式配置的绝对路径在树外，原样保留——与历史行为一致；相对值原样透传，幂等。
+export function portableConfigForDisk(config: AppConfig): AppConfig {
+  const PATH_KEYS = new Set(['vaultPath', 'usersFilePath', 'auditLogPath', 'logFilePath', 'incrementalStatePath']);
+  const apiDir = getApiDir();
+  const wikiRoot = path.resolve(apiDir, '..');
+  const repoParent = path.resolve(apiDir, '..', '..');
+  const replacer = function (this: Record<string, unknown>, key: string, value: unknown): unknown {
+    if (typeof value !== 'string' || !PATH_KEYS.has(key) || !path.isAbsolute(value)) return value;
+    const isLoggingSeg = key === 'logFilePath' && 'level' in this;
+    const base = isLoggingSeg ? path.resolve(apiDir, '..') : apiDir;
+    const root = isLoggingSeg ? repoParent : wikiRoot;
+    const v = value.toLowerCase();
+    if (!v.startsWith(root.toLowerCase() + path.sep)) return value;
+    const rel = path.relative(base, value);
+    if (!rel || path.isAbsolute(rel)) return value;
+    // 配置里的相对写法约定用正斜杠（'../data/vault'），Windows 的 path.relative 产出反斜杠需归一
+    return rel.replaceAll('\\', '/');
+  };
+  return JSON.parse(JSON.stringify(config, replacer)) as AppConfig;
+}
+
+// 全部「整份 config 回写 config.json」的单一出口：序列化前做 portable 还原。
+// 各 save* 函数此前各自 JSON.stringify(merged)——定根上线后那会把机器相关绝对路径
+// 固化进 config.json，因此全部收口到这里（T02886）。
+export async function persistConfigFile(config: AppConfig): Promise<void> {
+  const configPath = getConfigPath();
+  if (!configPath) return;
+  await fs.writeFile(configPath, JSON.stringify(portableConfigForDisk(config), null, 2), 'utf8');
 }
 
 // SEA 首次运行：若用户数据目录尚无 config.json，落盘默认配置，便于用户编辑且保持行为一致
@@ -604,8 +661,7 @@ export async function saveAiConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    const json = JSON.stringify(merged, null, 2);
-    await fs.writeFile(configPath, json, 'utf8');
+    await persistConfigFile(merged);
   }
 
   // 写盘后立即刷新缓存，避免后续 GET 命中旧缓存
@@ -671,8 +727,7 @@ export async function resetAiConfig(): Promise<AppConfig> {
 
   const configPath = getConfigPath();
   if (configPath) {
-    const json = JSON.stringify(merged, null, 2);
-    await fs.writeFile(configPath, json, 'utf8');
+    await persistConfigFile(merged);
   }
 
   refreshConfigCache(merged);
@@ -710,8 +765,7 @@ export async function saveWebSearchConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    const json = JSON.stringify(merged, null, 2);
-    await fs.writeFile(configPath, json, 'utf8');
+    await persistConfigFile(merged);
   }
 
   refreshConfigCache(merged);
@@ -760,7 +814,7 @@ export async function saveMcpConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
 
   refreshConfigCache(merged);
@@ -832,7 +886,7 @@ export async function saveSharedMediaConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
 
   refreshConfigCache(merged);
@@ -861,7 +915,7 @@ export async function saveBudgetConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -886,7 +940,7 @@ export async function saveSkillsConfig(
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -908,7 +962,7 @@ export async function saveHealthCheckConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -925,7 +979,7 @@ export async function saveSubAgentConfig(enabled?: boolean): Promise<AppConfig> 
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -942,7 +996,7 @@ export async function saveResumableStreamConfig(enabled?: boolean): Promise<AppC
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -971,7 +1025,7 @@ export async function saveBatchConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -1005,7 +1059,7 @@ export async function saveLoggingConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -1043,7 +1097,7 @@ export async function saveToolsConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -1104,7 +1158,7 @@ export async function saveQqConfig(updates: {
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -1145,7 +1199,7 @@ export async function saveUrlCrawlConfig(updates: Partial<UrlCrawlConfig>): Prom
 
   const configPath = getConfigPath();
   if (configPath) {
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
+    await persistConfigFile(merged);
   }
   refreshConfigCache(merged);
   return merged;
@@ -1420,7 +1474,8 @@ export async function importConfigData(
   }
 
   try {
-    await fs.writeFile(configPath, JSON.stringify(restored, null, 2), 'utf8');
+    // 导入恢复也走 persistConfigFile：restored 可能来自用户粘贴的配置，路径字段统一 portable 化
+    await persistConfigFile(restored as AppConfig);
   } catch (err) {
     // 写入失败：尽力回滚备份（忽略回滚自身的二次错误，交由路由上报原始错误）
     try {

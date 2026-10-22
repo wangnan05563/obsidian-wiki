@@ -8,6 +8,7 @@
 
 import * as fs from 'node:fs';
 import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { toAbsVaultPath } from './harness-dirs.js';
 
 // NOSONAR - S1128 path 通过 require('path') 动态使用
 
@@ -597,6 +598,10 @@ async function appendLog(logFilePath: string, line: string) {
 // Main BFS crawl generator
 export async function* crawlUrl(entryUrl: string, options: UrlCrawlConfig): AsyncGenerator<UrlCrawlEvent> { // NOSONAR - 函数签名需要多个参数
   const config = { ...DEFAULT_CRAWL_CONFIG, ...options };
+  // T02886：路径字段定根（复用 toAbsVaultPath 单一口径）。config.urlCrawl 来自 loadConfig 时
+  // 已是绝对值（原样保留）；直接以 DEFAULT_CRAWL_CONFIG 兜底的相对默认值不再随进程 CWD 漂移。
+  if (config.logging?.logFilePath) config.logging.logFilePath = toAbsVaultPath(config.logging.logFilePath);
+  if (config.incrementalStatePath) config.incrementalStatePath = toAbsVaultPath(config.incrementalStatePath);
   if (options?.logging) {
     config.logging = {
       enabled: options.logging.enabled ?? config.logging.enabled,
