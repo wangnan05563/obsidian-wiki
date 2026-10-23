@@ -240,6 +240,47 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService,
       });
     }
   });
+
+  // 删除命名隧道（T02913，PRD R-F4 第 4 条另一半）：named 字段此前「只进不出」，
+  // 绑定 hostname 后界面没有任何手段解除，只能去 CLI 手工删。守卫顺序：先本地状态
+  // 后远端资源；远端删除成功才清本地字段，避免「远端还在、本地已清」的漂移。
+  app.post('/api/tunnel/named/delete', { preHandler: guards.requireAdmin }, async (_request, reply) => {
+    const config = await loadConfig();
+    const t = config.tunnel;
+    if (t.tunnelMode !== 'named' && !t.hostname && !t.tunnelName && !t.tunnelId && !t.credentialsFile) {
+      return void reply.code(400).send({ detail: '当前没有已配置的固定域名（Named）隧道，无需删除' });
+    }
+    if (tunnel.status === 'running') {
+      return void reply.code(400).send({ detail: '隧道正在运行，请先停止再删除' });
+    }
+    const nameOrId = t.tunnelName || t.tunnelId;
+    if (nameOrId) {
+      if (!t.certFile) {
+        return void reply.code(400).send({
+          detail: '缺少 cert.pem 登录凭证，无法删除 Cloudflare 侧隧道资源；请重新执行 login 步骤后再删除',
+        });
+      }
+      const svc = getLoginService();
+      try {
+        await svc.deleteTunnel(nameOrId, t.certFile, t.binaryPath);
+      } catch (err) {
+        return void reply.code(500).send({
+          detail: `删除隧道失败: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+    await saveTunnelField('tunnelMode', 'quick');
+    await saveTunnelField('hostname', '');
+    await saveTunnelField('tunnelName', '');
+    await saveTunnelField('tunnelId', '');
+    await saveTunnelField('credentialsFile', '');
+    return void reply.send({
+      ok: true,
+      message: nameOrId
+        ? '隧道已删除，本地已切回快速模式。DNS 的 CNAME 记录 cloudflared 删不了，请到 Cloudflare 控制台 DNS 页手工删除；已分享出去的固定域名链接会失效'
+        : '本地固定域名配置已清除，切回快速模式（Cloudflare 侧未发现可删除的隧道资源）',
+    });
+  });
 }
 
 // T02469：状态响应统一由 buildStatusPayload 构造，status/start/stop/clear 四处共享同一份字段，

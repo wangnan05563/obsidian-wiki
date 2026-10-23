@@ -4,7 +4,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   CopyDocument, TopRight, VideoPlay, VideoPause, Link, RefreshRight, Close, Setting, MagicStick, Check, Key, CirclePlus, Connection,
-  View,
+  View, Delete,
 } from '@element-plus/icons-vue';
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
 import AppModal from '../components/AppModal.vue';
@@ -518,6 +518,40 @@ async function routeDns() {
   }
 }
 
+// ===== Named Tunnel 删除（T02913，PRD R-F4 第 4 条另一半）=====
+// named 字段此前「只进不出」：绑定后没有任何界面手段解除。删除属于写盘操作，
+// 只能由这个按钮显式触发（与 T02637 显式保存语义同源），确认文案必须说明
+// 「域名变化会让已分享链接失效」与 CNAME 记录需到 Cloudflare 控制台手工删除。
+const deletingTunnel = ref(false);
+const namedDeleteError = ref('');
+
+async function deleteNamedTunnel() {
+  namedDeleteError.value = '';
+  try {
+    await ElMessageBox.confirm(
+      '将删除 Cloudflare 侧的命名隧道资源，并清空本页保存的固定域名配置（切回快速模式）。\n\n'
+      + '域名变化会让已分享出去的固定域名链接永久失效；DNS 的 CNAME 记录需要你之后到 Cloudflare 控制台手工删除（本页代办不了）。\n\n确定删除？',
+      '删除固定域名隧道',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
+  } catch {
+    return; // 取消/关闭：什么都不做
+  }
+  deletingTunnel.value = true;
+  try {
+    const res = await apiFetch(`${API_BASE}/tunnel/named/delete`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    ElMessage.success(data.message || '隧道已删除');
+    await Promise.all([loadStatus(), loadConfig()]);
+  } catch (err) {
+    // 内联告警条而不是静默：失败原因（cloudflared 报错 / DNS 侧无权限）常驻在删除按钮上方
+    namedDeleteError.value = (err as Error).message || '删除失败，请重试';
+  } finally {
+    deletingTunnel.value = false;
+  }
+}
+
 // ===== Tailscale 授权处理 =====
 
 function openAuthUrl() {
@@ -789,7 +823,14 @@ onBeforeUnmount(() => {
                 <span class="info-label">固定域名：</span>
                 <code>{{ config.hostname }}</code>
               </div>
-              <IconActionButton name="重新配置" desc="重新运行 Cloudflare Named 隧道配置向导" :icon="Setting" size="small" variant="primary" @click="openWizard" />
+              <!-- T02913：删除出口。此前 named 字段只进不出，绑定后只能去 CLI 手工删 -->
+              <el-alert v-if="namedDeleteError" class="named-config-error" type="error" :closable="true" show-icon @close="namedDeleteError = ''">
+                <span>{{ namedDeleteError }}</span>
+              </el-alert>
+              <div class="named-action-row">
+                <IconActionButton name="重新配置" desc="重新运行 Cloudflare Named 隧道配置向导" :icon="Setting" size="small" variant="primary" @click="openWizard" />
+                <IconActionButton name="删除隧道" desc="删除 Cloudflare 侧隧道资源并清空固定域名配置（域名会失效，需确认）" :icon="Delete" size="small" variant="danger" :loading="deletingTunnel" @click="deleteNamedTunnel" />
+              </div>
             </div>
             <StateBlock
               v-else
@@ -960,7 +1001,7 @@ onBeforeUnmount(() => {
           </ul>
         </li>
         <li>如选 cpolar，需到官网注册获取 authtoken 并填入</li>
-        <li>如选 Cloudflare Named 模式，点击"开始配置向导"完成三步配置</li>
+        <li>如选 Cloudflare Named 模式，点击"开始配置向导"完成三步配置；不再使用时点「删除隧道」回收（已分享的固定域名链接会失效，DNS 的 CNAME 记录需到 Cloudflare 控制台手工删除）</li>
         <li>如选 Tailscale：装好并登录客户端后，用上方面板「前置条件自检」确认四项（安装/登录/MagicDNS/Funnel）是否满足，首次启动还需浏览器授权一次</li>
         <li>本地端口勾选「自动」即使用服务端口，也可取消勾选手动指定</li>
         <li>点击"保存配置"持久化到 config.json</li>
@@ -1195,6 +1236,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* T02913 重新配置 + 删除隧道两个操作并排 */
+.named-action-row {
+  display: flex;
+  gap: 12px;
 }
 
 .info-line {
