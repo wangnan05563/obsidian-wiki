@@ -38,6 +38,8 @@ export interface RestartRefusal {
   error: string;
   active: Pick<CleanupActiveState, 'compile' | 'query'> & {
     queuedCompile: number;
+    // T02931：朗读是独立的本地活跃类别（不进跨进程记录），放在这里只为前端能如实列名
+    tts: number;
     blockedReasons: string[];
   };
 }
@@ -48,13 +50,15 @@ export interface RestartRefusal {
  * guardErrorMessage——那句是「已拦截真实删除 + 改用仅预览」，用在重启上会指错方向。
  * 排队数单独计：activity.ts 只统计已起跑的任务，重启却会连排队中的请求一起丢掉。
  */
-export function restartRefusal(active: CleanupActiveState, queuedCompile = 0): RestartRefusal | null {
-  const running = active.compile + active.query;
+export function restartRefusal(active: CleanupActiveState, queuedCompile = 0, ttsActive = 0): RestartRefusal | null {
+  const running = active.compile + active.query + ttsActive;
   if (running + queuedCompile === 0) return null;
 
   const parts: string[] = [];
   if (active.compile > 0) parts.push(`${active.compile} 个编译`);
   if (active.query > 0) parts.push(`${active.query} 个问答`);
+  // T02931：朗读不改 vault，但重启会切断正在返回的音频流
+  if (ttsActive > 0) parts.push(`${ttsActive} 个朗读`);
   if (queuedCompile > 0) parts.push(`${queuedCompile} 个编译在排队`);
   // 跨进程拦下时把「是谁」带上，否则本进程一个任务都没有却看到「存在进行中任务」无从排查
   const foreign = [...new Set(active.blockedReasons.map((r) => r.reason))].filter((r) => r.includes('另一服务实例'));
@@ -67,6 +71,7 @@ export function restartRefusal(active: CleanupActiveState, queuedCompile = 0): R
       compile: active.compile,
       query: active.query,
       queuedCompile,
+      tts: ttsActive,
       blockedReasons: active.blockedReasons.map((r) => r.reason),
     },
   };

@@ -41,7 +41,7 @@ describe('restartRefusal：有活跃任务就不许重启', () => {
   it('编译任务在跑时拒绝，并带上计数', () => {
     const refusal = restartRefusal(activeState(2, 0));
     expect(refusal?.code).toBe('restart_blocked_by_active_task');
-    expect(refusal?.active).toEqual({ compile: 2, query: 0, queuedCompile: 0, blockedReasons: [] });
+    expect(refusal?.active).toEqual({ compile: 2, query: 0, tts: 0, queuedCompile: 0, blockedReasons: [] });
     expect(refusal?.error).toContain('已拒绝重启');
     expect(refusal?.error).toContain('2 个编译');
   });
@@ -54,8 +54,24 @@ describe('restartRefusal：有活跃任务就不许重启', () => {
   it('只有排队中的编译也拒绝：它还没起跑，但重启同样会丢掉这次提交', () => {
     const refusal = restartRefusal(activeState(0, 0), 2);
     expect(refusal).not.toBeNull();
-    expect(refusal?.active).toEqual({ compile: 0, query: 0, queuedCompile: 2, blockedReasons: [] });
+    expect(refusal?.active).toEqual({ compile: 0, query: 0, tts: 0, queuedCompile: 2, blockedReasons: [] });
     expect(refusal?.error).toContain('2 个编译在排队');
+  });
+
+  // T02931：朗读只跑在本进程，重启会截断它——不登记就会被静默重启杀掉
+  it('朗读进行中同样拒绝，并点名朗读', () => {
+    const refusal = restartRefusal(activeState(0, 0), 0, 1);
+    expect(refusal).not.toBeNull();
+    expect(refusal?.active.tts).toBe(1);
+    expect(refusal?.error).toContain('1 个朗读');
+  });
+
+  it('编译/问答/朗读混合时三项都计入拒绝', () => {
+    const refusal = restartRefusal(activeState(1, 1), 0, 2);
+    expect(refusal?.active).toEqual({ compile: 1, query: 1, tts: 2, queuedCompile: 0, blockedReasons: [] });
+    expect(refusal?.error).toContain('1 个编译');
+    expect(refusal?.error).toContain('1 个问答');
+    expect(refusal?.error).toContain('2 个朗读');
   });
 
   it('正在跑 + 排队同时存在时两项都点出来', () => {
