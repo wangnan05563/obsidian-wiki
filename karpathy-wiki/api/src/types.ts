@@ -44,6 +44,10 @@ export interface EngineAdapter {
   healthCheck(): Promise<HealthReport>;
   // §4.6 一键修复：走 LLM 引擎，SSE 流式返回修复进度
   healthCheckFix(input: FixInput): AsyncIterable<FixProgressEvent>;
+  // T02922 定点复检（可选实现）：确定性判定单个问题是否已被消解，零 LLM 消耗。
+  // 批量修复用它在「流程跑完」之后区分「已消解」与「未消解（ineffective）」；
+  // 未实现时调用方按 resolved 降级（保持流程成功语义）。
+  recheckIssueResolved?(input: FixInput): Promise<boolean>;
   // FR-18 AC-18-4 知识时效复核：为指定 dated 页面追加 reviewed_at（确定性操作，不走 LLM）
   markKnowledgeReviewed(paths: string[]): Promise<{ ok: boolean; paths: string[]; message: string }>;
   // §5.2 模型即时切换：前端 ModelSelector 切换时调用，无需重启

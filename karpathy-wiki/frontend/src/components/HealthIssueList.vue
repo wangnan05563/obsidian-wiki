@@ -15,8 +15,9 @@ const props = defineProps<{
   selected: Set<string>;
   fixingKey: string;
   anyFixing: boolean;
-  // 行在当前批量作业里的状态（done=已处理 / failed=失败），由作业快照与事件流推导
-  jobStates: Record<string, 'done' | 'failed'>;
+  // 行在当前批量作业里的状态（done=已消解 / ineffective=已处理但未消解 / failed=失败），
+  // 由作业快照与事件流推导
+  jobStates: Record<string, 'done' | 'failed' | 'ineffective'>;
 }>();
 
 const emit = defineEmits<{
@@ -178,7 +179,7 @@ watch(
       </template>
 
       <span v-if="jobStates[row.key]" class="row-badge" :class="jobStates[row.key]">
-        {{ jobStates[row.key] === 'done' ? '已处理' : '失败' }}
+        {{ jobStates[row.key] === 'done' ? '已消解' : jobStates[row.key] === 'ineffective' ? '未消解' : '失败' }}
       </span>
 
       <el-button
@@ -337,6 +338,11 @@ watch(
 .row-badge.done {
   color: var(--neon-cyan);
   border-color: var(--accent-cyan-a50);
+}
+
+.row-badge.ineffective {
+  color: var(--neon-amber, #f5a623);
+  border-color: rgba(245, 166, 35, 0.5);
 }
 
 .row-badge.failed {

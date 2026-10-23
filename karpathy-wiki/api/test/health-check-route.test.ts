@@ -34,22 +34,27 @@ interface AdapterStub {
   adapter: EngineAdapter;
   healthCheck: Mock<any, any>;
   fix: Mock<any, any>;
+  // T02922：定点复检桩（默认「已消解」——不关心复检的用例保持原语义）
+  recheck: Mock<any, any>;
   markReviewed: Mock<any, any>;
 }
 
 /** fixFor(eventsMap): 按 target 键返回不同事件序列/异常，覆盖多问题批处理 */
 function makeAdapter(
   fixImpl: (input: { issueType: string; target: unknown }) => AsyncIterable<FixProgressEvent>,
+  recheckImpl: (input: unknown) => Promise<boolean> = async () => true,
 ): AdapterStub {
   const healthCheck = vi.fn(async () => REPORT);
   const fix = vi.fn(fixImpl);
+  const recheck = vi.fn(recheckImpl);
   const markReviewed = vi.fn(async (paths: string[]) => ({ ok: true, paths, message: `reviewed ${paths.length}` }));
   const adapter = {
     healthCheck,
     healthCheckFix: fix,
+    recheckIssueResolved: recheck,
     markKnowledgeReviewed: markReviewed,
   } as unknown as EngineAdapter;
-  return { adapter, healthCheck, fix, markReviewed };
+  return { adapter, healthCheck, fix, recheck, markReviewed };
 }
 
 async function* iterEvents(events: FixProgressEvent[]): AsyncGenerator<FixProgressEvent> {
@@ -270,7 +275,7 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
     expect(frames.map((f) => f.event)).toEqual(['batch_start', 'issue_start', 'progress', 'fixed', 'issue_done', 'batch_done']);
     expect(frames[0].data).toEqual({ jobId, totalIssues: 1 });
     expect(frames[1].data).toMatchObject({ issueKey: 'broken_link:0', issueIndex: 0, totalIssues: 1 });
-    expect(frames[5].data).toMatchObject({ successCount: 1, failCount: 0, message: '批量修复完成：成功 1/1，失败 0' });
+    expect(frames[5].data).toMatchObject({ successCount: 1, failCount: 0, ineffectiveCount: 0, message: '批量修复完成：已处理 1/1，消解 1，未消解 0，失败 0' });
     await a.close();
   });
 
@@ -325,6 +330,80 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
     expect(snapshot).toMatchObject({ successCount: 1, failCount: 2 });
     expect(snapshot.doneKeys).toEqual(['broken_link:0']);
     expect(snapshot.failed.map((f) => f.message)).toEqual(['failed-by-engine', 'item-boom']);
+    await a.close();
+  });
+
+  // T02922：流程完成 ≠ 问题消解（本单的核心口径）
+  it('流程成功但定点复检未消解 → issue_ineffective，不进 doneKeys，单独计入 ineffectiveCount', async () => {
+    const stub = makeAdapter(
+      () => iterEvents([ev('scan', 'running'), ev('fixed', 'done'), ev('done', 'done', 'flow-ok')]),
+      async () => false,
+    );
+    const a = await withApp(stub);
+    const started = await a.inject({
+      method: 'POST',
+      url: '/api/health-check/fix/batch',
+      payload: { items: [itemOrphan], issueKeys: ['orphan:c.md'] },
+    });
+    const jobId = (started.json() as { jobId: string }).jobId;
+    const snap = await untilCompleted('未消解作业进入 completed 终态', readSnapshot(a, jobId));
+    const snapshot = snap.json() as {
+      status: string;
+      doneCount: number;
+      successCount: number;
+      failCount: number;
+      ineffectiveCount: number;
+      ineffective: Array<{ issueKey: string; message: string }>;
+      doneKeys: string[];
+    };
+    expect(snapshot).toMatchObject({
+      status: 'completed',
+      doneCount: 1,
+      successCount: 0,
+      failCount: 0,
+      ineffectiveCount: 1,
+    });
+    expect(snapshot.doneKeys).toEqual([]);
+    expect(snapshot.ineffective).toEqual([{ issueKey: 'orphan:c.md', message: '流程完成但问题未消解' }]);
+    // 复检入参与修复入参一致（复检的是同一问题）
+    expect(stub.recheck).toHaveBeenCalledWith(itemOrphan);
+
+    const events = await a.inject({ method: 'GET', url: `/api/health-check/fix/batch/${jobId}/events` });
+    const frames = parseSSE(events.body);
+    expect(frames.map((f) => f.event)).toEqual([
+      'batch_start',
+      'issue_start',
+      'progress',
+      'fixed',
+      'issue_ineffective',
+      'batch_done',
+    ]);
+    expect(frames[4].data).toMatchObject({ issueKey: 'orphan:c.md', issueDone: true });
+    expect(frames[5].data).toMatchObject({
+      ineffectiveCount: 1,
+      message: '批量修复完成：已处理 1/1，消解 0，未消解 1，失败 0',
+    });
+    await a.close();
+  });
+
+  it('复检自身抛错 → 不能确认消解，按未消解如实上报（不静默当成功）', async () => {
+    const stub = makeAdapter(
+      () => iterEvents([ev('done', 'done', 'ok')]),
+      async () => {
+        throw new Error('vault read failed');
+      },
+    );
+    const a = await withApp(stub);
+    const started = await a.inject({
+      method: 'POST',
+      url: '/api/health-check/fix/batch',
+      payload: { items: [itemBroken], issueKeys: ['broken:a.md->b.md'] },
+    });
+    const jobId = (started.json() as { jobId: string }).jobId;
+    const snap = await untilCompleted('复检异常作业进入 completed 终态', readSnapshot(a, jobId));
+    const snapshot = snap.json() as { successCount: number; ineffectiveCount: number; ineffective: Array<{ message: string }> };
+    expect(snapshot).toMatchObject({ successCount: 0, ineffectiveCount: 1 });
+    expect(snapshot.ineffective[0].message).toContain('复检失败');
     await a.close();
   });
 
