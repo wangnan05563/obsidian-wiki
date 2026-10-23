@@ -44,6 +44,21 @@ const saving = ref(false);
 const formProvider = ref<'cloudflare' | 'cpolar' | 'tailscale'>('cloudflare');
 const formAuthtoken = ref('');
 const formPort = ref(0);
+
+// T02912（PRD R-F4 第 3 条）：「自动」复选框只改表达方式——勾选即输入框禁用并显示继承的服务端口，
+// 存储侧仍是 localPort=0 这个哨兵（api/src/routes/tunnel.ts 兜底 config.server.port），语义不动。
+const portAuto = computed({
+  get: () => formPort.value === 0,
+  set: (v: boolean) => {
+    formPort.value = v ? 0 : config.value?.serverPort ?? 3000;
+  },
+});
+const portHint = computed(() => {
+  const port = config.value?.serverPort;
+  return portAuto.value
+    ? `已勾选自动：继承服务端口 ${port ?? '（读取中…）'}，隧道把公网流量转到本机这个端口`
+    : `隧道把公网流量转到本机的这个端口；不确定就勾选「自动」，继承服务端口 ${port ?? ''}`;
+});
 const formBinaryPath = ref('');
 const formAutoStart = ref(false);
 const formTunnelMode = ref<'quick' | 'named'>('quick');
@@ -815,12 +830,15 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 本地端口 -->
+        <!-- 本地端口（T02912）：「自动」复选框替代「0 = 自动」的哨兵写法 -->
         <div class="config-row">
           <label class="row-label" for="tunnel-port">本地端口</label>
           <div class="row-value">
-            <el-input-number id="tunnel-port" v-model="formPort" :min="0" :max="65535" controls-position="right" />
-            <div class="hint">0 = 自动继承服务端口</div>
+            <div class="port-auto-row">
+              <el-checkbox v-model="portAuto" data-tip="勾选后自动使用服务端口，不用记端口号">自动</el-checkbox>
+              <el-input-number id="tunnel-port" v-model="formPort" :min="0" :max="65535" controls-position="right" :disabled="portAuto" />
+            </div>
+            <div class="hint">{{ portHint }}</div>
           </div>
         </div>
 
@@ -944,7 +962,7 @@ onBeforeUnmount(() => {
         <li>如选 cpolar，需到官网注册获取 authtoken 并填入</li>
         <li>如选 Cloudflare Named 模式，点击"开始配置向导"完成三步配置</li>
         <li>如选 Tailscale：装好并登录客户端后，用上方面板「前置条件自检」确认四项（安装/登录/MagicDNS/Funnel）是否满足，首次启动还需浏览器授权一次</li>
-        <li>本地端口留 0 自动继承服务端口，或指定其他端口</li>
+        <li>本地端口勾选「自动」即使用服务端口，也可取消勾选手动指定</li>
         <li>点击"保存配置"持久化到 config.json</li>
         <li>点击"启动隧道"建立穿透，获得公网 URL</li>
         <li>开机自启开启后，服务启动时自动建立隧道</li>
@@ -1102,6 +1120,13 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--text-dim, #888);
   line-height: 1.5;
+}
+
+/* T02912 「自动」复选框与端口输入同行 */
+.port-auto-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .usage-list {

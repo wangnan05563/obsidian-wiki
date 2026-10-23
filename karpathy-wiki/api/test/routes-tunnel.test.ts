@@ -283,4 +283,13 @@ describe('GET /api/tunnel/config', () => {
     expect(JSON.stringify(res.json())).not.toContain('abcdef1234');
     await app.close();
   });
+
+  it('T02912：响应带 serverPort——界面「自动」复选框要显示实际继承哪个端口，缺了就得让用户猜', async () => {
+    const serverPort = baseAppConfig().server.port;
+    expect(serverPort, '前置：baseAppConfig 的 server.port 得有值，否则本用例测不出联动').toBeTruthy();
+    const app = await buildApp(makeTunnelStub());
+    const res = await app.inject({ method: 'GET', url: '/api/tunnel/config' });
+    expect(res.json().serverPort).toBe(serverPort);
+    await app.close();
+  });
 });

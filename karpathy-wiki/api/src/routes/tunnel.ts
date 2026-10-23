@@ -104,6 +104,8 @@ export function registerTunnelRoute(app: FastifyInstance, tunnel: TunnelService,
     return void reply.send({
       provider: t.provider,
       localPort: t.localPort,
+      // T02912：界面「自动」复选框要显示实际继承哪个端口（localPort=0 仍是存储哨兵，语义不变）
+      serverPort: config.server.port,
       cpolarAuthtokenMasked: maskToken(t.cpolarAuthtoken),
       cpolarAuthtokenConfigured: Boolean(t.cpolarAuthtoken),
       binaryPath: t.binaryPath,
