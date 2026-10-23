@@ -114,6 +114,7 @@ export const useHealthStore = defineStore('health', () => {
         updatedAt: Date.now(),
         elapsedMs: 0,
         avgMsPerIssue: job.value?.avgMsPerIssue ?? 0,
+        avgStepsPerIssue: job.value?.avgStepsPerIssue ?? 0,
         doneKeys: [],
         failed: [],
         nextIndex: 0,

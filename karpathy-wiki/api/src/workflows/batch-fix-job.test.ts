@@ -147,7 +147,9 @@ describe('BatchFixJobManager', { timeout: FS_HEAVY_TIMEOUT_MS }, () => {
     expect(calls.every((c) => !kept.includes(`orphan:${c}`))).toBe(true);
   });
 
-  it('失败项计入 failed 清单且不污染耗时样本', async () => {
+  // T02922 口径：失败项也消耗了真实 LLM 时间，必须计入耗时样本（不排除），
+  // 否则估算只看到成功项、越跑越乐观。此处锁「进 failed 清单」与「进样本」两件事。
+  it('失败项计入 failed 清单，同时仍计入耗时样本（T02922 口径）', async () => {
     const manager = new BatchFixJobManager(dir, fakeAdapter((input) =>
       String(input.target) === 'bad.md'
         ? [{ step: 'done', status: 'error', message: '模型返回异常' }]
@@ -159,21 +161,32 @@ describe('BatchFixJobManager', { timeout: FS_HEAVY_TIMEOUT_MS }, () => {
     expect(done.failCount).toBe(1);
     expect(done.failed).toEqual([{ issueKey: 'orphan:bad.md', message: '模型返回异常' }]);
     expect(done.doneKeys).toEqual(['orphan:ok.md']);
+    await manager.flush();
+    const stats = JSON.parse(await fs.readFile(path.join(dir, 'stats.json'), 'utf8')) as { samples: number };
+    expect(stats.samples).toBe(2);
   });
 
-  it('估算：无历史样本时用兜底均值并标注 basis=default，有样本后按实测均值', async () => {
+  it('估算：无历史样本时用标定兜底值并标注 basis=default，1~4 样本为 measured-low', async () => {
     const manager = new BatchFixJobManager(dir, fakeAdapter(() => [{ step: 'done', status: 'done', message: 'ok' }]));
     const cold = await manager.estimate(10);
     expect(cold.basis).toBe('default');
-    expect(cold.llmCalls).toBe(10);
+    // T02924：llmCalls 按 step 计（10 × 5.7 = 57），不再写死 1 项 1 次
+    expect(cold.avgStepsPerIssue).toBe(5.7);
+    expect(cold.llmCalls).toBe(57);
+    expect(cold.avgMsPerIssue).toBe(115_000);
     expect(cold.estimatedMs).toBe(cold.avgMsPerIssue * 10);
+    expect(cold.estimatedMinMs).toBe(575_000);
+    expect(cold.estimatedMaxMs).toBe(1_725_000);
 
     await manager.recordDuration(10_000);
     await manager.recordDuration(30_000);
     const warm = await manager.estimate(2);
-    expect(warm.basis).toBe('measured');
+    expect(warm.basis).toBe('measured-low');
     expect(warm.samples).toBe(2);
     expect(warm.avgMsPerIssue).toBe(20_000);
+    // ±1σ：样本 10s/30s → σ=10s，区间 20s~60s（count=2）
+    expect(warm.estimatedMinMs).toBe(20_000);
+    expect(warm.estimatedMaxMs).toBe(60_000);
     expect(warm.estimatedMinutes).toBe(1);
   });
 

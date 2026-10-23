@@ -20,7 +20,7 @@ function withoutItems<T extends { items: unknown[] }>(snapshot: T): Omit<T, 'ite
 //   POST /api/health-check/fix             一键修复单个问题（走 LLM，SSE 流式响应）
 //   POST /api/health-check/fix/batch       批量修复（T02466 起改为后台作业：立即返回 jobId）
 //   GET  /api/health-check/fix/batch/current        最近一次批量作业快照（刷新/重进页面恢复进度）
-//   GET  /api/health-check/fix/batch/estimate      启动前量化估算（问题数 / LLM 调用次数 / 预计耗时）
+//   GET  /api/health-check/fix/batch/estimate      启动前量化估算（问题数 / LLM 往返次数 / tokens / 耗时区间，T02924）
 //   GET  /api/health-check/fix/batch/:jobId/events 订阅作业事件（SSE，支持 fromSeq 续传）
 //   POST /api/health-check/fix/batch/pause|resume|cancel  暂停 / 继续 / 取消
 //
@@ -61,6 +61,9 @@ export function registerHealthCheckRoute(
     // T02922 样本口径：只要 LLM 流程跑过就计入（含流程报错/中断），
     // 与批量作业一致——否则估算拿到的只是「成功项」耗时，越跑越乐观
     let flowRan = false;
+    // T02924：与耗时同源采集 step/token 用量，供估算给出「往返次数/tokens」而非按项数估算
+    let harnessSteps = 0;
+    let tokens = 0;
 
     try {
       // 串行队列保护：fix 可能调用 write_file，与 compile 共享 vault 写入
@@ -69,6 +72,8 @@ export function registerHealthCheckRoute(
         for await (const ev of adapter.healthCheckFix(body as FixInput)) {
           // 客户端已断开：提前退出迭代避免继续触发 LLM 调用与 vault 写入
           if (isAborted()) break;
+          if (typeof ev.data?.harnessSteps === 'number') harnessSteps = ev.data.harnessSteps;
+          if (typeof ev.data?.tokens === 'number') tokens = ev.data.tokens;
           if (ev.step === 'done') {
             send('done', ev);
           } else if (ev.step === 'fixed') {
@@ -91,7 +96,7 @@ export function registerHealthCheckRoute(
     } finally {
       if (flowRan) {
         try {
-          await batchJobs.recordDuration(Date.now() - fixStartedAt);
+          await batchJobs.recordDuration(Date.now() - fixStartedAt, { steps: harnessSteps, tokens });
         } catch {
           // 统计失败不影响修复结果
         }
@@ -134,7 +139,8 @@ export function registerHealthCheckRoute(
     });
   });
 
-  // 启动前量化估算：确认弹窗据此显示「N 个问题 / N 次 LLM 调用 / 约 X 分钟（估算）」。
+  // 启动前量化估算：T02924 起按「项数 × 实测平均 step 数」给 LLM 往返次数，并带 tokens 与耗时区间；
+  // 样本不足（basis=default/measured-low）时响应本身即声明「仅供参考」，前端据此标黄。
   // 只读，无副作用；count 上限保护避免被当作压测入口。
   app.get('/api/health-check/fix/batch/estimate', { preHandler: guards.requireAdmin }, async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { count?: string };

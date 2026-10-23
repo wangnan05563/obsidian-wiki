@@ -525,20 +525,29 @@ export interface BatchFixJobSnapshot {
   updatedAt: number;
   elapsedMs: number;
   avgMsPerIssue: number;
+  // T02924：每项平均模型往返次数（样本不足时为标定默认值）
+  avgStepsPerIssue: number;
   doneKeys: string[];
   failed: BatchFixFailedItem[];
   nextIndex: number;
 }
 
-// 启动前量化估算：basis=measured 表示基于历史实测均值，default 表示无样本兜底
+// 启动前量化估算（T02924 口径）：
+//   llmCalls = 项数 × 每项平均 step 数（模型往返次数，不是「1 项 1 次」）；
+//   basis: default 无样本（用实测标定兜底）/ measured-low 样本 1~4（仅供参考）/ measured ≥5。
 export interface BatchFixEstimate {
   count: number;
   llmCalls: number;
+  avgStepsPerIssue: number;
   avgMsPerIssue: number;
+  avgTokensPerIssue: number;
+  tokens: number;
   samples: number;
   estimatedMs: number;
+  estimatedMinMs: number;
+  estimatedMaxMs: number;
   estimatedMinutes: number;
-  basis: 'measured' | 'default';
+  basis: 'default' | 'measured-low' | 'measured';
 }
 
 // ===== 全文检索相关类型 =====

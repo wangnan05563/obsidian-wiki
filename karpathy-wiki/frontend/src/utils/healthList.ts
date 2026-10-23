@@ -3,7 +3,7 @@
 // 为什么抽出来：Health.vue 原先把 4 类问题各写一段模板，597 项逐行渲染、无搜索、
 // 无多选、无折叠，且「过期页面」这类根本不能自动修复的问题和可修复项混在同一个
 // 总数里报警。列表建模属于纯计算，抽成 utils 后可单测、可复用（移动端后续接入）。
-import type { HealthReport } from '../types';
+import type { BatchFixEstimate, HealthReport } from '../types';
 
 export type IssueKind = 'orphan' | 'broken' | 'stale' | 'knowledge_stale';
 
@@ -167,6 +167,38 @@ export function formatDuration(ms: number): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest > 0 ? `约 ${hours} 小时 ${rest} 分` : `约 ${hours} 小时`;
+}
+
+// ===== T02924 启动前估算展示（口径见 api/src/workflows/batch-fix-job.ts）=====
+
+export function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 10_000) return `${(n / 10_000).toFixed(1).replace(/\.0$/, '')} 万`;
+  return String(Math.round(n));
+}
+
+type EstimateBasis = Pick<
+  BatchFixEstimate,
+  'basis' | 'samples' | 'avgMsPerIssue' | 'avgStepsPerIssue' | 'avgTokensPerIssue'
+>;
+
+// 三态必须投影到文案：default / measured-low 都要显式承认「样本不足」，
+// 不能让用户把兜底值当成实测值（T02605 的 2 分钟 vs 实际 6 分钟即由此而来）。
+export function estimateBasisText(e: EstimateBasis): string {
+  const per = `${formatDuration(e.avgMsPerIssue)}、${e.avgStepsPerIssue} 次往返/项`;
+  if (e.basis === 'measured') {
+    return `估算依据：最近 ${e.samples} 次实测均值 ${per}`;
+  }
+  if (e.basis === 'measured-low') {
+    return `估算依据：仅 ${e.samples} 个实测样本（不足 5 个，仅供参考），均值 ${per}`;
+  }
+  return `估算依据：尚无实测样本，按真实链路标定的默认值估算（${e.avgStepsPerIssue} 次往返 / ${formatDuration(e.avgMsPerIssue)} / 约 ${formatTokens(e.avgTokensPerIssue)} tokens 每项）`;
+}
+
+// 误差区间文案：宽度为 0（旧样本无法量方差之外的退化情形）时不显示，避免「假精确」
+export function estimateRangeText(minMs: number, maxMs: number): string {
+  if (!Number.isFinite(minMs) || !Number.isFinite(maxMs) || minMs === maxMs) return '';
+  return `区间 ${formatDuration(minMs)} ~ ${formatDuration(maxMs)}`;
 }
 
 // 已用时 mm:ss
