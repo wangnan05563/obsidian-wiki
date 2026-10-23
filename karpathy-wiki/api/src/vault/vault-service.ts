@@ -4,6 +4,8 @@ import matter from 'gray-matter';
 import { watch, type FSWatcher } from 'chokidar';
 // T02472 L1：页面口径（目录白名单 + 页面文件判定）单点定义，与数据清洗/统计接口共用
 import { PAGE_DIRS, isPageFile, WRITABLE_DIRS, INIT_DIRS, pageDepthError } from './page-scope.js';
+// T02921：wikilink 解析与目标名解析唯一实现（拆别名/锚点 + 大小写不敏感回落）
+import { createLinkResolver, extractWikilinkTargets } from './link-parser.js';
 
 // 将底层 fs 读取错误包装为带 code 的 Error，保留准确文案（区分不存在/目录/权限/其它）。
 // 为什么需要：路由层需按 HTTP 状态码分流（目录→400、权限→403、不存在→404、其它→500），
@@ -591,13 +593,14 @@ export class VaultService {
       ),
     );
 
-    // 用最新 nameToPath 解析 rawLinks 为 edges
+    // 用最新 nameToPath 解析 rawLinks 为 edges（T02921：解析走唯一 resolver——精确优先 + 大小写不敏感回落）
+    const resolver = createLinkResolver(nameToPath);
     const edges: Array<{ from: string; to: string }> = [];
     for (let i = 0; i < rawLinksArrays.length; i++) {
       const fromPath = Array.from(nameToPath.values())[i];
       const rawLinks = rawLinksArrays[i];
       for (const target of rawLinks) {
-        const toPath = nameToPath.get(target);
+        const toPath = resolver.resolve(target);
         if (toPath) {
           edges.push({ from: fromPath, to: toPath });
         }
@@ -658,12 +661,8 @@ export class VaultService {
       return [];
     }
 
-    const rawLinks: string[] = [];
-    const wikilinkRe = /\[\[([^\]]+)\]\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = wikilinkRe.exec(content)) !== null) {
-      rawLinks.push(m[1].trim());
-    }
+    // T02921：rawLinks 存拆掉别名/锚点后的真实目标名（边解析与断链扫描共用同一口径）
+    const rawLinks = extractWikilinkTargets(content);
 
     this._fileLinksCache.set(fromPath, { mtime: stat.mtimeMs, rawLinks });
     return rawLinks;

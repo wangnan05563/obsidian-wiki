@@ -18,6 +18,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
 import type { VaultService } from '../vault/vault-service.js';
+// T02921：wikilink 解析唯一实现（拆别名/锚点），discover 与 gaps/体检共用同一口径
+import { extractWikilinkTargets } from '../vault/link-parser.js';
 // T02686：页面目录取 page-scope 单一来源（此前本文件另写了一份同字面 PAGE_DIRS，无引用关系）
 import { PAGE_DIRS } from '../vault/page-scope.js';
 
@@ -46,14 +48,9 @@ export interface PageMetadata {
 
 // 提取：抽取正文中所有 [[页面名]] 双链
 // 为什么提取为独立函数：降低 S3776 认知复杂度，同时复用于其他场景
+// T02921：解析走唯一实现——`[[目标|别名]]`/`[[目标#锚点]]` 只取真实目标名
 function extractWikilinks(raw: string): Set<string> {
-  const wikilinks = new Set<string>();
-  const wikilinkRe = /\[\[([^\]]+)\]\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = wikilinkRe.exec(raw)) !== null) {
-    wikilinks.add(m[1].trim());
-  }
-  return wikilinks;
+  return new Set(extractWikilinkTargets(raw));
 }
 
 // 提取：读取单个目录下的所有 md 文件元数据
