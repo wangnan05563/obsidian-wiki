@@ -21,6 +21,30 @@ export function sendSSE(reply: FastifyReply, event: string, data: unknown): void
   reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+// T02930：在途 SSE 流的登记表。停服时先向客户端补一个终止事件再 end，
+// 让浏览器/前端拿到「流正常结束」而不是进程退出时的 ECONNRESET。
+// 为什么放在模块级而不是路由参数：13 处 SSE 路由共用 createSSESender，
+// 单点登记才能在 shutdown 时一次收尾，不必给每条路由加关闭钩子。
+const activeStreamClosers = new Set<(reason: string) => void>();
+
+export function activeSSECount(): number {
+  return activeStreamClosers.size;
+}
+
+// 结束所有在途 SSE 流，返回被收尾的流数量
+export function closeAllSSEStreams(reason = 'server-shutdown'): number {
+  const closers = [...activeStreamClosers];
+  activeStreamClosers.clear();
+  for (const close of closers) {
+    try {
+      close(reason);
+    } catch {
+      // 单个流写失败不影响其余流收尾
+    }
+  }
+  return closers.length;
+}
+
 // SSE 安全写入工厂：返回 send 函数与 aborted 检查器
 // 为什么需要：客户端 abort 后 reply.raw 被销毁，继续 write/end 会抛 ERR_STREAM_DESTROYED，
 // 被 Fastify 作为未捕获异常处理为 HTTP 500，污染日志并误导排障。
@@ -29,10 +53,6 @@ export function sendSSE(reply: FastifyReply, event: string, data: unknown): void
 // reply.raw（响应可写流）的 close 才是客户端断开连接的真实信号。
 export function createSSESender(reply: FastifyReply, request: FastifyRequest) {
   let aborted = false;
-  // 客户端断开（前端 abort / 网络中断 / 切换菜单触发 onBeforeUnmount）时触发
-  reply.raw.on('close', () => {
-    aborted = true;
-  });
   const send = (event: string, data: unknown): boolean => {
     if (aborted || reply.raw.destroyed || reply.raw.writableEnded) return false;
     try {
@@ -55,5 +75,20 @@ export function createSSESender(reply: FastifyReply, request: FastifyRequest) {
       // 流已销毁，忽略
     }
   };
+  // T02930：停服收尾。先补一个终结事件告知客户端「是服务端主动关的」，
+  // 再置 aborted 让上游迭代器尽快退出（不再发起 LLM 调用/写 Vault）。
+  const closeForShutdown = (reason: string): void => {
+    if (!aborted && !reply.raw.writableEnded && !reply.raw.destroyed) {
+      send('server-shutdown', { reason });
+    }
+    aborted = true;
+    safeEnd();
+  };
+  activeStreamClosers.add(closeForShutdown);
+  // 客户端断开（前端 abort / 网络中断 / 切换菜单触发 onBeforeUnmount）时触发
+  reply.raw.on('close', () => {
+    aborted = true;
+    activeStreamClosers.delete(closeForShutdown);
+  });
   return { send, isAborted, safeEnd };
 }

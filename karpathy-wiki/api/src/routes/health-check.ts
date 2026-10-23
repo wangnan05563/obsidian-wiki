@@ -96,7 +96,9 @@ export function registerHealthCheckRoute(
     } finally {
       if (flowRan) {
         try {
-          await batchJobs.recordDuration(Date.now() - fixStartedAt, { steps: harnessSteps, tokens });
+          // 下限钳 1ms：recordDuration 拒绝 <=0，而瞬时完成的流程 Date.now() 差可能为 0，
+          // 整条样本会被静默丢弃（与 batch-fix-job 的单批量路径同一口径）。
+          await batchJobs.recordDuration(Math.max(1, Date.now() - fixStartedAt), { steps: harnessSteps, tokens });
         } catch {
           // 统计失败不影响修复结果
         }
