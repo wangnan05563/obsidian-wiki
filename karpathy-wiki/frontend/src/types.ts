@@ -489,10 +489,13 @@ export interface BatchFixProgressEvent extends FixProgressEvent {
 }
 
 // 批量修复 batch_done 事件载荷：附统计信息
+// T02922：「已处理」与「已消解」分开——successCount 是复检确认消解的数，
+// ineffectiveCount 是流程跑完但复检未确认消解的项
 export interface BatchDoneEvent extends FixProgressEvent {
   totalIssues: number;
   successCount: number;
   failCount: number;
+  ineffectiveCount?: number;
 }
 
 // ===== T02466（PRD R-F2）批量修复后台作业 =====
@@ -510,8 +513,12 @@ export interface BatchFixJobSnapshot {
   status: BatchFixJobStatus;
   total: number;
   doneCount: number;
+  // 已消解：流程成功且定点复检确认问题消失（与 doneKeys 一一对应）
   successCount: number;
   failCount: number;
+  // T02922：流程跑完但复检未确认消解（LLM 没报错，问题仍在）
+  ineffectiveCount: number;
+  ineffective: BatchFixFailedItem[];
   currentIssueKey: string;
   pauseRequested: boolean;
   startedAt: number;

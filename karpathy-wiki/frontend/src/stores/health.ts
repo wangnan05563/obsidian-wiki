@@ -20,6 +20,8 @@ export const useHealthStore = defineStore('health', () => {
   // 已完成 key 集合：由快照初始化 + 事件流增量维护，列表项据此高亮
   const batchDoneKeys = ref<Set<string>>(new Set());
   const batchFailed = ref<BatchFixFailedItem[]>([]);
+  // T02922：流程跑完但复检未确认消解的项（与失败区分，列表项显示「未消解」）
+  const batchIneffective = ref<BatchFixFailedItem[]>([]);
 
   // 修复进度日志（时间线展示，单个修复与批量修复共用）
   const fixLogs = ref<FixProgressEvent[]>([]);
@@ -29,6 +31,8 @@ export const useHealthStore = defineStore('health', () => {
   const batchCurrent = computed(() => (job.value ? Math.min(job.value.doneCount + 1, job.value.total) : 0));
   const batchSuccessCount = computed(() => job.value?.successCount ?? 0);
   const batchFailCount = computed(() => job.value?.failCount ?? 0);
+  // 未消解数：快照优先，事件流未回填快照时按本地列表长度兜底
+  const batchIneffectiveCount = computed(() => job.value?.ineffectiveCount ?? batchIneffective.value.length);
   const batchElapsedMs = computed(() => {
     if (!job.value) return 0;
     // 运行中的耗时按「快照落盘时刻 + 之后经过的墙钟时间」外推，避免面板停在旧数字
@@ -52,16 +56,19 @@ export const useHealthStore = defineStore('health', () => {
     if (!snapshot) {
       batchDoneKeys.value = new Set();
       batchFailed.value = [];
+      batchIneffective.value = [];
       return;
     }
     batchDoneKeys.value = new Set(snapshot.doneKeys);
     batchFailed.value = [...snapshot.failed];
+    batchIneffective.value = [...(snapshot.ineffective ?? [])];
   }
 
   function clearJob() {
     job.value = null;
     batchDoneKeys.value = new Set();
     batchFailed.value = [];
+    batchIneffective.value = [];
   }
 
   // 开始单个修复
@@ -99,6 +106,8 @@ export const useHealthStore = defineStore('health', () => {
         doneCount: 0,
         successCount: 0,
         failCount: 0,
+        ineffectiveCount: 0,
+        ineffective: [],
         currentIssueKey: '',
         pauseRequested: false,
         startedAt: Date.now(),
@@ -111,6 +120,7 @@ export const useHealthStore = defineStore('health', () => {
       };
       batchDoneKeys.value = new Set();
       batchFailed.value = [];
+      batchIneffective.value = [];
       fixLogs.value = [];
       return;
     }
@@ -154,27 +164,34 @@ export const useHealthStore = defineStore('health', () => {
       });
       return;
     }
-    if (eventType === 'issue_done' || eventType === 'issue_error') {
+    if (eventType === 'issue_done' || eventType === 'issue_error' || eventType === 'issue_ineffective') {
       const key = String(ev.issueKey ?? '');
+      const resolved = eventType === 'issue_done';
+      const ineffective = eventType === 'issue_ineffective';
       if (job.value) {
         job.value.doneCount = Math.min(job.value.doneCount + 1, job.value.total);
         job.value.currentIssueKey = '';
-        if (eventType === 'issue_done') job.value.successCount++;
-        else {
+        if (resolved) job.value.successCount++;
+        else if (ineffective) {
+          job.value.ineffectiveCount++;
+          const item: BatchFixFailedItem = { issueKey: key, message: ev.message || '流程完成但问题未消解' };
+          batchIneffective.value.push(item);
+          job.value.ineffective = [...batchIneffective.value];
+        } else {
           job.value.failCount++;
           const item: BatchFixFailedItem = { issueKey: key, message: ev.message || '修复失败' };
           batchFailed.value.push(item);
-          if (job.value) job.value.failed = [...batchFailed.value];
+          job.value.failed = [...batchFailed.value];
         }
         job.value.updatedAt = Date.now();
       }
-      // doneKeys 语义与后端快照一致：只记「修复成功」的项（失败项进 batchFailed）。
-      // 若把失败项也计入，快照校准（GET /batch/:jobId）后高亮会莫名消失。
-      if (eventType === 'issue_done' && key) batchDoneKeys.value.add(key);
+      // doneKeys 语义与后端快照一致：只记「确认消解」的项（失败/未消解分别进 failed/ineffective）。
+      // 若把其它项也计入，快照校准（GET /batch/:jobId）后高亮会莫名消失。
+      if (resolved && key) batchDoneKeys.value.add(key);
       pushFixLog({
         step: 'done',
-        status: eventType === 'issue_done' ? 'done' : 'error',
-        message: `[${Number(ev.issueIndex ?? 0) + 1}/${ev.totalIssues ?? 0}] ${ev.message ?? (eventType === 'issue_done' ? '已修复' : '修复失败')}`,
+        status: ineffective ? 'running' : resolved ? 'done' : 'error',
+        message: `[${Number(ev.issueIndex ?? 0) + 1}/${ev.totalIssues ?? 0}] ${ev.message ?? (resolved ? '已修复' : ineffective ? '未消解' : '修复失败')}`,
         tool: ev.tool,
         data: ev.data,
       });
@@ -214,11 +231,13 @@ export const useHealthStore = defineStore('health', () => {
     job,
     batchDoneKeys,
     batchFailed,
+    batchIneffective,
     batchFixing,
     batchTotal,
     batchCurrent,
     batchSuccessCount,
     batchFailCount,
+    batchIneffectiveCount,
     batchElapsedMs,
     batchRemaining,
     batchEtaMs,

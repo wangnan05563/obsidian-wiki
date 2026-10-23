@@ -20,6 +20,7 @@ import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
 import { PAGE_DIRS, isPageFile } from '../vault/page-scope.js';
 // T02921：wikilink 解析与目标名解析唯一实现（拆别名/锚点 + 大小写不敏感回落）
 import { createLinkResolver, extractWikilinkTargets } from '../vault/link-parser.js';
+import type { LinkResolver } from '../vault/link-parser.js';
 
 // BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
 import { applyPerRequestOverride } from './byok-override.js';
@@ -250,14 +251,7 @@ export class HarnessAdapter implements EngineAdapter {
     // 原来这里写死 4 个目录（entities/concepts/comparisons/queries），而链接图/统计/清洗按 6 个目录算页面
     // → qa/ 与 solutions/ 页面里的 [[链接]] 永远不会被体检判为断链（体检报「0 断链」但页面确实指空）。
     const pageDirs = PAGE_DIRS;
-    const nameToPath = new Map<string, string>();
-    for (const rel of graph.nodes) {
-      const base = path.basename(rel, '.md');
-      nameToPath.set(base, rel);
-    }
-    // T02921：与链接图共用同一解析口径（精确优先 + 大小写不敏感回落），
-    // 别名/锚点已由 extractWikilinkTargets 拆掉，to 字段是真实目标名
-    const resolver = createLinkResolver(nameToPath);
+    const resolver = this.buildNameResolverFromGraph(graph);
 
     // §11.2：页面目录（PAGE_DIRS，6 个）并行扫描断链，Promise.all 等待全部完成
     const scanDir = async (d: string): Promise<Array<{ from: string; to: string }>> => {
@@ -326,6 +320,42 @@ export class HarnessAdapter implements EngineAdapter {
   invalidateHealthCheckCache(): void {
     this.healthReportCache = null;
     this.healthReportCachedAt = 0;
+  }
+
+  // 链接图 → 页面名解析器（doHealthCheck 与 recheckIssueResolved 共用同一口径）。
+  // T02921：精确优先 + 大小写不敏感回落，别名/锚点由 extractWikilinkTargets 拆掉。
+  private buildNameResolverFromGraph(graph: { nodes: string[] }): LinkResolver {
+    const nameToPath = new Map<string, string>();
+    for (const rel of graph.nodes) {
+      const base = path.basename(rel, '.md');
+      nameToPath.set(base, rel);
+    }
+    return createLinkResolver(nameToPath);
+  }
+
+  // T02922 定点复检：确定性判定单个问题是否已被消解，零 LLM 消耗。
+  // 为什么不复用 healthCheck()：那会命中 HEALTH_CHECK_CACHE_TTL_MS 缓存，把「写后」判成「写前」；
+  // buildLinkGraph 由 vault.writeFile 主动失效（vault-service.ts 写路径），此处拿到的一定是写后状态。
+  // 判定口径与 doHealthCheck 完全一致：
+  //   orphan：入链集合（graph.edges 的 to 端）包含该页 → 消解；
+  //   broken：来源页已不再指向该目标，或目标现在可解析 → 消解。
+  async recheckIssueResolved(input: FixInput): Promise<boolean> {
+    const graph = await this.vault.buildLinkGraph();
+    if (input.issueType === 'orphan') {
+      const targetPath = input.target as string;
+      return graph.edges.some((e) => e.to === targetPath);
+    }
+    const { from, to } = input.target as { from: string; to: string };
+    // 来源页已被删除/改路径 → 断链对不再存在，按消解（与体检列表一致：列表里也不会再有该对）
+    let content = '';
+    try {
+      content = await this.vault.readFile(from);
+    } catch {
+      return true;
+    }
+    const targets = extractWikilinkTargets(content);
+    if (!targets.includes(to)) return true;
+    return this.buildNameResolverFromGraph(graph).resolve(to) !== null;
   }
 
   // FR-18 AC-18-4：确定性"人工复核"动作——为指定 dated 页面追加 reviewed_at 到 frontmatter。

@@ -12,6 +12,11 @@
 //     取消 = 当前问题跑完后终止，已完成项保留（不做「回滚」承诺）；
 //   - 真实耗时样本持久化在 jobsDir/stats.json，供启动前量化估算（明确标注为估算）。
 //
+// T02922 成功口径裁决：流程跑完 ≠ 问题消解。每项流程成功后再做一次定点复检
+// （adapter.recheckIssueResolved，确定性、零 LLM），未消解判 ineffective 单独计数，
+// 不进 doneKeys；耗时样本改为「跑了 LLM 流程的项都计入」（成功/未消解/失败都消耗真实时间，
+// 否则无效项不计样本会让估算越跑越乐观）。
+//
 // vault 写入纪律不变：整批仍包在 withCompileLock 内串行，与 compile 互斥。
 
 import fs from 'node:fs/promises';
@@ -46,8 +51,12 @@ export interface BatchFixSnapshot {
   status: BatchFixStatus;
   total: number;
   doneCount: number;
+  // 已消解数：流程成功且定点复检确认问题消失（doneKeys 与之一一对应）
   successCount: number;
   failCount: number;
+  // T02922：流程跑完但定点复检未确认消解的项（与失败区分——LLM 没报错，只是问题还在）
+  ineffectiveCount: number;
+  ineffective: BatchFixFailedItem[];
   currentIssueKey: string;
   pauseRequested: boolean;
   startedAt: number;
@@ -140,6 +149,8 @@ export class BatchFixJobManager {
       doneCount: 0,
       successCount: 0,
       failCount: 0,
+      ineffectiveCount: 0,
+      ineffective: [],
       currentIssueKey: '',
       pauseRequested: false,
       startedAt: now,
@@ -350,6 +361,8 @@ export class BatchFixJobManager {
     }
     snap.status = snap.nextIndex >= snap.total ? 'completed' : snap.status;
     if (snap.status === 'completed') {
+      // T02922：文案区分「已处理」与「已消解」——进度条 100% 只代表处理完，
+      // 消解数才回答「问题还在不在」
       this.emit(entry, 'batch_done', {
         jobId: snap.jobId,
         step: 'done',
@@ -357,17 +370,21 @@ export class BatchFixJobManager {
         totalIssues: snap.total,
         successCount: snap.successCount,
         failCount: snap.failCount,
-        message: `批量修复完成：成功 ${snap.successCount}/${snap.total}，失败 ${snap.failCount}`,
+        ineffectiveCount: snap.ineffectiveCount,
+        message: `批量修复完成：已处理 ${snap.doneCount}/${snap.total}，消解 ${snap.successCount}，未消解 ${snap.ineffectiveCount}，失败 ${snap.failCount}`,
       });
     }
   }
 
-  // 修复单个问题：把 adapter.healthCheckFix 的事件包装为带定位信息的批量事件
+  // 修复单个问题：把 adapter.healthCheckFix 的事件包装为带定位信息的批量事件。
+  // T02922：流程成功的终态事件延后到定点复检之后——先裁定「消解/未消解」，
+  // 再发 issue_done / issue_ineffective，保证「全部打绿」只代表问题真的消解了。
   private async fixOne(entry: JobEntry, item: BatchFixItem, issueIndex: number): Promise<void> {
     const snap = entry.snapshot;
     const startedAt = Date.now();
     let succeeded = false;
     let errorMessage = '';
+    let doneMessage = '';
     let gotDoneEvent = false;
     try {
       for await (const ev of this.adapter.healthCheckFix(item.input)) {
@@ -381,8 +398,11 @@ export class BatchFixJobManager {
         if (ev.step === 'done') {
           gotDoneEvent = true;
           succeeded = ev.status === 'done';
-          errorMessage = succeeded ? '' : ev.message || '修复失败';
-          this.emit(entry, succeeded ? 'issue_done' : 'issue_error', wrapped);
+          if (succeeded) doneMessage = ev.message;
+          else {
+            errorMessage = ev.message || '修复失败';
+            this.emit(entry, 'issue_error', wrapped);
+          }
         } else {
           this.emit(entry, ev.step === 'fixed' ? 'fixed' : 'progress', wrapped);
         }
@@ -401,17 +421,53 @@ export class BatchFixJobManager {
         issueDone: true,
       });
     }
-    const ms = Date.now() - startedAt;
+    // 下限钳 1ms：recordDuration 拒绝 <=0，而瞬时完成的桩流程 Date.now() 差可能为 0
+    const ms = Math.max(1, Date.now() - startedAt);
     if (!gotDoneEvent) errorMessage = '修复流提前结束（未收到完成事件）';
     if (succeeded) {
-      snap.successCount++;
-      snap.doneKeys.push(item.issueKey);
-      await this.recordDuration(ms);
-      snap.avgMsPerIssue = (await this.readStats()).avgMs;
+      // 定点复检：确定性检查（零 LLM），裁定问题是否真的消解。
+      // adapter 未实现复检时按消解降级（保持流程成功语义）；复检自身异常按未消解如实上报。
+      let resolved = true;
+      let recheckNote = '';
+      try {
+        resolved = (await this.adapter.recheckIssueResolved?.(item.input)) ?? true;
+      } catch (err: unknown) {
+        resolved = false;
+        recheckNote = `复检失败: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      if (resolved) {
+        snap.successCount++;
+        snap.doneKeys.push(item.issueKey);
+        this.emit(entry, 'issue_done', {
+          step: 'done',
+          status: 'done',
+          message: doneMessage || '已修复',
+          issueIndex,
+          totalIssues: snap.total,
+          issueKey: item.issueKey,
+          issueDone: true,
+        });
+      } else {
+        snap.ineffectiveCount++;
+        snap.ineffective.push({ issueKey: item.issueKey, message: recheckNote || '流程完成但问题未消解' });
+        this.emit(entry, 'issue_ineffective', {
+          step: 'done',
+          status: 'done',
+          message: recheckNote || '流程完成但问题未消解（已处理，需复核）',
+          issueIndex,
+          totalIssues: snap.total,
+          issueKey: item.issueKey,
+          issueDone: true,
+        });
+      }
     } else {
       snap.failCount++;
       snap.failed.push({ issueKey: item.issueKey, message: errorMessage });
     }
+    // 耗时样本口径：只要 LLM 流程跑过就计入（成功/未消解/失败都消耗真实时间），
+    // 否则无效项白跑 LLM 却不计样本，估算会越跑越乐观
+    await this.recordDuration(ms);
+    snap.avgMsPerIssue = (await this.readStats()).avgMs;
   }
 
   private emit(entry: JobEntry, event: string, data: unknown): void {
@@ -493,6 +549,9 @@ export class BatchFixJobManager {
         snapshot.status = 'paused';
         snapshot.pauseRequested = false;
       }
+      // 旧快照（T02922 之前落盘）没有这两个字段，补齐避免前端读到 undefined
+      snapshot.ineffectiveCount ??= 0;
+      snapshot.ineffective ??= [];
       const entry: JobEntry = {
         snapshot,
         buffer: [],

@@ -58,16 +58,19 @@ export function registerHealthCheckRoute(
     const { send, isAborted, safeEnd } = createSSESender(reply, request);
     // T02466：记录真实耗时样本，供批量修复启动前的量化估算复用
     const fixStartedAt = Date.now();
+    // T02922 样本口径：只要 LLM 流程跑过就计入（含流程报错/中断），
+    // 与批量作业一致——否则估算拿到的只是「成功项」耗时，越跑越乐观
+    let flowRan = false;
 
     try {
       // 串行队列保护：fix 可能调用 write_file，与 compile 共享 vault 写入
       await withCompileLock(async () => {
+        flowRan = true;
         for await (const ev of adapter.healthCheckFix(body as FixInput)) {
           // 客户端已断开：提前退出迭代避免继续触发 LLM 调用与 vault 写入
           if (isAborted()) break;
           if (ev.step === 'done') {
             send('done', ev);
-            if (ev.status === 'done') await batchJobs.recordDuration(Date.now() - fixStartedAt);
           } else if (ev.step === 'fixed') {
             send('fixed', ev);
           } else {
@@ -86,6 +89,13 @@ export function registerHealthCheckRoute(
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
+      if (flowRan) {
+        try {
+          await batchJobs.recordDuration(Date.now() - fixStartedAt);
+        } catch {
+          // 统计失败不影响修复结果
+        }
+      }
       safeEnd();
     }
   });

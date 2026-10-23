@@ -72,11 +72,13 @@ const {
   job,
   batchDoneKeys,
   batchFailed,
+  batchIneffective,
   batchFixing,
   batchTotal,
   batchCurrent,
   batchSuccessCount,
   batchFailCount,
+  batchIneffectiveCount,
   batchElapsedMs,
   batchEtaMs,
   batchRemaining,
@@ -109,10 +111,11 @@ const healthStatus = computed<'healthy' | 'warning'>(() =>
   totalIssues.value === 0 ? 'healthy' : 'warning',
 );
 
-// 行在批量作业里的状态：失败覆盖成功（同一 key 重试失败后不应仍显示「已处理」）
-const jobStates = computed<Record<string, 'done' | 'failed'>>(() => {
-  const out: Record<string, 'done' | 'failed'> = {};
+// 行在批量作业里的状态：失败/未消解覆盖成功（同一 key 重试后以最新结局为准）
+const jobStates = computed<Record<string, 'done' | 'failed' | 'ineffective'>>(() => {
+  const out: Record<string, 'done' | 'failed' | 'ineffective'> = {};
   for (const key of batchDoneKeys.value) out[key] = 'done';
+  for (const f of batchIneffective.value) out[f.issueKey] = 'ineffective';
   for (const f of batchFailed.value) out[f.issueKey] = 'failed';
   return out;
 });
@@ -457,7 +460,10 @@ function dismissJob(): void {
 }
 
 function retryFailed(): void {
-  void openEstimate(new Set(batchFailed.value.map((f) => f.issueKey)));
+  const keys = new Set(
+    [...batchFailed.value, ...batchIneffective.value].map((f) => f.issueKey),
+  );
+  void openEstimate(keys);
 }
 
 const jobStatusText = computed(() => {
@@ -670,7 +676,10 @@ onMounted(() => {
 
         <div class="job-stats">
           <span class="job-stat">第 {{ batchCurrent }} / {{ batchTotal }} 个</span>
-          <span class="job-stat ok">成功 {{ batchSuccessCount }}</span>
+          <span class="job-stat ok" data-tip="流程成功且定点复检确认问题已消失">已消解 {{ batchSuccessCount }}</span>
+          <span v-if="batchIneffectiveCount > 0" class="job-stat warn" data-tip="LLM 流程已跑完，但复检发现问题仍在（未消解，建议重跑或人工处理）">
+            未消解 {{ batchIneffectiveCount }}
+          </span>
           <span class="job-stat fail">失败 {{ batchFailCount }}</span>
           <span class="job-stat">已用时 {{ formatElapsed(batchElapsedMs) }}</span>
           <span v-if="job.status === 'running' && batchEtaMs > 0" class="job-stat">
@@ -714,20 +723,27 @@ onMounted(() => {
             取消
           </el-button>
           <el-button
-            v-if="batchFailed.length > 0 && job.status !== 'running'"
+            v-if="(batchFailed.length > 0 || batchIneffective.length > 0) && job.status !== 'running'"
             size="small"
             class="neon-btn"
             :icon="RefreshRight"
-            data-tip="重试失败项 - 只把上次失败的问题重新提交为新作业"
+            data-tip="重试失败/未消解项 - 只把上次未达成的问题重新提交为新作业"
             :disabled="anyFixing"
             @click="retryFailed"
           >
-            重试失败项（{{ batchFailed.length }}）
+            重试失败/未消解（{{ batchFailed.length + batchIneffective.length }}）
           </el-button>
         </div>
 
         <div v-if="batchFailed.length > 0" class="job-failed">
           <div v-for="f in batchFailed" :key="f.issueKey" class="failed-item">
+            <code>{{ f.issueKey }}</code>
+            <span class="failed-msg">{{ f.message }}</span>
+          </div>
+        </div>
+
+        <div v-if="batchIneffective.length > 0" class="job-failed">
+          <div v-for="f in batchIneffective" :key="f.issueKey" class="failed-item">
             <code>{{ f.issueKey }}</code>
             <span class="failed-msg">{{ f.message }}</span>
           </div>
@@ -1222,6 +1238,11 @@ onMounted(() => {
 
 .job-stat.ok {
   color: var(--neon-cyan);
+}
+
+/* 未消解：流程没报错但问题还在，用琥珀色与「失败」区分开 */
+.job-stat.warn {
+  color: var(--neon-amber, #f5a623);
 }
 
 .job-stat.fail {
