@@ -384,12 +384,21 @@ const MATRIX: MatrixEntry[] = [
   },
   {
     file: 'workflows/health-check-fix-workflow.ts',
-    writes: 'fixPage → vault.writeFile、new Harness().run',
+    writes: 'fixPage → writePageSafely（vault/page-write-guard）、new Harness().run',
     verdict: 'outside',
     samples: [path.join(VAULT, 'concepts', 'fixed.md')],
     reason:
       '修复写页在 withCompileLock 内（routes/health-check.ts 与 batch-fix-job 都把整批包进锁）；'
       + '其 harness 终端 state 写入按「podcast-workflow」同条判定。',
+  },
+  {
+    file: 'vault/page-write-guard.ts',
+    writes: 'writePageSafely → vault.writeFile、vault.appendLog',
+    verdict: 'outside',
+    samples: [path.join(VAULT, 'concepts', 'fixed.md'), path.join(VAULT, 'log.md')],
+    reason:
+      'T02923 新增：修复工具的唯一落盘入口，只写 vault 页面（概念/实体等目录）与 log.md 审计行，'
+      + '两者都不在任何删除面内；调用链仍在 withCompileLock 内（同 health-check-fix-workflow 条）。',
   },
   {
     file: 'workflows/media-generation-workflow.ts',
