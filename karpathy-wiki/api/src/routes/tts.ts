@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { synthesizeEdgeTts, getEdgeTtsVoices, type EdgeTtsParams } from '../utils/edgeTtsClient.js';
 import { applyAudioPostprocess } from '../utils/audioPostprocess.js';
+// T02931：朗读是一次真实的长网络请求，登记为独立活跃类别 'tts'，让重启判定不再把它当空闲
+import { beginActivity } from '../activity.js';
 
 // 注册 TTS 路由：基于微软 Edge 神经网络语音的文本朗读服务。
 //
@@ -93,6 +95,7 @@ export function registerTtsRoute(app: FastifyInstance) {
       styledegree = body.styledegree;
     }
 
+    const release = beginActivity('tts');
     try {
       // 合成（prosody 调节 + 可选 FFmpeg 后处理；后端绝不 502 退化）
       let audioBuffer = await synthesizeEdgeTts({ text, voice, rate, volume, pitch, style, styledegree });
@@ -109,6 +112,8 @@ export function registerTtsRoute(app: FastifyInstance) {
       request.log.error({ err, voice, textLen: text.length }, 'Edge TTS synthesis failed');
       const message = err instanceof Error ? err.message : String(err);
       reply.code(502).send({ error: `语音合成失败: ${message}` });
+    } finally {
+      release();
     }
   });
 

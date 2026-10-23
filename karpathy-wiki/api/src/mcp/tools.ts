@@ -22,6 +22,10 @@ import {
   confirmTagForPage,
   listPendingTagPages,
 } from '../workflows/tag-suggest-workflow.js';
+// T02931：MCP 的编译/问答也要计入活跃，否则重启守卫把它们当空闲（T02622 的口径差）
+import { withCompileLock } from '../compile-queue.js';
+import { beginActivity, confirmActivityStart } from '../activity.js';
+import { awaitCleanupIdle } from '../cleanup-mutex.js';
 
 export interface McpToolContext {
   vault: VaultService;
@@ -195,13 +199,26 @@ const definitions: McpTool[] = [
       required: ['question'],
     },
     async handler(args, { adapter }) {
-      const text: string[] = [];
-      const refs: string[] = [];
-      for await (const chunk of adapter.query({ question: requireString(args, 'question'), stream: false })) {
-        if (chunk.text) text.push(chunk.text);
-        if (chunk.refs?.length) refs.push(...chunk.refs.map((r) => (typeof r === "string" ? r : r.path)));
+      const question = requireString(args, 'question');
+      // T02931：MCP 问答与 HTTP 问答同口径——先等真实清理结束再登记活跃，
+      // 让重启拒绝/清理守卫都能看见这段 LLM 调用，而不是把它当空闲硬切。
+      await awaitCleanupIdle();
+      let release = beginActivity('query');
+      while (!(await confirmActivityStart(release))) {
+        await awaitCleanupIdle();
+        release = beginActivity('query');
       }
-      return { answer: text.join(''), refs };
+      try {
+        const text: string[] = [];
+        const refs: string[] = [];
+        for await (const chunk of adapter.query({ question, stream: false })) {
+          if (chunk.text) text.push(chunk.text);
+          if (chunk.refs?.length) refs.push(...chunk.refs.map((r) => (typeof r === "string" ? r : r.path)));
+        }
+        return { answer: text.join(''), refs };
+      } finally {
+        release();
+      }
     },
   },
 
@@ -287,11 +304,14 @@ const definitions: McpTool[] = [
       required: ['content'],
     },
     async handler(args, { adapter, config }) {
-      return collectCompile(adapter, {
-        type: 'text',
+      const input = {
+        type: 'text' as const,
         content: requireString(args, 'content'),
         rawPath: typeof args.rawPath === 'string' ? args.rawPath : undefined,
-      }, config);
+      };
+      // T02931：与 HTTP 编译共用串行链 + 活跃登记。原先直接 adapter.compile，
+      // 重启守卫看不到它，编译写到一半被重启硬切（还有 index.md/log.md 半成品风险）。
+      return withCompileLock(() => collectCompile(adapter, input, config));
     },
   },
   {

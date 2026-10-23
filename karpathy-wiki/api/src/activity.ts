@@ -27,9 +27,13 @@ import {
   type ActivityRecord,
 } from './cleanup-cross-process.js';
 
-export type ActivityKind = 'compile' | 'query';
+// T02931：'tts' 是独立的活跃类别。朗读不改 vault（清理守卫不需要拦它），
+// 但一次合成最长数千字、走 Edge WebSocket 流式返回，重启会把它硬切成连接重置，
+// 所以只纳入重启判定，不参与清理判定，也不写入跨进程 activity 记录
+// （另一实例重启不会打断本实例的朗读，跨进程计数没有意义）。
+export type ActivityKind = 'compile' | 'query' | 'tts';
 
-const counts: Record<ActivityKind, number> = { compile: 0, query: 0 };
+const counts: Record<ActivityKind, number> = { compile: 0, query: 0, tts: 0 };
 
 // ── T02817：把本进程的活跃快照向外进程声明（跨进程可见性）──
 // 上面的 counts 只有本进程读得到；另一实例的清理守卫看不到它，于是「B 在编译、A 照样真删」。
@@ -48,7 +52,8 @@ function crossProcessDir(): string | null {
 export async function flushActivityRecord(): Promise<void> {
   const dir = crossProcessDir();
   if (!dir) return;
-  const snap = { ...counts };
+  // T02931：记录里只有 compile/query（跨进程可见的两类）；tts 只在本进程重启判定里生效
+  const snap = { compile: counts.compile, query: counts.query };
   const rec: ActivityRecord = {
     pid: process.pid,
     instance: coordinationPaths().instance,
@@ -129,8 +134,13 @@ export function beginActivity(kind: ActivityKind): () => void {
 }
 
 /** 当前各类活跃任务数量（供清理接口返回给前端做置灰判定）。 */
-export function activeActivities(): Record<ActivityKind, number> {
+export function activeActivities(): { compile: number; query: number } {
   return { compile: counts.compile, query: counts.query };
+}
+
+/** T02931：朗读活跃数。只给重启判定用，不进清理快照与跨进程记录。 */
+export function activeTtsCount(): number {
+  return counts.tts;
 }
 
 export function isActivityBusy(kind: ActivityKind): boolean {
@@ -138,7 +148,7 @@ export function isActivityBusy(kind: ActivityKind): boolean {
 }
 
 export function hasAnyActiveActivity(): boolean {
-  return counts.compile > 0 || counts.query > 0;
+  return counts.compile > 0 || counts.query > 0 || counts.tts > 0;
 }
 
 /**
@@ -149,6 +159,7 @@ export function __resetActivitiesForTest(): Record<ActivityKind, number> {
   const prev = { ...counts };
   counts.compile = 0;
   counts.query = 0;
+  counts.tts = 0;
   stopHeartbeatIfIdle();
   void flushActivityRecord();
   return prev;

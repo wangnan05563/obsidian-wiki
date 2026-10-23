@@ -205,7 +205,7 @@ async function restartServiceNow(): Promise<void> {
   if (restarting.value) return;
   try {
     await ElMessageBox.confirm(
-      '重启会中断当前所有连接。服务端会先检查是否有编译/问答在跑，有则拒绝重启。确认现在重启？',
+      '重启会中断当前所有连接。服务端会先检查是否有编译/问答/朗读在跑，有则拒绝重启。确认现在重启？',
       '一键重启服务',
       { confirmButtonText: '确认重启', cancelButtonText: '再等等', type: 'warning' },
     );
@@ -4973,12 +4973,12 @@ async function importConfig() {
         <p v-if="restartError" class="restart-guide-alert" role="alert">
           {{ restartError }}
           <span v-if="restartBlocked" class="restart-guide-blocked">
-            （编译 {{ restartBlocked.compile }} · 问答 {{ restartBlocked.query }}<template v-if="restartBlocked.queuedCompile > 0"> · 排队 {{ restartBlocked.queuedCompile }}</template>）
+            （编译 {{ restartBlocked.compile }} · 问答 {{ restartBlocked.query }}<template v-if="restartBlocked.tts > 0"> · 朗读 {{ restartBlocked.tts }}</template><template v-if="restartBlocked.queuedCompile > 0"> · 排队 {{ restartBlocked.queuedCompile }}</template>）
           </span>
         </p>
         <pre class="restart-guide-steps">{{ restartGuide }}</pre>
         <p class="restart-guide-note">
-          一键重启会先检查是否有正在进行的编译或批量任务，有则拒绝并列名；重启成功后本清单会自动清除。
+          一键重启会先检查是否有正在进行的编译、问答或朗读任务，有则拒绝并列名；重启成功后本清单会自动清除。
         </p>
       </div>
       <template #footer>

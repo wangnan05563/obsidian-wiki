@@ -28,6 +28,7 @@ import {
 } from '../utils/config-effects.js';
 // T02622：受控重启（A 方案）。空闲口径与清理守卫同源，拉起方按打包/dev 分两条通道。
 import { activeStateAcrossProcesses } from '../cleanup-guard.js';
+import { activeTtsCount } from '../activity.js';
 import { queuedCompileCount } from '../compile-queue.js';
 import { performRestart, restartRefusal, RESTART_EXIT_DELAY_MS, type RestartMode } from '../restart.js';
 
@@ -166,7 +167,8 @@ export function registerConfigRoute(
       });
     }
     const active = await activeStateAcrossProcesses();
-    const refusal = restartRefusal(active, queuedCompileCount());
+    // T02931：朗读只在本进程内被这次重启影响，取本地计数即可（跨进程记录不含 tts）
+    const refusal = restartRefusal(active, queuedCompileCount(), activeTtsCount());
     if (refusal) return void reply.code(409).send(refusal);
 
     const mode = (restart.perform ?? performRestart)();

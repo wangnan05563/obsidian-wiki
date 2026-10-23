@@ -16,6 +16,8 @@ export type RestartMode = 'packaged' | 'dev-watch';
 export interface RestartActiveState {
   compile: number;
   query: number;
+  /** T02931：朗读（TTS 合成）只跑在本进程，重启同样会把它截断 */
+  tts: number;
   /** 已入队但还没起跑的编译：重启同样会把它们丢掉 */
   queuedCompile: number;
   blockedReasons: string[];
@@ -59,15 +61,16 @@ export async function requestRestart(send: Send = apiFetch): Promise<RestartTrig
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   const serverMessage = typeof data.error === 'string' ? data.error : '';
 
-  // 409 = 有编译/问答在跑：把后端列出的任务原样交给界面，不替它总结
+  // 409 = 有编译/问答/朗读在跑：把后端列出的任务原样交给界面，不替它总结
   if (res.status === 409) {
     const active = (data.active ?? {}) as Record<string, unknown>;
     return {
       kind: 'blocked',
-      message: serverMessage || '有正在进行的编译或问答，重启被拒绝',
+      message: serverMessage || '有正在进行的编译、问答或朗读，重启被拒绝',
       active: {
         compile: asCount(active.compile),
         query: asCount(active.query),
+        tts: asCount(active.tts),
         queuedCompile: asCount(active.queuedCompile),
         blockedReasons: asReasons(active.blockedReasons),
       },
@@ -136,6 +139,7 @@ export function blockedSummary(active: RestartActiveState): string {
   const parts: string[] = [];
   if (active.compile > 0) parts.push(`${active.compile} 个编译任务`);
   if (active.query > 0) parts.push(`${active.query} 个问答`);
+  if (active.tts > 0) parts.push(`${active.tts} 个朗读`);
   if (active.queuedCompile > 0) parts.push(`${active.queuedCompile} 个编译排队`);
   return parts.length > 0 ? parts.join('、') : '未知任务';
 }
