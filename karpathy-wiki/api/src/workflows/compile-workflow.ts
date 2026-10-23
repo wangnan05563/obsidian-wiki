@@ -6,6 +6,8 @@ import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
 // T02686：目录集合取自 page-scope 单一来源
 import { TITLE_DEDUPE_DIRS, PAGE_DIR_TO_TYPE, pageDirsSlash, flatPagePathHint } from '../vault/page-scope.js';
+// T02921：wikilink 抽取取自 link-parser 单一来源（拆别名/锚点后按真实目标名对齐）
+import { extractWikilinkTargets } from '../vault/link-parser.js';
 import type { CompileInput, ProgressEvent, AppConfig } from '../types.js';
 import { RunLogger } from '../run-logger.js';
 import { CompileCache } from '../compile-cache.js';
@@ -115,13 +117,8 @@ function ensureEntitiesField(content: string): string {
     delete parsed.data.entities;
     return matter.stringify(parsed.content, parsed.data);
   }
-  // 收集正文 [[页面名]] 用于校验 entities.name 拓扑一致性
-  const wikilinkNames = new Set<string>();
-  const wikilinkRe = /\[\[([^\]]+)\]\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = wikilinkRe.exec(parsed.content)) !== null) {
-    wikilinkNames.add(m[1]);
-  }
+  // 收集正文 [[页面名]] 用于校验 entities.name 拓扑一致性（拆掉别名/锚点后的真实目标名）
+  const wikilinkNames = new Set(extractWikilinkTargets(parsed.content));
   // 过滤无效项：必须有 name 字段且 name 在正文双链中出现
   // 为什么要求 name 必须在双链中出现：AC-15-6 明确规定保证图谱拓扑一致
   const validEntities = rawEntities.filter((item: unknown): item is { name: string; relation?: string } => {

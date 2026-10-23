@@ -3,6 +3,8 @@ import type { HarnessConfig } from '@wiki/harness';
 import { Harness } from '@wiki/harness';
 import type { VaultService } from '../vault/vault-service.js';
 import { searchPages } from '../search-util.js';
+// T02921：wikilink 正则取自 link-parser 单一来源
+import { WIKILINK_RE } from '../vault/link-parser.js';
 import type { AppConfig, PodcastConfig, PodcastResult } from '../types.js';
 import { getPromptPath } from '../utils/runtime.js';
 
@@ -209,7 +211,7 @@ function estimateDurationSec(script: string): number {
   // 去除 Markdown 标记后计算字符数
   const cleanText = script
     .replace(/^#{1,6}\s+/gm, '')
-    .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(WIKILINK_RE, '$1')
     .replace(/[*_`~]/g, '')
     .trim();
   // 中文 4.5 字/秒，英文 3 词/秒，这里取中文近似值

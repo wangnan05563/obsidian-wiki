@@ -17,6 +17,8 @@
 
 import type { VaultService } from '../vault/vault-service.js';
 import { collectAllPageMetadata } from './discover-workflow.js';
+// T02921：wikilink 目标名解析唯一实现（精确优先 + 大小写不敏感回落）
+import { createLinkResolver } from '../vault/link-parser.js';
 import { Harness } from '@wiki/harness';
 import type { HarnessConfig } from '@wiki/harness';
 
@@ -67,9 +69,11 @@ function buildNameIndex(pages: PageMeta[]): Map<string, string> {
 }
 
 // 构建拓扑：adjacency[path] 无向邻居；outByName[pageName] 出链目标（页面名）
+// T02921：wikilink → 路径的解析走唯一 resolver（精确优先 + 大小写不敏感回落），
+// 与链接图/体检断链同一口径——别名/锚点在 extractWikilinks 阶段已拆掉
 function buildLinkTopology(
   pages: PageMeta[],
-  byName: Map<string, string>,
+  resolve: (name: string) => string | null,
 ): { adjacency: AdjacencyMap; outByName: AdjacencyMap } {
   const adjacency: AdjacencyMap = new Map();
   const outByName: AdjacencyMap = new Map();
@@ -79,7 +83,7 @@ function buildLinkTopology(
   }
   for (const p of pages) {
     for (const linkName of p.wikilinks) {
-      const targetPath = byName.get(linkName);
+      const targetPath = resolve(linkName);
       if (!targetPath || targetPath === p.path) continue; // 悬空/自环跳过
       adjacency.get(p.path)!.add(targetPath);
       adjacency.get(targetPath)!.add(p.path);
@@ -200,7 +204,8 @@ export function computeGaps(pages: PageMeta[], minPages = 20): GapResult {
   }
 
   const byName = buildNameIndex(pages);
-  const { adjacency, outByName } = buildLinkTopology(pages, byName);
+  const resolver = createLinkResolver(byName);
+  const { adjacency, outByName } = buildLinkTopology(pages, (n) => resolver.resolve(n));
 
   return {
     status: 'ok',

@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import type { VaultService } from '../vault/vault-service.js';
 import type { QueryInput, AnswerChunk, ThinkingChunk, WebRef, WebSearchConfig, ToolsConfig, MediaConfig, MediaImageUserConfig, AppConfig } from '../types.js';
 import { searchPages } from '../search-util.js';
+// T02921：wikilink 抽取取自 link-parser 单一来源（拆别名/锚点，refs 才能解析到真实页面）
+import { extractWikilinkTargets } from '../vault/link-parser.js';
 import { createWebSearchTool } from '../tools/web-search.js';
 import { loadExtendedTools } from '../tools/registry.js';
 // FR-19 引用置信：把 harness/fallback 产出的 string[] refs 升级为携带三信号（权威/完整/复核）+ 时效的对象数组。
@@ -109,12 +111,8 @@ export function createQueryTools(
 // 若传页面名（如 "llm-wiki"）后端 readFile 找不到文件返回 404。解析为路径（如 "concepts/llm-wiki.md"）
 // 后跳转即可正常读取。找不到对应文件时保留原页面名（向后兼容，前端仍可展示）。
 async function extractRefs(text: string, vault: VaultService): Promise<string[]> {
-  const pageNames = new Set<string>();
-  const re = /\[\[([^\]]+)\]\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    pageNames.add(m[1].trim());
-  }
+  // 拆掉别名/锚点取真实目标名：[[page|别名]] / [[page#章节]] 都能解析到实际文件
+  const pageNames = extractWikilinkTargets(text);
   // 并行解析每个页面名为文件路径，避免串行 fs.access 等待
   const resolved = await Promise.all(
     Array.from(pageNames).map(async (name) => {

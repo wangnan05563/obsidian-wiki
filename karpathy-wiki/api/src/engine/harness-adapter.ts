@@ -18,6 +18,8 @@ import matter from 'gray-matter';
 import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
 // T02686：页面口径单一来源（目录集合 + 测试文件排除规则）
 import { PAGE_DIRS, isPageFile } from '../vault/page-scope.js';
+// T02921：wikilink 解析与目标名解析唯一实现（拆别名/锚点 + 大小写不敏感回落）
+import { createLinkResolver, extractWikilinkTargets } from '../vault/link-parser.js';
 
 // BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
 import { applyPerRequestOverride } from './byok-override.js';
@@ -253,9 +255,11 @@ export class HarnessAdapter implements EngineAdapter {
       const base = path.basename(rel, '.md');
       nameToPath.set(base, rel);
     }
+    // T02921：与链接图共用同一解析口径（精确优先 + 大小写不敏感回落），
+    // 别名/锚点已由 extractWikilinkTargets 拆掉，to 字段是真实目标名
+    const resolver = createLinkResolver(nameToPath);
 
     // §11.2：页面目录（PAGE_DIRS，6 个）并行扫描断链，Promise.all 等待全部完成
-    const wikilinkRe = /\[\[([^\]]+)\]\]/g;
     const scanDir = async (d: string): Promise<Array<{ from: string; to: string }>> => {
       const results: Array<{ from: string; to: string }> = [];
       const dirFull = path.join(this.vault.getVaultPath(), d);
@@ -275,11 +279,8 @@ export class HarnessAdapter implements EngineAdapter {
         } catch {
           continue;
         }
-        let m: RegExpExecArray | null;
-        wikilinkRe.lastIndex = 0; // 复用正则需重置 lastIndex
-        while ((m = wikilinkRe.exec(content)) !== null) {
-          const target = m[1].trim();
-          if (!nameToPath.has(target)) {
+        for (const target of extractWikilinkTargets(content)) {
+          if (!resolver.resolve(target)) {
             results.push({ from: fromRel, to: target });
           }
         }
