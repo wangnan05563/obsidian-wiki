@@ -286,8 +286,9 @@ describe('T02476 加载态/空态方言守护（PRD X2 / X8）', () => {
     expect(listen, '窄屏页面级空态必须有主按钮').toContain(`@click="emit('open-ingest')"`);
     const shell = read('components/mobile/MobileShell.vue');
     for (const child of ['MobileBrowse', 'MobileListen']) {
+      // T02914：接法从内联赋值升级为 onTab('ingest')（顺带关闭功能入口视图），语义不变
       expect(shell, `${child} 的 open-ingest 没人接，空态按钮会点了没反应`).toMatch(
-        new RegExp(`<${child}[^>]*@open-ingest="activeTab = 'ingest'"`),
+        new RegExp(`<${child}[^>]*@open-ingest="(activeTab = 'ingest'|onTab\\('ingest'\\))"`),
       );
     }
 

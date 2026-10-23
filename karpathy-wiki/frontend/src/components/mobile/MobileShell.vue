@@ -11,6 +11,10 @@ import MobileIngest from './MobileIngest.vue';
 import MobileListen from './MobileListen.vue';
 import { useMobileTheme } from '../../composables/useMobileTheme';
 import { MOBILE_TABS } from '../../config/mobileTabs';
+// T02914 功能入口：桌面低频页（技能/清理类）本期不重做移动视图，直接全宽挂载桌面组件。
+import Skill from '../../views/Skill.vue';
+import Cleanup from '../../views/Cleanup.vue';
+import DataClean from '../../views/DataClean.vue';
 
 // 移动端外壳：底部 5 Tab 导航 + 登录门 + 内容切换（SRS FR-MOB-NAV）。
 // 完全复用桌面端 stores/services，不引入 vue-router（与项目单 SPA 约定一致）。
@@ -49,6 +53,21 @@ type TabKey = (typeof MOBILE_TABS)[number]['key'];
 const tabs = MOBILE_TABS;
 
 const activeTab = ref<TabKey>('query');
+
+// T02914：「我的 → 功能入口」打开的桌面页。打开时主区域整体切换为该桌面视图，
+// 点任意 Tab 或返回按钮即关闭回原 Tab——5 Tab 布局不动。
+type FeatureKey = 'skill' | 'cleanup' | 'dataclean';
+const featureView = ref<FeatureKey | null>(null);
+const featureComps: Record<FeatureKey, unknown> = { skill: Skill, cleanup: Cleanup, dataclean: DataClean };
+const featureTitles: Record<FeatureKey, string> = {
+  skill: '技能管理',
+  cleanup: '缓存与日志清理',
+  dataclean: '页面质量清洗',
+};
+function onTab(key: TabKey) {
+  featureView.value = null;
+  activeTab.value = key;
+}
 
 // 从「知识问答」页点击 vault 引用跳转（RefsList 派发 karpathy:jump-vault）。
 // 空串表示无跳转；'__search__:' 前缀表示按 query 搜索，否则按 path 打开详情。
@@ -90,13 +109,30 @@ const icons: Record<TabKey, string> = {
     <!-- 聆听页用 v-show 常驻挂载：切走 Tab 时组件不卸载，<audio> 继续后台播放、
          队列/进度等本地状态不丢失（播放中切页保持播放状态）。其余 Tab 仍用 v-if。 -->
     <main class="mobile-content">
-      <MobileQuery v-if="activeTab === 'query'" @open-me="activeTab = 'me'" />
-      <!-- T02720：窄屏空态的「下一步」= 切到能解决它的 Tab（知识库为空 → 去「投递」），
-           与 MobileQuery 的 open-me 同一先例，不引入 vue-router。 -->
-      <MobileBrowse v-else-if="activeTab === 'browse'" :jump-path="vaultJump" @open-ingest="activeTab = 'ingest'" />
-      <MobileIngest v-else-if="activeTab === 'ingest'" />
-      <MobileMe v-else-if="activeTab === 'me'" />
-      <MobileListen v-show="activeTab === 'listen'" :visible="activeTab === 'listen'" @open-ingest="activeTab = 'ingest'" />
+      <!-- T02914：功能入口打开时整体替换为桌面视图（含返回条），原 Tab 视图不销毁状态 -->
+      <section v-if="featureView" class="mobile-feature">
+        <div class="mf-topbar">
+          <button class="mf-back" type="button" aria-label="返回" @click="featureView = null">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+            返回
+          </button>
+          <span class="mf-title">{{ featureTitles[featureView] }}</span>
+        </div>
+        <div class="mf-body">
+          <component :is="featureComps[featureView]" />
+        </div>
+      </section>
+      <template v-else>
+        <MobileQuery v-if="activeTab === 'query'" @open-me="activeTab = 'me'" />
+        <!-- T02720：窄屏空态的「下一步」= 切到能解决它的 Tab（知识库为空 → 去「投递」），
+             与 MobileQuery 的 open-me 同一先例，不引入 vue-router。 -->
+        <MobileBrowse v-else-if="activeTab === 'browse'" :jump-path="vaultJump" @open-ingest="activeTab = 'ingest'" />
+        <MobileIngest v-else-if="activeTab === 'ingest'" />
+        <MobileMe v-else-if="activeTab === 'me'" @open-feature="featureView = $event" />
+      </template>
+      <MobileListen v-show="activeTab === 'listen' && !featureView" :visible="activeTab === 'listen' && !featureView" @open-ingest="onTab('ingest')" />
     </main>
 
     <!-- 底部 Tab 导航栏（固定，含安全区适配，浅色描边） -->
@@ -108,7 +144,7 @@ const icons: Record<TabKey, string> = {
         :class="{ active: activeTab === tab.key }"
         :aria-label="tab.label"
         :aria-current="activeTab === tab.key ? 'page' : undefined"
-        @click="activeTab = tab.key"
+        @click="onTab(tab.key)"
       >
         <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path :d="icons[tab.key]" />
@@ -146,6 +182,66 @@ const icons: Record<TabKey, string> = {
   -webkit-backdrop-filter: var(--m-blur);
   /* 预留底部 Tab 栏 + 系统导航安全区 */
   padding-bottom: calc(56px + env(safe-area-inset-bottom, 0));
+}
+
+/* T02914：功能入口承载的桌面视图（全宽挂载 + 返回条） */
+.mobile-feature {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  background: var(--m-surface, #ffffff);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.mf-topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: var(--m-border-subtle, 1px solid #ededed);
+  background: var(--m-surface, #ffffff);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.mf-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--m-primary, #1554d1);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: var(--m-font);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mf-back:active {
+  background: var(--m-border, #ececee);
+}
+
+.mf-back svg {
+  width: 18px;
+  height: 18px;
+}
+
+.mf-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--m-text, #111111);
+}
+
+/* 桌面组件自带内边距，这里只负责撑满可滚动区域 */
+.mf-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .mobile-tabbar {
