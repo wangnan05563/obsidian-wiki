@@ -74,6 +74,35 @@ export function disableGuard(user: Pick<UserInfo, 'id' | 'role' | 'enabled'>, ct
 }
 
 /**
+ * U2：编辑弹窗的守卫——只拦「减少管理员能力」的提交（T02935）。
+ * 为什么不能沿用 disableGuard 判所有角色变更：提权 user → admin 也会命中
+ * 「拟提交角色是 admin + 仅剩一个启用管理员」，把正常新增管理员判成停用最后一个管理员，
+ * 请求根本发不出去（实测 PUT 数为 0），用户只能绕行走「新建用户」。
+ *
+ * 口径与后端 PUT /api/auth/users/:id 对齐：只有当目标是管理员、且提交后不再有
+ * 「其它启用管理员」时才拒绝降级/停用；提权与改密码一律放行。
+ */
+export function editGuard(
+  current: Pick<UserInfo, 'id' | 'role' | 'enabled'>,
+  target: { role: AuthRole; enabled: boolean },
+  ctx: ProtectContext,
+): GuardResult {
+  // 停用先按原角色判（降级+停用组合时，下面的降级检查会给出更准确的原因）
+  if (target.enabled === false) {
+    const stop = disableGuard({ id: current.id, role: current.role, enabled: true }, ctx);
+    if (stop.blocked) return stop;
+  }
+  if (current.role === 'admin' && target.role !== 'admin') {
+    // 与后端 otherActiveAdmins === 0 同口径：排除目标自身后还剩几个启用管理员
+    const otherActiveAdmins = ctx.activeAdminCount - (current.enabled ? 1 : 0);
+    if (otherActiveAdmins <= 0) {
+      return { blocked: true, reason: '系统至少保留一个启用的管理员账户，不能降级最后一个可用管理员' };
+    }
+  }
+  return { blocked: false, reason: '' };
+}
+
+/**
  * U3：挑出仍是启用态的出厂种子账号。
  * 返回按 admin → user → guest 排序，管理页据此显示一条告警并提供逐项停用。
  */

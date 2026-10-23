@@ -3,6 +3,8 @@
 //   U8 搜索/排序/分页与相对时间；U7 输入校验与后端规则同源。
 // 约定：被测逻辑全部是 frontend/src/utils/userManagePresentation.ts 的纯函数（本项目不挂载 SFC）。
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { UserInfo } from '../src/types';
 import {
   PASSWORD_RULE,
@@ -14,6 +16,7 @@ import {
   deleteConfirmMessage,
   deleteGuard,
   disableGuard,
+  editGuard,
   filterUsers,
   hasErrors,
   relativeTime,
@@ -95,6 +98,53 @@ describe('U2 删除/停用守卫', () => {
   it('放行时 reason 是正常操作说明，可直接用作 data-tip', () => {
     expect(deleteGuard(other, ctx).reason).toContain('不可撤销');
     expect(disableGuard(other, ctx).reason).toContain('会话立即失效');
+  });
+});
+
+describe('U2 编辑守卫（T02935：提权不得被停用守卫误拦）', () => {
+  const onlyOne = { currentUserId: 'u-admin', adminCount: 1, activeAdminCount: 1 };
+  const normal = makeUser({ id: 'u2', username: 't02697', role: 'user' });
+  const admin = makeUser({ id: 'u-admin', username: 'admin', role: 'admin' });
+
+  it('仅 1 个启用管理员时，编辑普通用户提权为管理员必须放行', () => {
+    const g = editGuard(normal, { role: 'admin', enabled: true }, onlyOne);
+    expect(g.blocked).toBe(false);
+  });
+
+  it('降级最后一个启用管理员被拦（与后端 PUT 的 otherActiveAdmins 同口径）', () => {
+    const g = editGuard(admin, { role: 'user', enabled: true }, {
+      currentUserId: 'u-other',
+      adminCount: 1,
+      activeAdminCount: 1,
+    });
+    expect(g.blocked).toBe(true);
+    expect(g.reason).toContain('至少保留一个启用的管理员');
+  });
+
+  it('还有其它启用管理员时降级放行', () => {
+    expect(
+      editGuard(admin, { role: 'user', enabled: true }, { currentUserId: 'u-other', adminCount: 2, activeAdminCount: 2 })
+        .blocked,
+    ).toBe(false);
+  });
+
+  it('停用当前登录账户仍被拦（提权放行不能顺带放开自停用）', () => {
+    const self = editGuard(admin, { role: 'admin', enabled: false }, onlyOne);
+    expect(self.blocked).toBe(true);
+    expect(self.reason).toContain('登出');
+  });
+
+  it('提权同时停用不误报「唯一启用管理员」：目标账户原本不是管理员', () => {
+    expect(editGuard(normal, { role: 'admin', enabled: false }, onlyOne).blocked).toBe(false);
+  });
+
+  it('接线守护：submitEdit 与弹窗开关都用 editGuard，不再用 disableGuard 判角色变更', () => {
+    const src = readFileSync(resolve(__dirname, '../src/views/Users.vue'), 'utf8');
+    const submit = src.slice(src.indexOf('async function submitEdit'), src.indexOf('// ===== U1 + U2：删除'));
+    expect(submit).toContain('editGuard(');
+    expect(submit).not.toContain('disableGuard(');
+    const switchGuard = src.slice(src.indexOf('const editEnableGuard'), src.indexOf('async function submitEdit'));
+    expect(switchGuard).toContain('editGuard(');
   });
 });
 

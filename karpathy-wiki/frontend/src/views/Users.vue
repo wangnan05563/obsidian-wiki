@@ -17,6 +17,7 @@ import {
   deleteConfirmMessage,
   deleteGuard,
   disableGuard,
+  editGuard,
   filterUsers,
   hasErrors,
   relativeTime,
@@ -200,14 +201,12 @@ function startEdit(user: UserInfo) {
   editVisible.value = true;
 }
 
-// 弹窗里「状态」开关的可改性：按拟提交的角色/状态算守卫，而不是按数据库里的旧值
+// 弹窗里「状态」开关的可改性：按拟提交的角色/状态算守卫，而不是按数据库里的旧值。
+// 提权 user → admin 不再被「唯一启用管理员」误拦（T02935），降级/停用仍按 editGuard 判定。
 const editEnableGuard = computed(() => {
   const target = editingUser.value;
   if (!target) return { blocked: false, reason: '' };
-  return disableGuard(
-    { id: target.id, role: editForm.value.role, enabled: editForm.value.enabled },
-    protectCtx.value,
-  );
+  return editGuard(target, { role: editForm.value.role, enabled: editForm.value.enabled }, protectCtx.value);
 });
 
 async function submitEdit() {
@@ -219,10 +218,15 @@ async function submitEdit() {
     enabled: editForm.value.enabled,
   };
   if (editForm.value.password) updates.password = editForm.value.password;
-  // 客户端守卫先行（U2）：把「唯一管理员不能降级/停用」「不能自停用」挡在发请求之前
+  // 客户端守卫先行（U2）：把「降级/停用最后一个可用管理员」「不能自停用」挡在发请求之前。
+  // T02935：不能复用 disableGuard 判所有角色变更——提权 user → admin 会被误判为停用唯一管理员。
   if (updates.enabled === false || (updates.role && updates.role !== editingUser.value.role)) {
-    const guard = disableGuard(
-      { id: editingUser.value.id, role: updates.role ?? editingUser.value.role, enabled: updates.enabled ?? editingUser.value.enabled },
+    const guard = editGuard(
+      editingUser.value,
+      {
+        role: updates.role ?? editingUser.value.role,
+        enabled: updates.enabled ?? editingUser.value.enabled,
+      },
       protectCtx.value,
     );
     if (guard.blocked) {
