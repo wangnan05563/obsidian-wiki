@@ -674,6 +674,8 @@ export type TunnelProvider = 'cloudflare' | 'cpolar' | 'tailscale';
 export interface TunnelConfigData {
   provider: TunnelProvider;
   localPort: number;
+  // T02912：「自动」复选框用它显示实际继承的服务端口（localPort=0 仍表示自动，哨兵语义在存储侧）
+  serverPort?: number;
   cpolarAuthtokenMasked: string;
   cpolarAuthtokenConfigured: boolean;
   binaryPath: string;
