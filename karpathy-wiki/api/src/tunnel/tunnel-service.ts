@@ -1159,6 +1159,20 @@ export class CloudflareLoginService {
     return `https://${hostname}`;
   }
 
+  // 删除命名隧道：cloudflared tunnel --origincert <cert> delete <nameOrId>（T02913）
+  // 注意：cloudflared CLI 没有「route dns delete」子命令，DNS 的 CNAME 记录只能在
+  // Cloudflare 控制台手工删除——本方法只回收账户级隧道资源，DNS 侧由文案引导用户操作。
+  async deleteTunnel(tunnelNameOrId: string, certFile: string, binaryPath: string): Promise<string> {
+    const binary = binaryPath || path.resolve(process.cwd(), 'data', 'cloudflared.exe');
+    const args = ['--no-autoupdate', 'tunnel', '--origincert', certFile, 'delete', tunnelNameOrId];
+    const { stdout: output } = await execFileAsync(binary, args, {
+      windowsHide: true,
+      timeout: 30000,
+      maxBuffer: 1024 * 1024,
+    });
+    return output;
+  }
+
   // 查找所有可能的 cert.pem 位置（不同 Windows 版本/cloudflared 版本路径不同）
   private findCertPemPaths(): string[] {
     const paths: string[] = [];
