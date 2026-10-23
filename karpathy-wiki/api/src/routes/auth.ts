@@ -507,6 +507,8 @@ export function registerAuthRoute(app: FastifyInstance): void {
     }
     // 禁止停用/改角色搞死当前登录账户自身（停用会销毁自己的会话 → 立刻被踢出）
     if (target.id === request.currentUser?.userId && (body.enabled === false || (body.role && body.role !== 'admin'))) {
+      // T02937：被守卫拒绝的尝试同样要留痕（帮助文档承诺越权/用户管理操作都会记审计）
+      audit({ request, action: 'user_update', resource: `/api/auth/users/${id}`, result: 'fail', message: '不能停用或降级当前登录账户' });
       return void reply.code(400).send({ error: '不能停用或降级当前登录账户' });
     }
     // T02473（PRD U2）：禁止把最后一个可用管理员改角色或停用 —— 与删除同一条锁死红线
@@ -514,6 +516,8 @@ export function registerAuthRoute(app: FastifyInstance): void {
       const all = await listUsers();
       const otherActiveAdmins = all.filter((u) => u.id !== target.id && u.role === 'admin' && u.enabled).length;
       if (otherActiveAdmins === 0) {
+        // T02937：守卫拒绝也要写 fail 审计
+        audit({ request, action: 'user_update', resource: `/api/auth/users/${id}`, result: 'fail', message: '系统至少保留一个启用的管理员账户' });
         return void reply.code(400).send({ error: '系统至少保留一个启用的管理员账户' });
       }
     }
@@ -573,6 +577,8 @@ export function registerAuthRoute(app: FastifyInstance): void {
     // T02473（PRD U2）：原先缺 return，400 只是「回执」—— handler 继续往下跑，
     // 结果照样 destroyUserSessions + deleteUser，把当前登录账户真的删掉。守卫必须真的 return。
     if (request.currentUser?.userId === id) {
+      // T02937：自删被拦同样写 fail 审计
+      audit({ request, action: 'user_delete', resource: `/api/auth/users/${id}`, result: 'fail', message: '不能删除当前登录用户' });
       return void reply.code(400).send({ error: '不能删除当前登录用户' });
     }
     try {
