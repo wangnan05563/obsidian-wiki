@@ -861,6 +861,40 @@ const typeOptions = [
   })),
 ];
 
+// T02915：生效筛选拆成按字段可枚举结构——数据源仍是上面三个 filter ref（不建第二状态源），
+// doSearch 里的布尔聚合行为保持不变；筛选 chips 与按钮角标都从这里派生
+type FilterKey = 'source' | 'status' | 'type';
+const activeFilters = computed(() => {
+  const items: Array<{ key: FilterKey; field: string; option: string }> = [];
+  if (sourceFilter.value) {
+    const opt = sourceOptions.find((o) => o.value === sourceFilter.value);
+    items.push({ key: 'source', field: '来源', option: opt ? opt.label : sourceFilter.value });
+  }
+  if (statusFilter.value) {
+    const opt = statusOptions.find((o) => o.value === statusFilter.value);
+    items.push({ key: 'status', field: '状态', option: opt ? opt.label : statusFilter.value });
+  }
+  if (typeFilter.value) {
+    const opt = typeOptions.find((o) => o.value === typeFilter.value);
+    items.push({ key: 'type', field: '类型', option: opt ? opt.label : typeFilter.value });
+  }
+  return items;
+});
+
+function removeFilter(key: FilterKey) {
+  if (key === 'source') sourceFilter.value = '';
+  else if (key === 'status') statusFilter.value = '';
+  else typeFilter.value = '';
+  handleFilterChange();
+}
+
+function clearAllFilters() {
+  sourceFilter.value = '';
+  statusFilter.value = '';
+  typeFilter.value = '';
+  handleFilterChange();
+}
+
 const treeProps = {
   label: 'name',
   children: 'children',
@@ -1129,9 +1163,10 @@ function clearSearch() {
   searchQuery.value = '';
   searchHits.value = [];
   showSearchResults.value = false;
-  // 同时清除过滤条件（AC-10）
+  // 同时清除过滤条件（AC-10）；T02915：typeFilter 此前漏清，「返回目录」后 chip 仍挂着造成状态不一致
   sourceFilter.value = '';
   statusFilter.value = '';
+  typeFilter.value = '';
 }
 
 // 过滤条件变更时立即触发搜索（无防抖，因为是下拉选择）
@@ -2087,8 +2122,15 @@ onMounted(async () => {
               />
               <el-popover placement="bottom-end" :width="230" trigger="click" popper-class="browse-filter-popper">
                 <template #reference>
-                  <button type="button" class="filter-more-btn" title="筛选条件" data-tip="筛选条件">
+                  <button
+                    type="button"
+                    class="filter-more-btn"
+                    :class="{ 'is-active': activeFilters.length > 0 }"
+                    title="筛选条件"
+                    data-tip="筛选条件"
+                  >
                     <el-icon><MoreFilled /></el-icon>
+                    <span v-if="activeFilters.length" class="filter-badge" aria-label="生效筛选条件数">{{ activeFilters.length }}</span>
                   </button>
                 </template>
                 <!-- AC-10: source/status 过滤 + FR-15-3: type 过滤 -->
@@ -2147,6 +2189,23 @@ onMounted(async () => {
                   </div>
                 </div>
               </el-popover>
+              <!-- T02915：生效筛选 chip 行——popover 收起后仍能看出在筛什么，单个 × 清除 -->
+              <div v-if="activeFilters.length" class="filter-chips" role="list" aria-label="生效中的筛选条件">
+                <span v-for="f in activeFilters" :key="f.key" class="filter-chip" role="listitem">
+                  <span class="filter-chip-field">{{ f.field }}</span>
+                  <span class="filter-chip-value">{{ f.option }}</span>
+                  <button
+                    type="button"
+                    class="filter-chip-clear"
+                    :aria-label="`清除筛选条件：${f.field}`"
+                    data-tip="清除该筛选条件"
+                    @click="removeFilter(f.key)"
+                  >
+                    <el-icon><Close /></el-icon>
+                  </button>
+                </span>
+                <button type="button" class="filter-chip-clear-all" data-tip="清除全部筛选条件" @click="clearAllFilters">清除全部</button>
+              </div>
               <!-- T00300：文档树栏收起按钮移到筛选条件后同行（仅 tree 视图显示） -->
               <button
                 v-if="knowledgeView === 'tree'"
@@ -2181,9 +2240,13 @@ onMounted(async () => {
               v-else-if="searchHits.length === 0"
               state="empty"
               compact
-              empty-title="未找到匹配页面"
-              empty-desc="换个关键词，或点上方「返回目录」查看全部页面"
-            />
+              :empty-title="activeFilters.length ? '筛选条件下没有匹配页面' : '未找到匹配页面'"
+              :empty-desc="activeFilters.length ? '当前按来源/状态/类型筛选，没有符合条件的页面' : '换个关键词，或点上方「返回目录」查看全部页面'"
+            >
+              <template v-if="activeFilters.length" #action>
+                <el-button size="small" text type="primary" data-tip="清除全部筛选条件并返回目录" @click="clearAllFilters">清除筛选条件</el-button>
+              </template>
+            </StateBlock>
             <div
               v-for="hit in searchHits"
               :key="hit.path"
@@ -2851,6 +2914,7 @@ onMounted(async () => {
 /* 三点过滤按钮：小图标按钮，hover 高亮提示可展开过滤条件 */
 .filter-more-btn {
   flex-shrink: 0;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2862,12 +2926,35 @@ onMounted(async () => {
   border-radius: 6px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: color 0.2s ease, background 0.2s ease;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
 .filter-more-btn:hover {
   color: var(--neon-cyan);
   background: var(--accent-purple-a12);
+}
+
+/* T02915：有生效筛选时按钮保持 active 态，让 popover 收起后状态仍可辨 */
+.filter-more-btn.is-active {
+  color: var(--neon-cyan);
+  background: var(--accent-purple-a12);
+  border-color: var(--accent-cyan-a40);
+}
+
+/* T02915：生效筛选条数角标 */
+.filter-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent-cyan-a40);
+  color: var(--bg-scene);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
 }
 
 /* 过滤 popover 内：三个下拉条件纵向排列，字段标签 + 选择器 */
@@ -2888,6 +2975,75 @@ onMounted(async () => {
   color: var(--text-soft);
   font-family: var(--font-mono);
   letter-spacing: 1px;
+}
+
+/* T02915：生效筛选 chip 行——挂在筛选按钮外，popover 收起后仍可见 */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 0;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 4px 0 8px;
+  background: var(--accent-purple-a12);
+  border: 1px solid var(--accent-purple-a25);
+  border-radius: 11px;
+  font-size: 11px;
+}
+
+.filter-chip-field {
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  letter-spacing: 1px;
+}
+
+.filter-chip-value {
+  color: var(--neon-cyan);
+}
+
+.filter-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.filter-chip-clear:hover {
+  color: var(--neon-cyan);
+  background: var(--accent-purple-a15);
+}
+
+.filter-chip-clear-all {
+  height: 22px;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.filter-chip-clear-all:hover {
+  color: var(--neon-cyan);
 }
 
 /* FR-11 视图切换器 */
