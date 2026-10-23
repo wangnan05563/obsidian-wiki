@@ -6,6 +6,8 @@ import path from 'node:path';
 import { initAuthModule, registerAuthRoute } from '../src/routes/auth.js';
 import { resetUserStore } from '../src/auth/user-store.js';
 import { resetAuthRateLimiters } from '../src/auth/auth-rate-limit.js';
+import { flushAuditLog } from '../src/auth/audit-log.js';
+import type { AuditLogEntry } from '../src/auth/types.js';
 
 // T02473（PRD U2）路由级验证：用户管理写接口的守卫必须真的拦住请求。
 // 回归点：原先这几处 400 分支缺 return，Fastify 不会中断 handler ——
@@ -156,6 +158,45 @@ describe('T02473 用户管理写接口守卫', () => {
     });
     expect(demote.statusCode).toBe(400);
     expect((await listUsers(token)).find(u => u.id === me.id)!.role).toBe('admin');
+  });
+
+  it('被守卫拒绝的自毁/降级/自删 400 都会写 fail 审计（T02937）', async () => {
+    const token = await login('admin', 'admin123');
+    const me = (await listUsers(token)).find(u => u.username === 'admin')!;
+
+    const rejected = [
+      await app.inject({
+        method: 'PUT', url: `/api/auth/users/${me.id}`, headers: { authorization: `Bearer ${token}` },
+        payload: { role: 'user' },
+      }),
+      await app.inject({
+        method: 'PUT', url: `/api/auth/users/${me.id}`, headers: { authorization: `Bearer ${token}` },
+        payload: { enabled: false },
+      }),
+      await app.inject({ method: 'DELETE', url: `/api/auth/users/${me.id}`, headers: { authorization: `Bearer ${token}` } }),
+    ];
+    for (const res of rejected) expect(res.statusCode).toBe(400);
+
+    await flushAuditLog();
+    const logRes = await app.inject({
+      method: 'GET', url: '/api/auth/audit-log', headers: { authorization: `Bearer ${token}` },
+    });
+    expect(logRes.statusCode).toBe(200);
+    const entries = (logRes.json() as { entries: AuditLogEntry[] }).entries;
+    const fails = entries.filter(e => e.result === 'fail' && (e.action === 'user_update' || e.action === 'user_delete'));
+
+    const messages = fails.map(e => e.message);
+    expect(messages).toContain('不能停用或降级当前登录账户');
+    expect(messages).toContain('不能删除当前登录用户');
+    // 两次 PUT 被抓：降级与停用各一条，且 resource 指向被操作账户
+    const puts = fails.filter(e => e.action === 'user_update' && e.message === '不能停用或降级当前登录账户');
+    expect(puts).toHaveLength(2);
+    for (const e of puts) {
+      expect(e.resource).toBe(`/api/auth/users/${me.id}`);
+      expect(e.username).toBe('admin');
+    }
+    const del = fails.find(e => e.action === 'user_delete')!;
+    expect(del.resource).toBe(`/api/auth/users/${me.id}`);
   });
 
   it('停用其他账户正常生效，改密码不合规被拦（400 带原文）', async () => {
