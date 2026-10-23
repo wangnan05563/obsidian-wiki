@@ -12,6 +12,8 @@ import rateLimit from '@fastify/rate-limit';
 import { registerCompression } from './compression.js';
 import { loadConfig, getEffectiveApiKey } from './config.js';
 import { setupSpaStatic } from './spa-static.js';
+// T02930：优雅停服（app.close + 在途 SSE 收尾 + 超时兜底）
+import { runShutdown } from './utils/shutdown.js';
 import { DEFAULT_GOVERNOR_CONFIG } from './engine/context-governor.js';
 import { VaultService } from './vault/vault-service.js';
 import { HarnessAdapter, resolveSubAgents } from './engine/harness-adapter.js';
@@ -663,27 +665,32 @@ registerDataCleanRoute(app, vault, isolationGuards);
   await setupSpaStatic(app);
 
 
-  // shutdown 优雅停止：优先停隧道，避免调度器停止后隧道仍转发流量到已关闭服务
-
-
+  // shutdown 优雅停止：顺序见 utils/shutdown.ts —— 先停隧道，再收尾 SSE 与在途请求
+  // （app.close），最后释放工具/Vault/日志等进程级资源；整体有超时兜底，不会吊住进程。
+  let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
-    console.log(`[关闭] 收到 ${signal}，正在停止隧道与工具连接...`);
-    tunnel.stop();
-
-    await shutdownToolRegistry();
-    // § P2-7：关闭 chokidar 监听器，清空 VaultService 缓存
-    await vault.dispose();
-    // 关闭日志文件流，确保缓冲写入落盘（GS-1：长连接资源清理）
-    // 为什么用超时保护：避免文件系统异常导致退出阻塞，1s 足够小体积日志刷新
-    // 为什么用局部变量 stream：闭包内 TS 无法保证 logFileStream 仍非空，局部变量避免 ! 断言
-    if (logFileStream) {
-      const stream = logFileStream;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1000);
-        stream.end(() => { clearTimeout(timer); resolve(); });
-      });
-    }
-    process.exit(0);
+    // SIGINT/SIGTERM 可能连续到达（Ctrl+C 两次 / 关窗+系统关机），重复拆线会打断正在 drain 的请求
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[关闭] 收到 ${signal}，正在停止接收新连接并收尾在途请求...`);
+    await runShutdown({
+      tunnelStop: () => tunnel.stop(),
+      closeServer: () => app.close(),
+      shutdownTools: () => shutdownToolRegistry(),
+      // § P2-7：关闭 chokidar 监听器，清空 VaultService 缓存
+      disposeVault: () => vault.dispose(),
+      // 关闭日志文件流，确保缓冲写入落盘（GS-1：长连接资源清理）
+      // 为什么用超时保护：避免文件系统异常导致退出阻塞，1s 足够小体积日志刷新
+      // 为什么用局部变量 stream：闭包内 TS 无法保证 logFileStream 仍非空，局部变量避免 ! 断言
+      flushLogs: async () => {
+        if (!logFileStream) return;
+        const stream = logFileStream;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 1000);
+          stream.end(() => { clearTimeout(timer); resolve(); });
+        });
+      },
+    });
   };
   shutdownOnRestart = () => { void shutdown('restart'); };
   return { app, config, shutdown };
