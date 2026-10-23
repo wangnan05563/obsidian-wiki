@@ -18,6 +18,13 @@
 2. 在最相关的其他页面中添加 [[链接]] 指向孤立页面
 3. 用 write_file 更新相关页面
 
+## write_file 用法（T02923）
+- 修改**已存在**页面时只提交正文：frontmatter 由服务端以原页为准逐字保留，内容里夹带的 frontmatter 会被忽略并记入 log.md。
+- 确需修改其他 frontmatter 字段，用 `frontmatter` 参数显式声明（键→新值）；`updated` 由知识库维护，不可改。
+- 默认只允许最小改动（追加链接、修正断链所在行）。删除原有标题或大段正文会被拒绝；
+  确实需要重构页面时显式传 `allowRestructure: true`，并说明理由。
+- 新建页面时提交完整内容（含 frontmatter）。
+
 ## 约束
 - 仅允许 write_file 工具修改页面，禁止改 SCHEMA.md/index.md/log.md
 - 修复后用 append_log 记录修复操作

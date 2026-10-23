@@ -5,6 +5,7 @@ import type { VaultService } from '../vault/vault-service.js';
 import type { FixInput, FixProgressEvent } from '../types.js';
 import { getPromptPath } from '../utils/runtime.js';
 import { pageDirsSlash, flatPagePathHint } from '../vault/page-scope.js';
+import { writePageSafely } from '../vault/page-write-guard.js';
 
 // 加载 fix prompt 单点存储（M-3 prompt 等价性）
 // 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
@@ -38,18 +39,43 @@ export function createFixTools(vault: VaultService): ToolDefinition[] {
       // T02686：文案与页面口径同源。原描述写死 4 个目录（缺 qa/solutions），
       // 而真实写白名单是 page-scope 的 8 个可写目录——描述落后于实现会让 LLM 以为
       // 「qa/ 下的体检修复写不进去」，转而把修复产物写到 concepts/ 去。
-      description: `写入页面（含 frontmatter）。仅允许 ${pageDirsSlash()}/ 目录；${flatPagePathHint()}（否则页面不会被知识库索引到）。`,
+      // T02923：已存在页面的 frontmatter 由服务端原样保留，正文删除受护栏约束（见 page-write-guard）。
+      description:
+        `写入页面。仅允许 ${pageDirsSlash()}/ 目录；${flatPagePathHint()}（否则页面不会被知识库索引到）。` +
+        '已存在的页面：只提交正文，frontmatter 一律以原页为准（内容里夹带的 frontmatter 会被忽略并记入 log.md）；' +
+        '确有字段要改必须用 frontmatter 参数显式声明（updated 不可改）。正文默认只允许最小改动，' +
+        '删除原有标题或大段内容会被拒绝；确需重构请显式传 allowRestructure: true。',
       parameters: objSchema(
         {
           path: { type: 'string', description: `页面相对路径（${flatPagePathHint()}）` },
-          content: { type: 'string', description: '页面完整内容' },
+          content: { type: 'string', description: '页面正文（已存在页面无需带 frontmatter；带了也会被忽略）' },
+          frontmatter: {
+            type: 'object',
+            description: '需要显式修改的 frontmatter 字段（键→新值，仅已存在页面生效）；updated 不可修改',
+          },
+          allowRestructure: {
+            type: 'boolean',
+            description: '确认要重构正文（允许删除标题/大段内容）时显式置 true',
+          },
         },
         ['path', 'content'],
       ),
       handler: async (args: unknown) => {
-        const { path: p, content } = args as { path: string; content: string };
-        await vault.writeFile(p, content);
-        return { ok: true, path: p };
+        const { path: p, content, frontmatter, allowRestructure } = args as {
+          path: string;
+          content: string;
+          frontmatter?: Record<string, unknown>;
+          allowRestructure?: boolean;
+        };
+        const result = await writePageSafely(vault, p, content, { frontmatter, allowRestructure });
+        return {
+          ok: true,
+          path: p,
+          created: result.created,
+          frontmatterPreserved: result.preservedFrontmatter,
+          frontmatterApplied: result.applied,
+          frontmatterIgnored: result.ignored,
+        };
       },
     },
     {
