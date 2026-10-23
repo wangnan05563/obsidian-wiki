@@ -9,7 +9,7 @@ import {
   DEFAULT_AI_USER_CONFIG,
   type AiUserConfig,
 } from '../../services/userConfig';
-import type { LlmPreset } from '../../types';
+import type { AuthPermission, LlmPreset } from '../../types';
 import { useMobileTheme } from '../../composables/useMobileTheme';
 
 // 移动端「我的」页（SRS FR-ME）：用户资料 + BYOK（AI 服务密钥）配置 + 登出。
@@ -99,6 +99,18 @@ async function logout() {
   await authStore.logout();
   // 登录门由 MobileShell 监听 authStore.isLoggedIn 自动切回登录页
 }
+
+// T02914：功能入口按 AuthPermission 显隐（复用 authStore.hasPermission，不新建白名单）。
+// dataclean 与 cleanup 共用桌面同名权限（menu.ts：两页都挂 cleanup 权限点）。
+type FeatureKey = 'skill' | 'cleanup' | 'dataclean';
+const allFeatures: Array<{ key: FeatureKey; label: string; perm: AuthPermission }> = [
+  { key: 'skill', label: '技能管理', perm: 'skill' },
+  { key: 'cleanup', label: '缓存与日志清理', perm: 'cleanup' },
+  { key: 'dataclean', label: '页面质量清洗', perm: 'cleanup' },
+];
+const featureEntries = computed(() => allFeatures.filter((f) => authStore.hasPermission(f.perm)));
+
+defineEmits<{ (e: 'open-feature', key: FeatureKey): void }>();
 </script>
 
 <template>
@@ -187,6 +199,22 @@ async function logout() {
 
       <button class="mme-save" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : (saved ? '已保存 ✓' : '保存配置') }}
+      </button>
+    </section>
+
+    <!-- T02914 功能入口：桌面端独有的低频功能（技能/清理类），本期只补入口不重做移动视图，
+         跳转目标由 MobileShell 全宽挂载对应桌面视图。按权限显隐，口径与桌面 filterVisibleMenus 一致。 -->
+    <section v-if="featureEntries.length" class="mme-card mme-features">
+      <h2 class="mme-card-title">功能入口</h2>
+      <button
+        v-for="f in featureEntries"
+        :key="f.key"
+        class="mme-feature-item"
+        type="button"
+        @click="$emit('open-feature', f.key)"
+      >
+        <span>{{ f.label }}</span>
+        <span class="mme-feature-arrow" aria-hidden="true">›</span>
       </button>
     </section>
 
@@ -434,6 +462,41 @@ select.mme-input {
 .mme-save:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.mme-features {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mme-feature-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 10px;
+  border: none;
+  border-radius: 10px;
+  background: var(--m-surface-2, #ffffff);
+  border: 1px solid var(--m-border, #ececee);
+  color: var(--m-text, #111111);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--m-font, var(--font-body));
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mme-feature-item:active {
+  background: var(--m-border, #ececee);
+}
+
+.mme-feature-arrow {
+  color: var(--m-text-3, #9aa0a6);
+  font-size: 18px;
+  line-height: 1;
 }
 
 .mme-logout {
