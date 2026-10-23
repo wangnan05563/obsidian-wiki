@@ -175,15 +175,18 @@ ${targetDesc}
     .run({ task, context: { issueType: input.issueType, target: input.target } })
     .then((result) => {
       const isError = result.status === 'failed';
+      // T02924：把实测 harness step 数/token 带给批量作业，作为「调用次数/费用」估算样本
+      const usage = { harnessSteps: result.step, tokens: result.tokenUsed };
       pushEvent({
         step: isError ? 'done' : 'fixed',
         status: isError ? 'error' : 'done',
         message: isError
           ? `修复失败: ${result.finalContent || '未知错误'}`
           : `修复完成，共 ${result.step} 步`,
+        data: usage,
       });
       if (!isError) {
-        pushEvent({ step: 'done', status: 'done', message: '修复流程结束' });
+        pushEvent({ step: 'done', status: 'done', message: '修复流程结束', data: usage });
       }
     })
     .catch((err: unknown) => {

@@ -182,6 +182,38 @@ describe('POST /api/health-check/fix（单问题 SSE）', () => {
     await a.close();
   });
 
+  // T02924：单个修复与批量作业共用 stats.json，usage 必须同样落盘，否则「先单独修几条」
+  // 的用户第一次批量估算拿到的仍是默认值（接错对象的典型：只在批量路径采集）。
+  it('单个修复：耗时样本同时记录 harnessSteps / tokens（供批量估算复用）', async () => {
+    const dir = tempJobsDir();
+    const stub = makeAdapter(() =>
+      iterEvents([{ step: 'done', status: 'done', message: 'ok', data: { harnessSteps: 6, tokens: 9_000 } }]),
+    );
+    const app = Fastify({ logger: false });
+    registerHealthCheckRoute(app, stub.adapter, undefined, dir);
+    const res = await app.inject({ method: 'POST', url: '/api/health-check/fix', payload: valid });
+    expect(res.statusCode).toBe(200);
+    expect(stub.fix).toHaveBeenCalledTimes(1);
+    await app.close();
+    const statsFile = path.join(dir, 'stats.json');
+    // 响应结束与统计落盘在注入链上不保证同一 tick：轮询文件存在性（终点可观测）
+    await pollUntil(
+      'T02924 单修复 usage 写入 stats.json',
+      () => fs.existsSync(statsFile),
+      (exists) => exists,
+      { ...NO_TIMER_CHAIN, capMs: 2_000 },
+    );
+    const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8')) as Record<string, number>;
+    expect(stats).toMatchObject({
+      samples: 1,
+      stepSamples: 1,
+      totalSteps: 6,
+      tokenSamples: 1,
+      totalTokens: 9_000,
+      avgSteps: 6,
+    });
+  });
+
   it('adapter 抛 Error → SSE error 事件带 message，流正常结束（HTTP 200）', async () => {
     const stub = makeAdapter(() => throwAfter([ev('scan', 'running')], new Error('boom')));
     const a = await withApp(stub);
@@ -232,8 +264,8 @@ describe('POST /api/health-check/fix/batch（T02466：后台作业）', () => {
     expect(typeof body.jobId).toBe('string');
     expect(body.total).toBe(2);
     expect(body.status).toBe('running');
-    // 估算：无实测样本时显式标 basis=default，并给出 LLM 调用次数
-    expect(body.estimate).toMatchObject({ count: 2, llmCalls: 2, basis: 'default' });
+    // 估算：无实测样本时显式标 basis=default；T02924 起 llmCalls 按 step 计（2 × 5.7 ≈ 11）
+    expect(body.estimate).toMatchObject({ count: 2, llmCalls: 11, basis: 'default' });
     await a.close();
   });
 

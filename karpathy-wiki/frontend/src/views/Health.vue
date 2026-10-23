@@ -49,6 +49,9 @@ import {
   selectionBreakdown,
   formatDuration,
   formatElapsed,
+  formatTokens,
+  estimateBasisText as buildEstimateBasisText,
+  estimateRangeText as buildEstimateRangeText,
 } from '../utils/healthList';
 import type { IssueKind, IssueRow } from '../utils/healthList';
 
@@ -278,14 +281,18 @@ const estimate = ref<BatchFixEstimate | null>(null);
 const pendingPayload = ref<{ items: FixRequest[]; issueKeys: string[] } | null>(null);
 const starting = ref(false);
 
-const estimateBasisText = computed(() => {
+// T02924：三态口径——default 无样本（实测标定兜底）/ measured-low 1~4 样本（仅供参考）/ measured ≥5。
+// 文案与区间计算放在 utils/healthList，便于单测直接锁「样本不足」不被渲染成确定值。
+const estimateBasisText = computed(() => (estimate.value ? buildEstimateBasisText(estimate.value) : ''));
+
+const estimateLowConfidence = computed(() => {
   const e = estimate.value;
-  if (!e) return '';
-  if (e.basis === 'measured') {
-    return `估算依据：最近 ${e.samples} 次实测均值 ${formatDuration(e.avgMsPerIssue)}/项`;
-  }
-  return '估算依据：尚无实测样本，按默认单题耗时估算';
+  return !!e && e.basis !== 'measured';
 });
+
+const estimateRangeText = computed(() =>
+  estimate.value ? buildEstimateRangeText(estimate.value.estimatedMinMs, estimate.value.estimatedMaxMs) : '',
+);
 
 async function openEstimate(sel: Set<string>): Promise<void> {
   if (anyFixing.value) return;
@@ -682,6 +689,13 @@ onMounted(() => {
           </span>
           <span class="job-stat fail">失败 {{ batchFailCount }}</span>
           <span class="job-stat">已用时 {{ formatElapsed(batchElapsedMs) }}</span>
+          <span
+            v-if="job.avgStepsPerIssue > 0"
+            class="job-stat"
+            data-tip="每个问题的平均模型往返次数（实测均值；样本不足时为标定默认值）"
+          >
+            平均 {{ job.avgStepsPerIssue }} 次往返/项
+          </span>
           <span v-if="job.status === 'running' && batchEtaMs > 0" class="job-stat">
             预计剩余 {{ formatDuration(batchEtaMs) }}
           </span>
@@ -938,14 +952,21 @@ onMounted(() => {
           </div>
           <div class="estimate-item">
             <span class="estimate-num">{{ estimate?.llmCalls ?? '—' }}</span>
-            <span class="estimate-label">LLM 调用次数</span>
+            <span class="estimate-label">模型往返次数</span>
+            <span v-if="estimate" class="estimate-sub">≈ {{ estimate.avgStepsPerIssue }} 次/项</span>
+          </div>
+          <div class="estimate-item">
+            <span class="estimate-num">{{ estimate ? `约 ${formatTokens(estimate.tokens)}` : '—' }}</span>
+            <span class="estimate-label">预计 tokens</span>
+            <span v-if="estimate" class="estimate-sub">≈ {{ formatTokens(estimate.avgTokensPerIssue) }}/项</span>
           </div>
           <div class="estimate-item">
             <span class="estimate-num">{{ estimate ? formatDuration(estimate.estimatedMs) : '—' }}</span>
             <span class="estimate-label">预计耗时</span>
+            <span v-if="estimateRangeText" class="estimate-sub">{{ estimateRangeText }}</span>
           </div>
         </div>
-        <p v-if="estimate" class="estimate-basis">
+        <p v-if="estimate" class="estimate-basis" :class="{ 'is-low-confidence': estimateLowConfidence }">
           {{ estimateBasisText }}。每个问题需读写 vault，作业全程持有编译锁，期间编译任务会排队；暂停与取消在「当前问题完成后」生效。
         </p>
         <p v-if="job && job.status === 'paused'" class="estimate-basis">
@@ -1476,6 +1497,17 @@ onMounted(() => {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.estimate-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-soft);
+}
+
+/* 样本不足（default / measured-low）：把「估算非承诺」显性化，避免被当成实测值 */
+.estimate-basis.is-low-confidence {
+  color: var(--accent-amber, #ffb224);
 }
 
 /* ===== 修复日志 ===== */

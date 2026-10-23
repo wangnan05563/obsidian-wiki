@@ -22,6 +22,7 @@ function snapshot(overrides: Partial<BatchFixJobSnapshot> = {}): BatchFixJobSnap
     updatedAt: 0,
     elapsedMs: 1000,
     avgMsPerIssue: 500,
+    avgStepsPerIssue: 5.7,
     doneKeys: ['orphan:a.md'],
     failed: [],
     nextIndex: 2,
