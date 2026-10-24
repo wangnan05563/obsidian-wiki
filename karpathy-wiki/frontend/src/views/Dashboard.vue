@@ -688,7 +688,11 @@ onMounted(() => {
   font-family: var(--font-mono);
 }
 
-@media (max-width: 900px) {
+/* T02916：内容列降列的阈值按「内容列宽」而非「视口宽」定档。
+   视口 ≤900 时壳层已收成顶部横条（内容列 ≈ 视口 − 24），而 901-1100 仍是侧栏壳
+   （内容列 ≈ 视口 − 244）。实测 900 视口的内容列 876px ≈ 1120 视口侧栏态的内容列，
+   所以这一档要用 laptop(1100)，否则恰好在 900/901 两侧出现「宽屏反而挤」的倒挂。 */
+@media (max-width: 1100px) {
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .bottom-row { grid-template-columns: 1fr; }
   .welcome-left, .welcome-right { display: block; margin: 0 0 16px; }

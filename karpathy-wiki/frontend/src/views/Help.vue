@@ -809,8 +809,10 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* 响应式：小屏隐藏侧栏，内容铺满 */
-@media (max-width: 900px) {
+/* 响应式：小屏隐藏侧栏，内容铺满
+   T02916：侧栏 240px + 主栏在 901-1100 的侧栏壳下只剩约 500px 正文宽，
+   与 ≤900 顶部横条态的 876px 相比反而更挤，故按内容列宽改判到 laptop(1100)。 */
+@media (max-width: 1100px) {
   .help-sidebar {
     display: none;
   }

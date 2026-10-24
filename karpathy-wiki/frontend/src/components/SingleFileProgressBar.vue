@@ -532,7 +532,7 @@ const hasTotalElapsed = computed(() => store.totalElapsedMs > 0);
 }
 
 /* 响应式：窄屏下调整布局与字号 */
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   .single-progress-container {
     padding: 16px 18px;
   }

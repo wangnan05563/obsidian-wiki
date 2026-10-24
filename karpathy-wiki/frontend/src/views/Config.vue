@@ -5258,7 +5258,9 @@ async function importConfig() {
   color: var(--text-muted, #6b7280);
 }
 
-@media (max-width: 900px) {
+/* T02916：二级导航 + 表单两列在 901-1100 的侧栏壳下已放不下（内容列 ≈656-856px），
+   与 ConfigSideNav.vue 同档改判到 laptop(1100)，避免「900 视口比 1000 视口宽松」的倒挂。 */
+@media (max-width: 1100px) {
   .config-layout {
     flex-direction: column;
     gap: 14px;
@@ -5295,9 +5297,6 @@ async function importConfig() {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.1em;
-}
-
-@media (max-width: 760px) {
 }
 
 .schema-section,

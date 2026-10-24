@@ -1289,7 +1289,7 @@ onBeforeUnmount(() => {
 }
 
 /* 响应式 */
-@media (max-width: 500px) {
+@media (max-width: 768px) {
   .floating-panel {
     width: calc(100vw - 16px) !important;
     height: calc(100vh - 80px) !important;

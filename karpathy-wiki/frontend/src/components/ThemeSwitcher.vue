@@ -325,7 +325,7 @@ onBeforeUnmount(() => {
 }
 
 /* Responsive: small screen */
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   .theme-switcher {
     right: 16px;
     bottom: 16px;

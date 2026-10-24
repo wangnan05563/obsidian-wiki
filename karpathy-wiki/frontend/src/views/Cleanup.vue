@@ -847,7 +847,8 @@ onMounted(() => {
 }
 
 /* 响应式：小屏改为单列 */
-@media (max-width: 900px) {
+/* T02916：降列阈值改按内容列宽定档（详见 Dashboard.vue 同处注释） */
+@media (max-width: 1100px) {
   .status-grid {
     grid-template-columns: repeat(2, 1fr);
   }

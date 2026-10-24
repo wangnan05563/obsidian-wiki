@@ -855,7 +855,7 @@ onBeforeUnmount(() => {
 }
 
 /* 响应式：小屏堆叠 */
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   .brand-card {
     flex-direction: column;
     align-items: stretch;
