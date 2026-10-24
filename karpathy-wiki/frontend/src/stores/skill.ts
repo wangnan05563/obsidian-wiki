@@ -29,6 +29,34 @@ export const useSkillStore = defineStore('skill', () => {
   // 总占用字节数
   const totalSize = computed(() => skills.value.reduce((sum, s) => sum + s.size, 0));
 
+  // T02917 可用技能数：页头计数按 enabled 现算，禁用一项就必须少一项，
+  //   不允许「只改图标不改计数」。
+  const enabledCount = computed(() => skills.value.filter((s) => s.enabled).length);
+
+  // T02917 切换启用状态：成功后用服务端返回的元数据覆盖本地那一条，
+  //   避免前端乐观更新后与落盘结果不一致（例如禁用写盘失败却显示已禁用）。
+  async function setSkillEnabled(id: string, enabled: boolean): Promise<boolean> {
+    try {
+      const res = await apiFetch(`${API_BASE}/skills/${encodeURIComponent(id)}/enabled`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ error: '切换启用状态失败' }));
+        throw new Error(errBody.error || `切换启用状态失败：${res.status}`);
+      }
+      const meta: SkillMeta = await res.json();
+      skills.value = skills.value.map((s) => (s.id === id ? { ...s, ...meta } : s));
+      if (currentDetail.value?.id === id) {
+        currentDetail.value = { ...currentDetail.value, enabled: meta.enabled };
+      }
+      return true;
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : '切换启用状态失败';
+      return false;
+    }
+  }
+
   // 加载技能列表
   async function fetchSkills(): Promise<void> {
     loading.value = true;
@@ -153,9 +181,11 @@ export const useSkillStore = defineStore('skill', () => {
     lastImportWarnings,
     totalCount,
     totalSize,
+    enabledCount,
     fetchSkills,
     uploadSkill,
     fetchSkillDetail,
+    setSkillEnabled,
     deleteSkill,
     clearError,
     clearDetail,

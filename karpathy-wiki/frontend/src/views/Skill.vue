@@ -167,6 +167,18 @@ async function refreshList(): Promise<void> {
   }
 }
 
+// 切换启用状态（T02917）
+// 为什么不做乐观更新：禁用要写回 SKILL.md，写盘失败时界面不能先显示「已禁用」；
+// 统一等 PATCH 返回后用服务端元数据覆盖那一条。
+async function toggleEnabled(skill: SkillMeta, next: boolean): Promise<void> {
+  const ok = await store.setSkillEnabled(skill.id, next);
+  if (ok) {
+    ElMessage.success(next ? `技能 "${skill.name}" 已启用` : `技能 "${skill.name}" 已禁用`);
+  } else {
+    ElMessage.error(apiErrorMessage('切换启用状态失败', store.error));
+  }
+}
+
 onMounted(() => {
   // 首次进入页面加载列表
   if (store.skills.length === 0) {
@@ -190,6 +202,11 @@ onMounted(() => {
           <div class="stat-item">
             <span class="stat-value">{{ store.totalCount }}</span>
             <span class="stat-label">技能总数</span>
+          </div>
+          <!-- T02917：可用技能数随启用状态实时变化，禁用一项就少一项 -->
+          <div class="stat-item">
+            <span class="stat-value">{{ store.enabledCount }}</span>
+            <span class="stat-label">可用技能</span>
           </div>
           <div class="stat-item">
             <span class="stat-value">{{ formatSize(store.totalSize) }}</span>
@@ -306,6 +323,7 @@ onMounted(() => {
             v-for="skill in filteredSkills"
             :key="skill.id"
             class="skill-item hover-glow"
+            :class="{ 'is-disabled': !skill.enabled }"
           >
             <div class="skill-icon">
               <span class="format-badge" :class="`format-${skill.format}`">{{ skill.format.toUpperCase() }}</span>
@@ -314,6 +332,9 @@ onMounted(() => {
               <div class="skill-name-row">
                 <span class="skill-name">{{ skill.name }}</span>
                 <span class="skill-id">{{ skill.id }}</span>
+                <span class="status-badge" :class="skill.enabled ? 'status-on' : 'status-off'">
+                  {{ skill.enabled ? '启用' : '已禁用' }}
+                </span>
               </div>
               <div class="skill-desc">{{ skill.description || '（无描述）' }}</div>
               <div class="skill-meta">
@@ -325,6 +346,17 @@ onMounted(() => {
               </div>
             </div>
             <div class="skill-actions">
+              <el-switch
+                class="enabled-switch"
+                size="small"
+                inline-prompt
+                active-text="启"
+                inactive-text="停"
+                :model-value="skill.enabled"
+                :aria-label="`切换技能 ${skill.name} 启用状态`"
+                @click.stop
+                @change="(val: boolean) => toggleEnabled(skill, val)"
+              />
               <button class="action-btn view-btn" title="查看详情" @click.stop="viewDetail(skill)">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2"/>
@@ -663,6 +695,35 @@ onMounted(() => {
   background: var(--accent-purple-a08);
 }
 
+/* T02917 已禁用：整行降透明度并去掉悬停高亮，避免「看起来还能用」 */
+.skill-item.is-disabled {
+  opacity: 0.55;
+}
+
+.skill-item.is-disabled:hover {
+  border-color: var(--accent-purple-a15);
+  background: var(--bg-glass);
+}
+
+/* T02917 启用状态标识：文字 + 颜色双通道，不依赖单一色相 */
+.status-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+
+.status-badge.status-on {
+  background: var(--accent-cyan-a20);
+  color: var(--text-bright);
+}
+
+.status-badge.status-off {
+  background: var(--accent-pink-a15);
+  color: var(--text-soft);
+}
+
 .skill-icon {
   flex-shrink: 0;
 }
@@ -744,8 +805,14 @@ onMounted(() => {
 
 .skill-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+
+/* T02917：开关与两个图标按钮之间留一点距离，避免误触删除 */
+.enabled-switch {
+  margin-right: 6px;
 }
 
 .action-btn {

@@ -1217,6 +1217,9 @@ export interface SkillMeta {
   importedAt: string;
   size: number;
   entryFile: string;
+  // T02917 启用状态：落在 SKILL.md frontmatter 的 enabled 字段。
+  // 缺失即视为 true——存量技能升级后不得被静默禁用。
+  enabled: boolean;
 }
 
 // 技能详情（GET /api/skills/:id 返回）

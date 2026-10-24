@@ -7,6 +7,7 @@ import type { AppConfig, EngineAdapter, LlmPreset } from '../types.js';
 import type { IsolationGuards } from '../middleware/auth.js';
 import { createIsolationGuards } from '../middleware/auth.js';
 import { testWebSearchConnection } from '../tools/web-search.js';
+import { resolveActivePreset, buildPresetUpdates } from '../skill/active-preset.js';
 import { testImageGeneration, applyImageOverride } from '../workflows/media-generation-workflow.js';
 
 // 模块加载时一次性读取 LLM 预设列表，避免每次请求都读盘。
@@ -163,13 +164,9 @@ export function registerAiRoute(
     };
     if (activeSkill !== undefined) {
       skillUpdates.activeSkill = activeSkill || '';
-      const activePreset = merged.skills?.find((s) => s.id === activeSkill);
-      skillUpdates.systemPrompt = activePreset?.systemPrompt ?? '';
-      skillUpdates.scope = activePreset?.scope ?? 'all';
-      skillUpdates.outputFormat = activePreset?.outputFormat ?? '';
-      if (activePreset?.model) {
-        skillUpdates.model = activePreset.model;
-      }
+      // T02917：激活预设必须过 enabled 这一关——被禁用的伙伴不再把提示词/范围灌进 adapter
+      const activePreset = resolveActivePreset(merged.skills, activeSkill);
+      Object.assign(skillUpdates, buildPresetUpdates(activeSkill, activePreset));
     }
     adapter.updateConfig(skillUpdates as Parameters<typeof adapter.updateConfig>[0]);
   }

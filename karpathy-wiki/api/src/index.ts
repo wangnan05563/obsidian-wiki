@@ -52,6 +52,7 @@ import { registerToolsRoute } from './routes/tools.js';
 // MCP Server 端点：对外暴露知识库能力给外部 AI Agent（Streamable HTTP /mcp）
 import { registerMcpRoute } from './routes/mcp-route.js';
 import { registerSkillRoute } from './routes/skill.js';
+import { applyActivePresetToAdapter } from './skill/active-preset.js';
 // FR-10-1 AI 自动打标签路由：列出待审核 / 手动触发建议 / 确认 tag
 import { registerTagsRoute } from './routes/tags.js';
 // FR-16-1 Discover Sources 路由：基于双链拓扑推荐相关笔记 + 一键建立双链
@@ -357,6 +358,10 @@ export async function buildApp(): Promise<BuiltApp> {
     subAgentsConfig,
   );
 
+  // T02917：启动即按落盘配置恢复「AI 伙伴」，禁用项不恢复。
+  // 此前伙伴提示词只在 PUT /api/ai/config 时灌进 adapter，重启后界面仍显示已选伙伴、
+  // 问答却不带指令；启用/禁用也就无从生效。
+  applyActivePresetToAdapter(adapter, config);
 
 
   const loggingConfig = config.logging ?? { level: 'info', enableRequestLog: true, logFilePath: '' };
@@ -604,7 +609,9 @@ registerDataCleanRoute(app, vault, isolationGuards);
   registerMcpRoute(app, vault, adapter, config);
 
 
-  registerSkillRoute(app);
+  // 传入真实守卫（T02917）：此前不传时 registerSkillRoute 用默认 createIsolationGuards()，
+  // 其 enabled 默认为 false ⇒ 该路由上任何 preHandler 都是空转。
+  registerSkillRoute(app, isolationGuards);
   // FR-10-1 AI 自动打标签：compile 末尾追加 ai_tags 建议 + 手动触发 + 确认
   // 为什么需要 config 完整对象：POST /api/tags/suggest 调用 LLM 需读取 llm.baseUrl/model/apiKey
   registerTagsRoute(app, vault, config);
