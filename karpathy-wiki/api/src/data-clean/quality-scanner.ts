@@ -151,6 +151,57 @@ function hasValidFrontmatter(data: Record<string, unknown>): boolean {
   return !!(data?.type && data?.title);
 }
 
+/** 序列项里是否有引号外、括号外的逗号（`- name: a, relation: b` 这种内联映射） */
+function hasTopLevelComma(text: string): boolean {
+  let quote = '';
+  let depth = 0;
+  for (const ch of text) {
+    if (quote) {
+      if (ch === quote) quote = '';
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '{' || ch === '[' || ch === '(') {
+      depth++;
+    } else if (ch === '}' || ch === ']' || ch === ')') {
+      depth--;
+    } else if (ch === ',' && depth === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 历史文件里的第二块常写成 `- name: x, relation: y`（缺花括号的流式映射），js-yaml 判定非法。
+ * 只把这类序列项补成 `- {x, y}`，其余行原样保留；引号内逗号不动。
+ */
+function normalizeInlineSequenceMappings(block: string): string {
+  return block
+    .split(/\r?\n/)
+    .map((line) => {
+      const m = line.match(/^(\s*)-\s+(.+)$/);
+      if (!m) return line;
+      const rest = m[2].trim();
+      if (rest.startsWith('{') || rest.startsWith('[')) return line;
+      return hasTopLevelComma(rest) ? `${m[1]}- {${rest}}` : line;
+    })
+    .join('\n');
+}
+
+function parseYamlBlock(block: string): Record<string, unknown> | null {
+  // 传 options 绕过 gray-matter 全局缓存：缓存是在解析前写入的，解析失败也会留下坏条目，
+  // 后续同字符串的解析会直接拿到空 data（表现为「第一次能合并、第二次突然合并不了」）。
+  try {
+    return matter(`---\n${block}\n---\n`, {}).data as Record<string, unknown>;
+  } catch {
+    try {
+      return matter(`---\n${normalizeInlineSequenceMappings(block)}\n---\n`, {}).data as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+}
+
 /**
  * T02933：内容开头若还跟着第二块 YAML frontmatter（历史编译写盘产生的双块），把它并进第一块。
  * 第二块字段优先（title/created/updated 是真实值），返回去掉第二块后的正文。
@@ -162,12 +213,7 @@ export function mergeDuplicateFrontmatter(
 ): { data: Record<string, unknown>; content: string; hadDuplicateBlock: boolean } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
   if (!match) return { data, content, hadDuplicateBlock: false };
-  let second: unknown;
-  try {
-    second = matter(`---\n${match[1]}\n---\n`).data;
-  } catch {
-    return { data, content, hadDuplicateBlock: false };
-  }
+  const second = parseYamlBlock(match[1]);
   if (!second || typeof second !== 'object' || Array.isArray(second) || Object.keys(second).length === 0) {
     return { data, content, hadDuplicateBlock: false };
   }
@@ -282,14 +328,16 @@ export async function fixFrontmatter( // NOSONAR - 认知复杂度由业务逻�
       const addedFields = Object.keys(newFm).filter((key) => !parsed.data?.[key]);
       // 双块文件即使没有新增字段也必须重写，否则第二块原样留在正文里
       if (addedFields.length > 0 || merged.hadDuplicateBlock) {
-        const updated = matter.stringify(merged.content, newFm);
+        // 用对象形式传正文：matter.stringify(字符串) 会先重新解析正文，正文里若还留着
+        // 一段非法 YAML（第二块解析失败时就会留着），这里会直接抛 YAMLException。
+        const updated = matter.stringify({ content: merged.content }, newFm);
         if (!dryRun) {
           await vaultRetry(() => vault.writeFile(relPath, updated), `fm-write:${relPath}`);
         }
         fixed.push({ path: relPath, addedFields });
       }
     } catch (err) {
-      errors.push(`Fix failed ${relPath}: ${err}`);
+      errors.push(`Fix failed ${relPath}: ${err}\nSTACK:${(err as Error)?.stack}`);
     }
   }
   return { fixed, errors };

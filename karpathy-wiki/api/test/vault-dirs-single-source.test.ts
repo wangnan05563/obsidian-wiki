@@ -240,6 +240,69 @@ describe('H · 双 frontmatter 块合并（T02933）', () => {
     expect(parsed.content).toContain('正文第一行');
   });
 
+  it('第二块用 `- name: x, relation: y` 内联映射（非法 YAML）也要合并，字段不丢', async () => {
+    const DUP_INLINE = [
+      '---',
+      'type: concept',
+      "updated: '2026-10-09'",
+      '---',
+      '---',
+      'title: 双块内联映射',
+      'type: concept',
+      'created: 2026-07-21',
+      'entities:',
+      '  - name: "上海票据交易所", relation: "created_by"',
+      '---',
+      '',
+      '正文第一行。',
+      '',
+    ].join('\n');
+    await vault.writeFile('concepts/dup-inline.md', DUP_INLINE);
+    const res = await fixFrontmatter(vault, ['concepts/dup-inline.md'], false);
+    expect(res.errors).toEqual([]);
+
+    const raw = await vault.readFile('concepts/dup-inline.md');
+    expect(raw.match(/^---$/gm)?.length).toBe(2);
+    const parsed = matter(raw);
+    expect(parsed.data.title).toBe('双块内联映射');
+    expect(new Date(parsed.data.created as string).toISOString().slice(0, 10)).toBe('2026-07-21');
+    expect(parsed.data.entities).toEqual([{ name: '上海票据交易所', relation: 'created_by' }]);
+    expect(parsed.content.trimStart().startsWith('---')).toBe(false);
+  });
+
+  it('同一进程先扫描再修复仍能合并（回归：gray-matter 解析失败会污染全局缓存）', async () => {
+    // 扫描阶段先解析过一次第二块（非法 YAML → 抛错），灰度缓存会留下坏条目；
+    // 修复阶段再解析同一段就会拿到空 data，表现为「扫描认得出、修复却合并不了」。
+    const DUP_INLINE = [
+      '---',
+      'type: concept',
+      "updated: '2026-10-09'",
+      '---',
+      '---',
+      'title: 双块内联映射',
+      'type: concept',
+      'created: 2026-07-21',
+      'entities:',
+      '  - name: "上海票据交易所", relation: "created_by"',
+      '---',
+      '',
+      '正文第一行。',
+      '',
+    ].join('\n');
+    await vault.writeFile('concepts/dup-cache.md', DUP_INLINE);
+
+    const pages = await scanVault(vault);
+    const scanned = pages.find((p) => p.path === 'concepts/dup-cache.md');
+    expect(scanned?.metadata.hasFrontmatter).toBe(true);
+    expect(scanned?.title).toBe('双块内联映射');
+
+    const res = await fixFrontmatter(vault, ['concepts/dup-cache.md'], false);
+    expect(res.errors).toEqual([]);
+    const raw = await vault.readFile('concepts/dup-cache.md');
+    expect(raw.match(/^---$/gm)?.length).toBe(2);
+    expect(matter(raw).data.title).toBe('双块内联映射');
+  });
+
   it('扫描口径：双块页面合并后判定为有元信息，不再落进「缺元信息」', async () => {
     await vault.writeFile('concepts/dup-scan.md', DUP);
     const pages = await scanVault(vault);
