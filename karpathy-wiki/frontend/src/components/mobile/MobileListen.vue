@@ -4,9 +4,12 @@
 // 复用：apiFetch+API_BASE（注入 token）、loadTtsConfig（per-user voice/rate）、/api/files/pages 内容源、/api/tts/synthesize 合成。
 // 合成策略：POST /api/tts/synthesize → MP3 blob → <audio>.src（后端该端点返回 audio/mpeg，前端用 blob 播放最稳）。
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
+import { storeToRefs } from 'pinia';
 import { apiFetch, API_BASE } from '../../utils/apiBase';
 import { loadTtsConfig } from '../../services/ttsConfig';
 import { useAuthStore } from '../../stores/auth';
+// T02942：队列提到 store，供 MobileQuery「加入聆听」写入同一份清单
+import { useListenQueueStore, type ListenQueueItem } from '../../stores/listenQueue';
 import MarkdownRenderer from '../MarkdownRenderer.vue';
 import StateBlock from '../StateBlock.vue';
 import { Aim, Top, Bottom, Refresh, Delete, Plus } from '@element-plus/icons-vue';
@@ -19,13 +22,6 @@ const props = defineProps<{ visible?: boolean }>();
 // T02720：与 MobileBrowse 同口径——空知识库的下一步是去「投递」页，由 MobileShell 切 Tab。
 const emit = defineEmits<{ (e: 'open-ingest'): void }>();
 
-interface QueueItem {
-  path: string;
-  title: string;
-  body: string;
-  voice?: string; // 每曲目可选朗读者（演唱者），缺省用全局默认音色
-}
-
 const pages = ref<PageItem[]>([]);
 // T02476（PRD X2 / R4 同类缺陷）：原来用 `pages.length === 0` 冒充「加载中」，
 // 知识库真为空时会永远停在「加载中…」，故为列表加载单独加一个状态位。
@@ -36,7 +32,9 @@ const pagesLoading = ref(false);
 const pagesError = ref('');
 const searchError = ref('');
 const previewError = ref('');
-const queue = ref<QueueItem[]>([]);
+const listenQueueStore = useListenQueueStore();
+// 共享队列：MobileQuery 的「加入聆听」与本页播放列表是同一条数据源
+const { queue } = storeToRefs(listenQueueStore);
 const currentIndex = ref(-1);
 const isPlaying = ref(false);
 const position = ref(0);
@@ -241,7 +239,7 @@ async function startAt(idx: number) {
 }
 
 // 合成并播放单条（后端单条上限 5000 字，超长截断提示）
-async function synthAndPlay(item: QueueItem) {
+async function synthAndPlay(item: ListenQueueItem) {
   const a = audioEl.value;
   if (!a) return;
   const text = (item.body || '').trim();
@@ -413,7 +411,7 @@ function onLoadedMeta() {
   if (audioEl.value) duration.value = audioEl.value.duration;
 }
 
-function updateMediaMetadata(item: QueueItem) {
+function updateMediaMetadata(item: ListenQueueItem) {
   if (!('mediaSession' in navigator) || typeof window.MediaMetadata === 'undefined') return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: item.title,

@@ -44,6 +44,8 @@ import CitationModal from '../CitationModal.vue';
 // T02824：FR-QRY-06 移动端消息级朗读——与桌面共用 ttsStore，TtsController 自带
 // 固定定位浮现逻辑（仅 state !== 'idle' 时显示），这里只需挂载一次
 import TtsController from '../TtsController.vue';
+// T02942：移动端消息级朗读入口（朗读/停止 + 加入聆听）
+import MobileMessageActions from './MobileMessageActions.vue';
 import StateBlock from '../StateBlock.vue';
 import FollowupsChips from '../FollowupsChips.vue';
 import SessionStatusIcon from '../SessionStatusIcon.vue';
@@ -901,6 +903,11 @@ onBeforeUnmount(() => {
                 @click="onFollowup"
               />
               <RefsList v-if="normalizeRefs(msg.refs).length > 0" :refs="normalizeRefs(msg.refs)" />
+              <!-- T02942（FR-QRY-06）：移动端助手消息的朗读与入列入口；窄屏常驻气泡内，不照搬桌面 hover 工具条 -->
+              <MobileMessageActions
+                v-if="msg.role === 'assistant' && msg.content"
+                :message="{ id: msg.id || `msg-${idx}`, content: msg.content }"
+              />
               <!-- FR-22 失败重试入口（移动端）：失败/中断消息常驻重试按钮，与桌面端语义一致 -->
               <button
                 v-if="msg.role === 'assistant' && (msg.status === 'error' || msg.status === 'interrupted')"
