@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Check, Close, Edit, Delete, Search, Refresh } from '@element-plus/icons-vue';
 import AppModal from '../components/AppModal.vue';
@@ -294,6 +294,13 @@ function enableSwitchTip(user: UserInfo): string {
   return '启用该账户，恢复其登录能力';
 }
 
+// T02936：列表刷新不能挡在 before-change 的 Promise 里。el-switch 在 Promise 落定后要写内部
+// input.checked，若此时 loadUsers 已替换行（组件卸载），会抛 Cannot set properties of null。
+// 所以先返回 true 让开关落定，再在下一个 tick 拉列表；最终状态仍以服务端数据为准。
+function refreshUsersSoon(): void {
+  void nextTick(() => { void loadUsers(); });
+}
+
 // 表格里的启用开关：停用是「会把人踢下线」的动作，先过守卫再二次确认（X3 确认策略矩阵）；
 // 启用无副作用，直接提交。返回值只决定开关是否本地翻转，最终状态一律以 loadUsers 拉回的数据为准。
 async function beforeToggle(user: UserInfo): Promise<boolean> {
@@ -304,7 +311,7 @@ async function beforeToggle(user: UserInfo): Promise<boolean> {
       return false;
     }
     ElMessage.success(`已启用 ${user.username}`);
-    await loadUsers();
+    refreshUsersSoon();
     return true;
   }
   const guard = disableGuard(user, protectCtx.value);
@@ -327,7 +334,7 @@ async function beforeToggle(user: UserInfo): Promise<boolean> {
     return false;
   }
   ElMessage.success(`已停用 ${user.username}`);
-  await loadUsers();
+  refreshUsersSoon();
   return true;
 }
 

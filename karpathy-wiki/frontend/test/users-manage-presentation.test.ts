@@ -266,3 +266,14 @@ describe('角色文案', () => {
     expect(roleLabel('guest')).toBe('游客');
   });
 });
+
+describe('T02936 行内开关的刷新时机', () => {
+  it('beforeToggle 不得在 before-change 的 Promise 里 await 列表刷新，否则行被卸载后 el-switch 写 checked 会抛 TypeError', () => {
+    const src = readFileSync(resolve(__dirname, '../src/views/Users.vue'), 'utf8');
+    const body = src.slice(src.indexOf('async function beforeToggle'), src.indexOf('// U8：列表用相对时间'));
+    expect(body).not.toContain('await loadUsers(');
+    expect(body).toContain('refreshUsersSoon()');
+    // 刷新推迟到下一个 tick，等开关先落定
+    expect(src).toContain('void nextTick(() => { void loadUsers(); });');
+  });
+});
