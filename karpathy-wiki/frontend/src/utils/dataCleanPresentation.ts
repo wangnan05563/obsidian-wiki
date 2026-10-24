@@ -74,19 +74,13 @@ function normTitle(title: string): string {
 export interface PageIssueContext {
   /** 归一化标题 → 出现次数 */
   titleCount: Map<string, number>;
+  /** 页面路径 → 命中分类（T02934：构建时算一次，排序/筛选/单元格复用，不再逐次重算） */
+  issueKeys: Map<string, IssueKey[]>;
+  /** 页面路径 → 问题数（与 issueKeys 同源，排序比较只做 Map 查询） */
+  problemCounts: Map<string, number>;
 }
 
-export function buildIssueContext(pages: PageQualityScore[]): PageIssueContext {
-  const titleCount = new Map<string, number>();
-  for (const p of pages) {
-    const k = normTitle(p.title);
-    titleCount.set(k, (titleCount.get(k) ?? 0) + 1);
-  }
-  return { titleCount };
-}
-
-/** 单页命中的问题分类（可能多个），供「问题数」列、筛选与默认排序使用 */
-export function pageIssueKeys(page: PageQualityScore, ctx: PageIssueContext): IssueKey[] {
+function computeIssueKeys(page: PageQualityScore, ctx: Pick<PageIssueContext, 'titleCount'>): IssueKey[] {
   const out: IssueKey[] = [];
   if (page.issues.some((i) => i.code === 'SCAN_ERROR')) out.push('scanError');
   if (!page.metadata.hasFrontmatter) out.push('missingFrontmatter');
@@ -96,8 +90,34 @@ export function pageIssueKeys(page: PageQualityScore, ctx: PageIssueContext): Is
   return out;
 }
 
+export function buildIssueContext(pages: PageQualityScore[]): PageIssueContext {
+  const titleCount = new Map<string, number>();
+  for (const p of pages) {
+    const k = normTitle(p.title);
+    titleCount.set(k, (titleCount.get(k) ?? 0) + 1);
+  }
+  const ctx: PageIssueContext = { titleCount, issueKeys: new Map(), problemCounts: new Map() };
+  for (const p of pages) {
+    const keys = computeIssueKeys(p, ctx);
+    ctx.issueKeys.set(p.path, keys);
+    ctx.problemCounts.set(p.path, keys.length);
+  }
+  return ctx;
+}
+
+/** 单页命中的问题分类（可能多个），供「问题数」列、筛选与默认排序使用 */
+export function pageIssueKeys(page: PageQualityScore, ctx: PageIssueContext): IssueKey[] {
+  // 不在上下文里的页面（如单测直接构造）按需计算并缓存，口径与批建时完全一致
+  const cached = ctx.issueKeys.get(page.path);
+  if (cached) return cached;
+  const keys = computeIssueKeys(page, ctx);
+  ctx.issueKeys.set(page.path, keys);
+  ctx.problemCounts.set(page.path, keys.length);
+  return keys;
+}
+
 export function problemCount(page: PageQualityScore, ctx: PageIssueContext): number {
-  return pageIssueKeys(page, ctx).length;
+  return ctx.problemCounts.get(page.path) ?? pageIssueKeys(page, ctx).length;
 }
 
 /** 各分类命中数：分类卡片的数字与「全部为 0 = 集合已较健康」的判断依据 */
