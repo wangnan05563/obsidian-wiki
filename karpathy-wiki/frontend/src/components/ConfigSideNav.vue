@@ -127,7 +127,9 @@ function pick(item: ConfigTabMeta & { locked: boolean }): void {
   border: 1px solid rgba(217, 154, 24, 0.28);
   white-space: nowrap;
 }
-@media (max-width: 900px) {
+/* T02916：与 Config.vue 的 .config-layout 同档判定——901-1100 是侧栏壳，
+   内容列已被主导航占掉 244px，二级导航再占一列会让表单比 ≤900 时更窄。 */
+@media (max-width: 1100px) {
   .config-nav {
     width: auto;
     flex: none;

@@ -1,11 +1,13 @@
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, onMounted, onBeforeUnmount, type Ref } from 'vue';
+import { maxWidthQuery } from '../config/breakpoints';
 
 // 响应式移动端判定（SRS §3 信息架构：底部 Tab 替代桌面侧边栏）。
 //
-// 断点 768px：平板（≥768px）回退桌面端布局，手机（<768px）启用 MobileShell。
+// 断点 portable（768px）：平板（≥768px）回退桌面端布局，手机（<768px）启用 MobileShell。
 // 为什么用 matchMedia 而非读 UA：避免伪装 UA 误判，且能在旋转/缩放时实时切换，
 // 与项目「复用现有 SPA、不引入 vue-router」策略契合（App.vue 用 isMobile 决定渲染分支）。
-const MOBILE_QUERY = '(max-width: 768px)';
+// T02916：阈值改由 config/breakpoints.ts 单点定义，页面里所有 @media 档位同源。
+const MOBILE_QUERY = maxWidthQuery('portable');
 
 function getInitial(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {

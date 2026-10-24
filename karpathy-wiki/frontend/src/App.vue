@@ -908,6 +908,11 @@ onBeforeUnmount(() => {
 
 /* ============================================================
  * 响应式：窄屏降级为顶部水平条（保留原有 .nav / .nav-collapsed 类名兼容测试）
+ *
+ * T02916 平板口径：实测 769-900 区间原实现把 15 项菜单 + 分组标题折成 3 行，
+ * 顶部 chrome 吃掉约 200px（780px 高的视口里占 26%），而内容区本身并不溢出。
+ * 所以这一档要解决的是「chrome 高度」而不是「横向溢出」：
+ * 菜单改为单行横向滚动、分组标题与溢出提示条隐藏、用户区并入同一行。
  * ============================================================ */
 @media (max-width: 900px) {
   .app-shell {
@@ -918,35 +923,76 @@ onBeforeUnmount(() => {
 
   .nav {
     width: 100%;
-    flex-direction: column;
-    padding: 10px 12px;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+  }
+
+  .nav-left {
+    flex: 0 0 auto;
+    padding-right: 0;
+  }
+
+  .nav-left .subtitle {
+    display: none;
   }
 
   .nav-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
   }
 
+  /* 单行横滚时分组标题只会占宽不占义，提示条也与横滚冲突（T02449 的 N1/N2 属侧栏形态） */
+  .nav-group-label,
+  .nav-scroll-hint {
+    display: none;
+  }
+
   .tab-btn {
     width: auto;
+    flex-shrink: 0;
+  }
+
+  .tab-label {
+    white-space: nowrap;
+  }
+
+  .nav-bottom {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 0 0 0 10px;
+    border-top: none;
+    border-left: 1px solid var(--accent-purple-a30);
+  }
+
+  .nav-user {
+    flex-wrap: nowrap;
   }
 
   .nav-collapsed {
     width: 100%;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .nav-icons-bar {
+    flex: 1 1 auto;
+    min-width: 0;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
   }
 
   .nav-collapsed-bottom {
+    flex: 0 0 auto;
     flex-direction: row;
     border-top: none;
     border-left: 1px solid var(--accent-purple-a30);

@@ -1460,7 +1460,7 @@ onBeforeUnmount(() => {
 }
 
 /* 响应式：窄屏配置行堆叠 */
-@media (max-width: 700px) {
+@media (max-width: 768px) {
   .config-row {
     flex-direction: column;
     gap: 8px;
