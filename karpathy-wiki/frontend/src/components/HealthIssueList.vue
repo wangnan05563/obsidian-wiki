@@ -7,7 +7,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElCheckbox, ElButton } from 'element-plus';
 import { Link, EditPen } from '@element-plus/icons-vue';
-import { computeVirtualWindow, shouldVirtualize, VIRTUAL_OVERSCAN_ROWS } from '../utils/healthList';
+import { computeVirtualWindow, shouldVirtualize, quantizeScrollTop } from '../utils/healthList';
 import type { IssueRow } from '../utils/healthList';
 
 const props = defineProps<{
@@ -54,7 +54,10 @@ const viewportH = ref(0);
 const rowHeight = ref(46);
 const rowGap = ref(8);
 let rafId = 0;
-let lastStart = -1; // 上次算出的窗口起始行，用于跳过无谓重渲染
+// T02929：窗口起点按 8 行一块量化。原来每滚动一行就重建 34 行 × 每页 2 个列表，
+// 60fps 下每帧都在重建 Element Plus 复选框/按钮，长帧的主因在这里而非模糊。
+// 块高（8 行 = 432px）不超过 overscan 行数，窗口上下沿仍有覆盖，不会露白。
+const WINDOW_BUCKET_ROWS = 8;
 
 const virtualized = computed(() => shouldVirtualize(props.rows.length));
 const windowInfo = computed(() =>
@@ -107,12 +110,11 @@ function updateScrollState(): void {
   viewportH.value = window.innerHeight || document.documentElement.clientHeight || 0;
   // 列表顶相对视口顶为负 → 已被滚出的距离；为正 → 尚未进入视口，从 0 起算
   const scrolled = Math.max(0, -rect.top);
-  // 窗口起始行未变则不写回：避免细粒度滚动每次都触发一轮重渲染
   const pitch = Math.max(1, rowHeight.value + rowGap.value);
-  const start = Math.max(0, Math.floor(scrolled / pitch) - VIRTUAL_OVERSCAN_ROWS);
-  if (start === lastStart && scrolled === scrollTop.value) return;
-  if (start !== lastStart) lastStart = start;
-  scrollTop.value = scrolled;
+  const quantized = quantizeScrollTop(scrolled, pitch, WINDOW_BUCKET_ROWS);
+  // 同一块内不写回：窗口区间、行定位都不变，省掉整窗 VDOM 重建
+  if (quantized === scrollTop.value) return;
+  scrollTop.value = quantized;
 }
 
 // 滚动事件在内部滚动容器（MAIN.content）上不冒泡，用捕获阶段监听统一接管
@@ -143,7 +145,6 @@ onBeforeUnmount(() => {
 watch(
   () => props.rows.length,
   () => {
-    lastStart = -1;
     nextTick(() => {
       measureGeometry();
       updateScrollState();
