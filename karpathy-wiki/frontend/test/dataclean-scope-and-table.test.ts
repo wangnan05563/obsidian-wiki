@@ -2,6 +2,8 @@
 //   L1 总页数口径与仪表盘同源；L2 评分卡改成可操作的问题分类；L3 表格搜索/排序/分页/跨页选择。
 // 约定：被测逻辑全部是 frontend/src/utils/dataCleanPresentation.ts 的纯函数（本项目不挂载 SFC）。
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { MisplacedPage, PageQualityScore } from '../src/types';
 import {
   ISSUE_CATEGORIES,
@@ -189,6 +191,54 @@ describe('L3 搜索 / 排序 / 分页', () => {
 
   it('每页条数提供 50/100/200 三档', () => {
     expect(PAGE_SIZE_OPTIONS).toEqual([50, 100, 200]);
+  });
+});
+
+// T02934：200 行/页时旧实现每次排序都重新跑 pageIssueKeys（O(n log n) 次），
+// 且 200 行全量渲染成 DOM。这里锁两件事：分类结果在上下文里只算一次；表格必须走虚拟滚动。
+describe('T02934 排序预计算与表格虚拟滚动', () => {
+  const pages = [
+    makePage({ path: 'concepts/a.md', metadata: { hasFrontmatter: false, internalLinks: 0 } }),
+    makePage({ path: 'concepts/b.md', metadata: { wordCount: 10 } }),
+    makePage({ path: 'entities/c.md' }),
+  ];
+
+  it('问题分类在 buildIssueContext 时算好：重复查询返回同一份缓存，排序比较只做 Map 查询', () => {
+    const ctx = buildIssueContext(pages);
+    const first = pageIssueKeys(pages[0], ctx);
+    expect(pageIssueKeys(pages[0], ctx)).toBe(first);
+    for (const p of pages) {
+      expect(problemCount(p, ctx)).toBe(pageIssueKeys(p, ctx).length);
+    }
+    // 排序结果不受缓存影响，与既有 L3 口径一致
+    expect(sortPages(pages, ctx, 'problems', 'descending').map((p) => p.path))
+      .toEqual(['concepts/a.md', 'concepts/b.md', 'entities/c.md']);
+  });
+
+  it('上下文之外的页面按需计算并缓存，口径与批量构建一致', () => {
+    const ctx = buildIssueContext([pages[2]]);
+    const foreign = makePage({ path: 'queries/late.md', metadata: { hasFrontmatter: false } });
+    expect(pageIssueKeys(foreign, ctx)).toEqual(['missingFrontmatter']);
+    expect(pageIssueKeys(foreign, ctx)).toBe(pageIssueKeys(foreign, ctx));
+    expect(problemCount(foreign, ctx)).toBe(1);
+  });
+
+  it('DataClean 表格走自实现虚拟窗口，旧的全量 el-table 与逐单元格组件的 table-v2 都不得回潮', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../src/views/DataClean.vue'), 'utf8');
+    // 虚拟窗口三要素：滚动容器、窗口切片、绝对定位行
+    expect(src).toContain('dc-table-viewport');
+    expect(src).toContain('dc-tr');
+    expect(src).toMatch(/const ROW_HEIGHT = 44/);
+    expect(src).toMatch(/const VIRTUAL_OVERSCAN = 4/);
+    expect(src).toMatch(/pagedRows\.value\.slice\(start, start \+ VIRTUAL_VIEWPORT_ROWS\)/);
+    // 容器高度与旧 height="520" 一致，行绝对定位在自己的序号位置
+    expect(src).toContain('.table-virtual-wrap');
+    expect(src).toMatch(/\.table-virtual-wrap\s*\{[^}]*height:\s*520px/);
+    expect(src).toMatch(/top:\s*`\$\{item\.index \* ROW_HEIGHT\}px`/);
+    // 旧实现：<el-table ...> 全量渲染；table-v2 每格一个组件，滚动 40ms/帧（T02934 实测）
+    expect(src).not.toMatch(/<el-table[\s>]/);
+    expect(src).not.toContain('<el-table-column');
+    expect(src).not.toContain('<el-table-v2');
   });
 });
 

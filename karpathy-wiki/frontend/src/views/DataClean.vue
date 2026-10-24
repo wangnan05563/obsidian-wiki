@@ -1,8 +1,7 @@
 ﻿<script setup lang="ts">
 import { API_BASE, apiFetch } from '../utils/apiBase';
-import { ref, computed, reactive, watch, nextTick, onMounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import type { TableInstance } from 'element-plus';
+import { ref, computed, reactive, watch, onMounted } from 'vue';
+import { ElMessage, ElMessageBox, ElCheckbox } from 'element-plus';
 import { Sort, MagicStick, Right, Refresh, View, CopyDocument, Search } from '@element-plus/icons-vue';
 // wiki三期 T02472 L4（PRD §16）：本页顶部操作原为 4 个纯图标按钮（仅悬浮提示），
 // 破坏性/耗时动作看不出是什么 → 改回带文字按钮，AI 分析旁注明「调用你的模型」。
@@ -29,7 +28,6 @@ import {
   conflictedMisplaced,
   defaultTableQuery,
   filterPages,
-  mergeSelection,
   misplacedSummaryText,
   pageIssueKeys,
   precheckCategoryLines,
@@ -116,7 +114,6 @@ const healthy = computed(() => ISSUE_CATEGORIES.every((c) => issueCounts.value[c
 const tableQuery = reactive<TableQuery>(defaultTableQuery());
 const pageNum = ref(1);
 const pageSize = ref(50);
-const tableRef = ref<TableInstance>();
 
 const filteredPages = computed(() => filterPages(pages.value, issueCtx.value, tableQuery));
 const sortedPages = computed(() => sortPages(filteredPages.value, issueCtx.value, tableQuery.sortProp, tableQuery.sortOrder));
@@ -139,14 +136,17 @@ function toggleIssueFilter(key: IssueKey): void {
   resetPage();
 }
 
-function onSortChange(payload: { prop?: string | null; order?: string | null }): void {
-  if (!payload.prop || !payload.order) {
-    const d = defaultTableQuery();
-    tableQuery.sortProp = d.sortProp;
-    tableQuery.sortOrder = d.sortOrder;
+const SORT_PROPS = new Set<TableQuery['sortProp']>(['path', 'title', 'problems', 'qualityScore', 'wordCount', 'internalLinks']);
+
+/** 表头点击：新列从升序开始，再点同一列切换方向（与旧 el-table 行为一致） */
+function toggleSort(key: string): void {
+  if (!SORT_PROPS.has(key as TableQuery['sortProp'])) return;
+  const prop = key as TableQuery['sortProp'];
+  if (tableQuery.sortProp === prop) {
+    tableQuery.sortOrder = tableQuery.sortOrder === 'ascending' ? 'descending' : 'ascending';
   } else {
-    tableQuery.sortProp = payload.prop as TableQuery['sortProp'];
-    tableQuery.sortOrder = payload.order as TableQuery['sortOrder'];
+    tableQuery.sortProp = prop;
+    tableQuery.sortOrder = 'ascending';
   }
   resetPage();
 }
@@ -160,28 +160,125 @@ function resetFilters(): void {
 
 const hasFilter = computed(() => tableQuery.keyword !== '' || tableQuery.issue !== 'all' || tableQuery.dir !== 'all');
 
-// el-table 的 selection-change 只带当前页的行；直接赋值会让翻页丢掉其他页的勾选。
-function onRowChange(selection: PageQualityScore[]) {
-  selectedPages.value = mergeSelection(selectedPages.value, pageRowPaths.value, selection.map((s) => s.path));
+// T02934：表格改虚拟滚动后勾选状态由页面自己持有（selectedPages 本来就是跨页口径），
+// 行内 checkbox 只改这一份集合，翻页/排序都不会让其他页的勾选丢失。
+const selectedPathSet = computed(() => new Set(selectedPages.value));
+
+function toggleRowPath(path: string, checked: boolean): void {
+  const next = new Set(selectedPages.value);
+  if (checked) next.add(path); else next.delete(path);
+  selectedPages.value = Array.from(next);
 }
 
-/** 分类批量动作的落点：先把该分类全部页面置为已选，再把表格勾选状态同步到当前页 */
-async function selectCategory(key: IssueKey): Promise<void> {
+function togglePageRows(checked: boolean): void {
+  const next = new Set(selectedPages.value);
+  for (const p of pageRowPaths.value) {
+    if (checked) next.add(p); else next.delete(p);
+  }
+  selectedPages.value = Array.from(next);
+}
+
+function onHeaderCheck(v: boolean | string | number): void {
+  togglePageRows(Boolean(v));
+}
+
+function onRowCheck(row: PageQualityScore, e: Event): void {
+  toggleRowPath(row.path, (e.target as HTMLInputElement).checked);
+}
+
+const allPageRowsSelected = computed(() => pageRowPaths.value.length > 0 && pageRowPaths.value.every((p) => selectedPathSet.value.has(p)));
+const somePageRowsSelected = computed(() => !allPageRowsSelected.value && pageRowPaths.value.some((p) => selectedPathSet.value.has(p)));
+
+/** 分类批量动作的落点：整类置为已选；勾选状态由 selectedPages 驱动，表格不再需要逐行同步 */
+function selectCategory(key: IssueKey): void {
   const paths = categoryPaths(pages.value, issueCtx.value, key);
   if (paths.length === 0) return;
   selectedPages.value = paths;
   tableQuery.issue = key;
   resetPage();
-  await nextTick();
-  const t = tableRef.value;
-  if (!t) return;
-  t.clearSelection();
-  pagedRows.value.filter((p) => paths.includes(p.path)).forEach((p) => t.toggleRowSelection(p, true));
 }
 
 function clearSelection(): void {
-  tableRef.value?.clearSelection();
   selectedPages.value = [];
+}
+
+// T02934：表格自实现虚拟窗口（不再用 el-table / el-table-v2）。
+// 旧 el-table 在 200 行/页时全量渲染 200 个 tr，排序一次 1.46s；
+// el-table-v2 虽已虚拟化，但每个单元格都是独立组件，滚动一帧要重渲染约 160 个 Cell
+// （生产包实测 ~40ms/帧，只有 4 列时才回到 39fps）。这里沿用体检页 HealthIssueList
+// 的做法：行绝对定位 + 原生滚动，只在窗口起始行变化时换行，滚动中不再逐帧重渲染。
+const ROW_HEIGHT = 44;
+const HEADER_HEIGHT = 42;
+const VIRTUAL_OVERSCAN = 4;
+const VIRTUAL_VIEWPORT_ROWS = Math.ceil(520 / ROW_HEIGHT) + VIRTUAL_OVERSCAN * 2;
+
+const tableViewport = ref<HTMLElement | null>(null);
+const virtualStart = ref(0);
+let virtualRaf = 0;
+
+const visibleRows = computed(() => {
+  const start = virtualStart.value;
+  return pagedRows.value.slice(start, start + VIRTUAL_VIEWPORT_ROWS).map((row, i) => ({ row, index: start + i }));
+});
+const virtualTotalHeight = computed(() => pagedRows.value.length * ROW_HEIGHT);
+
+function onTableScroll(): void {
+  if (virtualRaf) return;
+  virtualRaf = requestAnimationFrame(() => {
+    virtualRaf = 0;
+    const el = tableViewport.value;
+    if (!el) return;
+    const next = Math.max(0, Math.floor(el.scrollTop / ROW_HEIGHT) - VIRTUAL_OVERSCAN);
+    if (next !== virtualStart.value) virtualStart.value = next;
+  });
+}
+
+// 翻页/排序/筛选后回到表头：否则窗口停在旧偏移，首屏看不到应排第一的行
+watch(pagedRows, () => {
+  virtualStart.value = 0;
+  if (tableViewport.value) tableViewport.value.scrollTop = 0;
+});
+
+interface TableColumnDef {
+  key: string;
+  title: string;
+  align?: 'left' | 'center' | 'right';
+  sortable?: boolean;
+}
+
+const TABLE_COLUMNS: TableColumnDef[] = [
+  { key: 'select', title: '' },
+  { key: 'path', title: '文件路径', sortable: true },
+  { key: 'title', title: '标题', sortable: true },
+  { key: 'problems', title: '问题数', align: 'center', sortable: true },
+  { key: 'qualityScore', title: '评分', align: 'center', sortable: true },
+  { key: 'wordCount', title: '字数', align: 'right', sortable: true },
+  { key: 'internalLinks', title: '出链', align: 'right', sortable: true },
+  { key: 'directory', title: '目录' },
+  { key: 'hasFrontmatter', title: '元信息' },
+  { key: 'issues', title: '问题分类' },
+];
+const DATA_COLUMNS = TABLE_COLUMNS.slice(1);
+
+function sortMark(key: string): string {
+  if (tableQuery.sortProp !== key) return '';
+  return tableQuery.sortOrder === 'ascending' ? '↑' : '↓';
+}
+
+function ariaSort(key: string): 'ascending' | 'descending' | 'none' {
+  return tableQuery.sortProp === key ? tableQuery.sortOrder : 'none';
+}
+
+/** 评分色带沿用旧模板：>=80 绿、>=60 默认、>=40 橙、其余红 */
+function scoreTagType(score: number): 'primary' | 'success' | 'warning' | 'danger' {
+  if (score >= 80) return 'success';
+  if (score >= 60) return 'primary';
+  if (score >= 40) return 'warning';
+  return 'danger';
+}
+
+function issueTagsOf(row: PageQualityScore): IssueKey[] {
+  return pageIssueKeys(row, issueCtx.value);
 }
 
 /**
@@ -200,7 +297,7 @@ async function runCategoryAction(key: IssueKey): Promise<void> {
     await fixFrontmatterFor(paths);
     return;
   }
-  await selectCategory(key);
+  selectCategory(key);
   if (key === 'duplicateTitle') await runDeduplication();
 }
 
@@ -823,59 +920,82 @@ onMounted(() => loadPages());
         <p v-if="!isAdmin" class="perm-note">永久删除、归档与补齐元信息会改动知识库文件，需要管理员账户；当前账户只能查看和筛选。</p>
       </div>
 
-      <!-- 页面表格：默认按「问题数」倒序，最该处理的排在第一页 -->
-      <el-table
-        ref="tableRef"
-        :data="pagedRows"
-        row-key="path"
-        style="width: 100%"
-        stripe
-        height="520"
-        :default-sort="{ prop: 'problems', order: 'descending' }"
-        @selection-change="onRowChange"
-        @sort-change="onSortChange"
-      >
-        <el-table-column type="selection" width="55" align="center" />
-        <el-table-column prop="path" label="文件路径" min-width="200" sortable="custom" show-overflow-tooltip />
-        <el-table-column prop="title" label="标题" min-width="150" sortable="custom" show-overflow-tooltip />
-        <el-table-column prop="problems" label="问题数" width="100" align="center" sortable="custom">
-          <template #default="{ row }">
-            <el-tag :type="pageIssueKeys(row, issueCtx).length > 0 ? 'warning' : 'info'" size="small" effect="plain">
-              {{ pageIssueKeys(row, issueCtx).length }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="qualityScore" label="评分" width="90" align="center" sortable="custom">
-          <template #default="{ row }">
-            <el-tag :type="row.qualityScore>=80?'success':row.qualityScore>=60?'':row.qualityScore>=40?'warning':'danger'" size="small">
-              {{ row.qualityScore }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="wordCount" label="字数" width="90" align="right" sortable="custom">
-          <template #default="{ row }">{{ row.metadata.wordCount }}</template>
-        </el-table-column>
-        <el-table-column prop="internalLinks" label="出链" width="90" align="right" sortable="custom">
-          <template #default="{ row }">{{ row.metadata.internalLinks }}</template>
-        </el-table-column>
-        <el-table-column label="目录" width="110"><template #default="{ row }">{{ row.metadata.directory }}</template></el-table-column>
-        <!-- T02472 L5：原「有 FM / 无 FM」是缩写，用户读不出 FM 指什么 -->
-        <el-table-column label="元信息" width="110"><template #default="{ row }">
-          <el-tag v-if="row.metadata.hasFrontmatter" type="success" size="small" effect="plain">元信息完整</el-tag>
-          <el-tag v-else type="danger" size="small" effect="plain">缺元信息</el-tag>
-        </template></el-table-column>
-        <el-table-column label="问题分类" min-width="190"><template #default="{ row }">
-          <el-tag
-            v-for="k in pageIssueKeys(row, issueCtx)"
-            :key="k"
-            type="warning"
-            size="small"
-            effect="plain"
-            class="issue-tag"
-          >{{ ISSUE_CATEGORIES.find((c) => c.key === k)?.label }}</el-tag>
-          <span v-if="pageIssueKeys(row, issueCtx).length === 0" class="no-issue">—</span>
-        </template></el-table-column>
-      </el-table>
+      <!-- 页面表格：默认按「问题数」倒序，最该处理的排在第一页。
+           T02934：自实现行虚拟滚动（见 script 中 ROW_HEIGHT/VIRTUAL_OVERSCAN），
+           DOM 只保留视口内行；50/100/200 三档共用同一套行与列宽。 -->
+      <div v-if="pages.length > 0" class="table-virtual-wrap">
+        <div ref="tableViewport" class="dc-table-viewport" @scroll.passive="onTableScroll">
+          <div class="dc-table-grid dc-table-head" role="row">
+            <div class="dc-th is-center" role="columnheader">
+              <el-checkbox
+                :model-value="allPageRowsSelected"
+                :indeterminate="somePageRowsSelected"
+                aria-label="选中本页全部页面"
+                @change="onHeaderCheck"
+              />
+            </div>
+            <div
+              v-for="col in DATA_COLUMNS"
+              :key="col.key"
+              class="dc-th"
+              :class="[col.align ? `is-${col.align}` : '', col.sortable ? 'is-sortable' : '']"
+              role="columnheader"
+              :aria-sort="col.sortable ? ariaSort(col.key) : undefined"
+              :tabindex="col.sortable ? 0 : undefined"
+              @click="col.sortable && toggleSort(col.key)"
+              @keydown.enter.prevent="col.sortable && toggleSort(col.key)"
+              @keydown.space.prevent="col.sortable && toggleSort(col.key)"
+            >
+              <span>{{ col.title }}</span>
+              <span v-if="sortMark(col.key)" class="dc-sort-mark" aria-hidden="true">{{ sortMark(col.key) }}</span>
+            </div>
+          </div>
+          <div class="dc-table-body" :style="{ height: `${virtualTotalHeight}px` }">
+            <div
+              v-for="item in visibleRows"
+              :key="item.row.path"
+              class="dc-tr dc-table-grid"
+              :class="{ 'is-striped': item.index % 2 === 1 }"
+              :style="{ top: `${item.index * ROW_HEIGHT}px` }"
+              role="row"
+            >
+              <div class="dc-td is-center" role="cell">
+                <input
+                  type="checkbox"
+                  class="dc-row-check"
+                  :checked="selectedPathSet.has(item.row.path)"
+                  :aria-label="`选中 ${item.row.path}`"
+                  @change="onRowCheck(item.row, $event)"
+                />
+              </div>
+              <div class="dc-td" role="cell"><span class="dc-cell-text" :title="item.row.path">{{ item.row.path }}</span></div>
+              <div class="dc-td" role="cell"><span class="dc-cell-text" :title="item.row.title">{{ item.row.title }}</span></div>
+              <div class="dc-td is-center" role="cell">
+                <span class="dc-tag" :class="issueTagsOf(item.row).length > 0 ? 'dc-tag--warning' : 'dc-tag--info'">{{ issueTagsOf(item.row).length }}</span>
+              </div>
+              <div class="dc-td is-center" role="cell">
+                <span class="dc-tag" :class="`dc-tag--${scoreTagType(item.row.qualityScore)}`">{{ item.row.qualityScore }}</span>
+              </div>
+              <div class="dc-td is-right" role="cell"><span class="dc-cell-text" :title="String(item.row.metadata.wordCount)">{{ item.row.metadata.wordCount }}</span></div>
+              <div class="dc-td is-right" role="cell"><span class="dc-cell-text" :title="String(item.row.metadata.internalLinks)">{{ item.row.metadata.internalLinks }}</span></div>
+              <div class="dc-td" role="cell"><span class="dc-cell-text" :title="item.row.metadata.directory">{{ item.row.metadata.directory }}</span></div>
+              <div class="dc-td" role="cell">
+                <span class="dc-tag" :class="item.row.metadata.hasFrontmatter ? 'dc-tag--success' : 'dc-tag--danger'">
+                  {{ item.row.metadata.hasFrontmatter ? '元信息完整' : '缺元信息' }}
+                </span>
+              </div>
+              <div class="dc-td" role="cell">
+                <div v-if="issueTagsOf(item.row).length > 0" class="issue-tags">
+                  <span v-for="k in issueTagsOf(item.row)" :key="k" class="dc-tag dc-tag--warning issue-tag">
+                    {{ ISSUE_CATEGORIES.find((c) => c.key === k)?.label ?? k }}
+                  </span>
+                </div>
+                <span v-else class="no-issue">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div v-if="pages.length > 0" class="table-foot">
         <el-pagination
@@ -1235,6 +1355,133 @@ onMounted(() => loadPages());
 
 .dir-select {
   width: 150px;
+}
+
+/* T02934：虚拟滚动表格容器——高度沿用旧 el-table 的 520，滚动交给浏览器原生滚动条 */
+.table-virtual-wrap {
+  position: relative;
+  z-index: 1;
+  height: 520px;
+  border: 1px solid var(--el-border-color-lighter, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-input, 8px);
+  overflow: hidden;
+}
+
+.dc-table-viewport {
+  height: 100%;
+  overflow: auto;
+}
+
+/* 表头与行共用同一套列宽：固定列 + 两列弹性，小屏时整体横向滚动 */
+.dc-table-grid {
+  display: grid;
+  grid-template-columns: 48px minmax(180px, 2fr) minmax(140px, 1.5fr) 100px 90px 90px 90px 110px 110px minmax(160px, 1.5fr);
+  align-items: center;
+  min-width: 1120px;
+}
+
+.dc-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 42px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  font-size: 12px;
+  color: var(--text-soft);
+  background: var(--bg-elevated, #1c2128);
+  border-bottom: 1px solid var(--el-border-color-lighter, rgba(255, 255, 255, 0.08));
+}
+
+.dc-th {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 10px;
+  user-select: none;
+}
+
+.dc-th.is-center { justify-content: center; }
+.dc-th.is-right { justify-content: flex-end; }
+.dc-th.is-sortable { cursor: pointer; }
+.dc-th.is-sortable:hover { color: var(--neon-cyan); }
+.dc-th.is-sortable:focus-visible { outline: 1px solid var(--neon-cyan); outline-offset: -1px; }
+
+.dc-sort-mark {
+  color: var(--neon-cyan);
+  font-size: 11px;
+}
+
+.dc-table-body {
+  position: relative;
+}
+
+/* 行绝对定位在自己的序号位置：滚动时只有窗口索引变化才换行，中间帧完全交给合成器 */
+.dc-tr {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 44px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--accent-purple-a08, rgba(160, 120, 255, 0.08));
+}
+
+.dc-tr.is-striped {
+  background: var(--el-fill-color-lighter, rgba(255, 255, 255, 0.02));
+}
+
+.dc-tr:hover {
+  background: var(--accent-purple-a15, rgba(160, 120, 255, 0.15));
+}
+
+.dc-td {
+  min-width: 0;
+  padding: 0 10px;
+  overflow: hidden;
+}
+
+.dc-td.is-center { text-align: center; }
+.dc-td.is-right { text-align: right; }
+
+.dc-cell-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 对应 EP plain 标签：底色 -light-9、描边 -light-5、文字取主色，尺寸与 small 一致 */
+.dc-tag {
+  display: inline-block;
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.dc-tag--primary { color: var(--el-color-primary); border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); }
+.dc-tag--success { color: var(--el-color-success); border-color: var(--el-color-success-light-5); background: var(--el-color-success-light-9); }
+.dc-tag--info { color: var(--el-color-info); border-color: var(--el-color-info-light-5); background: var(--el-color-info-light-9); }
+.dc-tag--warning { color: var(--el-color-warning); border-color: var(--el-color-warning-light-5); background: var(--el-color-warning-light-9); }
+.dc-tag--danger { color: var(--el-color-danger); border-color: var(--el-color-danger-light-5); background: var(--el-color-danger-light-9); }
+
+.dc-row-check {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--el-color-primary);
+  cursor: pointer;
+}
+
+.issue-tags {
+  display: flex;
+  gap: 4px;
+  overflow: hidden;
 }
 
 .filter-count {
