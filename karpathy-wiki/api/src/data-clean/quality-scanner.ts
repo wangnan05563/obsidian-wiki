@@ -52,14 +52,16 @@ async function processScanFile(
       `scan:${relPath}`
     );
     const parsed = matter(content);
+    // T02933：双块页面按合并后的元信息判定，否则第一块缺 title 会被误判「缺元信息」
+    const merged = mergeDuplicateFrontmatter(parsed.data as Record<string, unknown>, parsed.content || "");
     return {
       page: {
         path: relPath,
-        title: (parsed.data.title as string) || file.replace(".md", ""),
+        title: (merged.data.title as string) || file.replace(".md", ""),
         qualityScore: Math.min(100, Math.max(0,
           countWords(parsed.content || "") / 10 +
             countLinks(content) * 25 +
-            (hasValidFrontmatter(parsed) ? 50 : 0)
+            (hasValidFrontmatter(merged.data) ? 50 : 0)
         )),
         category: {
           length: 20, links: 25, frontmatter: 25, citations: 20, duplicate: 0, freshness: 10,
@@ -70,7 +72,7 @@ async function processScanFile(
           internalLinks: countLinks(content),
           inboundLinks: 0,
           lastModified: new Date().toISOString(),
-          hasFrontmatter: hasValidFrontmatter(parsed),
+          hasFrontmatter: hasValidFrontmatter(merged.data),
           isDraft: false,
           fileSizeBytes: Buffer.byteLength(content),
           hasBom: false,
@@ -145,8 +147,35 @@ function countWords(text: string): number {
 function countLinks(content: string): number {
   return (content.match(/\[\[.*?\]\]/g) || []).length;
 }
-function hasValidFrontmatter(parsed: matter.GrayMatterFile<string>): boolean {
-  return !!(parsed.data?.type && parsed.data?.title);
+function hasValidFrontmatter(data: Record<string, unknown>): boolean {
+  return !!(data?.type && data?.title);
+}
+
+/**
+ * T02933：内容开头若还跟着第二块 YAML frontmatter（历史编译写盘产生的双块），把它并进第一块。
+ * 第二块字段优先（title/created/updated 是真实值），返回去掉第二块后的正文。
+ * 只有「能解析成非空、非数组的 YAML 映射」才算重复块，避免把正文里的分隔线误判成 frontmatter。
+ */
+export function mergeDuplicateFrontmatter(
+  data: Record<string, unknown>,
+  content: string,
+): { data: Record<string, unknown>; content: string; hadDuplicateBlock: boolean } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match) return { data, content, hadDuplicateBlock: false };
+  let second: unknown;
+  try {
+    second = matter(`---\n${match[1]}\n---\n`).data;
+  } catch {
+    return { data, content, hadDuplicateBlock: false };
+  }
+  if (!second || typeof second !== 'object' || Array.isArray(second) || Object.keys(second).length === 0) {
+    return { data, content, hadDuplicateBlock: false };
+  }
+  return {
+    data: { ...data, ...(second as Record<string, unknown>) },
+    content: content.slice(match[0].length),
+    hadDuplicateBlock: true,
+  };
 }
 
 // 把传入路径解析为 vault 内的绝对路径并拦住越权访问：实现见 data-clean/vault-path.ts
@@ -229,7 +258,9 @@ export async function fixFrontmatter( // NOSONAR - 认知复杂度由业务逻�
     try {
       const content = await vaultRetry(() => vault.readFile(relPath), `fm-read:${relPath}`);
       const parsed = matter(content);
-      const newFm: Record<string, any> = { ...parsed.data };
+      // T02933：历史双块文件先把第二块合并进来，再补齐缺字段；否则第二块会被当正文写回，形成假修复
+      const merged = mergeDuplicateFrontmatter(parsed.data as Record<string, unknown>, parsed.content || "");
+      const newFm: Record<string, any> = { ...merged.data };
 
       if (!newFm.title) {
         const h1Match = parsed.content.match(/^#\s+(.+)$/m);
@@ -249,8 +280,9 @@ export async function fixFrontmatter( // NOSONAR - 认知复杂度由业务逻�
       if (!newFm.source) newFm.source = relPath;
 
       const addedFields = Object.keys(newFm).filter((key) => !parsed.data?.[key]);
-      if (addedFields.length > 0) {
-        const updated = matter.stringify(parsed.content, newFm);
+      // 双块文件即使没有新增字段也必须重写，否则第二块原样留在正文里
+      if (addedFields.length > 0 || merged.hadDuplicateBlock) {
+        const updated = matter.stringify(merged.content, newFm);
         if (!dryRun) {
           await vaultRetry(() => vault.writeFile(relPath, updated), `fm-write:${relPath}`);
         }
