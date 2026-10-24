@@ -600,7 +600,10 @@ onMounted(() => {
 
 <template>
   <div class="health-page">
-    <div class="glass-card health-card">
+    <div class="glass-card health-card is-viewport-blur">
+      <!-- T02929：视口级模糊层。整卡可高达数万像素，backdrop-filter 的采样面积随内容膨胀，
+           滚动每帧都要重算数千万像素；改为卡片内 sticky 的 100vh 层，模糊面积固定为一屏。 -->
+      <div class="health-blur-layer" aria-hidden="true"></div>
       <!-- 不对称装饰块：旋转品红渐变 -->
       <div class="card-deco"></div>
 
@@ -999,6 +1002,40 @@ onMounted(() => {
   position: relative;
   padding: 24px 28px;
   overflow: hidden;
+}
+
+/* T02929：模糊层默认不参与布局；只有卡片打上 is-viewport-blur 时才启用。
+   卡片自身去掉背景与 backdrop-filter（改由模糊层承担），并用 overflow: clip 取代 hidden：
+   clip 只裁剪不产生滚动容器，sticky 层才能继续以页面 .content 为滚动参照贴住视口顶部。 */
+.health-blur-layer {
+  display: none;
+}
+
+.health-card.is-viewport-blur {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overflow: clip;
+}
+
+.health-card.is-viewport-blur .health-blur-layer {
+  display: block;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  /* 负外边距把层拉到卡片 border-box 边缘（抵消 24/28px 内边距），
+     再用 -100vh 的底部负边距让层不占布局高度。 */
+  margin: -24px -28px calc(24px - 100vh);
+  z-index: 0;
+  pointer-events: none;
+  background: var(--bg-card);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+/* 模糊层是卡内定位元素，会按绘制顺序盖住 .glass-card::before 的顶部霓虹线 */
+.health-card.is-viewport-blur::before {
+  z-index: 2;
 }
 
 /* 不对称装饰块：旋转品红渐变 */

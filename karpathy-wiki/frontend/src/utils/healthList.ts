@@ -255,3 +255,14 @@ export function computeVirtualWindow(input: VirtualWindowInput): VirtualWindow {
   return { start, end, pitch, totalHeight };
 }
 
+// T02929：把窗口更新量化到「行块」。滚动量不足一块时窗口区间不变，
+// 避免每帧重建整窗行组件（Element Plus 复选框/按钮）；块高需 ≤ 外溢行数，否则底沿会露白。
+export const VIRTUAL_WINDOW_BUCKET_ROWS = 8;
+
+export function quantizeScrollTop(scrolled: number, pitch: number, bucketRows = VIRTUAL_WINDOW_BUCKET_ROWS): number {
+  const safePitch = Number.isFinite(pitch) ? Math.max(1, pitch) : 1;
+  const safeRows = Number.isFinite(bucketRows) ? Math.max(1, bucketRows) : 1;
+  const safeScrolled = Number.isFinite(scrolled) ? Math.max(0, scrolled) : 0;
+  const bucketPx = safePitch * safeRows;
+  return Math.floor(safeScrolled / bucketPx) * bucketPx;
+}

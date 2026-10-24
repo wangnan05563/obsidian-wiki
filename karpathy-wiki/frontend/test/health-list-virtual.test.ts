@@ -4,8 +4,10 @@ import { describe, it, expect } from 'vitest';
 import {
   computeVirtualWindow,
   shouldVirtualize,
+  quantizeScrollTop,
   VIRTUAL_MIN_ROWS,
   VIRTUAL_OVERSCAN_ROWS,
+  VIRTUAL_WINDOW_BUCKET_ROWS,
 } from '../src/utils/healthList';
 
 const readSrc = (p: string) => readFileSync(resolve(__dirname, '../src', p), 'utf8');
@@ -97,6 +99,36 @@ describe('computeVirtualWindow', () => {
   });
 });
 
+describe('quantizeScrollTop（T02929 滚动窗口分块）', () => {
+  it('同一块内返回同一窗口起点，跨块才前进', () => {
+    const pitch = ROW + GAP;
+    const block = pitch * VIRTUAL_WINDOW_BUCKET_ROWS;
+    expect(quantizeScrollTop(0, pitch)).toBe(0);
+    expect(quantizeScrollTop(block - 1, pitch)).toBe(0);
+    expect(quantizeScrollTop(block, pitch)).toBe(block);
+    expect(quantizeScrollTop(block * 3 + 10, pitch)).toBe(block * 3);
+  });
+
+  it('负值与非法 pitch 被兜底，不产生负起点或 NaN', () => {
+    expect(quantizeScrollTop(-500, ROW + GAP)).toBe(0);
+    expect(quantizeScrollTop(100, 0)).toBe(96);
+    expect(Number.isFinite(quantizeScrollTop(100, NaN))).toBe(true);
+  });
+
+  it('块内任意滚动位置都被窗口覆盖：起点不晚于首行、终点晚于末行', () => {
+    const pitch = ROW + GAP;
+    const block = pitch * VIRTUAL_WINDOW_BUCKET_ROWS;
+    for (const actual of [1, pitch, block - 1, block + pitch * 3.5, 5400]) {
+      const start0 = quantizeScrollTop(actual, pitch);
+      const w = computeVirtualWindow({ count: 466, scrollTop: start0, viewportHeight: VIEW, rowHeight: ROW, rowGap: GAP });
+      const firstVisible = Math.floor(actual / pitch);
+      const lastVisible = Math.ceil((actual + VIEW) / pitch);
+      expect(w.start).toBeLessThanOrEqual(firstVisible);
+      expect(w.end).toBeGreaterThan(Math.min(lastVisible, 465));
+    }
+  });
+});
+
 describe('HealthIssueList 虚拟窗口接线（源码守护）', () => {
   const src = readSrc('components/HealthIssueList.vue');
 
@@ -105,8 +137,10 @@ describe('HealthIssueList 虚拟窗口接线（源码守护）', () => {
     expect(src).toContain('shouldVirtualize');
     expect(src).toContain(':key="slotKeys[idx]"');
     expect(src).toContain('visibleRows.value.map((r) => r.key)');
-    // 起始行未变不重渲染
-    expect(src).toContain('if (start === lastStart && scrolled === scrollTop.value) return;');
+    // T02929：滚动位置按行块量化，同一块内不重建窗口
+    expect(src).toContain('const WINDOW_BUCKET_ROWS = 8;');
+    expect(src).toContain('quantizeScrollTop(scrolled, pitch, WINDOW_BUCKET_ROWS)');
+    expect(src).toContain('if (quantized === scrollTop.value) return;');
   });
 
   it('滚动主体是页面/内部滚动容器：捕获阶段监听，不新增内部滚动盒', () => {
@@ -132,6 +166,25 @@ describe('HealthIssueList 虚拟窗口接线（源码守护）', () => {
 
   it('截断信息不丢失：行提供完整文本 title', () => {
     expect(src).toContain(':title="rowTitle(row)"');
+  });
+});
+
+describe('Health.vue 视口级模糊层（T02929）', () => {
+  const src = readSrc('views/Health.vue');
+
+  it('模糊由卡内 sticky 的 100vh 层承担，卡片自身不再按内容高度撑开模糊面积', () => {
+    expect(src).toContain('class="glass-card health-card is-viewport-blur"');
+    expect(src).toContain('class="health-blur-layer"');
+    expect(src).toMatch(/\.health-card\.is-viewport-blur\s*\{[^}]*backdrop-filter:\s*none/s);
+    expect(src).toMatch(/\.health-card\.is-viewport-blur\s*\{[^}]*overflow:\s*clip/s);
+    expect(src).toMatch(/\.health-card\.is-viewport-blur \.health-blur-layer\s*\{[^}]*position:\s*sticky/s);
+    expect(src).toMatch(/\.health-card\.is-viewport-blur \.health-blur-layer\s*\{[^}]*height:\s*100vh/s);
+    expect(src).toMatch(/\.health-card\.is-viewport-blur \.health-blur-layer\s*\{[^}]*backdrop-filter:\s*var\(--blur\)/s);
+  });
+
+  it('不改滚动主体：体检页仍是页面级滚动，卡片不引入内部滚动盒', () => {
+    expect(src).not.toContain('overflow-y: auto');
+    expect(src).not.toContain('overflow: auto');
   });
 });
 
