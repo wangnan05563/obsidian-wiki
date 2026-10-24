@@ -11,7 +11,11 @@ import { getDataDir } from '../utils/runtime.js';
 
 // 技能存储根目录：karpathy-wiki/data/skills/（开发模式）或 exe/data/skills/（SEA 模式）
 // 为什么用 getDataDir：runtime.ts 统一解析 data 目录，与 CWD 解耦
-const SKILLS_ROOT = path.resolve(getDataDir(), 'skills');
+// 为什么留 API_SKILLS_ROOT 覆盖口（T02917）：启用状态要**写回 SKILL.md frontmatter**，
+//   没有覆盖口时测试用例只能落在用户真实的 data/skills 里。
+const SKILLS_ROOT = process.env.API_SKILLS_ROOT
+  ? path.resolve(process.env.API_SKILLS_ROOT)
+  : path.resolve(getDataDir(), 'skills');
 
 // 技能 ID 白名单正则：仅允许小写字母、数字、连字符、下划线
 // 为什么需要：防止路径穿越攻击（如 "../etc/passwd" 作为 skillId），CODING-005 输入白名单
@@ -88,11 +92,27 @@ function extractFirstParagraph(body: string): string {
   return '';
 }
 
+// 启用状态归一化（T02917）
+// 为什么缺字段要回 true：技能正文里的 frontmatter 由第三方技能包作者书写，
+//   存量技能没有 enabled 字段；若缺省按禁用，升级会把用户已在用的技能静默关掉。
+// 为什么要认字符串：手改的 SKILL.md 里 `enabled: "false"` 会被 YAML 当字符串，
+//   直接 Boolean() 会得到 true，出现「界面显示禁用、实际仍启用」。
+function normalizeEnabled(raw: unknown): boolean {
+  if (raw === undefined || raw === null) return true;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const v = raw.trim().toLowerCase();
+    return v !== 'false' && v !== '0' && v !== 'no' && v !== 'off';
+  }
+  return Boolean(raw);
+}
+
 // 从 SKILL.md 内容解析技能名称和描述
 // 优先级：frontmatter.name/description > 首个标题 > 文件名
-function parseSkillMetadata(content: string, fallbackName: string): { name: string; description: string; entryFile: string } {
+function parseSkillMetadata(content: string, fallbackName: string): { name: string; description: string; entryFile: string; enabled: boolean } {
   let name = fallbackName;
   let description = '';
+  let enabled = true;
 
   try {
     const parsed = matter(content);
@@ -102,6 +122,7 @@ function parseSkillMetadata(content: string, fallbackName: string): { name: stri
     if (parsed.data.description && typeof parsed.data.description === 'string') {
       description = parsed.data.description;
     }
+    enabled = normalizeEnabled(parsed.data.enabled);
     // frontmatter 无 description 时从正文首段提取（去除空行和标题）
     if (!description) {
       description = extractFirstParagraph(parsed.content.trim());
@@ -111,7 +132,7 @@ function parseSkillMetadata(content: string, fallbackName: string): { name: stri
     description = extractFirstParagraph(content.trim());
   }
 
-  return { name, description, entryFile: 'SKILL.md' };
+  return { name, description, entryFile: 'SKILL.md', enabled };
 }
 
 // 计算目录占用字节数（递归遍历所有文件）
@@ -232,7 +253,7 @@ async function importZipSkill(
   // 解析 SKILL.md 提取元数据
   const skillMdPath = path.resolve(targetDir, skillMdEntry.entryName);
   const skillMdContent = await fs.readFile(skillMdPath, 'utf8');
-  const { name, description, entryFile } = parseSkillMetadata(skillMdContent, fallbackName);
+  const { name, description, entryFile, enabled } = parseSkillMetadata(skillMdContent, fallbackName);
 
   const size = await calculateDirSize(targetDir);
   const meta: SkillMeta = {
@@ -243,6 +264,7 @@ async function importZipSkill(
     importedAt: new Date().toISOString(),
     size,
     entryFile,
+    enabled,
   };
 
   return { meta, warnings };
@@ -263,7 +285,7 @@ async function importMarkdownSkill(
   await fs.mkdir(targetDir, { recursive: true });
 
   const content = fileBuffer.toString('utf8');
-  const { name, description, entryFile } = parseSkillMetadata(content, fallbackName);
+  const { name, description, entryFile, enabled } = parseSkillMetadata(content, fallbackName);
 
   // 写入 SKILL.md
   const skillMdPath = path.resolve(targetDir, entryFile);
@@ -278,6 +300,7 @@ async function importMarkdownSkill(
     importedAt: new Date().toISOString(),
     size,
     entryFile,
+    enabled,
   };
 
   return { meta, warnings };
@@ -354,13 +377,13 @@ export async function listSkills(): Promise<SkillMeta[]> {
       if (!entryFile) return null;
 
       const content = await fs.readFile(path.resolve(skillDir, entryFile), 'utf8');
-      const { name, description } = parseSkillMetadata(content, skillId);
+      const { name, description, enabled } = parseSkillMetadata(content, skillId);
       const stat = await fs.stat(skillDir);
       const size = await calculateDirSize(skillDir);
       const allFiles = await listFilesRecursive(skillDir);
       const format: 'zip' | 'md' = allFiles.length <= 1 ? 'md' : 'zip';
 
-      return { id: skillId, name, description, format, importedAt: stat.mtime.toISOString(), size, entryFile };
+      return { id: skillId, name, description, format, importedAt: stat.mtime.toISOString(), size, entryFile, enabled };
     } catch {
       // 单个技能读取失败时跳过，不阻断列表
       return null;
@@ -404,7 +427,7 @@ export async function getSkillDetail(skillId: string): Promise<SkillDetail | nul
   }
 
   const content = await fs.readFile(path.resolve(skillDir, entryFile), 'utf8');
-  const { name, description } = parseSkillMetadata(content, skillId);
+  const { name, description, enabled } = parseSkillMetadata(content, skillId);
   const stat = await fs.stat(skillDir);
   const size = await calculateDirSize(skillDir);
   const files = await listFilesRecursive(skillDir);
@@ -420,9 +443,66 @@ export async function getSkillDetail(skillId: string): Promise<SkillDetail | nul
     importedAt: stat.mtime.toISOString(),
     size,
     entryFile,
+    enabled,
     content,
     files,
   };
+}
+
+// 设置技能启用状态（T02917）
+// 落盘位置：入口文件 frontmatter 的 enabled 字段——技能目录本身没有 sidecar，
+//   写 SKILL.md 是与「技能=一个目录＋一个入口文件」这一既有模型唯一对齐的持久化方式。
+// 为什么整文件重写而不是追加行：gray-matter 会保留其余 frontmatter 键与正文，
+//   手写的技能包不会因为切换开关丢掉 name/description 等字段。
+// 返回更新后的元数据；技能不存在或 ID 非法时返回 null（与 getSkillDetail/deleteSkill 同一口径）。
+export async function setSkillEnabled(skillId: string, enabled: boolean): Promise<SkillMeta | null> {
+  // 路径穿越防护：与 getSkillDetail/deleteSkill 同一白名单
+  if (!SKILL_ID_PATTERN.test(skillId)) {
+    return null;
+  }
+
+  const skillDir = path.resolve(SKILLS_ROOT, skillId);
+  if (!fsSync.existsSync(skillDir)) {
+    return null;
+  }
+
+  let entryFile = '';
+  for (const candidate of SKILL_MD_CANDIDATES) {
+    if (fsSync.existsSync(path.resolve(skillDir, candidate))) {
+      entryFile = candidate;
+      break;
+    }
+  }
+  if (!entryFile) {
+    return null;
+  }
+
+  const entryPath = path.resolve(skillDir, entryFile);
+  const raw = await fs.readFile(entryPath, 'utf8');
+  // importedAt 是由目录 mtime 派生的：写 SKILL.md 会刷新目录 mtime，
+  // 不还原就会让「导入时间」变成「最近一次切换开关的时间」，列表还按它倒序跳到最前。
+  const before = await fs.stat(skillDir);
+  let data: Record<string, unknown>;
+  let body: string;
+  try {
+    const parsed = matter(raw);
+    data = { ...(parsed.data as Record<string, unknown>) };
+    body = parsed.content;
+  } catch {
+    // frontmatter 解析失败：不猜测结构、不覆盖正文，直接拒绝
+    return null;
+  }
+  data.enabled = enabled;
+
+  const next = matter.stringify(body, data);
+  // 先写临时文件再原子替换：中途失败不能让入口文件变成半截内容
+  const tmpPath = path.resolve(skillDir, `${entryFile}.tmp-${Date.now()}`);
+  await fs.writeFile(tmpPath, next, 'utf8');
+  await fs.rename(tmpPath, entryPath);
+  // 还原目录时间戳：让「导入时间」与列表顺序不受开关操作影响
+  await fs.utimes(skillDir, before.atime, before.mtime);
+
+  return getSkillDetail(skillId);
 }
 
 // 删除技能

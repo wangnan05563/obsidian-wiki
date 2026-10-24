@@ -824,6 +824,8 @@ export interface SkillMeta {
   importedAt: string;
   size: number;
   entryFile: string;
+  // T02917 启用状态（与后端 SkillMeta 镜像）：缺失视为启用
+  enabled: boolean;
 }
 
 // 技能详情（GET /api/skills/:id 返回）

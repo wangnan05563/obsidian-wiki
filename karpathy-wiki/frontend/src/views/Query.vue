@@ -188,7 +188,9 @@ async function loadSkills() {
     const cfg = await res.json() as { skills?: typeof skills.value; activeSkill?: string };
     skills.value = cfg.skills?.filter((s) => s.enabled) ?? [];
     // 优先用后端保存的 activeSkill；后端无记录时回退本地 localStorage（保证刷新后保留选择）
-    activeSkillId.value = cfg.activeSkill ?? (localStorage.getItem(STORAGE_KEYS.ACTIVE_SKILL) || '');
+    const saved = cfg.activeSkill ?? (localStorage.getItem(STORAGE_KEYS.ACTIVE_SKILL) || '');
+    // T02917：被禁用的伙伴不得继续显示为「已选」——后端此时也不会加载它的指令
+    activeSkillId.value = skills.value.some((s) => s.id === saved) ? saved : '';
   } catch { /* skills 加载失败不阻断主流程 */ }
 }
 
