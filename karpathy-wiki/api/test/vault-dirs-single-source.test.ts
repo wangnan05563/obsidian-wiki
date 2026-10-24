@@ -34,7 +34,7 @@ import {
 } from '../src/vault/page-scope.js';
 import { VaultService } from '../src/vault/vault-service.js';
 import { HarnessAdapter } from '../src/engine/harness-adapter.js';
-import { fixFrontmatter } from '../src/data-clean/quality-scanner.js';
+import { fixFrontmatter, scanVault } from '../src/data-clean/quality-scanner.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -202,6 +202,51 @@ describe('F · 补元信息的 dir→type 推断覆盖 6 个页面目录', () =>
     const solFm = matter(await vault.readFile('solutions/meta-sample.md')).data;
     expect(qaFm.type).toBe('qa');
     expect(solFm.type).toBe('solution');
+  });
+});
+
+describe('H · 双 frontmatter 块合并（T02933）', () => {
+  // 真实故障形态：第一块只有 type/ai_tags/updated，第二块才带 title/created/source
+  const DUP = [
+    '---',
+    'type: concept',
+    'ai_tags: [a]',
+    "updated: '2026-10-09'",
+    '---',
+    '---',
+    'title: 双块样本',
+    'type: concept',
+    'created: 2026-07-21',
+    'source: concepts/dup.md',
+    '---',
+    '',
+    '正文第一行。',
+    '',
+  ].join('\n');
+
+  it('fixFrontmatter 后只剩一块，created 保留第二块真实值，正文不再以 --- 开头', async () => {
+    await vault.writeFile('concepts/dup-fm.md', DUP);
+    const res = await fixFrontmatter(vault, ['concepts/dup-fm.md'], false);
+    expect(res.errors).toEqual([]);
+    expect(res.fixed.map((f) => f.path)).toContain('concepts/dup-fm.md');
+
+    const raw = await vault.readFile('concepts/dup-fm.md');
+    // 只保留一对 --- 分隔符（一个 frontmatter 块）
+    expect(raw.match(/^---$/gm)?.length).toBe(2);
+    const parsed = matter(raw);
+    expect(parsed.data.title).toBe('双块样本');
+    expect(new Date(parsed.data.created as string).toISOString().slice(0, 10)).toBe('2026-07-21');
+    expect(parsed.content.trimStart().startsWith('---')).toBe(false);
+    expect(parsed.content).toContain('正文第一行');
+  });
+
+  it('扫描口径：双块页面合并后判定为有元信息，不再落进「缺元信息」', async () => {
+    await vault.writeFile('concepts/dup-scan.md', DUP);
+    const pages = await scanVault(vault);
+    const page = pages.find((p) => p.path === 'concepts/dup-scan.md');
+    expect(page).toBeTruthy();
+    expect(page!.metadata.hasFrontmatter).toBe(true);
+    expect(page!.title).toBe('双块样本');
   });
 });
 
