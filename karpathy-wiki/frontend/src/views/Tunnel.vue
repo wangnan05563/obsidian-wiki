@@ -13,6 +13,9 @@ import IconActionButton from '../components/IconActionButton.vue';
 import { useDirtyFields } from '../composables/useDirtyFields';
 // T02476（PRD X8）：自检未跑 / 尚未配置这类空态用统一模板（现状 + 原因 + 一个主按钮）
 import StateBlock from '../components/StateBlock.vue';
+// T02639：前置条件自检是管理员能力（后端 /tunnel/prerequisites 走 requireAdmin），
+// 普通用户既拿不到数据，留一张只会显示 403 的卡片纯属占位，因此整块对其隐藏。
+import { usePermission } from '../composables/usePermission';
 // T02469：失败原因 → 人话建议、自检三态灯等纯判定逻辑（有单测，见 utils/tunnelDiagnostics.ts）
 import {
   buildStartErrorView,
@@ -33,6 +36,8 @@ import type {
   CloudflareLoginStartResult,
   CloudflareLoginStatusResult,
 } from '../types';
+
+const { isAdmin } = usePermission();
 
 // ===== 运行状态与配置 =====
 const status = ref<TunnelStatus | null>(null);
@@ -167,6 +172,13 @@ const startErrorView = computed(() => {
 });
 
 async function runPrereqCheck(opts: { silent?: boolean } = {}) {
+  // 非管理员没有这个能力：不发请求，避免每次进页面/保存/启动失败都撞一次 403
+  if (!isAdmin.value) {
+    prereq.value = null;
+    prereqError.value = '';
+    prereqLoading.value = false;
+    return;
+  }
   prereqLoading.value = true;
   if (!opts.silent) prereqError.value = '';
   try {
@@ -232,6 +244,7 @@ async function gotoPrereqFocus(item: TunnelPrereqItem) {
 
 // 告警条上的「查看前置条件」：滚到自检卡片，没检测过就顺手检测一次
 async function gotoPrereqPanel() {
+  if (!isAdmin.value) return;
   document.getElementById('tunnel-prereq-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (!prereq.value && !prereqLoading.value) await runPrereqCheck();
 }
@@ -682,7 +695,7 @@ onBeforeUnmount(() => {
           <template v-if="status.lastStartError.source === 'boot'"> · 来自服务启动时的自动尝试</template>
         </div>
         <div class="start-error-actions">
-          <IconActionButton name="查看前置条件" desc="跳到前置条件自检，逐项看哪一步没满足" :icon="View" size="small" variant="primary" @click="gotoPrereqPanel" />
+          <IconActionButton v-if="isAdmin" name="查看前置条件" desc="跳到前置条件自检，逐项看哪一步没满足" :icon="View" size="small" variant="primary" @click="gotoPrereqPanel" />
           <IconActionButton name="重新启动" desc="再试一次启动隧道" :icon="RefreshRight" size="small" @click="startTunnel" />
           <IconActionButton name="知道了" desc="这条提示我已经看过，先不再显示" :icon="Close" size="small" @click="dismissStartError" />
         </div>
@@ -691,8 +704,9 @@ onBeforeUnmount(() => {
 
     <!-- 前置条件自检（T02469 / PRD §11 T4）
          替掉原来 Tailscale 那 4 行「需预装 / 请登录 / 启用 MagicDNS / 完成授权」纯文字：
-         文字清单不告诉用户「现在到底满没满足」，只能启动后靠报错猜。现在每一项是实测灯 + 事实 + 处理入口。 -->
-    <div class="glass-card prereq-card" id="tunnel-prereq-card">
+         文字清单不告诉用户「现在到底满没满足」，只能启动后靠报错猜。现在每一项是实测灯 + 事实 + 处理入口。
+         T02639：只对管理员展示——后端 /tunnel/prerequisites 是 requireAdmin，普通用户看到这张卡只会是 403 占位。 -->
+    <div class="glass-card prereq-card" id="tunnel-prereq-card" v-if="isAdmin">
       <div class="prereq-head">
         <h2 class="card-title">前置条件自检</h2>
         <span class="prereq-meta" v-if="prereqLoading">检测中…</span>
@@ -883,7 +897,8 @@ onBeforeUnmount(() => {
           <div class="row-value">
             <div class="hint">
               Tailscale 需要本机安装并登录客户端，公网地址还依赖管理后台的 MagicDNS 与 Funnel 开关。
-              这几项是否已经满足，看上方「前置条件自检」的实测结果，不必先启动再靠报错猜。
+              <template v-if="isAdmin">这几项是否已经满足，看上方「前置条件自检」的实测结果，不必先启动再靠报错猜。</template>
+              <template v-else>逐项实测需要管理员账户；直接启动即可，缺哪一步时失败提示会说明原因。</template>
             </div>
           </div>
         </div>
@@ -1019,7 +1034,7 @@ onBeforeUnmount(() => {
         </li>
         <li>如选 cpolar，需到官网注册获取 authtoken 并填入</li>
         <li>如选 Cloudflare Named 模式，点击"开始配置向导"完成三步配置；不再使用时点「删除隧道」回收（已分享的固定域名链接会失效，DNS 的 CNAME 记录需到 Cloudflare 控制台手工删除）</li>
-        <li>如选 Tailscale：装好并登录客户端后，用上方面板「前置条件自检」确认四项（安装/登录/MagicDNS/Funnel）是否满足，首次启动还需浏览器授权一次</li>
+        <li>如选 Tailscale：装好并登录客户端后<template v-if="isAdmin">，用上方面板「前置条件自检」确认四项（安装/登录/MagicDNS/Funnel）是否满足</template>，首次启动还需浏览器授权一次</li>
         <li>本地端口勾选「自动」即使用服务端口，也可取消勾选手动指定</li>
         <li>点击"保存配置"持久化到 config.json</li>
         <li>点击"启动隧道"建立穿透，获得公网 URL</li>
