@@ -46,7 +46,11 @@ ts: 2026-07-20T14:30:15Z
 # entities: 本页与其它实体的关系列表（仅 compile 阶段由 LLM 抽取，不引入独立 NER 模型）
 # - name: 相关实体页面名（不含 .md 后缀，必须与正文 [[页面名]] 一致）
 # - relation: 关系类型（snake_case），常用值：leader_of / member_of / depends_on / created_by / related_to
-entities: [{name: "项目X", relation: "leader_of"}, {name: "团队A", relation: "member_of"}]
+entities:
+  - name: "项目X"
+    relation: "leader_of"
+  - name: "团队A"
+    relation: "member_of"
 ---
 ```
 

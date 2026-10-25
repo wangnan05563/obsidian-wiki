@@ -22,6 +22,7 @@ import {
   logsDirIn,
 } from '../utils/harness-dirs.js';
 import { suggestTagsForPage } from './tag-suggest-workflow.js';
+import { mergeDuplicateFrontmatter } from '../data-clean/quality-scanner.js';
 
 // §12.3-6：compile 中途失败时，给已生成的页面标记 status: draft。
 // 决策不回滚——LLM 编译成本高（token 已消耗），半成品保留供用户决策。
@@ -33,13 +34,32 @@ async function markPagesAsDraft(vault: VaultService, pagePaths: string[]): Promi
       // 已有 status 字段则不覆盖，仅补充缺失的
       if (!parsed.data.status) {
         parsed.data.status = 'draft';
-        const updated = matter.stringify(parsed.content, parsed.data);
+        const updated = matter.stringify({ content: parsed.content }, parsed.data);
         await vault.writeFile(rel, updated);
       }
     } catch {
       // 页面可能写入失败就不存在，跳过
     }
   }
+}
+
+// T02964：LLM 偶尔在首块 frontmatter 之后又完整输出一块（块 2 才是 title/entities 等完整元信息），
+// 落盘前按 T02933 的读侧合并口径收敛为单块；否则双块 + 非法内联 YAML 会随文件落盘，
+// 之后任何「读→改→写」都会在重解析正文时抛 YAMLException（表现为页面改不动）。
+function collapseDuplicateFrontmatter(content: string): string {
+  let parsed;
+  try {
+    parsed = matter(content);
+  } catch {
+    return content; // 首块本身非法：保持原样，由 health-check 兜底
+  }
+  const merged = mergeDuplicateFrontmatter(
+    parsed.data as Record<string, unknown>,
+    parsed.content ?? '',
+  );
+  if (!merged.hadDuplicateBlock) return content;
+  // 对象形式传正文：避免 matter.stringify 对正文再做一次 YAML 解析
+  return matter.stringify({ content: merged.content }, merged.data);
 }
 
 // FR-15-4：合法的页面 type 枚举，与 SCHEMA.md 对齐
@@ -83,7 +103,7 @@ function ensurePageTypeField(pagePath: string, content: string): string {
   const topDir = pagePath.split('/')[0]?.toLowerCase() ?? '';
   const inferredType = DIR_TO_TYPE[topDir] ?? 'concept'; // 兜底到 concept
   parsed.data.type = inferredType;
-  return matter.stringify(parsed.content, parsed.data);
+  return matter.stringify({ content: parsed.content }, parsed.data);
 }
 
 // FR-15-6：校验 frontmatter entities 字段格式与拓扑一致性
@@ -110,12 +130,12 @@ function ensureEntitiesField(content: string): string {
   // 格式校验：必须是数组
   if (!Array.isArray(rawEntities)) {
     delete parsed.data.entities;
-    return matter.stringify(parsed.content, parsed.data);
+    return matter.stringify({ content: parsed.content }, parsed.data);
   }
   // 空数组：删除字段避免污染
   if (rawEntities.length === 0) {
     delete parsed.data.entities;
-    return matter.stringify(parsed.content, parsed.data);
+    return matter.stringify({ content: parsed.content }, parsed.data);
   }
   // 收集正文 [[页面名]] 用于校验 entities.name 拓扑一致性（拆掉别名/锚点后的真实目标名）
   const wikilinkNames = new Set(extractWikilinkTargets(parsed.content));
@@ -130,11 +150,11 @@ function ensureEntitiesField(content: string): string {
   // 清理后为空：移除字段
   if (validEntities.length === 0) {
     delete parsed.data.entities;
-    return matter.stringify(parsed.content, parsed.data);
+    return matter.stringify({ content: parsed.content }, parsed.data);
   }
   // 写回清理后的 entities（过滤掉无效项）
   parsed.data.entities = validEntities;
-  return matter.stringify(parsed.content, parsed.data);
+  return matter.stringify({ content: parsed.content }, parsed.data);
 }
 
 // FR-18：校验 frontmatter 的 knowledge_class 字段（V4.0 知识时效分类）
@@ -157,12 +177,12 @@ function ensureKnowledgeClassField(content: string): string {
   const VALID_KC = ['timeless', 'dated', 'pointer'];
   if (typeof kc !== 'string' || !VALID_KC.includes(kc.toLowerCase())) {
     delete parsed.data.knowledge_class; // 非法值：移除，避免脏分类
-    return matter.stringify(parsed.content, parsed.data);
+    return matter.stringify({ content: parsed.content }, parsed.data);
   }
   // 合法但大小写不规范：规整为小写
   if (kc !== kc.toLowerCase()) {
     parsed.data.knowledge_class = kc.toLowerCase();
-    return matter.stringify(parsed.content, parsed.data);
+    return matter.stringify({ content: parsed.content }, parsed.data);
   }
   return content;
 }
@@ -210,6 +230,8 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
       ),
       handler: async (args: unknown) => {
         const { path: p, content } = args as { path: string; content: string };
+        // T02964：先收敛双 frontmatter 块，再走下面的去重/字段兜底（去重也可能依赖块 2 的 title）
+        const singleBlockContent = collapseDuplicateFrontmatter(content);
         // P2 去重：按 frontmatter title 查找已有页面，命中则重定向到已有路径（覆盖更新而非新建重复）
         // 仅对 TITLE_DEDUPE_DIRS（entities/concepts）生效；差异原因记在 page-scope：
         // qa/solutions 按 rawId 命名天然不重复，comparisons/queries 是聚合产物，按 title 重定向会并页
@@ -217,7 +239,7 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
         let targetPath = p;
         if (TITLE_DEDUPE_DIRS.includes(topDir)) {
           try {
-            const parsed = matter(content);
+            const parsed = matter(singleBlockContent);
             const title = typeof parsed.data.title === 'string' ? parsed.data.title : '';
             if (title) {
               const existing = await vault.findPageByTitle(title, topDir);
@@ -233,7 +255,7 @@ export function createCompileTools(vault: VaultService): ToolDefinition[] {
         // FR-15-4 兜底：LLM 漏写或写错 type 字段时，按目录路径自动推断回写
         // FR-15-6 兜底：校验 entities 字段格式与拓扑一致性，清理无效项
         // 为什么放在写入前：避免脏数据落盘后还要回扫修复，与 markPagesAsDraft 同样采用"读→改→写"模式
-        const withType = ensurePageTypeField(targetPath, content);
+        const withType = ensurePageTypeField(targetPath, singleBlockContent);
         const withKc = ensureKnowledgeClassField(withType);
         const finalContent = ensureEntitiesField(withKc);
         await vault.writeFile(targetPath, finalContent);

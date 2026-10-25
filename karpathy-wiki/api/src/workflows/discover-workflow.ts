@@ -226,10 +226,10 @@ export async function createBidirectionalLink(
 
   // 分别写入（仅当有变更时才写盘，避免无谓 IO）
   if (sourceChanged) {
-    await vault.writeFile(sourcePath, matter.stringify(sourceParsed.content, sourceParsed.data));
+    await vault.writeFile(sourcePath, matter.stringify({ content: sourceParsed.content }, sourceParsed.data));
   }
   if (targetChanged) {
-    await vault.writeFile(targetPath, matter.stringify(targetParsed.content, targetParsed.data));
+    await vault.writeFile(targetPath, matter.stringify({ content: targetParsed.content }, targetParsed.data));
   }
 
   return { sourceRelated, targetRelated };

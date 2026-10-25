@@ -513,7 +513,7 @@ export async function mergeDuplicatePages( // NOSONAR - 认知复杂度由业务
     }
 
     // Step 5: Write back pageA
-    const finalStringified = matter.stringify(mergedContent, mergedFm);
+    const finalStringified = matter.stringify({ content: mergedContent }, mergedFm);
     if (!dryRun) {
       await vaultRetry(() => vault.writeFile(pageA.path, finalStringified), "merge-write-A");
     }
