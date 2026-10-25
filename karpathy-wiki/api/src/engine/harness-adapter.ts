@@ -376,7 +376,7 @@ export class HarnessAdapter implements EngineAdapter {
         const kc = typeof parsed.data.knowledge_class === 'string' ? parsed.data.knowledge_class.toLowerCase() : '';
         if (kc !== 'dated') continue;
         parsed.data.reviewed_at = reviewedAt;
-        await this.vault.writeFile(rel, matter.stringify(parsed.content, parsed.data));
+        await this.vault.writeFile(rel, matter.stringify({ content: parsed.content }, parsed.data));
         done++;
       } catch (err: unknown) {
         // 单页失败不阻断其它页面（批量复核应尽力而为）

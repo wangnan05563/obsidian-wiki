@@ -144,7 +144,7 @@ export async function suggestTagsForPage(
   // 同时更新 updated 字段，记录本次修改时间
   parsed.data.updated = new Date().toISOString().slice(0, 10);
 
-  const updated = matter.stringify(parsed.content, parsed.data);
+  const updated = matter.stringify({ content: parsed.content }, parsed.data);
   await vault.writeFile(pagePath, updated);
 
   return result.ai_tags;
@@ -181,7 +181,7 @@ export async function confirmTagForPage(
   }
   parsed.data.updated = new Date().toISOString().slice(0, 10);
 
-  const updated = matter.stringify(parsed.content, parsed.data);
+  const updated = matter.stringify({ content: parsed.content }, parsed.data);
   await vault.writeFile(pagePath, updated);
 
   return { tags: newTags, aiTags: newAiTags };

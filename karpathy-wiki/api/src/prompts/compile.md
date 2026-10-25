@@ -25,7 +25,14 @@
   - `depends_on` / `depends_by`：依赖关系
   - `created_by` / `creates`：创建关系
   - `related_to`：通用关联（无法归入上述类型时使用）
-- 示例：`entities: [{name: "项目X", relation: "leader_of"}, {name: "团队A", relation: "member_of"}]`
+- 示例（必须用块式写法；不要写成 `- name: "项目X", relation: "leader_of"` 这种缺花括号的行，js-yaml 会判定非法）：
+  ```yaml
+  entities:
+    - name: "项目X"
+      relation: "leader_of"
+    - name: "团队A"
+      relation: "member_of"
+  ```
 - 仅抽取原始资料中**明确出现**的关系，**不要编造**关系或实体名
 - 若本页不涉及任何实体关系，frontmatter 中**不要**写 `entities` 字段（留空比编造更好）
 - `entities` 字段中的 `name` 必须在正文 `[[双向链接]]` 中出现（保证图谱拓扑一致）
