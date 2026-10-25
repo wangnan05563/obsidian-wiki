@@ -8,7 +8,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
+import { createPinia, setActivePinia } from 'pinia';
 import Tunnel from '../src/views/Tunnel.vue';
+import { useAuthStore } from '../src/stores/auth';
 import {
   adviceFor,
   buildStartErrorView,
@@ -178,9 +180,22 @@ function routeResponder(routes: Routes) {
   });
 }
 
-async function mountTunnel(routes: Routes) {
+async function mountTunnel(routes: Routes, role: 'admin' | 'user' = 'admin') {
   routeResponder(routes);
-  const wrapper = mount(Tunnel, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const auth = useAuthStore();
+  auth.token = 'test-token';
+  auth.user = {
+    id: 'u1',
+    username: role === 'admin' ? 'admin' : 'visitor',
+    role,
+    enabled: true,
+    createdAt: '',
+    updatedAt: '',
+    permissions: role === 'admin' ? ['tunnel'] : ['dashboard', 'browse', 'query', 'graph'],
+  };
+  const wrapper = mount(Tunnel, { global: { plugins: [ElementPlus, pinia] }, attachTo: document.body });
   await flushPromises();
   await nextTickFlush();
   return wrapper;
@@ -314,7 +329,7 @@ describe('Tunnel.vue 前置条件自检（PRD §11 T4）', () => {
     wrapper.unmount();
   });
 
-  it('非管理员 403：说清是权限问题，不甩后端错误串、也不弹 toast 刷屏', async () => {
+  it('管理员但服务端拒绝 403：说清是权限问题，不甩后端错误串、也不弹 toast 刷屏', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const wrapper = await mountTunnel({ prereq: { detail: 'Forbidden' }, prereqStatus: 403 });
     const card = wrapper.find('#tunnel-prereq-card');
@@ -322,6 +337,47 @@ describe('Tunnel.vue 前置条件自检（PRD §11 T4）', () => {
     expect(card.text()).not.toContain('Forbidden');
     spy.mockRestore();
     wrapper.unmount();
+  });
+
+  // T02639：PRD 权限口径下自检是管理员能力，普通用户不该看到一张只会报 403 的占位卡
+  describe('普通用户：自检整块隐藏，不再撞 403', () => {
+    it('不渲染自检卡、不调 /prerequisites（进页面不该白跑一次必失败的请求）', async () => {
+      const wrapper = await mountTunnel({ prereq: { detail: 'Forbidden' }, prereqStatus: 403 }, 'user');
+      expect(wrapper.find('#tunnel-prereq-card').exists()).toBe(false);
+      expect(calls('/tunnel/prerequisites')).toBe(0);
+      expect(wrapper.text()).not.toContain('前置条件自检');
+      wrapper.unmount();
+    });
+
+    it('启动失败告警条保留原因/建议/动作，只去掉「查看前置条件」', async () => {
+      const wrapper = await mountTunnel({
+        status: {
+          status: 'stopped', publicUrl: null, provider: 'tailscale',
+          lastStartError: { message: '请先打开并登录 Tailscale，然后重新启动隧道', at: Date.now(), provider: 'tailscale', source: 'manual' },
+        },
+      }, 'user');
+      const card = wrapper.find('#tunnel-start-error');
+      expect(card.exists()).toBe(true);
+      expect(card.text()).toContain('请先打开并登录 Tailscale');
+      expect(card.find('[aria-label="查看前置条件"]').exists()).toBe(false);
+      expect(card.find('[aria-label="重新启动"]').exists()).toBe(true);
+      expect(card.find('[aria-label="知道了"]').exists()).toBe(true);
+      wrapper.unmount();
+    });
+
+    it('文案不把用户指向看不见的面板', async () => {
+      const wrapper = await mountTunnel({
+        config: {
+          provider: 'tailscale', localPort: 0, cpolarAuthtokenMasked: '', cpolarAuthtokenConfigured: false, binaryPath: '',
+          autoStart: false, tunnelMode: 'quick', tunnelName: '', tunnelId: '', credentialsFile: '', hostname: '', certFileConfigured: false,
+        },
+      }, 'user');
+      const text = wrapper.text();
+      expect(text).not.toContain('看上方「前置条件自检」');
+      expect(text).not.toContain('用上方面板「前置条件自检」');
+      expect(text).toContain('逐项实测需要管理员账户');
+      wrapper.unmount();
+    });
   });
 
   it('点「重新检测」再跑一次；切换服务商后旧灯要标注是谁的结果', async () => {

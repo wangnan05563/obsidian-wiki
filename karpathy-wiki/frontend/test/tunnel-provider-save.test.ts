@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia } from 'pinia';
 import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus';
 import Tunnel from '../src/views/Tunnel.vue';
 import type { TunnelConfigData } from '../src/types';
@@ -100,7 +101,7 @@ async function nextTickFlush() {
 
 async function mountTunnel(opts: Install = {}) {
   install(opts);
-  const wrapper = mount(Tunnel, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+  const wrapper = mount(Tunnel, { global: { plugins: [ElementPlus, createPinia()] }, attachTo: document.body });
   await nextTickFlush();
   return wrapper;
 }
