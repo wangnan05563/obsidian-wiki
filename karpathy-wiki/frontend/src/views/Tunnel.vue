@@ -9,6 +9,8 @@ import {
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
 import AppModal from '../components/AppModal.vue';
 import IconActionButton from '../components/IconActionButton.vue';
+// T02918：逐字段 dirty 口径抽到 composable，配置中心的 8 个页签共用同一份实现
+import { useDirtyFields } from '../composables/useDirtyFields';
 // T02476（PRD X8）：自检未跑 / 尚未配置这类空态用统一模板（现状 + 原因 + 一个主按钮）
 import StateBlock from '../components/StateBlock.vue';
 // T02469：失败原因 → 人话建议、自检三态灯等纯判定逻辑（有单测，见 utils/tunnelDiagnostics.ts）
@@ -106,24 +108,39 @@ const PROVIDER_DESC: Record<string, string> = {
   tailscale: '免费固定 ts.net 地址，需预装 Tailscale 并登录。首次启用需浏览器授权。',
 };
 
-// ===== 未保存改动（T02637）=====
+// ===== 未保存改动（T02637，T02918 统一口径）=====
 // 表单是草稿，config 是已落盘的那一份。POST /tunnel/start 只读后端 config.json、不收请求体，
 // 所以「表单 ≠ 已保存」这个差值只能由界面说出来——以前靠切换下拉框时顺手写盘抹平，
 // 代价是用户没点保存也改了配置。现在「保存配置」是本页唯一的写盘入口。
-const dirtyFields = computed<string[]>(() => {
+// authtoken 不回显明文，空串表示不修改：saved 侧固定为空串，因此用户填了才算一项改动。
+const tunnelSavedSnapshot = computed(() => {
   const saved = config.value;
-  if (!saved) return [];
-  const out: string[] = [];
-  if (formProvider.value !== saved.provider) out.push('Provider');
-  if (formTunnelMode.value !== saved.tunnelMode) out.push('隧道模式');
-  // authtoken 不回显明文，空串表示不修改：用户填了才算一项改动
-  if (formAuthtoken.value !== '') out.push('Authtoken');
-  if (formPort.value !== saved.localPort) out.push('本地端口');
-  if (formBinaryPath.value !== saved.binaryPath) out.push('程序路径');
-  if (formAutoStart.value !== saved.autoStart) out.push('开机自启');
-  return out;
+  if (!saved) return null;
+  return {
+    provider: saved.provider,
+    tunnelMode: saved.tunnelMode,
+    authtoken: '',
+    localPort: saved.localPort,
+    binaryPath: saved.binaryPath,
+    autoStart: saved.autoStart,
+  };
 });
-const isDirty = computed(() => dirtyFields.value.length > 0);
+const tunnelFormSnapshot = computed(() => ({
+  provider: formProvider.value,
+  tunnelMode: formTunnelMode.value,
+  authtoken: formAuthtoken.value,
+  localPort: formPort.value,
+  binaryPath: formBinaryPath.value,
+  autoStart: formAutoStart.value,
+}));
+const { dirtyFields, isDirty } = useDirtyFields(tunnelSavedSnapshot, tunnelFormSnapshot, {
+  provider: 'Provider',
+  tunnelMode: '隧道模式',
+  authtoken: 'Authtoken',
+  localPort: '本地端口',
+  binaryPath: '程序路径',
+  autoStart: '开机自启',
+});
 const runningProviderNote = computed(() => {
   if (status.value?.status !== 'running' || !config.value || !isDirty.value) return '';
   const p = status.value.provider;
