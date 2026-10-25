@@ -669,12 +669,16 @@ export class VaultService {
   }
 
   // 提取页面 frontmatter 的 updated 字段。供 healthCheck 判定过期用。
+  // T02955：未加引号的 ISO 时间戳会被 js-yaml 解析成 Date（typeof object），
+  // 原来只认 string 会导致这类页面一律返回 null、stale 列表系统性漏报。
   async getPageUpdated(rel: string): Promise<string | null> {
     try {
       const content = await this.readFile(rel);
       const parsed = matter(content);
       const updated = parsed.data?.updated;
-      return typeof updated === 'string' ? updated : null;
+      if (typeof updated === 'string') return updated;
+      if (updated instanceof Date) return Number.isNaN(updated.getTime()) ? null : updated.toISOString();
+      return null;
     } catch {
       return null;
     }
