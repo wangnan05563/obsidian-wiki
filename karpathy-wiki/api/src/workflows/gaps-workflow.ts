@@ -18,7 +18,12 @@
 import type { VaultService } from '../vault/vault-service.js';
 import { collectAllPageMetadata } from './discover-workflow.js';
 // T02921：wikilink 目标名解析唯一实现（精确优先 + 大小写不敏感回落）
-import { createLinkResolver } from '../vault/link-parser.js';
+import {
+  addPageName,
+  addPageToNameIndex,
+  createLinkResolver,
+  type PageNameIndex,
+} from '../vault/link-parser.js';
 import { Harness } from '@wiki/harness';
 import type { HarnessConfig } from '@wiki/harness';
 
@@ -62,9 +67,13 @@ export interface PageMeta {
 type AdjacencyMap = Map<string, Set<string>>;
 
 // 按页面名建立「页面名 → 路径」索引，解析 [[页面名]] wikilink 为真实路径
-function buildNameIndex(pages: PageMeta[]): Map<string, string> {
-  const byName = new Map<string, string>();
-  for (const p of pages) byName.set(p.pageName, p.path);
+// T02951：同名页保留全部候选（后者不再覆盖前者），路径限定链接可精确指向
+function buildNameIndex(pages: PageMeta[]): PageNameIndex {
+  const byName: PageNameIndex = new Map();
+  for (const p of pages) {
+    addPageName(byName, p.pageName, p.path);
+    addPageToNameIndex(byName, p.path);
+  }
   return byName;
 }
 
