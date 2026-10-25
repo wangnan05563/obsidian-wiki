@@ -55,26 +55,56 @@ export interface LinkResolver {
   resolve(target: string): string | null;
 }
 
-// 目标名解析器：精确匹配优先；未命中回落大小写不敏感匹配。
-// 回落候选按路径稳定排序取首个，避免同名候选的不确定行为；
-// 不做 toLowerCase 单键合并——不同页面可能仅大小写不同，精确命中必须优先且互不吞并。
-export function createLinkResolver(nameToPath: Map<string, string>): LinkResolver {
-  const byLower = new Map<string, Array<{ path: string }>>();
-  for (const [base, p] of nameToPath) {
-    const k = base.toLowerCase();
-    const arr = byLower.get(k);
-    if (arr) arr.push({ path: p });
-    else byLower.set(k, [{ path: p }]);
+// 页面名索引：一个名字可对应多个页面路径（跨目录同名页），候选按路径稳定排序。
+// T02951：此前 vault-service/harness-adapter 用 Map<string, string> 建索引，
+// 同名页后者覆盖前者——被覆盖页永远不进 nameToPath.values()，出边全部丢失。
+export type PageNameIndex = Map<string, string[]>;
+
+const comparePath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+function sortedUnique(paths: string[]): string[] {
+  return [...new Set(paths)].sort(comparePath);
+}
+
+export function addPageName(index: PageNameIndex, name: string, rel: string): void {
+  const arr = index.get(name);
+  if (arr) {
+    if (!arr.includes(rel)) arr.push(rel);
+  } else {
+    index.set(name, [rel]);
   }
-  for (const arr of byLower.values()) {
-    arr.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+// 登记页面：短名（basename）与「目录/短名」两种键都进索引。
+// 同名页只能靠 `[[entities/hundsun]]` 这类路径限定链接精确指向，否则按稳定排序落到首个候选。
+export function addPageToNameIndex(index: PageNameIndex, rel: string): void {
+  const noExt = rel.replace(/\.md$/i, '');
+  const slash = noExt.lastIndexOf('/');
+  addPageName(index, noExt.slice(slash + 1), rel);
+  if (slash >= 0) addPageName(index, noExt, rel);
+}
+
+// 目标名解析器：精确匹配优先；未命中回落大小写不敏感匹配。
+// 候选按路径稳定排序取首个，避免同名/同大小写候选的不确定行为；
+// 不做 toLowerCase 单键合并——不同页面可能仅大小写不同，精确命中必须优先且互不吞并。
+// 兼容旧调用：值可以是单路径或路径数组。
+export function createLinkResolver(nameToPath: Map<string, string | string[]>): LinkResolver {
+  const byKey = new Map<string, string[]>();
+  const byLower = new Map<string, string[]>();
+  for (const [name, value] of nameToPath) {
+    const cands = sortedUnique(Array.isArray(value) ? value : [value]);
+    if (cands.length === 0) continue;
+    byKey.set(name, cands);
+    const lower = name.toLowerCase();
+    const prev = byLower.get(lower);
+    byLower.set(lower, prev ? sortedUnique(prev.concat(cands)) : cands);
   }
   return {
     resolve(target: string): string | null {
-      const exact = nameToPath.get(target);
-      if (exact) return exact;
+      const exact = byKey.get(target);
+      if (exact && exact.length > 0) return exact[0];
       const cands = byLower.get(target.toLowerCase());
-      return cands && cands.length > 0 ? cands[0].path : null;
+      return cands && cands.length > 0 ? cands[0] : null;
     },
   };
 }

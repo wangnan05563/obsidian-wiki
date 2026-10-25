@@ -5,7 +5,12 @@ import { watch, type FSWatcher } from 'chokidar';
 // T02472 L1：页面口径（目录白名单 + 页面文件判定）单点定义，与数据清洗/统计接口共用
 import { PAGE_DIRS, isPageFile, WRITABLE_DIRS, INIT_DIRS, pageDepthError } from './page-scope.js';
 // T02921：wikilink 解析与目标名解析唯一实现（拆别名/锚点 + 大小写不敏感回落）
-import { createLinkResolver, extractWikilinkTargets } from './link-parser.js';
+import {
+  addPageToNameIndex,
+  createLinkResolver,
+  extractWikilinkTargets,
+  type PageNameIndex,
+} from './link-parser.js';
 
 // 将底层 fs 读取错误包装为带 code 的 Error，保留准确文案（区分不存在/目录/权限/其它）。
 // 为什么需要：路由层需按 HTTP 状态码分流（目录→400、权限→403、不存在→404、其它→500），
@@ -578,7 +583,8 @@ export class VaultService {
       return this._linkGraphCache;
     }
 
-    const nameToPath = new Map<string, string>();
+    // T02951：nameToPath 保留同名页全部候选；出边按 nodes 全量扫描，避免被覆盖页丢边
+    const nameToPath: PageNameIndex = new Map();
     const nodes: string[] = [];
 
     // 并行收集 4 个目录：Promise.all 同时发起 readdir，避免串行等待
@@ -588,16 +594,14 @@ export class VaultService {
 
     // 并行获取每个文件的 rawLinks（命中 mtime 缓存则跳过 readFile）
     const rawLinksArrays = await Promise.all(
-      Array.from(nameToPath).map(([, fromPath]) =>
-        this.getRawLinksForPage(fromPath),
-      ),
+      nodes.map((fromPath) => this.getRawLinksForPage(fromPath)),
     );
 
     // 用最新 nameToPath 解析 rawLinks 为 edges（T02921：解析走唯一 resolver——精确优先 + 大小写不敏感回落）
     const resolver = createLinkResolver(nameToPath);
     const edges: Array<{ from: string; to: string }> = [];
     for (let i = 0; i < rawLinksArrays.length; i++) {
-      const fromPath = Array.from(nameToPath.values())[i];
+      const fromPath = nodes[i];
       const rawLinks = rawLinksArrays[i];
       for (const target of rawLinks) {
         const toPath = resolver.resolve(target);
@@ -617,7 +621,7 @@ export class VaultService {
   private async collectPagesFromDir(
     dir: string,
     nodes: string[],
-    nameToPath: Map<string, string>,
+    nameToPath: PageNameIndex,
   ): Promise<void> {
     const dirFull = path.join(this.vaultPath, dir);
     let entries: string[] = [];
@@ -628,10 +632,9 @@ export class VaultService {
     }
     for (const f of entries) {
       if (!isPageFile(f)) continue;
-      const pageName = f.slice(0, -3);
       const rel = `${dir}/${f}`;
       nodes.push(rel);
-      nameToPath.set(pageName, rel);
+      addPageToNameIndex(nameToPath, rel);
     }
   }
 

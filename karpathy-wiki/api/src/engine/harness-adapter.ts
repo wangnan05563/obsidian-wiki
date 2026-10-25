@@ -19,7 +19,12 @@ import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
 // T02686：页面口径单一来源（目录集合 + 测试文件排除规则）
 import { PAGE_DIRS, isPageFile } from '../vault/page-scope.js';
 // T02921：wikilink 解析与目标名解析唯一实现（拆别名/锚点 + 大小写不敏感回落）
-import { createLinkResolver, extractWikilinkTargets } from '../vault/link-parser.js';
+import {
+  addPageToNameIndex,
+  createLinkResolver,
+  extractWikilinkTargets,
+  type PageNameIndex,
+} from '../vault/link-parser.js';
 import type { LinkResolver } from '../vault/link-parser.js';
 
 // BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
@@ -324,12 +329,10 @@ export class HarnessAdapter implements EngineAdapter {
 
   // 链接图 → 页面名解析器（doHealthCheck 与 recheckIssueResolved 共用同一口径）。
   // T02921：精确优先 + 大小写不敏感回落，别名/锚点由 extractWikilinkTargets 拆掉。
+  // T02951：同名页保留全部候选，与 buildLinkGraph 使用同一份索引口径。
   private buildNameResolverFromGraph(graph: { nodes: string[] }): LinkResolver {
-    const nameToPath = new Map<string, string>();
-    for (const rel of graph.nodes) {
-      const base = path.basename(rel, '.md');
-      nameToPath.set(base, rel);
-    }
+    const nameToPath: PageNameIndex = new Map();
+    for (const rel of graph.nodes) addPageToNameIndex(nameToPath, rel);
     return createLinkResolver(nameToPath);
   }
 
