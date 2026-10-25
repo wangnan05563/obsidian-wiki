@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { API_BASE } from '../utils/apiBase';
-import { ref, computed, reactive, onMounted, watch, type Ref } from 'vue';
+import { ref, computed, reactive, onMounted, onBeforeUnmount, watch, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Check, Close, Connection, List, Download, Upload, Refresh, Document,
@@ -18,6 +18,8 @@ import { consumeSSE } from '../utils/sse';
 import { useAuthStore } from '../stores/auth';
 import { useTtsStore } from '../stores/tts';
 import { useFormDraft } from '../composables/useFormDraft';
+// T02918：未保存改动口径（与 Tunnel 页共用），逐页签对比已保存快照
+import { cloneSnapshot, useDirtyFields } from '../composables/useDirtyFields';
 import { useModelStore } from '../stores/model';
 import { AUTO_MODEL } from '../utils/autoModel';
 import { DEFAULT_TTS_CONFIG } from '../services/ttsConfig';
@@ -99,8 +101,16 @@ const navGroups = computed(() => navGroupsFor(isAdmin.value));
 // 懒挂载语义（复刻原 el-tabs，避免一进页面就渲染 SCHEMA/Prompt IDE 等重内容）：
 // 首次切入才挂载，之后用 v-show 保活，切走不丢表单草稿与编辑器状态。
 const visitedTabs = ref<ConfigTabName[]>([activeTab.value]);
-watch(activeTab, (tab) => {
+watch(activeTab, (tab, prev) => {
   if (!visitedTabs.value.includes(tab)) visitedTabs.value.push(tab);
+  // T02918 裁决：切页签「提醒不阻断」——照常切换，只把上一页签的未保存项说出来。
+  // 为什么不硬拦：配置页的页签常被当作对照查看（照着系统配置填 AI 服务），硬拦会让人寸步难行。
+  if (prev && prev !== tab) {
+    const fields = tabDirtyFields.value[prev] ?? [];
+    if (fields.length > 0) {
+      ElMessage.warning(`「${findTabMeta(prev)?.label ?? prev}」还有 ${fields.length} 项改动未保存（${fields.join('、')}）`);
+    }
+  }
 });
 
 // 面板自身的权限闸门：导航已置灰拦一次，这里兜住外部深链（帮助文档直达）与角色变化后的残留状态，
@@ -392,6 +402,13 @@ function cancelEdit() {
   editingSchema.value = false;
 }
 
+// T02918：SCHEMA 页签的未保存项（编辑器缓冲区 vs 已保存内容）
+const { dirtyFields: schemaDirtyFields } = useDirtyFields(
+  () => ({ content: schemaContent.value }),
+  () => ({ content: schemaBuffer.value }),
+  { content: 'SCHEMA 内容' },
+);
+
 // 提取为函数以避免模板中出现嵌套三元（S3358）
 function diffLinePrefix(type: string): string {
   if (type === 'add') return '+';
@@ -472,6 +489,13 @@ const aiForm = ref({
   apiKey: '', // 脱敏值或新输入值
   embeddingModel: '', // FR-20 语义搜索：选填，留空则仅关键词检索
 });
+// T02918：已保存快照。必须在草稿恢复之前取——恢复出来的草稿与快照的差值就是「未保存」。
+const aiFormSaved = ref<typeof aiForm.value | null>(null);
+const { dirtyFields: aiFormDirtyFields } = useDirtyFields(
+  () => aiFormSaved.value,
+  () => aiForm.value,
+  { provider: '服务商', baseUrl: 'Base URL', model: '模型', apiKey: 'API Key', embeddingModel: '向量模型' },
+);
 
 // ── FR-20 语义索引状态与重建（设置页入口，规格 4）──
 const indexStatus = ref({ indexedPages: 0, pendingPages: 0, totalChunks: 0 });
@@ -519,6 +543,13 @@ const sharedAiForm = ref({
   apiKey: '',      // 服务端脱敏回显（**** 开头=未修改），或管理员新输入值
   apiKeySet: false, // 服务端共享是否已配置可用 Key
 });
+// T02918：共享 AI 的已保存快照（脱敏串视作「当前已保存状态」，用户不改则永远算干净）
+const sharedAiFormSaved = ref<typeof sharedAiForm.value | null>(null);
+const { dirtyFields: sharedAiDirtyFields } = useDirtyFields(
+  () => sharedAiFormSaved.value,
+  () => sharedAiForm.value,
+  { provider: '共享服务商', baseUrl: '共享 Base URL', model: '共享模型', apiKey: '共享 API Key', apiKeySet: 'Key 状态' },
+);
 const savingSharedAi = ref(false);
 
 // ── T00319「共享 AI」增强：预设快捷选择 / 获取模型 / 测试连接 ──
@@ -549,6 +580,8 @@ async function loadSharedAi(): Promise<void> {
       apiKey: cfg.apiKeyMasked ?? '',
       apiKeySet: Boolean(cfg.apiKeySet),
     };
+    // T02918：载入即基线
+    sharedAiFormSaved.value = cloneSnapshot(sharedAiForm.value);
   } catch {
     // 加载失败不阻断，管理员可手动填写后保存
   }
@@ -579,6 +612,8 @@ async function saveSharedAi(): Promise<void> {
     const data = await res.json() as { config?: { apiKeySet?: boolean } | undefined };
     ElMessage.success('已保存「共享 AI」配置');
     sharedAiForm.value.apiKeySet = Boolean(data.config?.apiKeySet);
+    // T02918：保存后基线前移
+    sharedAiFormSaved.value = cloneSnapshot(sharedAiForm.value);
     // 同步 model store 的服务端 Key 状态，保证问答页降级提示口径一致
     modelStore.apiKeySet = sharedAiForm.value.apiKeySet;
   } catch (err) {
@@ -800,6 +835,8 @@ async function loadAiConfig() {
       apiKey: cfg.apiKey,
       embeddingModel: cfg.embeddingModel ?? '',
     };
+    // T02918：先记已保存基线，再恢复草稿（下一行之后的 aiDraftApi.restore 会覆盖表单）
+    aiFormSaved.value = cloneSnapshot(aiForm.value);
     // 判定「是否已配置」必须以「本用户本地是否存了真实 Key」为准，而非服务端脱敏回填值。
     // 为什么：服务端兜底会把脱敏串（**** 开头，仅服务端基线）回填进 apiKey，若据此置 apiKeySet=true
     //   会显示"Key 已设置"，但问答按 BYOK 只认本用户真实密钥 → 出现"测试连接能通（走服务端 key）但问答失败"。
@@ -853,6 +890,8 @@ async function applyPreset(preset: LlmPreset) {
     embeddingModel: cfg.embeddingModel ?? '', // FR-20：embedding 模型随预设独立保存
   };
   aiConfig.value = deriveAiSummary(aiForm.value);
+  // T02918：切预设 = 换一份已保存基线；随后恢复该预设的草稿会与基线正确比对
+  aiFormSaved.value = cloneSnapshot(aiForm.value);
   // T01833：预设切换后恢复「该预设」的未提交草稿（key 随 selectedPresetKey 变化）
   aiDraftApi.restore();
   // 清空上一预设残留的「服务商可用模型」清单：否则下拉会因模型名不匹配当前预设而显示空白，
@@ -899,6 +938,8 @@ async function saveAiConfig() {
     ElMessage.success(`AI 配置已保存到本地（${label}，仅当前账户可见）`);
     // T01833：保存成功即清除该预设的未提交草稿
     aiDraftApi.clear();
+    // T02918：保存后基线前移，AI 页签的标记随之清零
+    aiFormSaved.value = cloneSnapshot(aiForm.value);
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
@@ -929,6 +970,8 @@ async function resetAiConfig() {
     aiForm.value = { ...def, embeddingModel: def.embeddingModel ?? '' };
     aiConfig.value = deriveAiSummary(def);
     aiTestResult.value = null;
+    // T02918：重置即回到默认基线（表单与快照一致，标记清零）
+    aiFormSaved.value = cloneSnapshot(aiForm.value);
     // T01833：本地配置已全部重置，同步清空所有预设的未提交草稿
     clearAllAiDrafts();
     ElMessage.success('已恢复当前账户默认配置');
@@ -1019,6 +1062,13 @@ const webSearchForm = ref({
   apiKey: '',
   maxResults: 5,
 });
+// T02918：联网搜索的已保存快照（同样在草稿恢复之前取）
+const webSearchFormSaved = ref<typeof webSearchForm.value | null>(null);
+const { dirtyFields: webSearchDirtyFields } = useDirtyFields(
+  () => webSearchFormSaved.value,
+  () => webSearchForm.value,
+  { provider: '搜索服务商', apiKey: '搜索 API Key', maxResults: '搜索结果数' },
+);
 // T01833：配置中心草稿持久化 —— 联网搜索表单启用本地草稿，API Key 仅在勾选「记住」时落盘
 const rememberSearchKey = ref(false);
 const { clear: clearWebSearchDraft, restore: restoreWebSearchDraft } = useFormDraft(
@@ -1057,6 +1107,8 @@ async function loadWebSearchConfig() {
       apiKey: cfg.apiKey,
       maxResults: cfg.maxResults ?? 5,
     };
+    // T02918：先记基线，finally 里的 restoreWebSearchDraft 会把草稿叠回来
+    webSearchFormSaved.value = cloneSnapshot(webSearchForm.value);
     webSearchStatus.value = {
       enabled: Boolean(cfg.apiKey),
       apiKeySet: Boolean(cfg.apiKey),
@@ -1088,6 +1140,8 @@ async function saveWebSearchConfig() {
     };
     ElMessage.success('联网搜索配置已保存到本地（仅当前账户可见）');
     clearWebSearchDraft();
+    // T02918：保存后基线前移
+    webSearchFormSaved.value = cloneSnapshot(webSearchForm.value);
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
   } finally {
@@ -1141,6 +1195,13 @@ const webSearchTestText = computed(() => {
 // 生图/视频配置不在服务端共享，改为每用户独立（BYOK）：密钥/模型/分辨率/比例/时长等按 userId
 // 存本地 IndexedDB，发起生成时随请求体透传后端。本区提供表单编辑 + 预设一键应用 + 连接测试。
 const mediaForm = ref<MediaUserConfig>(JSON.parse(JSON.stringify(DEFAULT_MEDIA_USER_CONFIG)) as MediaUserConfig);
+// T02918：生图/视频用户配置的已保存快照（按 image/video 两组比对，字段名在组内给出）
+const mediaFormSaved = ref<MediaUserConfig | null>(null);
+const { dirtyFields: mediaFormDirtyFields } = useDirtyFields(
+  () => mediaFormSaved.value,
+  () => mediaForm.value,
+  { image: '生图配置', video: '视频配置' },
+);
 const mediaPresets = ref<{ imagePresets: MediaImagePreset[]; videoPresets: MediaVideoPreset[] }>({
   imagePresets: [],
   videoPresets: [],
@@ -1156,6 +1217,8 @@ const imageGenTestResult = ref<{ ok: boolean; detail: string; model?: string } |
 async function loadMediaSection() {
   const uid = authStore.user?.id || 'guest';
   mediaForm.value = await loadMediaUserConfig(uid);
+  // T02918：载入即基线
+  mediaFormSaved.value = cloneSnapshot(mediaForm.value);
   // /api/media/presets 已挂 requireAuth，需用 authStore.authFetch（带凭证）拉取；未登录时回退空预设
   mediaPresets.value = await fetchMediaPresets(
     authStore.authFetch as (input: string, init?: RequestInit) => Promise<Response>,
@@ -1191,6 +1254,8 @@ async function saveMediaConfig() {
   savingMedia.value = true;
   try {
     await saveMediaUserConfig(uid, mediaForm.value);
+    // T02918：保存后基线前移
+    mediaFormSaved.value = cloneSnapshot(mediaForm.value);
     ElMessage.success('生图/视频配置已保存（将用于你自己的生成服务）');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存失败', err));
@@ -1507,6 +1572,19 @@ const sharedVideoGenTestText = computed(() => {
 // 与用户 BYOK 的 mediaForm 相互独立，各自持久化到服务端 config.json 与本地 IndexedDB，互不混用。
 const sharedImageForm = ref<MediaImageUserConfig>({ ...DEFAULT_MEDIA_USER_CONFIG.image });
 const sharedVideoForm = ref<MediaVideoUserConfig>({ ...DEFAULT_MEDIA_USER_CONFIG.video });
+// T02918：共享生图/视频的已保存快照
+const sharedImageFormSaved = ref<MediaImageUserConfig | null>(null);
+const sharedVideoFormSaved = ref<MediaVideoUserConfig | null>(null);
+const { dirtyFields: sharedImageDirtyFields, isDirty: sharedImageDirty } = useDirtyFields(
+  () => sharedImageFormSaved.value,
+  () => sharedImageForm.value,
+  { baseUrl: '共享生图 Base URL', model: '共享生图模型', apiKey: '共享生图 Key', size: '共享生图尺寸', ratio: '共享生图比例', steps: '采样步数', cfgScale: 'CFG', sampler: '采样器', seed: '种子', negativePrompt: '负向提示词' },
+);
+const { dirtyFields: sharedVideoDirtyFields, isDirty: sharedVideoDirty } = useDirtyFields(
+  () => sharedVideoFormSaved.value,
+  () => sharedVideoForm.value,
+  { baseUrl: '共享视频 Base URL', videoModel: '共享视频模型', apiKey: '共享视频 Key', size: '共享视频尺寸', seconds: '时长', fps: '帧率', motion: '运动强度', seed: '种子', negativePrompt: '负向提示词' },
+);
 // 服务端共享是否已配置可用 Key（GET 返回 apiKeySet；表单内 apiKey 为脱敏回显 ****…）
 const sharedImageKeySet = ref(false);
 const sharedVideoKeySet = ref(false);
@@ -1554,6 +1632,9 @@ async function loadSharedMedia(): Promise<void> {
       apiKey: vid.apiKeyMasked ?? '',
     };
     sharedVideoKeySet.value = Boolean(vid.apiKeySet);
+    // T02918：载入即基线
+    sharedImageFormSaved.value = cloneSnapshot(sharedImageForm.value);
+    sharedVideoFormSaved.value = cloneSnapshot(sharedVideoForm.value);
   } catch {
     // 加载失败不阻断，管理员可手动填写后保存
   }
@@ -1586,6 +1667,8 @@ async function saveSharedImage(): Promise<void> {
     const d = await res.json() as { image?: { apiKeyMasked?: string; apiKeySet?: boolean } };
     sharedImageForm.value.apiKey = d.image?.apiKeyMasked ?? sharedImageForm.value.apiKey;
     sharedImageKeySet.value = Boolean(d.image?.apiKeySet);
+    // T02918：保存后基线前移
+    sharedImageFormSaved.value = cloneSnapshot(sharedImageForm.value);
     ElMessage.success('已保存「共享生图」配置（对所有用户生效）');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存「共享生图」失败', err));
@@ -1620,6 +1703,8 @@ async function saveSharedVideo(): Promise<void> {
     const d = await res.json() as { video?: { apiKeyMasked?: string; apiKeySet?: boolean } };
     sharedVideoForm.value.apiKey = d.video?.apiKeyMasked ?? sharedVideoForm.value.apiKey;
     sharedVideoKeySet.value = Boolean(d.video?.apiKeySet);
+    // T02918：保存后基线前移
+    sharedVideoFormSaved.value = cloneSnapshot(sharedVideoForm.value);
     ElMessage.success('已保存「共享视频」配置（对所有用户生效）');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存「共享视频」失败', err));
@@ -1721,6 +1806,49 @@ function syncAdvancedFormsFromConfig(cfg: ConfigData): void {
   loggingForm.value.level = cfg.logging.level;
   loggingForm.value.enableRequestLog = cfg.logging.enableRequestLog;
 }
+
+// T02918：系统配置页签的未保存项。
+// 基线直接取 config.value——四个子保存接口成功后都会写回 config.value.{budget,healthCheck,batch,logging}，
+// 因此保存哪一块，哪一块就从标记里消失，不需要另存一份快照再手工同步。
+// 子智能体开关不在其中：它 @change 即落盘（saveSubAgents），本来就没有「未保存」状态。
+const configTabSavedSnapshot = computed(() => {
+  const cfg = config.value;
+  if (!cfg) return null;
+  return {
+    maxSteps: cfg.budget.maxSteps,
+    tokenBudget: cfg.budget.tokenBudget,
+    staleDays: cfg.healthCheck.staleDays,
+    allowedExtensionsText: cfg.batch.allowedExtensions.join(', '),
+    maxBatchSize: cfg.batch.maxBatchSize,
+    maxFileSizeMb: cfg.batch.maxFileSizeMb,
+    logLevel: cfg.logging.level,
+    enableRequestLog: cfg.logging.enableRequestLog,
+  };
+});
+const configTabFormSnapshot = computed(() => ({
+  maxSteps: budgetForm.value.maxSteps,
+  tokenBudget: budgetForm.value.tokenBudget,
+  staleDays: healthCheckForm.value.staleDays,
+  allowedExtensionsText: batchForm.value.allowedExtensionsText,
+  maxBatchSize: batchForm.value.maxBatchSize,
+  maxFileSizeMb: batchForm.value.maxFileSizeMb,
+  logLevel: loggingForm.value.level,
+  enableRequestLog: loggingForm.value.enableRequestLog,
+}));
+const { dirtyFields: configTabDirtyFields } = useDirtyFields(
+  configTabSavedSnapshot,
+  configTabFormSnapshot,
+  {
+    maxSteps: '最大步数',
+    tokenBudget: 'Token 预算',
+    staleDays: '过期阈值',
+    allowedExtensionsText: '允许扩展名',
+    maxBatchSize: '最大批量数',
+    maxFileSizeMb: '单文件上限',
+    logLevel: '日志级别',
+    enableRequestLog: '请求日志',
+  },
+);
 
 // 保存运行参数
 async function saveBudget() {
@@ -1927,6 +2055,13 @@ const toolsForm = ref<ToolsConfig>({
   scenes: [],
   routerMode: 'auto',
 });
+// T02918：工具配置的已保存快照（按顶层四组比对；组内细节由结构相等递归覆盖）
+const toolsFormSaved = ref<ToolsConfig | null>(null);
+const { dirtyFields: toolsFormDirtyFields } = useDirtyFields(
+  () => toolsFormSaved.value,
+  () => toolsForm.value,
+  { mcpServers: 'MCP 服务器', cliTools: 'CLI 工具', scenes: '场景路由', routerMode: '路由模式' },
+);
 const loadingTools = ref(false);
 const savingTools = ref(false);
 const testingCli = ref(false);
@@ -2007,6 +2142,8 @@ async function loadToolsConfig(): Promise<void> {
       scenes: (cfg.scenes ?? []).map(sc => ({ ...sc, keywords: [...sc.keywords], tools: [...sc.tools] })),
       routerMode: cfg.routerMode ?? 'auto',
     };
+    // T02918：载入即基线
+    toolsFormSaved.value = cloneSnapshot(toolsForm.value);
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载工具配置失败', err));
   } finally {
@@ -2061,6 +2198,8 @@ async function saveToolsConfig(): Promise<void> {
   try {
     // 按用户隔离写入本地 IndexedDB，不回传服务端（每个用户使用自己配置的工具，互不干扰）
     await saveToolsUserConfig(currentUserId.value, toolsForm.value);
+    // T02918：JSON 模式保存前已把 JSON 应用进表单，基线取保存后的整份表单
+    toolsFormSaved.value = cloneSnapshot(toolsForm.value);
     ElMessage.success('工具配置已保存到本地（仅当前账户可见），下次问答将使用新配置');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存工具配置失败', err));
@@ -2139,6 +2278,13 @@ function serializeMcpToJson(servers: McpServerEntry[]): string {
   }
   return JSON.stringify({ mcpServers }, null, 2);
 }
+
+// T02918：JSON 模式下编辑的是文本，toolsForm 尚未被改写；用户改 JSON 也必须点亮「工具配置」标记。
+// 对照物是「已保存快照序列化后的 JSON」而不是当前表单，否则表单本身有未保存改动时会把两条口径混在一起。
+const toolsJsonDirty = computed(() => {
+  if (mcpEditMode.value !== 'json' || !toolsFormSaved.value) return false;
+  return mcpJsonText.value.trim() !== serializeMcpToJson(toolsFormSaved.value.mcpServers).trim();
+});
 
 // 切换到 JSON 模式时从表单状态生成 JSON 文本
 function switchToMcpJsonMode(): void {
@@ -2268,14 +2414,33 @@ const patternValidation = computed(() => {
   }
   return result;
 });
-const qqConfigDirty = ref(false);
-let _qqConfigInitial = '';
-
-// 深度监听 qqConfig 变化，与初始快照对比判断是否脏
-watch(() => qqConfig, () => {
-  if (!_qqConfigInitial) return;
-  qqConfigDirty.value = JSON.stringify(qqConfig) !== _qqConfigInitial;
-}, { deep: true });
+// T02918：QQ 配置的未保存判定改用统一 composable（原来是一段 JSON.stringify 的 deep watch）。
+// reactive 对象不能直接 structuredClone（Proxy 不可克隆），这里显式摊平成普通对象作为快照/表单视图。
+function qqConfigSnapshot(): QqConfigData {
+  return {
+    noise_rules: { ...qqConfig.noise_rules },
+    privacy_patterns: { ...qqConfig.privacy_patterns },
+    max_batch_size: qqConfig.max_batch_size,
+    chunk_threshold: qqConfig.chunk_threshold,
+    extract_model: qqConfig.extract_model,
+    extract_base_url: qqConfig.extract_base_url,
+    extract_token_budget: qqConfig.extract_token_budget,
+  };
+}
+const qqConfigSaved = ref<QqConfigData | null>(null);
+const { dirtyFields: qqDirtyFields, isDirty: qqConfigDirty } = useDirtyFields(
+  () => qqConfigSaved.value,
+  () => qqConfigSnapshot(),
+  {
+    noise_rules: '噪声规则',
+    privacy_patterns: '脱敏规则',
+    max_batch_size: '批量上限',
+    chunk_threshold: '分块阈值',
+    extract_model: '提取模型',
+    extract_base_url: '提取 Base URL',
+    extract_token_budget: 'Token 预算',
+  },
+);
 
 async function loadQqConfig() {
   loadingQqConfig.value = true;
@@ -2296,7 +2461,7 @@ async function loadQqConfig() {
     ElMessage.error(apiErrorMessage('加载 QQ 配置失败', err));
   } finally {
     loadingQqConfig.value = false;
-    _qqConfigInitial = JSON.stringify(qqConfig);
+    qqConfigSaved.value = qqConfigSnapshot();
     // T01833：已保存快照记入后再恢复未提交草稿（恢复值与快照的差异会正确置脏）
     restoreQqDraft();
   }
@@ -2340,8 +2505,7 @@ async function saveQqConfigForm() {
       throw new Error(err.error || `HTTP ${res.status}`);
     }
     ElMessage.success('QQ 配置保存成功');
-    _qqConfigInitial = JSON.stringify(qqConfig);
-    qqConfigDirty.value = false;
+    qqConfigSaved.value = qqConfigSnapshot();
     clearQqDraft();
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存 QQ 配置失败', err));
@@ -2396,7 +2560,12 @@ const currentPromptMeta = computed<PromptFile | null>(() =>
 );
 
 // 编辑器内容是否脏（未保存）
-const promptDirty = computed(() => promptContent.value !== promptContentSaved.value);
+// T02918：与其它页签同一口径（已保存内容 vs 当前编辑内容），只是内容本身是字符串。
+const { dirtyFields: promptDirtyFields, isDirty: promptDirty } = useDirtyFields(
+  () => ({ content: promptContentSaved.value }),
+  () => ({ content: promptContent.value }),
+  { content: '提示词内容' },
+);
 
 // 加载 prompt 文件列表
 async function loadPromptList(): Promise<void> {
@@ -2552,7 +2721,49 @@ function clearTestResult(): void {
   testError.value = null;
 }
 
+// ===== T02918：逐页签未保存标记 =====
+// 只有「有编辑表单 + 显式保存动作」的页签才可能进入这张表：
+//   tts / theme 改完即时生效到本地（无未保存态），backup / migrate 是一次性动作，均不参与。
+const tabDirtyFields = computed<Partial<Record<ConfigTabName, string[]>>>(() => {
+  const toolsJsonFields = toolsJsonDirty.value ? ['MCP 服务器（JSON 文本）'] : [];
+  return {
+    schema: schemaDirtyFields.value,
+    config: configTabDirtyFields.value,
+    mcp: mcpFormDirtyFields.value,
+    ai: [...aiFormDirtyFields.value, ...webSearchDirtyFields.value, ...mediaFormDirtyFields.value],
+    sharedAi: [...sharedAiDirtyFields.value, ...sharedImageDirtyFields.value, ...sharedVideoDirtyFields.value],
+    tools: [...toolsFormDirtyFields.value, ...toolsJsonFields],
+    qq: qqDirtyFields.value,
+    prompts: promptDirtyFields.value,
+  };
+});
+const dirtyTabNames = computed<ConfigTabName[]>(() =>
+  (Object.keys(tabDirtyFields.value) as ConfigTabName[]).filter(
+    (name) => (tabDirtyFields.value[name] ?? []).length > 0,
+  ),
+);
+const dirtyTabSummary = computed(() =>
+  dirtyTabNames.value
+    .map((name) => {
+      const fields = tabDirtyFields.value[name] ?? [];
+      return `${findTabMeta(name)?.label ?? name}：${fields.join('、')}`;
+    })
+    .join('；'),
+);
+
+function hasUnsavedChanges(): boolean {
+  return dirtyTabNames.value.length > 0;
+}
+
+// 刷新/关标签前的原生提示：标记只读不写盘，用户没点保存就一定不能悄悄丢
+function onBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = '';
+}
+
 onMounted(async () => {
+  window.addEventListener('beforeunload', onBeforeUnload);
   // 生效登记表与角色无关，所有用户都要看到自己那批字段的生效方式；先拉，失败只影响徽标。
   void loadConfigEffects();
   // T02455（PRD D1x）：消费帮助文档「可点击直达」的 tab 指令（sessionStorage 一次性传递，
@@ -2613,6 +2824,14 @@ onMounted(async () => {
   void refreshIndexStatus();
 });
 
+// T02918 裁决：离开配置页「提醒不阻断」——照常离开，只在离开那一刻说清楚还有哪些页签没存。
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload);
+  if (hasUnsavedChanges()) {
+    ElMessage.warning(`配置页还有 ${dirtyTabNames.value.length} 个页签的改动尚未保存（${dirtyTabSummary.value}）`);
+  }
+});
+
 // 进入 AI 服务 tab 时，若当前 selectedPresetKey 为空/非法（如 aiPresets 晚于 loadAiConfig 加载、
 // 或用户在问答页切换预设后才打开本页），自动重新选中有效预设，避免以空 key 保存而误入 LEGACY 槽。
 // 仅在 selectedPresetKey 无效时重选，不覆盖用户已手动选中的预设，也不丢弃已填写的表单。
@@ -2643,6 +2862,13 @@ const mcpForm = ref({
   userToken: '',
   adminToken: '',
 });
+// T02918：MCP 接口配置的已保存快照（脱敏 token 原样作为基线）
+const mcpFormSaved = ref<typeof mcpForm.value | null>(null);
+const { dirtyFields: mcpFormDirtyFields, isDirty: mcpFormDirty } = useDirtyFields(
+  () => mcpFormSaved.value,
+  () => mcpForm.value,
+  { enabled: 'MCP 开关', endpointPath: '端点路径', name: '服务名', version: '版本', authenticated: '鉴权开关', userToken: '用户 Token', adminToken: '管理员 Token' },
+);
 const mcpSaving = ref(false);
 const mcpLoading = ref(false);
 
@@ -2661,6 +2887,8 @@ async function loadMcpConfig() {
       userToken: d.userTokenMasked || '',
       adminToken: d.adminTokenMasked || '',
     };
+    // T02918：载入即基线
+    mcpFormSaved.value = cloneSnapshot(mcpForm.value);
   } catch (err) {
     ElMessage.error(apiErrorMessage('加载 MCP 接口配置失败', err));
   } finally {
@@ -2691,6 +2919,8 @@ async function saveMcpConfig() {
     // 用后端返回的最新掩码回显，避免展示用户刚输入的明文 token
     mcpForm.value.userToken = cfg.userTokenMasked || '';
     mcpForm.value.adminToken = cfg.adminTokenMasked || '';
+    // T02918：保存后基线前移（用后端最新掩码，而不是用户刚输入的明文）
+    mcpFormSaved.value = cloneSnapshot(mcpForm.value);
     ElMessage.success('MCP 接口配置已保存（外部 Agent 立即按新配置连接）');
   } catch (err) {
     ElMessage.error(apiErrorMessage('保存 MCP 接口配置失败', err));
@@ -2699,14 +2929,18 @@ async function saveMcpConfig() {
   }
 }
 
-// 切入「MCP 接口」tab 时加载最新配置
+// 切入「MCP 接口」tab 时加载最新配置。
+// T02918：仅在没有未保存改动时重载——否则切走再切回会把用户刚填的 Token/端点静默冲掉。
 watch(activeTab, (tab) => {
-  if (tab === 'mcp' && isAdmin.value) void loadMcpConfig();
+  if (tab === 'mcp' && isAdmin.value && !mcpFormDirty.value) void loadMcpConfig();
 });
 
-// 切入「共享 AI」tab 时重载管理员全局「共享生图/视频」配置（管理员可能在其它设备改了 config.json）
+// 切入「共享 AI」tab 时重载管理员全局「共享生图/视频」配置（管理员可能在其它设备改了 config.json）。
+// T02918：共享生图/视频有未保存改动时不重载，理由同上。
 watch(activeTab, (tab) => {
-  if (tab === 'sharedAi' && isAdmin.value) void loadSharedMedia();
+  if (tab === 'sharedAi' && isAdmin.value && !sharedImageDirty.value && !sharedVideoDirty.value) {
+    void loadSharedMedia();
+  }
 });
 
 // ===== 数据迁移（T00332）：配置整体导出 / 导入 =====
@@ -2864,6 +3098,15 @@ async function importConfig() {
         </div>
       </div>
 
+      <!-- T02918：未保存汇总常驻页顶——不必滚到某个保存按钮才知道「刚才改了东西」 -->
+      <div v-if="dirtyTabNames.length > 0" class="unsaved-bar" role="status" aria-live="polite">
+        <span class="unsaved-icon" aria-hidden="true">!</span>
+        <div class="unsaved-body">
+          <div class="unsaved-title">{{ dirtyTabNames.length }} 个页签有未保存改动（{{ dirtyTabSummary }}）</div>
+          <div class="unsaved-desc">改动只留在本页表单里，不会自动写入；请到对应页签点保存，或刷新前确认放弃。</div>
+        </div>
+      </div>
+
       <!-- T02467（PRD §10 C1）：页顶待重启汇总——改完就走的人不会被提醒，这里常驻 -->
       <div v-if="pendingRestart.length > 0" class="pending-restart-bar" role="status" aria-live="polite">
         <span class="pending-icon" aria-hidden="true">!</span>
@@ -2882,7 +3125,7 @@ async function importConfig() {
         </div>
       </div>
       <div class="config-layout">
-        <ConfigSideNav v-model="activeTab" :groups="navGroups" @locked="onLockedTab" />
+        <ConfigSideNav v-model="activeTab" :groups="navGroups" :dirty-tabs="dirtyTabNames" @locked="onLockedTab" />
         <div class="config-panels">
         <!-- SCHEMA 编辑器 -->
         <section
@@ -5115,6 +5358,54 @@ async function importConfig() {
   min-width: 0;
 }
 
+/* T02918：未保存汇总条。与待重启条同形但用警示黄，避免和「需重启」的红色混淆 */
+.unsaved-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid rgba(217, 154, 24, 0.35);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: rgba(217, 154, 24, 0.08);
+}
+
+.unsaved-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(217, 154, 24, 0.18);
+  color: #8a5a00;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.unsaved-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.unsaved-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.unsaved-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted, #6b7280);
+}
+
 /* 待重启汇总条：改完就走的人不会被提醒，这里常驻到用户确认已重启 */
 .pending-restart-bar {
   position: relative;
@@ -5167,8 +5458,7 @@ async function importConfig() {
 
 .pending-item {
   padding: 2px 8px;
-  border: 1px dashed rgba(220, 76, 90, 0.4);
-  border-radius: 999px;
+  border: 1px dashed rgba(220, 76, 90, 0.4);  border-radius: 999px;
   background: transparent;
   color: #c0414e;
   font-size: 12px;

@@ -11,6 +11,8 @@ import type { ConfigNavGroup, ConfigTabMeta } from '../utils/configTabs';
 const props = defineProps<{
   modelValue: string;
   groups: ConfigNavGroup[];
+  /** T02918：有未保存改动的页签名。只读标记——本组件不落盘、不发请求。 */
+  dirtyTabs?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -26,6 +28,15 @@ function pick(item: ConfigTabMeta & { locked: boolean }): void {
   }
   if (item.name !== props.modelValue) emit('select', item.name);
   emit('update:modelValue', item.name);
+}
+
+function isDirtyTab(name: string): boolean {
+  return (props.dirtyTabs ?? []).includes(name);
+}
+
+function tabTip(item: ConfigTabMeta & { locked: boolean }): string {
+  const base = item.locked ? `${item.label} - 仅管理员可修改` : `${item.label} - ${item.desc}`;
+  return isDirtyTab(item.name) ? `${base} - 有未保存改动` : base;
 }
 </script>
 
@@ -43,10 +54,18 @@ function pick(item: ConfigTabMeta & { locked: boolean }): void {
             role="tab"
             :aria-selected="item.name === modelValue"
             :aria-disabled="item.locked ? true : undefined"
-            :data-tip="item.locked ? `${item.label} - 仅管理员可修改` : `${item.label} - ${item.desc}`"
+            :data-tip="tabTip(item)"
             @click="pick(item)"
           >
             <span class="nav-label">{{ item.label }}</span>
+            <!-- T02918：只读标记。看到圆点 ≠ 已保存，也不触发任何写盘。 -->
+            <span
+              v-if="isDirtyTab(item.name)"
+              class="nav-dirty"
+              role="img"
+              :aria-label="`${item.label}：有未保存改动`"
+              data-testid="nav-dirty"
+            ></span>
             <span v-if="item.locked" class="nav-lock">仅管理员</span>
           </button>
         </li>
@@ -126,6 +145,19 @@ function pick(item: ConfigTabMeta & { locked: boolean }): void {
   background: rgba(217, 154, 24, 0.12);
   border: 1px solid rgba(217, 154, 24, 0.28);
   white-space: nowrap;
+}
+/* T02918：未保存标记——占位小圆点，与「仅管理员」并排不挤掉页签名 */
+.nav-label {
+  flex: 1;
+  min-width: 0;
+}
+.nav-dirty {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d99a18;
+  box-shadow: 0 0 0 2px rgba(217, 154, 24, 0.18);
 }
 /* T02916：与 Config.vue 的 .config-layout 同档判定——901-1100 是侧栏壳，
    内容列已被主导航占掉 244px，二级导航再占一列会让表单比 ≤900 时更窄。 */
