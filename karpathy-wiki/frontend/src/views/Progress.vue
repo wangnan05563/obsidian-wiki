@@ -175,9 +175,10 @@ async function startResume(runId: string) {
   store.isCompiling = true;
   abortController = new AbortController();
   try {
+    // 无 body 的 POST 不能声明 JSON content-type：Fastify 对空 JSON body 直接回 400
+    // （FST_ERR_CTP_EMPTY_JSON_BODY），用户看到的就是「点击恢复报 HTTP 400」。
     const response = await apiFetch(`${API_BASE}/compile/resume/${runId}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       signal: abortController.signal
     });
 
