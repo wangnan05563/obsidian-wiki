@@ -5,6 +5,14 @@ import path from 'node:path';
 import type { EngineAdapter, CompileInput, BatchCompileConfig, AppConfig } from '../types.js';
 import { withCompileLock } from '../compile-queue.js';
 import { createSSESender } from '../utils/sse.js';
+import {
+  CompileIdempotency,
+  fileContentKey,
+  textContentKey,
+  batchContentKey,
+  rawPathKey,
+} from '../compile-idempotency.js';
+import { isRetryableLlmError } from '../utils/llm-error.js';
 
 // 默认批量编译配置，当 index.ts 未传 config.batch 时回退使用。
 // 为什么需要默认值：避免 config.json 缺失 batch 字段时路由崩溃
@@ -50,6 +58,12 @@ function validateBatchFiles(
   return { validFiles, rejected };
 }
 
+// T03591 重试入参校验：只认 vault 内 raw/<name>.md。
+// 正则本身排除了多级目录、反斜杠与上跳（'../x.md' 无法匹配 [^/\\]+\.md$）。
+function isSafeRawPath(p: string): boolean {
+  return /^raw\/[^/\\]+\.md$/.test(p);
+}
+
 // 注册 POST /api/compile 与 POST /api/compile/batch 路由。
 // 单文件端点接受两种 Content-Type：
 //   - multipart/form-data：file 字段上传单文件
@@ -65,11 +79,16 @@ export function registerCompileRoute(
   appConfig?: AppConfig,
 ) {
   const batch = batchConfig ?? DEFAULT_BATCH_CONFIG;
+  // T03591 幂等表：按内容指纹挡住「同一份内容正在编译」的重复/并发提交。
+  // 每个 route 注册对应一个实例（进程内、单测可隔离），语义见 compile-idempotency.ts。
+  const idempotency = new CompileIdempotency();
   app.post('/api/compile', {
     // 破坏性端点更严格限流：compile 触发 LLM + 写 vault，10/min 防滥用
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     let input: CompileInput;
+    // T03591 幂等 Key：multipart 按上传字节，JSON 按 type+正文
+    let idempotencyKey: string;
 
     const contentType = request.headers['content-type'] ?? '';
     if (contentType.startsWith('multipart/form-data')) {
@@ -79,6 +98,7 @@ export function registerCompileRoute(
         return void reply.code(400).send({ error: '缺少 file 字段' });
       }
       const buffer = await file.toBuffer();
+      idempotencyKey = fileContentKey(buffer);
       // sanitize filename：防路径穿越，剥离目录前缀并替换非法字符。
       // 白名单保留 Unicode 字母/数字（含中文），避免中文文件名被替换成下划线。
       const safeName = path.basename(file.filename).replaceAll(/[^\p{L}\p{N}._-]/gu, '_');
@@ -98,6 +118,7 @@ export function registerCompileRoute(
         content: body.content ?? '',
         rawPath: body.rawPath,
       };
+      idempotencyKey = textContentKey(input.type, input.content);
     }
 
     // SSE headers。Connection: keep-alive 防代理断开，X-Accel-Buffering: no 防 Nginx 缓冲。
@@ -111,6 +132,25 @@ export function registerCompileRoute(
     // 通过工厂创建 SSE sender：客户端 abort 时 send 自动短路，safeEnd 容错结束流
     const { send, isAborted, safeEnd } = createSSESender(reply, request, { heartbeatMs: SSE_HEARTBEAT_MS });
 
+    // 幂等占位：同内容已在编译 → 回放当前进度快照后直接收流，不新建任务
+    const begun = idempotency.begin(idempotencyKey);
+    if (begun.kind === 'running') {
+      send('deduped', {
+        step: 'deduped',
+        status: 'running',
+        message: '相同内容正在编译中，已复用该任务的进度',
+        data: { ...begun.snapshot },
+      });
+      safeEnd();
+      if (input.type === 'file') {
+        await fs.unlink(input.content).catch(() => {});
+      }
+      return;
+    }
+    const idempotencyToken = begun.token;
+    let streamStatus: 'done' | 'failed' = 'failed';
+    let lastMessage: string | undefined;
+
     try {
       // §12.3-5：串行队列包装，保证并发 compile 请求不产生 index.md/log.md 追加竞态。
       // withCompileLock 等待前一个 compile 完成后才开始消费本次迭代。
@@ -118,9 +158,12 @@ export function registerCompileRoute(
         for await (const ev of adapter.compile(input, appConfig)) {
           // 客户端已断开：提前退出迭代避免继续触发 LLM 调用与 vault 写入
           if (isAborted()) break;
+          lastMessage = ev.message;
+          idempotency.touch(idempotencyKey, { step: ev.step, message: ev.message });
           // 区分进度事件与页面生成事件：data 含 path/title 视为 page 事件
           // FR-10-1: generate_tags 步骤归为 progress 事件（无 path/title）
           if (ev.step === 'done') {
+            streamStatus = ev.status === 'error' ? 'failed' : 'done';
             send('done', ev);
           } else if (ev.data?.path && ev.data?.title) {
             send('page', ev);
@@ -139,8 +182,14 @@ export function registerCompileRoute(
         step: 'finalize',
         status: 'error',
         message: err instanceof Error ? err.message : String(err),
+        retryable: isRetryableLlmError(err),
       });
     } finally {
+      // 客户端中途断开也按 failed 收口：否则同内容会被一直挡在「编译中」直到 TTL 过期
+      idempotency.finish(idempotencyKey, idempotencyToken, {
+        status: isAborted() ? 'failed' : streamStatus,
+        message: lastMessage,
+      });
       // 清理临时文件：仅 file 模式落盘了临时文件，避免 tmp 目录残留泄漏
       if (input.type === 'file') {
         await fs.unlink(input.content).catch(() => {});
@@ -247,6 +296,9 @@ export function registerCompileRoute(
       return;
     }
 
+    // T03591 批量幂等 Key：对每个文件的内容 key 排序后再哈希，选择顺序不影响判定
+    const batchKey = batchContentKey(validFiles.map((f) => fileContentKey(f.buffer)));
+
     // SSE headers
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -257,6 +309,20 @@ export function registerCompileRoute(
 
     // 通过工厂创建 SSE sender：客户端 abort 时 send 自动短路，safeEnd 容错结束流
     const { send, isAborted, safeEnd } = createSSESender(reply, request, { heartbeatMs: SSE_HEARTBEAT_MS });
+
+    // 幂等占位：同一文件集合正在编译 → 回放当前进度快照，不再启动第二轮 LLM 调用
+    const begun = idempotency.begin(batchKey);
+    if (begun.kind === 'running') {
+      send('batch_deduped', {
+        step: 'batch_done',
+        status: 'running',
+        message: '相同文件集合正在批量编译中，已复用该任务的进度',
+        data: { ...begun.snapshot, fileCount: validFiles.length },
+      });
+      safeEnd();
+      return;
+    }
+    const idempotencyToken = begun.token;
 
     // 推送文件列表与被拒绝项，前端据此渲染初始分组
     send('batch_start', {
@@ -285,6 +351,8 @@ export function registerCompileRoute(
         for await (const ev of adapter.compile(input, appConfig)) {
           // 客户端已断开：提前退出迭代，停止当前文件的剩余步骤
           if (isAborted()) break;
+          // T03591：让后来的重复提交能看到「当前编译到哪个文件/哪一步」
+          idempotency.touch(batchKey, { step: ev.step, message: `${fileName}: ${ev.message}` });
           // 把 fileIndex/fileCount/fileName 注入到每个事件的 data，前端按 fileIndex 路由到对应分组
           const evWithData = {
             ...ev,
@@ -298,13 +366,21 @@ export function registerCompileRoute(
           if (ev.step === 'done') {
             // 单文件编译失败时，done 事件的 status 为 error，必须转发为 file_error，
             // 避免前端把失败误标为 DONE（之前 0 页面且显示成功即因此）。
+            // T03591：失败事件透传 rawPath/retryable，前端据此显示「免上传重试」入口。
             if (ev.status === 'error') {
               fileFailed = true;
               send('file_error', {
                 step: 'finalize',
                 status: 'error',
                 message: ev.message || '编译失败',
-                data: { fileIndex, fileCount, fileName },
+                data: {
+                  fileIndex,
+                  fileCount,
+                  fileName,
+                  rawPath: ev.data?.rawPath,
+                  retryable: ev.retryable,
+                },
+                retryable: ev.retryable,
               });
             } else {
               send('file_done', evWithData);
@@ -326,7 +402,8 @@ export function registerCompileRoute(
           step: 'finalize',
           status: 'error',
           message: `文件 ${fileName} 编译失败: ${errMsg}`,
-          data: { fileIndex, fileCount, fileName },
+          data: { fileIndex, fileCount, fileName, retryable: isRetryableLlmError(err) },
+          retryable: isRetryableLlmError(err),
         });
       }
       return !fileFailed;
@@ -388,10 +465,128 @@ export function registerCompileRoute(
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
+      // T03591：中断（客户端断开）同样收口为 failed，允许稍后重试同一文件集合；
+      // 只有整批跑完且无失败文件才记为 done。
+      idempotency.finish(batchKey, idempotencyToken, {
+        status: !isAborted() && !batchHasError ? 'done' : 'failed',
+        message: batchHasError ? '部分文件失败' : undefined,
+      });
       // 清理临时文件：避免 tmp 目录残留
       for (const tmp of tmpPaths) {
         await fs.unlink(tmp).catch(() => {});
       }
+      safeEnd();
+    }
+  });
+
+  // T03591 免上传重试：POST /api/compile/retry
+  // 入参 JSON：{ rawPath, fileName?, fileIndex?, fileCount? }
+  //   - rawPath：上游失败事件 data.rawPath 回带的存档路径（vault 内 raw/<name>.md）
+  //   - fileIndex/fileCount/fileName：批量分组上下文；提供时按 file_done/file_error 语义回推，
+  //     复用前端已有的批量分组事件处理，不额外发明事件类型
+  // 出参：SSE，事件类型与 /api/compile 一致（progress/page/done）；重复提交回 deduped
+  app.post('/api/compile/retry', {
+    // 与单文件 compile 同额度：重试同样触发一次 LLM 编译
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = (request.body ?? {}) as {
+      rawPath?: unknown;
+      fileName?: unknown;
+      fileIndex?: unknown;
+      fileCount?: unknown;
+    };
+    const rawPath = body.rawPath;
+    if (typeof rawPath !== 'string' || !isSafeRawPath(rawPath)) {
+      return void reply.code(400).send({ error: 'rawPath 须为 raw/ 目录下的 .md 相对路径' });
+    }
+    if (!adapter.compileFromRaw) {
+      return void reply.code(501).send({ error: '当前引擎不支持从存档重试' });
+    }
+    const fileIndex = typeof body.fileIndex === 'number' ? body.fileIndex : undefined;
+    const fileCount = typeof body.fileCount === 'number' ? body.fileCount : undefined;
+    const fileName = typeof body.fileName === 'string' ? body.fileName : undefined;
+
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const { send, isAborted, safeEnd } = createSSESender(reply, request, { heartbeatMs: SSE_HEARTBEAT_MS });
+
+    const retryKey = rawPathKey(rawPath);
+    const begun = idempotency.begin(retryKey);
+    if (begun.kind === 'running') {
+      send('deduped', {
+        step: 'deduped',
+        status: 'running',
+        message: '这份资料正在重新编译中，已复用该任务的进度',
+        data: { ...begun.snapshot, fileIndex, fileCount, fileName },
+      });
+      safeEnd();
+      return;
+    }
+    const idempotencyToken = begun.token;
+    let streamStatus: 'done' | 'failed' = 'failed';
+    let lastMessage: string | undefined;
+
+    try {
+      await withCompileLock(async () => {
+        for await (const ev of adapter.compileFromRaw!(rawPath)) {
+          if (isAborted()) break;
+          lastMessage = ev.message;
+          idempotency.touch(retryKey, { step: ev.step, message: ev.message });
+          const evWithData = fileIndex === undefined
+            ? ev
+            : { ...ev, data: { ...ev.data, fileIndex, fileCount, fileName } };
+          if (ev.step === 'done') {
+            streamStatus = ev.status === 'error' ? 'failed' : 'done';
+            if (fileIndex === undefined) {
+              send('done', evWithData);
+            } else if (ev.status === 'error') {
+              // 批量分组重试：沿用 file_error，前端既有处理会刷新分组错误态与重试入口
+              send('file_error', {
+                step: 'finalize',
+                status: 'error',
+                message: ev.message || '编译失败',
+                data: { fileIndex, fileCount, fileName, rawPath, retryable: ev.retryable },
+                retryable: ev.retryable,
+              });
+            } else {
+              send('file_done', evWithData);
+            }
+          } else if (ev.data?.path && ev.data?.title) {
+            send('page', evWithData);
+          } else {
+            send('progress', evWithData);
+          }
+        }
+      });
+    } catch (err: unknown) {
+      request.log.error({ err, rawPath }, 'compile retry SSE stream error');
+      const message = err instanceof Error ? err.message : String(err);
+      if (fileIndex === undefined) {
+        send('error', {
+          step: 'finalize',
+          status: 'error',
+          message,
+          retryable: isRetryableLlmError(err),
+        });
+      } else {
+        send('file_error', {
+          step: 'finalize',
+          status: 'error',
+          message,
+          data: { fileIndex, fileCount, fileName, rawPath, retryable: isRetryableLlmError(err) },
+          retryable: isRetryableLlmError(err),
+        });
+      }
+    } finally {
+      idempotency.finish(retryKey, idempotencyToken, {
+        status: isAborted() ? 'failed' : streamStatus,
+        message: lastMessage,
+      });
       safeEnd();
     }
   });

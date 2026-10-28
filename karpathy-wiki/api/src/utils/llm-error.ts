@@ -107,3 +107,19 @@ export function friendlyLlmError(rawErr: unknown): {
     category: 'unknown',
   };
 }
+
+// T03591：错误是否值得重试（前端据此决定「重试」按钮是否出现）。
+// 值得重试：服务端故障 / 超时 / 限流 —— 同样的输入换个时间往往就成。
+// 不值得重试：认证失败 / 内容过大 —— 不换配置或不分批，重试多少次都一样。
+// unknown 保守判为不可重试；但显式命中 429/连接重置等特征时仍视为可重试，
+// 因为 provider 不一定按 `HTTP/error <code>` 的格式报错。
+const RETRYABLE_CATEGORIES = new Set(['service_down', 'timeout', 'rate_limit']);
+const RETRYABLE_MESSAGE = /429|rate.?limit|too many requests|temporarily unavailable|ECONNRESET|ECONNREFUSED|socket hang up|ETIMEDOUT|EAI_AGAIN|fetch failed/i;
+
+export function isRetryableLlmError(rawErr: unknown): boolean {
+  const { category } = friendlyLlmError(rawErr);
+  if (RETRYABLE_CATEGORIES.has(category)) return true;
+  if (category === 'auth' || category === 'request_too_large') return false;
+  const errMsg = rawErr instanceof Error ? rawErr.message : String(rawErr);
+  return RETRYABLE_MESSAGE.test(errMsg);
+}

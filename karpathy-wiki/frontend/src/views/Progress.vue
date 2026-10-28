@@ -93,6 +93,7 @@ const logDialogVisible = ref(false);
 const viewingRunId = ref<string>('');
 
 const robotMood = computed<string>(() => {
+  if (store.dedupeMessage) return 'deduped';
   if (store.errorMessage) return 'sad';
   if (store.isDone) return 'happy';
   return 'thinking';
@@ -104,6 +105,7 @@ const showRunsList = computed(() => !store.isCompiling && !store.isDone && !stor
 // 用户在页头读不到自己所在的功能名；状态降为标题右侧徽标，四态信息量不减。
 const headStatus = computed<{ text: string; tone: string }>(() => {
   if (store.isCompiling) return { text: '机器人正在编译…', tone: 'running' };
+  if (store.dedupeMessage) return { text: '已复用进行中的编译', tone: 'idle' };
   if (store.isDone) return { text: '编译完成', tone: 'success' };
   if (store.errorMessage) return { text: '编译失败', tone: 'danger' };
   return { text: '准备就绪', tone: 'idle' };
@@ -145,6 +147,19 @@ async function startCompile(payload: IngestPayload) {
   } finally {
     abortController = null;
   }
+}
+
+// T03591 单文件重试：复用上次投递内容重新编译，时间线保留上一轮记录便于追溯
+async function retrySingle() {
+  const payload = store.pendingPayload;
+  if (!payload || !store.beginRetrySingle()) return;
+  await startCompile(payload);
+}
+
+// T03591 批量分组重试：从 raw/ 存档重新编译，无需重新上传
+async function retryGroup(fileIndex: number) {
+  await store.retryFileGroup(fileIndex);
+  if (store.dedupeMessage) ElMessage.info(store.dedupeMessage);
 }
 
 async function startResume(runId: string) {
@@ -330,13 +345,14 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
             <span class="head-status" :class="`is-${headStatus.tone}`">{{ headStatus.text }}</span>
           </h2>
           <p class="head-tip">
-            <template v-if="robotMood === 'thinking'">小提示：编译过程是流式的，可实时查看每一步</template>
+            <template v-if="robotMood === 'deduped'">{{ store.dedupeMessage }}</template>
+            <template v-else-if="robotMood === 'thinking'">小提示：编译过程是流式的，可实时查看每一步</template>
             <template v-else-if="robotMood === 'happy'">
               共生成 {{ store.generatedPages.length }} 个页面
             </template>
             <template v-else>{{ store.errorMessage }}</template>
           </p>
-          <div v-if="store.errorMessage" class="head-error-actions">
+          <div v-if="store.errorMessage || store.lastErrorRetryable" class="head-error-actions">
             <el-button
               v-if="store.currentRunId"
               size="small"
@@ -345,6 +361,16 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
               data-tip="查看本次编译的运行日志"
               @click="viewErrorLog"
             >查看日志</el-button>
+            <!-- T03591：可重试的失败（限流/超时/服务不可用）提供一键重试，无需回投递页重传 -->
+            <el-button
+              v-if="!store.isBatchMode && store.lastErrorRetryable && store.pendingPayload"
+              size="small"
+              type="primary"
+              :loading="store.isCompiling"
+              :disabled="store.isCompiling"
+              data-tip="使用上次投递的内容重新编译（无需重新上传）"
+              @click="retrySingle"
+            >重试</el-button>
           </div>
         </div>
         <!-- T00356：页面右上角常驻显示当前使用模型（编译走服务端共享 AI，即 GET /api/ai/config 返回的 model）。
@@ -388,6 +414,19 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
                 <el-icon v-else-if="group.status === 'error'"><Close /></el-icon>
                 <span>{{ stepStatusLabel(group.status) }}</span>
               </span>
+              <!-- T03591：失败可重试时从 raw/ 存档重编，无需重新上传；重试期间禁用所有分组按钮 -->
+              <el-button
+                v-if="group.status === 'error' && group.retryable && group.rawPath"
+                class="batch-group-retry"
+                size="small"
+                type="primary"
+                text
+                :loading="store.retryingIndexes.includes(group.fileIndex)"
+                :disabled="store.retryingIndexes.length > 0"
+                data-tip="从已存档的原始资料重新编译（无需重新上传）"
+                @click="retryGroup(group.fileIndex)"
+              >重试</el-button>
+              <span v-if="group.attempts" class="batch-group-attempts" data-tip="该文件已重试的次数">已重试 {{ group.attempts }} 次</span>
             </div>
             <!-- 分组内时间线（折叠态：仅显示最近一条；展开态：完整列表） -->
             <div v-if="group.timeline.length > 0" class="batch-group-timeline">
@@ -1226,6 +1265,19 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
 .batch-group-status.error {
   background: var(--accent-pink-a15, rgba(255, 0, 110, 0.15));
   color: var(--neon-magenta);
+}
+
+/* T03591：分组重试入口与尝试次数标记 */
+.batch-group-retry {
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.batch-group-attempts {
+  font-size: 11px;
+  color: var(--text-dim, rgba(255, 255, 255, 0.55));
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .batch-group-timeline {

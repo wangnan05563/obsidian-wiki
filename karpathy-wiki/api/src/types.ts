@@ -40,6 +40,10 @@ export interface EngineAdapter {
   compile(input: CompileInput, appConfig?: AppConfig): AsyncIterable<ProgressEvent>;
   // §11.2 断点续传：从中断点恢复编译
   resumeCompile(runId: string): AsyncIterable<ProgressEvent>;
+  // T03591 重试：用 raw/ 里已存档的正文重新编译，避免用户重新上传。
+  // rawPath 必须是 vault 内的相对路径（路由层已校验 raw/ 前缀与无穿越）；
+  // 可选实现：未实现时重试接口返回 501，前端隐藏重试入口。
+  compileFromRaw?(rawPath: string): AsyncIterable<ProgressEvent>;
   query(input: QueryInput): AsyncIterable<AnswerChunk>;
   healthCheck(): Promise<HealthReport>;
   // §4.6 一键修复：走 LLM 引擎，SSE 流式返回修复进度
@@ -99,7 +103,11 @@ export interface ProgressEvent {
   // 为什么放 data：避免新增顶层字段破坏现有 SSE 消费端，前端按需读取
   // path/title 保持可选：archive 步骤仅含 path，done 步骤含 path+cached，
   // page 事件才同时含 path+title（后端用 if (ev.data?.path && ev.data?.title) 守卫区分）
-  data?: { path?: string; title?: string; cached?: boolean; fileIndex?: number; fileCount?: number; fileName?: string };
+  // rawPath（T03591）：失败事件回带 raw/ 存档路径，前端据此发起「免上传重试」
+  data?: { path?: string; title?: string; cached?: boolean; fileIndex?: number; fileCount?: number; fileName?: string; rawPath?: string };
+  // 失败事件是否值得重试（限流/超时/服务不可用 = true；鉴权失败/内容过大 = false）。
+  // 为什么只给失败事件：成功事件无重试语义，未标记即视为不可重试。
+  retryable?: boolean;
 }
 
 export interface QueryInput {

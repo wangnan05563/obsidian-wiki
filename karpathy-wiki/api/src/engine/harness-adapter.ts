@@ -158,6 +158,18 @@ export class HarnessAdapter implements EngineAdapter {
     yield* resumeCompileWorkflow(this.harnessConfig, this.vault, runId);
   }
 
+  // T03591 重试：用 raw/ 里已存档的正文重新编译，用户无需重新上传原文件。
+  // 按 text 输入走 compileWorkflow：存档步骤会以同名覆盖 raw/（同一份内容，写回等价）。
+  async *compileFromRaw(rawPath: string): AsyncIterable<ProgressEvent> {
+    const content = await this.vault.readFile(rawPath);
+    yield* compileWorkflow(
+      this.harnessConfig,
+      this.vault,
+      { type: 'text', content, rawPath },
+      this.appConfig,
+    );
+  }
+
   // §5.2 query 改造：传入 webSearchConfig 给 workflow，支持联网搜索工具注入
   // 需求 4：传入 toolsConfig 给 workflow，支持 MCP/CLI 扩展工具动态注入
   async *query(input: QueryInput): AsyncIterable<AnswerChunk> {

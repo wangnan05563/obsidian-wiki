@@ -1,6 +1,7 @@
 ﻿import { API_BASE, apiFetch } from '../utils/apiBase';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
+import { consumeSSE } from '../utils/sse';
 import type {
   CompileStep,
   DoneData,
@@ -116,6 +117,15 @@ export const useCompileStore = defineStore('compile', () => {
   // 为什么独立字段：errorMessage 用于后端推送的错误事件，cancelCompile 是用户主动行为，
   //   两者视觉提示不同（取消是中性粉色，错误是红色），且文案语义不同
   const isCancelled = ref(false);
+  // T03591 幂等命中：服务端未新建任务、只回放了进行中任务的进度。
+  // 与错误区分开——重复提交不是失败，不应显示红色失败态。
+  const dedupeMessage = ref('');
+  // T03591 重试：正在重试的分组下标（用于禁用按钮，避免同组并发重试）
+  const retryingIndexes = ref<number[]>([]);
+  // 单文件模式最近一次失败是否可重试（后端 done/error 事件携带 retryable）
+  const lastErrorRetryable = ref(false);
+  // T03591：重试流的取消句柄。与主编译流分开持有——用户切走页面时两者都要中止
+  let retryAbortController: AbortController | null = null;
 
   // ===== 草稿批量发布状态（Browse.vue 业务）=====
   // 为什么放在 store 而非 Browse.vue 局部 ref：App.vue 用 v-if 切换视图，
@@ -229,6 +239,9 @@ export const useCompileStore = defineStore('compile', () => {
     batchGroups.value = [];
     batchRejected.value = [];
     isCancelled.value = false;
+    dedupeMessage.value = '';
+    retryingIndexes.value = [];
+    lastErrorRetryable.value = false;
     // §优化方案2/3：同步清空新增字段
     stageTimings.value = {};
     currentStepStartedAt.value = 0;
@@ -477,6 +490,7 @@ export const useCompileStore = defineStore('compile', () => {
     if (isCompiling.value) {
       isCompiling.value = false;
     }
+    retryAbortController?.abort();
   }
 
   // 用户主动取消编译：标记 isCancelled 让进度条组件切换到"取消态"视觉
@@ -509,6 +523,107 @@ export const useCompileStore = defineStore('compile', () => {
     isCompiling.value = true;
     // §优化方案1：记录编译开始时间，便于总耗时展示
     compileStartedAt.value = Date.now();
+  }
+
+  // T03591 单文件重试：复用已保存的 pendingPayload 重新提交（不 reset，保留上一轮时间线可追溯）。
+  // 为什么在 store 而不在 Progress.vue：错误态/时间线/状态复位都要动，放一起避免组件里散落赋值。
+  function beginRetrySingle(): boolean {
+    if (!pendingPayload.value || isCompiling.value) return false;
+    errorMessage.value = '';
+    isDone.value = false;
+    dedupeMessage.value = '';
+    lastErrorRetryable.value = false;
+    isCompiling.value = true;
+    if (compileStartedAt.value === 0) compileStartedAt.value = Date.now();
+    timeline.value.push({
+      step: 'archive',
+      status: 'running',
+      message: '重试：使用上次的投递内容重新编译',
+      timestamp: Date.now(),
+    });
+    return true;
+  }
+
+  // T03591 批量重试后重算整体结果：只在所有分组都落定（无 pending/running）时收口，
+  // 避免「一个文件重试成功就把整批标成完成」。
+  function refreshBatchOutcome(): void {
+    const groups = batchGroups.value;
+    if (groups.length === 0) return;
+    if (groups.some((g) => g.status === 'pending' || g.status === 'running')) {
+      isCompiling.value = true;
+      return;
+    }
+    const failed = groups.filter((g) => g.status === 'error').length;
+    isCompiling.value = false;
+    isDone.value = failed === 0;
+    errorMessage.value = failed > 0
+      ? `批量编译完成，仍有 ${failed} 个文件失败，可点击对应文件的重试`
+      : '';
+    if (failed === 0) {
+      doneMessage.value = `批量编译完成，共处理 ${groups.length} 个文件`;
+    }
+  }
+
+  // T03591 批量分组重试：用失败事件回带的 rawPath 从存档重新编译，不要求用户重新上传。
+  // 事件由服务端注入 fileIndex，复用既有 file_done/file_error 处理，分组状态自然流转。
+  async function retryFileGroup(fileIndex: number): Promise<void> {
+    const group = batchGroups.value[fileIndex];
+    if (!group || !group.rawPath || !group.retryable) return;
+    if (retryingIndexes.value.includes(fileIndex)) return;
+    retryingIndexes.value = [...retryingIndexes.value, fileIndex];
+    group.attempts = (group.attempts ?? 0) + 1;
+    group.timeline.push({
+      step: 'archive',
+      status: 'running',
+      message: `第 ${group.attempts} 次重试：从存档 ${group.rawPath} 重新编译`,
+      timestamp: Date.now(),
+    });
+    group.status = 'running';
+    group.errorMessage = '';
+    isCompiling.value = true;
+    isDone.value = false;
+    errorMessage.value = '';
+    dedupeMessage.value = '';
+    retryAbortController = new AbortController();
+    // 幂等命中（服务端已有同一 rawPath 的重试在跑）：本组收不到后续进度，
+    // 不能停在 running，也不能误报「连接断开」。
+    let deduped = false;
+    try {
+      const res = await apiFetch(`${API_BASE}/compile/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rawPath: group.rawPath,
+          fileName: group.fileName,
+          fileIndex,
+          fileCount: batchGroups.value.length,
+        }),
+        signal: retryAbortController.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      await consumeSSE(res, (eventType, parsed) => {
+        if (eventType === 'deduped' || eventType === 'batch_deduped') deduped = true;
+        handleEvent(eventType, parsed);
+      }, retryAbortController?.signal);
+      // 流结束仍停在 running：没有终止事件，按「可重试的失败」收口（与 T03438 同口径）
+      if (group.status === 'running') {
+        group.status = 'error';
+        group.retryable = true;
+        group.errorMessage = deduped
+          ? '相同资料已有重试正在进行，请稍后查看结果'
+          : '重试连接已断开，可稍后再次重试';
+      }
+    } catch (err) {
+      group.status = 'error';
+      group.retryable = true;
+      group.errorMessage = (err as Error).name === 'AbortError'
+        ? '重试已中断，可再次重试'
+        : `重试失败：${(err as Error).message}`;
+    } finally {
+      retryAbortController = null;
+      retryingIndexes.value = retryingIndexes.value.filter((i) => i !== fileIndex);
+      refreshBatchOutcome();
+    }
   }
 
   // 批量编译预存：FormData 包含多个 files 字段
@@ -555,19 +670,34 @@ export const useCompileStore = defineStore('compile', () => {
         page: extractPage(p.data),
         timestamp: Date.now()
       });
+    } else if (eventType === 'deduped') {
+      // T03591 幂等命中：同内容已在编译，服务端只回放快照后收流。
+      // 不能算失败；记一条时间线供追溯，头部显示中性提示。
+      const d = data as { message?: string; data?: { step?: string; message?: string } };
+      dedupeMessage.value = d.message || '相同内容正在编译中，已复用该任务的进度';
+      timeline.value.push({
+        step: (d.data?.step as CompileStep) || 'archive',
+        status: 'running',
+        message: d.data?.message || dedupeMessage.value,
+        timestamp: Date.now(),
+      });
+      isCompiling.value = false;
+      errorMessage.value = '';
     } else if (eventType === 'done') {
-      // 后端 done 事件发送的是完整 ProgressEvent：{ step, status, message, data: { path, cached? } }
+      // 后端 done 事件发送的是完整 ProgressEvent：{ step, status, message, data: { path, cached?, rawPath? }, retryable? }
       // 从中提取 cached 标识和 message 供前端展示
-      const d = data as { status?: string; message?: string; data?: { cached?: boolean; path?: string } };
+      const d = data as { status?: string; message?: string; retryable?: boolean; data?: { cached?: boolean; path?: string } };
       // 失败态的 done 事件（status='error'）必须走错误分支，不能显示"编译完成"
       if (d.status === 'error') {
         errorMessage.value = d.message || '编译失败';
+        lastErrorRetryable.value = d.retryable === true;
         isCompiling.value = false;
         isDone.value = false;
         finishAllStages();
         clearPersistedState();
         return;
       }
+      lastErrorRetryable.value = false;
       result.value = {
         pages: [],
         indexUpdated: false,
@@ -583,8 +713,9 @@ export const useCompileStore = defineStore('compile', () => {
       clearPersistedState();
     } else if (eventType === 'error') {
       // 后端可能在流中推送 error 事件
-      const e = data as { message?: string };
+      const e = data as { message?: string; retryable?: boolean };
       errorMessage.value = e?.message || '编译过程出错';
+      lastErrorRetryable.value = e?.retryable === true;
       isCompiling.value = false;
       // §优化方案2：错误时同样累计最后一阶段耗时
       finishAllStages();
@@ -595,11 +726,20 @@ export const useCompileStore = defineStore('compile', () => {
 
   // 批量模式事件载荷类型
   type BatchEventData = ProgressData & {
+    retryable?: boolean;
     data?: {
       fileIndex?: number;
       fileCount?: number;
       fileName?: string;
       rejected?: Array<{ name: string; reason: string }>;
+      // T03591 重试：失败事件回带的存档路径与可重试语义
+      rawPath?: string;
+      retryable?: boolean;
+      // T03591 幂等：服务端回放的进度快照字段
+      state?: 'running' | 'done' | 'failed';
+      startedAt?: number;
+      step?: string;
+      message?: string;
     };
   };
 
@@ -676,6 +816,9 @@ export const useCompileStore = defineStore('compile', () => {
       group.errorMessage = (data as BatchEventData).message || '编译失败';
     } else {
       group.status = 'done';
+      // T03591：重试成功后清掉上一轮的失败信息与重试入口
+      group.errorMessage = '';
+      group.retryable = false;
     }
   }
 
@@ -691,6 +834,27 @@ export const useCompileStore = defineStore('compile', () => {
 
     if (eventType === 'batch_done') {
       handleBatchDoneEvent(d);
+      return;
+    }
+
+    // T03591 幂等命中：不新建任务，只回放进行中任务的进度快照。
+    // 不是失败——头部显示中性提示；分组重试时把快照记进该组时间线便于追溯。
+    if (eventType === 'deduped' || eventType === 'batch_deduped') {
+      const msg = d.message || '相同内容正在编译中，已复用该任务的进度';
+      dedupeMessage.value = msg;
+      const idx = d.data?.fileIndex;
+      if (idx !== undefined) {
+        const group = batchGroups.value[idx];
+        if (group) {
+          group.timeline.push({
+            step: (d.data?.step as CompileStep) || 'archive',
+            status: 'running',
+            message: d.data?.message || msg,
+            timestamp: Date.now(),
+          });
+        }
+      }
+      isCompiling.value = false;
       return;
     }
 
@@ -733,6 +897,9 @@ export const useCompileStore = defineStore('compile', () => {
     if (eventType === 'file_error') {
       group.status = 'error';
       group.errorMessage = d.message;
+      // T03591：rawPath/retryable 决定「重试」入口是否出现；缺省的旧后端保持隐藏
+      group.rawPath = d.data?.rawPath ?? group.rawPath;
+      group.retryable = (d.retryable ?? d.data?.retryable) === true;
       return;
     }
 
@@ -802,6 +969,12 @@ export const useCompileStore = defineStore('compile', () => {
     batchGroups,
     batchRejected,
     isCancelled,
+    // T03591 幂等/重试
+    dedupeMessage,
+    retryingIndexes,
+    lastErrorRetryable,
+    beginRetrySingle,
+    retryFileGroup,
     // 草稿批量发布状态（Browse.vue 业务，跨组件生命周期保留）
     draftBatchItems,
     draftIsPublishing,
