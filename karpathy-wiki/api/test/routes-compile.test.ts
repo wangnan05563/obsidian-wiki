@@ -223,10 +223,30 @@ describe('routes/compile.ts 编译路由', () => {
       const adapter = createAdapter();
       const app = await buildApp(adapter);
       const res = await app.inject({ method: 'POST', url: '/api/compile/resume/..%2Fevil' });
-      // 校验失败先发 400 JSON（源码校验后未 return，后续 SSE 写入不会再改变已发送的响应）
+      // 校验失败即 400 JSON 并 return：不再继续写 SSE 头
       expect(res.statusCode).toBe(400);
       expect(res.payload).toContain('无效的 runId');
       expect(adapter.resumeCompile).not.toHaveBeenCalled();
+    });
+
+    it('前端请求形态：无 body 时不得声明 JSON content-type（Fastify 空 JSON body 直接 400）', async () => {
+      const adapter = createAdapter();
+      const app = await buildApp(adapter);
+      const runId = '11111111-2222-3333-4444-555555555555';
+      // 旧前端实现：POST 带 Content-Type: application/json 但不发 body，
+      // Fastify 在进路由前就以 FST_ERR_CTP_EMPTY_JSON_BODY 拒绝——用户侧表现为「点击恢复报 HTTP 400」
+      const withJsonHeader = await app.inject({
+        method: 'POST',
+        url: `/api/compile/resume/${runId}`,
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(withJsonHeader.statusCode).toBe(400);
+      expect(withJsonHeader.json().code).toBe('FST_ERR_CTP_EMPTY_JSON_BODY');
+
+      // 修复后的形态：无 body 就不带 content-type
+      const plain = await app.inject({ method: 'POST', url: `/api/compile/resume/${runId}` });
+      expect(plain.statusCode).toBe(200);
+      expect(adapter.resumeCompile).toHaveBeenCalledWith(runId);
     });
 
     it('resume 过程抛错应发 error 事件', async () => {

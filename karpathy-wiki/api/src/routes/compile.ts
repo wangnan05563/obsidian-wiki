@@ -206,7 +206,8 @@ export function registerCompileRoute(
       const { runId } = request.params;
       // 防路径穿越：只允许 UUID 格式的 runId
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
-        reply.code(400).send({ error: '无效的 runId' });
+        // 必须 return：否则后续 raw.writeHead 会在已发送 400 之后二次写头
+        return void reply.code(400).send({ error: '无效的 runId' });
       }
 
       reply.raw.writeHead(200, {
