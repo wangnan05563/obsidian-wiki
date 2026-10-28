@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import { Check, Close, CircleClose } from '@element-plus/icons-vue';
 import { useCompileStore } from '../stores/compile';
 // T02476（PRD X8）：空闲态改用统一空态模板，主按钮直达投递页
@@ -63,11 +63,42 @@ const currentStatus = computed<ProgressStatus>(() => {
   return 'idle';
 });
 
+// T03438：batch_start 之前的窗口（浏览器上传 + 服务端解析校验）此前也显示「正在编译 0/0 0%」。
+// 40 个大文件经隧道上传时这段时间可能很长，用户无法区分「还在上传」和「已经卡死」。
+// 文件数由 store 在提交时从原始 FormData 数好，组件只读标量（FormData 走响应式代理后不可读）。
+const pendingFileCount = computed(() => store.pendingBatchFileCount);
+
+// 「已提交但 batch_start 还未到」= 运行态且分组尚未初始化
+const awaitingStart = computed(() => currentStatus.value === 'running' && totalCount.value === 0);
+
+// 等待秒数：给「没卡死，只是还没开始」一个可核对的时间证据
+const waitedSeconds = ref(0);
+let waitedTimer: ReturnType<typeof setInterval> | null = null;
+function stopWaitedTimer(): void {
+  if (!waitedTimer) return;
+  clearInterval(waitedTimer);
+  waitedTimer = null;
+}
+watch(awaitingStart, (active) => {
+  stopWaitedTimer();
+  waitedSeconds.value = 0;
+  if (!active) return;
+  waitedTimer = setInterval(() => {
+    waitedSeconds.value += 1;
+  }, 1000);
+}, { immediate: true });
+onBeforeUnmount(stopWaitedTimer);
+
 // 状态文案：用于进度条上方的标题与完成后 banner
 // 文案原则：running 态强调"正在处理 + 进度"，done 态强调"成果 + 数量"
 const statusTitle = computed(() => {
   switch (currentStatus.value) {
     case 'running':
+      if (awaitingStart.value) {
+        return pendingFileCount.value > 0
+          ? `正在上传并解析 ${pendingFileCount.value} 个文件…`
+          : '正在上传并解析文件…';
+      }
       return `正在编译 ${completedCount.value}/${totalCount.value} 个页面`;
     case 'done':
       return `已编译 ${completedCount.value}/${totalCount.value} 个页面`;
@@ -85,6 +116,9 @@ const statusTitle = computed(() => {
 const statusSubtitle = computed(() => {
   switch (currentStatus.value) {
     case 'running':
+      if (awaitingStart.value) {
+        return '文件已提交，等待服务端接收与校验完成；大文件或网络较慢时这一步可能持续数十秒';
+      }
       return `成功 ${successCount.value} · 失败 ${errorCount.value} · 进行中 ${runningCount.value} · 待处理 ${pendingCount.value}`;
     case 'done':
       return errorCount.value > 0
@@ -146,7 +180,8 @@ function handleCancel() {
       <div class="progress-title-row">
         <span class="progress-status-dot" :class="currentStatus"></span>
         <span class="progress-title">{{ statusTitle }}</span>
-        <span class="progress-percentage">{{ progressPercentage }}%</span>
+        <!-- T03438：上传/校验阶段没有可计量的编译进度，显示 0% 会被误读成「卡死在 0%」 -->
+        <span v-if="!awaitingStart" class="progress-percentage">{{ progressPercentage }}%</span>
       </div>
       <el-button
         v-if="canCancel"
@@ -174,6 +209,12 @@ function handleCancel() {
       class="progress-bar"
     />
 
+    <!-- T03438：已提交、服务端还在接收与校验（batch_start 未到）——给等待时长作为「没卡死」的证据 -->
+    <div v-else-if="awaitingStart" class="awaiting-start">
+      <span class="awaiting-spinner"></span>
+      <span class="awaiting-elapsed">已等待 {{ waitedSeconds }} 秒</span>
+    </div>
+
     <!-- 空状态：batchGroups 还未初始化（T02476 / PRD X8：三点动画死胡同改为现状 + 原因 + 主按钮） -->
     <StateBlock
       v-else
@@ -187,7 +228,7 @@ function handleCancel() {
     </StateBlock>
 
     <!-- 副文案：详细统计 -->
-    <div v-if="totalCount > 0" class="progress-subtitle">
+    <div v-if="totalCount > 0 || awaitingStart" class="progress-subtitle">
       {{ statusSubtitle }}
     </div>
 
@@ -357,6 +398,36 @@ function handleCancel() {
   color: var(--text-soft);
   letter-spacing: 0.5px;
   word-break: break-all;
+}
+
+/* 上传/校验阶段：无进度可画，用旋转环 + 秒表替代进度条 */
+.awaiting-start {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  margin-bottom: 10px;
+}
+
+.awaiting-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-pink-a35);
+  border-top-color: var(--neon-pink);
+  animation: awaiting-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+.awaiting-elapsed {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--neon-pink);
+  letter-spacing: 0.5px;
+}
+
+@keyframes awaiting-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* banner：语义色弱化背景 + 左侧 3px 色条 + 圆角 */

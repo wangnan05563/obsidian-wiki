@@ -45,14 +45,47 @@ export function closeAllSSEStreams(reason = 'server-shutdown'): number {
   return closers.length;
 }
 
+export interface SSESenderOptions {
+  // 心跳间隔（ms）。0/缺省表示不发心跳（保持既有行为）。
+  // T03438：编译链路单次 LLM 调用可能数分钟无事件，中间代理会按空闲超时切断连接，
+  // 客户端拿到「干净结束」却没有任何终止事件，于是进度页永久停在当前计数。
+  heartbeatMs?: number;
+}
+
 // SSE 安全写入工厂：返回 send 函数与 aborted 检查器
 // 为什么需要：客户端 abort 后 reply.raw 被销毁，继续 write/end 会抛 ERR_STREAM_DESTROYED，
 // 被 Fastify 作为未捕获异常处理为 HTTP 500，污染日志并误导排障。
 // 为什么监听 reply.raw 而非 request.raw：request.raw（请求可读流）在有 body 的请求
 // （如 multipart upload）中，body 读取完毕即触发 close，并不代表客户端断开；
 // reply.raw（响应可写流）的 close 才是客户端断开连接的真实信号。
-export function createSSESender(reply: FastifyReply, request: FastifyRequest) {
+export function createSSESender(
+  reply: FastifyReply,
+  request: FastifyRequest,
+  options: SSESenderOptions = {},
+) {
   let aborted = false;
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+  const stopHeartbeat = (): void => {
+    if (!heartbeatTimer) return;
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  };
+  // 注释行（`: ping`）不是 SSE 事件：没有 event:/data: 前缀，前端解析器会当成空事件跳过，
+  // 只用于维持连接活跃并给客户端提供「服务端仍在运行」的存活信号。
+  const sendComment = (text: string): void => {
+    if (aborted || reply.raw.destroyed || reply.raw.writableEnded) return;
+    try {
+      reply.raw.write(`: ${text}\n\n`);
+    } catch {
+      aborted = true;
+    }
+  };
+  const heartbeatMs = options.heartbeatMs ?? 0;
+  if (heartbeatMs > 0) {
+    heartbeatTimer = setInterval(() => sendComment('ping'), heartbeatMs);
+    // 不阻止进程退出：心跳只是连接级保活，不应成为 event loop 的强引用
+    heartbeatTimer.unref?.();
+  }
   const send = (event: string, data: unknown): boolean => {
     if (aborted || reply.raw.destroyed || reply.raw.writableEnded) return false;
     try {
@@ -68,6 +101,7 @@ export function createSSESender(reply: FastifyReply, request: FastifyRequest) {
   const isAborted = () => aborted;
   // 安全结束流：检查流状态避免重复 end 或对已销毁流 end 抛错
   const safeEnd = (): void => {
+    stopHeartbeat();
     if (reply.raw.writableEnded || reply.raw.destroyed) return;
     try {
       reply.raw.end();
@@ -88,6 +122,7 @@ export function createSSESender(reply: FastifyReply, request: FastifyRequest) {
   // 客户端断开（前端 abort / 网络中断 / 切换菜单触发 onBeforeUnmount）时触发
   reply.raw.on('close', () => {
     aborted = true;
+    stopHeartbeat();
     activeStreamClosers.delete(closeForShutdown);
   });
   return { send, isAborted, safeEnd };

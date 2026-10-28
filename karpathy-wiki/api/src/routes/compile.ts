@@ -15,6 +15,10 @@ const DEFAULT_BATCH_CONFIG: BatchCompileConfig = {
   maxFileSizeMb: 10,
 };
 
+// T03438：编译步与步之间可能沉默数分钟（LLM 调用），心跳间隔取 15s——
+// 低于常见代理 60s 空闲超时，又不会在高频事件期间产生明显流量。
+const SSE_HEARTBEAT_MS = 15_000;
+
 // 批量文件校验：剥离目录前缀 + 白名单 + 大小校验，独立为纯函数降低 batch 端点认知复杂度
 function validateBatchFiles(
   uploaded: Array<{ name: string; buffer: Buffer }>,
@@ -105,7 +109,7 @@ export function registerCompileRoute(
     });
 
     // 通过工厂创建 SSE sender：客户端 abort 时 send 自动短路，safeEnd 容错结束流
-    const { send, isAborted, safeEnd } = createSSESender(reply, request);
+    const { send, isAborted, safeEnd } = createSSESender(reply, request, { heartbeatMs: SSE_HEARTBEAT_MS });
 
     try {
       // §12.3-5：串行队列包装，保证并发 compile 请求不产生 index.md/log.md 追加竞态。
@@ -164,7 +168,7 @@ export function registerCompileRoute(
       });
 
       // 通过工厂创建 SSE sender：客户端 abort 时 send 自动短路，safeEnd 容错结束流
-      const { send, isAborted, safeEnd } = createSSESender(reply, request);
+      const { send, isAborted, safeEnd } = createSSESender(reply, request, { heartbeatMs: SSE_HEARTBEAT_MS });
 
       try {
         await withCompileLock(async () => {
@@ -252,7 +256,7 @@ export function registerCompileRoute(
     });
 
     // 通过工厂创建 SSE sender：客户端 abort 时 send 自动短路，safeEnd 容错结束流
-    const { send, isAborted, safeEnd } = createSSESender(reply, request);
+    const { send, isAborted, safeEnd } = createSSESender(reply, request, { heartbeatMs: SSE_HEARTBEAT_MS });
 
     // 推送文件列表与被拒绝项，前端据此渲染初始分组
     send('batch_start', {

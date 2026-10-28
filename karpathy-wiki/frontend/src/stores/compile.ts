@@ -103,6 +103,11 @@ export const useCompileStore = defineStore('compile', () => {
   const isBatchMode = ref(false);
   // 批量编译的待发 FormData（与单文件 pendingPayload 分离，避免类型混淆）
   const pendingBatchPayload = ref<FormData | null>(null);
+  // 本次提交的文件数：在 prepareBatchCompile 时从 FormData 数一次存下来。
+  // 为什么不在组件里现数：Pinia 会把 ref 里的对象包成响应式代理，FormData 走代理后
+  // 内部私有字段不可读（happy-dom 下直接抛错），组件侧只读这个标量最稳。
+  // T03438：batch_start 到达前用它显示「正在上传并解析 N 个文件」。
+  const pendingBatchFileCount = ref(0);
   // 批量编译的文件分组：按 fileIndex 路由 SSE 事件
   const batchGroups = ref<BatchFileGroup[]>([]);
   // 批量编译的拒绝列表（来自 batch_start 事件）
@@ -220,6 +225,7 @@ export const useCompileStore = defineStore('compile', () => {
     pendingPayload.value = null;
     isBatchMode.value = false;
     pendingBatchPayload.value = null;
+    pendingBatchFileCount.value = 0;
     batchGroups.value = [];
     batchRejected.value = [];
     isCancelled.value = false;
@@ -482,6 +488,20 @@ export const useCompileStore = defineStore('compile', () => {
     isCompiling.value = false;
   }
 
+  // 编译流在「未收到终止事件」的情况下结束：代理空闲断流、网络中断、服务端重启
+  // （停服时后端先补 server-shutdown 再 end）都会走到这里。
+  // 旧实现只把 isCompiling 留在 true，进度页停在「正在编译 X/Y」甚至「0/0」，
+  // 既没有错误提示也没有重试入口——用户看到的就是「编译卡住不动」。
+  // 收敛在 store：Progress.vue 的首连与 resume 两个消费点都调用，避免两处各写一套判定。
+  function handleStreamEnd(reason?: string): void {
+    if (!isCompiling.value) return;
+    isCompiling.value = false;
+    errorMessage.value = reason
+      || '编译连接已断开（服务可能重启或网络中断），已完成部分不受影响，可返回投递页重试';
+    finishAllStages();
+    clearPersistedState();
+  }
+
   // 投递前预存载荷并进入编译态
   function prepareCompile(payload: IngestPayload) {
     reset();
@@ -496,6 +516,12 @@ export const useCompileStore = defineStore('compile', () => {
   function prepareBatchCompile(payload: FormData) {
     reset();
     pendingBatchPayload.value = payload;
+    // 此刻 payload 还是调用方的原始 FormData（未被响应式代理），能安全数出文件数
+    try {
+      pendingBatchFileCount.value = payload.getAll('files').length;
+    } catch {
+      pendingBatchFileCount.value = 0;
+    }
     isBatchMode.value = true;
     isCompiling.value = true;
   }
@@ -505,6 +531,11 @@ export const useCompileStore = defineStore('compile', () => {
   //              file_done(带 fileIndex) / file_error(带 fileIndex) / file_complete(带 fileIndex) /
   //              batch_done / error
   function handleEvent(eventType: string, data: unknown) {
+    // T03438：停服收尾事件——服务端已结束流，后续不会再有 done/batch_done
+    if (eventType === 'server-shutdown') {
+      handleStreamEnd('服务端已重启，编译连接已中断；已完成部分不受影响，可返回投递页重试');
+      return;
+    }
     // 批量模式事件路由
     if (isBatchMode.value) {
       handleBatchEvent(eventType, data);
@@ -767,6 +798,7 @@ export const useCompileStore = defineStore('compile', () => {
     loadingLog,
     isBatchMode,
     pendingBatchPayload,
+    pendingBatchFileCount,
     batchGroups,
     batchRejected,
     isCancelled,
@@ -792,6 +824,7 @@ export const useCompileStore = defineStore('compile', () => {
     reset,
     abortCompile,
     cancelCompile,
+    handleStreamEnd,
     prepareCompile,
     prepareBatchCompile,
     handleEvent,
