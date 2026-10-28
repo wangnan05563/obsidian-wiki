@@ -26,7 +26,12 @@ export interface ProgressData {
     fileCount?: number;
     fileName?: string;
     rejected?: Array<{ name: string; reason: string }>;
+    // T03591：失败事件回带的 raw/ 存档路径，用于「免上传重试」
+    rawPath?: string;
+    retryable?: boolean;
   };
+  // T03591：失败是否值得重试（限流/超时/服务不可用 = true）
+  retryable?: boolean;
 }
 
 export interface DoneData {
@@ -102,6 +107,10 @@ export interface BatchFileGroup {
   timeline: TimelineItem[];
   pages: Array<{ path: string; title: string }>;
   errorMessage?: string;
+  // T03591 重试：失败事件回带的存档路径与可重试语义；attempts 记录重试次数（保留可追溯性）
+  rawPath?: string;
+  retryable?: boolean;
+  attempts?: number;
 }
 
 // Element Plus UploadFile 兼容类型（避免直接引入复杂类型）

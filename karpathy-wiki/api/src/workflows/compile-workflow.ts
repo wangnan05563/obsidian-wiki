@@ -15,7 +15,7 @@ import { convertOfficeFile } from '../utils/office-convert.js';
 import { convertPdfToMarkdown } from '../utils/pdf-convert.js';
 import { ocrImageToMarkdown, resolveOcrConfig, OCR_SUPPORTED_MIME } from '../utils/ocr-convert.js';
 import { audioToText, resolveAudioConfig, AUDIO_SUPPORTED_MIME } from '../utils/audio-convert.js';
-import { friendlyLlmError } from '../utils/llm-error.js';
+import { friendlyLlmError, isRetryableLlmError } from '../utils/llm-error.js';
 import {
   compileCacheFileIn,
   getHarnessDirFromVault,
@@ -562,7 +562,9 @@ async function* bridgeHarnessToEvents(
         message: isError
           ? `编译失败: ${result.finalContent || '未知错误'}`
           : `编译完成，共 ${result.step} 步`,
-        data: { path: rawPath || undefined },
+        // T03591：失败事件带 rawPath + retryable，前端据此提供「免上传重试」
+        data: { path: rawPath || undefined, rawPath: rawPath || undefined },
+        retryable: isError ? isRetryableLlmError(result.finalContent ?? '') : undefined,
       });
       // §12.3-6：失败时给已生成页面标记 draft，保留半成品供用户决策
       if (isError && generatedPages.length > 0) {
@@ -592,6 +594,10 @@ async function* bridgeHarnessToEvents(
         step: 'done',
         status: 'error',
         message: `编译失败: ${friendlyMsg}`,
+        // T03591：rawPath 让前端可在失败后直接发起「免上传重试」，
+        // retryable 区分「换个时间能成」与「重试也没用（鉴权/内容过大）」
+        data: { path: rawPath || undefined, rawPath: rawPath || undefined },
+        retryable: isRetryableLlmError(err),
         // 注意：ProgressEvent 无 error 字段，错误详情已含于 message
         // 完整 rawErrMsg 写入 RunLogger 供事后排查
       });

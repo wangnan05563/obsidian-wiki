@@ -104,9 +104,10 @@ describe('createSSESender 心跳（T03438）', () => {
 });
 
 describe('compile 路由心跳接线（T03438）', () => {
-  it('单文件、断点续传、批量三条 SSE 路由都开启心跳', () => {
+  it('单文件、断点续传、批量、重试四条 SSE 路由都开启心跳', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '../src/routes/compile.ts'), 'utf8');
     // 漏接任何一条，对应入口在长时间 LLM 静默时又会被代理掐断且前端无从得知
-    expect(src.match(/heartbeatMs: SSE_HEARTBEAT_MS/g)).toHaveLength(3);
+    // T03591 重试端点是第四条 SSE 路由，同样要心跳
+    expect(src.match(/heartbeatMs: SSE_HEARTBEAT_MS/g)).toHaveLength(4);
   });
 });
