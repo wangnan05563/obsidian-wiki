@@ -129,6 +129,10 @@ async function startCompile(payload: IngestPayload) {
     }
 
     await consumeCompileSSE(response);
+    // T03438：流「干净结束」但不含终止事件（done/batch_done/error）时，
+    // fetch 不会抛错，旧实现就此 return，isCompiling 永远留在 true。
+    // handleStreamEnd 内部只在仍在编译时兜底报错，正常完成/已取消时是空操作。
+    store.handleStreamEnd();
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
       // 中止时仅复位 isCompiling，不污染 errorMessage：
@@ -167,6 +171,7 @@ async function startResume(runId: string) {
     }
 
     await consumeCompileSSE(response);
+    store.handleStreamEnd();
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
       store.abortCompile();
