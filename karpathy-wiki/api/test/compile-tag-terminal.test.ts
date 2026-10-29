@@ -20,10 +20,12 @@ import { compileWorkflow, resumeCompileWorkflow } from '../src/workflows/compile
 import { suggestTagsForPage } from '../src/workflows/tag-suggest-workflow.js';
 import type { AppConfig, ProgressEvent } from '../src/types.js';
 
-// 每个用例用各自不同的页面内容。
-// 为什么刻意不同：gray-matter 以「整段内容字符串」为键做进程内缓存，且 matter(str).data
-// 就是缓存对象的同一引用——tag 阶段改写 parsed.data 会把字段写回缓存。
-// 用例间复用同一段内容时，前一个用例产生的 ai_tags 会凭空出现在后一个用例的文件里。
+// 页面内容带各自标题，只为断言可读。
+// 曾经这里是一条隐性依赖：gray-matter 以「整段内容字符串」为键做进程内缓存，且 matter(str).data
+// 就是缓存对象本体，tag 阶段就地改写 parsed.data 会把字段写回缓存——用例间复用同一段内容时，
+// 前一个用例产生的 ai_tags 会凭空出现在后一个用例的文件里（当时表现为「单跑通过、整文件失败」）。
+// T03647 已把写入口改为 parsePage/stringifyPage（副本脱钩），该规避不再是必需的；
+// 跨页串字段的行为由 api/test/frontmatter-cache-isolation.test.ts 直接断言并守住。
 function pageMarkdown(title: string): string {
   return ['---', `title: ${title}`, 'type: concept', '---', '', `正文见 [[${title}]]。`].join('\n');
 }
