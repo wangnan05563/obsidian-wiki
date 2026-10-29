@@ -301,6 +301,20 @@ const MATRIX: MatrixEntry[] = [
     reason: '会话记录在 data/conversations/，与 .harness/state 不同目录（同为 *.json，靠目录名区分）。',
   },
   {
+    file: 'uploads/upload-store.ts',
+    writes: 'save → fs.mkdir + fs.writeFile(blob)、fs.writeFile(meta.json)、失败回滚 fs.rm',
+    verdict: 'outside',
+    samples: [
+      path.join(DATA, 'uploads', 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', 'blob'),
+      path.join(DATA, 'uploads', 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', 'meta.json'),
+    ],
+    // T03611 投递原件留存。判 outside 的实测依据：deletedSurfaceOf 对 data/uploads/ 下的
+    // blob 与 meta.json 都返回 null（既不匹配 raw_archive 的目录/文件名口径，也不在
+    // .harness 的 state/logs/compile_cache 面内），所以任何清理目标都不会碰到它。
+    // 语义上它也不该被清理：原件是用户自己投递的数据，删除只能由用户侧显式发起。
+    reason: '原件在 data/uploads/<uuid>/{blob,meta.json}，位置与文件名都不在任何删除面内；用户数据不参与清理。',
+  },
+  {
     file: 'routes/files.ts',
     writes: 'PUT 页面保存 → awaitCleanupIdle 后 vault.writeFile(query.path)',
     verdict: 'wired',
