@@ -28,6 +28,14 @@ export interface UseHashViewOptions {
   guard?: (view: string) => boolean;
 }
 
+// go() 权限通过后调用：写入历史条目（pushState 不触发 hashchange，回退由监听统一处理）
+function syncHash(view: string): void {
+  const want = formatViewHash(view);
+  if (window.location.hash !== want) {
+    window.history.pushState(null, '', want);
+  }
+}
+
 export function useHashView(
   currentView: Ref<string>,
   options: UseHashViewOptions,
@@ -49,14 +57,6 @@ export function useHashView(
       }
     }
     return false;
-  }
-
-  // go() 权限通过后调用：写入历史条目（pushState 不触发 hashchange，回退由监听统一处理）
-  function syncHash(view: string): void {
-    const want = formatViewHash(view);
-    if (window.location.hash !== want) {
-      window.history.pushState(null, '', want);
-    }
   }
 
   function onHashChange(): void {

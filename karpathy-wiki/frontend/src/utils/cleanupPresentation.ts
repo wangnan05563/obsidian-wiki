@@ -98,17 +98,17 @@ export function cardOf(key: CleanupCardKey): CleanupCardMeta {
  * 关闭预览必须在页顶出现红色横幅——原来 4 个开关各自为政，
  * 用户以为「我只是关了一张卡」，实际另外三卡也可能已关。
  */
-export function buildPreviewBanner(preview: boolean): string {
-  return preview
-    ? ''
-    : '预览开关已关闭：下面 4 个「清理」按钮都会真实删除文件，且不可撤销。';
+export type CleanupMode = 'preview' | 'live';
+
+export function buildPreviewBanner(mode: CleanupMode): string {
+  if (mode === 'preview') return '';
+  return '预览开关已关闭：下面 4 个「清理」按钮都会真实删除文件，且不可撤销。';
 }
 
 /** 页级开关旁的一句话，让「开/关」不用猜 */
-export function previewSwitchHint(preview: boolean): string {
-  return preview
-    ? '开着时只会列出会删哪些文件，不会真删。'
-    : '已切到真实删除，每次点击都会先弹二次确认。';
+export function previewSwitchHint(mode: CleanupMode): string {
+  if (mode === 'preview') return '开着时只会列出会删哪些文件，不会真删。';
+  return '已切到真实删除，每次点击都会先弹二次确认。';
 }
 
 export interface ModeChip {
@@ -117,8 +117,9 @@ export interface ModeChip {
 }
 
 /** 卡片只呈现「当前模式」，不再自带开关 */
-export function modeChip(preview: boolean): ModeChip {
-  return preview ? { label: '当前：仅预览', danger: false } : { label: '当前：真实删除', danger: true };
+export function modeChip(mode: CleanupMode): ModeChip {
+  if (mode === 'preview') return { label: '当前：仅预览', danger: false };
+  return { label: '当前：真实删除', danger: true };
 }
 
 export interface CleanupButtonState {

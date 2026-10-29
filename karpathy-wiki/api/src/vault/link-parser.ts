@@ -60,7 +60,11 @@ export interface LinkResolver {
 // 同名页后者覆盖前者——被覆盖页永远不进 nameToPath.values()，出边全部丢失。
 export type PageNameIndex = Map<string, string[]>;
 
-const comparePath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const comparePath = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
 
 function sortedUnique(paths: string[]): string[] {
   return [...new Set(paths)].sort(comparePath);

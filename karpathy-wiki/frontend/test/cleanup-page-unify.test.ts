@@ -74,20 +74,20 @@ describe('S5 命名统一：菜单名 = 页标题 = 一句话职责', () => {
 
 describe('S2 预览开关收敛为页级单开关', () => {
   it('默认（预览开着）不出现红色横幅，卡片也不会自称「真实删除」', () => {
-    expect(buildPreviewBanner(true)).toBe('');
-    expect(modeChip(true)).toEqual({ label: '当前：仅预览', danger: false });
+    expect(buildPreviewBanner('preview')).toBe('');
+    expect(modeChip('preview')).toEqual({ label: '当前：仅预览', danger: false });
   });
 
   it('关闭预览后横幅讲清「4 个按钮都会真实删除且不可撤销」', () => {
-    const banner = buildPreviewBanner(false);
+    const banner = buildPreviewBanner('live');
     expect(banner).toContain('真实删除');
     expect(banner).toContain('不可撤销');
-    expect(modeChip(false).danger).toBe(true);
+    expect(modeChip('live').danger).toBe(true);
   });
 
   it('开关旁一句话解释开与关各自的后果，不靠用户猜', () => {
-    expect(previewSwitchHint(true)).toContain('不会真删');
-    expect(previewSwitchHint(false)).toContain('二次确认');
+    expect(previewSwitchHint('preview')).toContain('不会真删');
+    expect(previewSwitchHint('live')).toContain('二次确认');
   });
 
   it('卡片元数据里没有 per-card 开关字段（dry_run 只能来自页级开关）', () => {

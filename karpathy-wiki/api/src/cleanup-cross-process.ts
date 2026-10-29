@@ -227,6 +227,34 @@ export async function removeActivityRecord(dir: string, pid: number): Promise<vo
   await fs.rm(activityFile(dir, pid), { force: true }).catch(() => undefined);
 }
 
+interface ForeignActivityContext {
+  selfPid: number;
+  now: number;
+  ttlMs: number;
+  alive: (pid: number) => boolean;
+}
+
+/** 读取并校验单个 activity 条目；非本进程关注的条目（tmp/自身/陈旧/死进程）返回 null。 */
+async function readForeignActivity(
+  dir: string,
+  name: string,
+  ctx: ForeignActivityContext,
+): Promise<ActivityRecord | null> {
+  if (!name.endsWith('.json') || name.includes('.tmp')) return null;
+  const pid = Number(name.slice(0, -'.json'.length));
+  if (!Number.isFinite(pid) || pid === ctx.selfPid) return null;
+  let rec: ActivityRecord | null = null;
+  try {
+    rec = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as ActivityRecord;
+  } catch {
+    return null;
+  }
+  if (!rec || typeof rec.updatedAt !== 'number') return null;
+  if (ctx.now - rec.updatedAt > ctx.ttlMs) return null;
+  if (!ctx.alive(pid)) return null;
+  return rec;
+}
+
 /**
  * 读出**其它进程**声明的活跃任务数（pid 死亡或心跳超时的记录直接忽略）。
  * 与 readCleanupMarker 同口径：读不到就当没有，不阻塞本进程。
@@ -235,10 +263,12 @@ export async function readForeignActivities(
   dir: string,
   opts: ForeignActivityOptions = {},
 ): Promise<{ compile: number; query: number; instances: ActivityRecord[] }> {
-  const selfPid = opts.selfPid ?? process.pid;
-  const now = opts.now ?? Date.now();
-  const ttlMs = opts.ttlMs ?? DEFAULT_ACTIVITY_TTL_MS;
-  const alive = opts.isPidAlive ?? pidAlive;
+  const ctx: ForeignActivityContext = {
+    selfPid: opts.selfPid ?? process.pid,
+    now: opts.now ?? Date.now(),
+    ttlMs: opts.ttlMs ?? DEFAULT_ACTIVITY_TTL_MS,
+    alive: opts.isPidAlive ?? pidAlive,
+  };
 
   let names: string[] = [];
   try {
@@ -251,18 +281,8 @@ export async function readForeignActivities(
   let compile = 0;
   let query = 0;
   for (const name of names) {
-    if (!name.endsWith('.json') || name.includes('.tmp')) continue;
-    const pid = Number(name.slice(0, -'.json'.length));
-    if (!Number.isFinite(pid) || pid === selfPid) continue;
-    let rec: ActivityRecord | null = null;
-    try {
-      rec = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as ActivityRecord;
-    } catch {
-      continue;
-    }
-    if (!rec || typeof rec.updatedAt !== 'number') continue;
-    if (now - rec.updatedAt > ttlMs) continue;
-    if (!alive(pid)) continue;
+    const rec = await readForeignActivity(dir, name, ctx);
+    if (!rec) continue;
     compile += Math.max(0, rec.compile || 0);
     query += Math.max(0, rec.query || 0);
     if ((rec.compile || 0) > 0 || (rec.query || 0) > 0) instances.push(rec);
@@ -311,34 +331,78 @@ export interface PruneCoordinationOptions {
  * 在 rm 前复核文件内容与判定时一致才删——把「读到陈旧、删时已被别人换成新标记」的窗口
  * 压到与 claim 自身的 rm 同量级；activity 条目按 pid 分文件、写方只写自己那份，无此竞态。
  */
-export async function pruneStaleCoordinationFiles(opts: PruneCoordinationOptions): Promise<CoordinationPruneEntry[]> {
-  const selfPid = opts.selfPid ?? process.pid;
-  const now = opts.now ?? Date.now();
-  const alive = opts.isPidAlive ?? pidAlive;
-  const removed: CoordinationPruneEntry[] = [];
+interface PruneContext {
+  selfPid: number;
+  now: number;
+  alive: (pid: number) => boolean;
+}
 
-  // 1) cleanup.lock：复用 readCleanupMarker 的判定（busy / 本进程遗留一律不动）
+/** 陈旧 cleanup.lock：复核内容未被替换后才删；不可读/非陈旧一律不动。 */
+async function pruneStaleMarker(
+  opts: PruneCoordinationOptions,
+  ctx: PruneContext,
+): Promise<CoordinationPruneEntry | null> {
   try {
     const rawBefore = await fs.readFile(opts.markerFile, 'utf8');
     const read = await readCleanupMarker(opts.markerFile, {
-      selfPid,
-      now,
+      selfPid: ctx.selfPid,
+      now: ctx.now,
       maxAgeMs: opts.maxAgeMs,
-      isPidAlive: alive,
+      isPidAlive: ctx.alive,
     });
-    if (read.state === 'stale' && (await fs.readFile(opts.markerFile, 'utf8').catch(() => null)) === rawBefore) {
-      await fs.rm(opts.markerFile, { force: true });
-      const entry: CoordinationPruneEntry = {
-        kind: 'cleanup_lock',
-        pid: read.marker?.pid ?? null,
-        file: opts.markerFile,
-        reason: (read.reason ?? 'unreadable') as CoordinationPruneEntry['reason'],
-      };
-      removed.push(entry);
-      await opts.onPruned?.(entry);
-    }
+    const unchanged = (await fs.readFile(opts.markerFile, 'utf8').catch(() => null)) === rawBefore;
+    if (read.state !== 'stale' || !unchanged) return null;
+    await fs.rm(opts.markerFile, { force: true });
+    return {
+      kind: 'cleanup_lock',
+      pid: read.marker?.pid ?? null,
+      file: opts.markerFile,
+      reason: (read.reason ?? 'unreadable') as CoordinationPruneEntry['reason'],
+    };
   } catch {
-    /* 主文件不存在或读不到：无残留可回收 */
+    return null;
+  }
+}
+
+/** activity 文件名 → pid；tmp/自身/不可解析的名字返回 null。 */
+function activityPidOf(name: string, selfPid: number): number | null {
+  if (!name.endsWith('.json') || name.includes('.tmp')) return null;
+  const pid = Number(name.slice(0, -'.json'.length));
+  if (!Number.isFinite(pid) || pid === selfPid) return null;
+  return pid;
+}
+
+/** 单个 activity 条目的陈旧原因；仍活跃时返回 null。 */
+async function staleActivityReason(
+  file: string,
+  pid: number,
+  opts: PruneCoordinationOptions,
+  ctx: PruneContext,
+): Promise<CoordinationPruneEntry['reason'] | null> {
+  try {
+    const rec = JSON.parse(await fs.readFile(file, 'utf8')) as Partial<ActivityRecord>;
+    if (typeof rec.updatedAt !== 'number') return 'unreadable';
+    if (ctx.now - rec.updatedAt > (opts.ttlMs ?? DEFAULT_ACTIVITY_TTL_MS)) return 'too_old';
+    if (!ctx.alive(pid)) return 'pid_dead';
+    return null;
+  } catch {
+    return 'unreadable';
+  }
+}
+
+export async function pruneStaleCoordinationFiles(opts: PruneCoordinationOptions): Promise<CoordinationPruneEntry[]> {
+  const ctx: PruneContext = {
+    selfPid: opts.selfPid ?? process.pid,
+    now: opts.now ?? Date.now(),
+    alive: opts.isPidAlive ?? pidAlive,
+  };
+  const removed: CoordinationPruneEntry[] = [];
+
+  // 1) cleanup.lock：复用 readCleanupMarker 的判定（busy / 本进程遗留一律不动）
+  const lockEntry = await pruneStaleMarker(opts, ctx);
+  if (lockEntry) {
+    removed.push(lockEntry);
+    await opts.onPruned?.(lockEntry);
   }
 
   // 2) activity/<pid>.json：与 readForeignActivities 同口径（本进程的那份不动；
@@ -350,19 +414,10 @@ export async function pruneStaleCoordinationFiles(opts: PruneCoordinationOptions
     /* 目录还不存在：无残留 */
   }
   for (const name of names) {
-    if (!name.endsWith('.json') || name.includes('.tmp')) continue;
+    const pid = activityPidOf(name, ctx.selfPid);
+    if (pid === null) continue;
     const file = path.join(opts.activityDir, name);
-    const pid = Number(name.slice(0, -'.json'.length));
-    if (!Number.isFinite(pid) || pid === selfPid) continue;
-    let reason: CoordinationPruneEntry['reason'] | null = null;
-    try {
-      const rec = JSON.parse(await fs.readFile(file, 'utf8')) as Partial<ActivityRecord>;
-      if (typeof rec.updatedAt !== 'number') reason = 'unreadable';
-      else if (now - rec.updatedAt > (opts.ttlMs ?? DEFAULT_ACTIVITY_TTL_MS)) reason = 'too_old';
-      else if (!alive(pid)) reason = 'pid_dead';
-    } catch {
-      reason = 'unreadable';
-    }
+    const reason = await staleActivityReason(file, pid, opts, ctx);
     if (!reason) continue;
     await fs.rm(file, { force: true }).catch(() => undefined);
     const entry: CoordinationPruneEntry = { kind: 'activity', pid, file, reason };

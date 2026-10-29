@@ -291,9 +291,24 @@ async function askUnsavedBeforeStart(): Promise<UnsavedChoice> {
       },
     );
     return 'save-and-start';
-  } catch (action) {
-    // cancel = 用户明确选择按已保存配置启动；close（右上角/ESC）= 不启动
-    return action === 'cancel' ? 'start-as-saved' : 'abort';
+  } catch (error_) {
+    // cancel = 用户明确按已保存配置启动；close（右上角/ESC）= 不启动
+    return error_ === 'cancel' ? 'start-as-saved' : 'abort';
+  }
+}
+
+/** 启动失败的响应体：下载失败/授权错误走专用 UI，其余作为告警条留存 */
+function applyStartFailure(data: Record<string, unknown>): void {
+  if (data.errorType === 'binary_download_failed') {
+    downloadError.value = data as unknown as TunnelDownloadError;
+  }
+  if (data.errorType === 'tailscale_funnel_auth') {
+    authError.value = data as unknown as TunnelAuthError;
+  }
+  // T02469：失败原因同时落到 status.lastStartError，页面刷新后告警条依然在
+  if (data.lastStartError) {
+    const base: TunnelStatus = status.value ?? { status: 'stopped', publicUrl: null, provider: '' };
+    status.value = { ...base, lastStartError: data.lastStartError as TunnelStatus['lastStartError'] };
   }
 }
 
@@ -311,19 +326,7 @@ async function startTunnel() {
     const res = await apiFetch(`${API_BASE}/tunnel/start`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) {
-      // 下载失败：渲染手动放置指引而非普通错误提示
-      if (data.errorType === 'binary_download_failed') {
-        downloadError.value = data as TunnelDownloadError;
-      }
-      // Tailscale 首次授权：渲染授权向导
-      if (data.errorType === 'tailscale_funnel_auth') {
-        authError.value = data as TunnelAuthError;
-      }
-      // T02469：失败原因同时落到 status.lastStartError，页面刷新后告警条依然在
-      if (data.lastStartError) {
-        const base: TunnelStatus = status.value ?? { status: 'stopped', publicUrl: null, provider: '' };
-        status.value = { ...base, lastStartError: data.lastStartError };
-      }
+      applyStartFailure(data);
       throw new Error(data.detail || `HTTP ${res.status}`);
     }
     status.value = data as TunnelStatus;

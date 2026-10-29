@@ -562,13 +562,13 @@ export async function buildApp(): Promise<BuiltApp> {
   // T02622：受控重启。shutdown 在本函数后半段才定义，用可变引用接上；
   // 只有打包通道需要自己关停——dev 通道由 tsx watch 杀旧进程（自己退出会让 watch 不再重跑，实测）。
   let shutdownOnRestart: (() => void) | null = null;
-  registerConfigRoute(app, adapter, isolationGuards, {
+  registerConfigRoute(app, adapter, {
     bootId: () => BOOT_ID,
     afterRestart: (mode) => {
       if (mode !== 'packaged') return;
       setTimeout(() => { shutdownOnRestart?.(); }, RESTART_EXIT_DELAY_MS);
     },
-  });
+  }, isolationGuards);
   // §11.2 断点续传：查询中断任务列表（完整 resume 待详细设计）
   // T02772：stateDir 即 runStateDirs 首项（规范目录），清单整体传给路由，
   // 这样升级前写在遗留目录里的运行仍能在「中断任务/步骤追踪」里看到。

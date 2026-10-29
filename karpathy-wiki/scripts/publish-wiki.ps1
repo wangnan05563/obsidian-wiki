@@ -196,9 +196,9 @@ if ($SkipRestart) {
 } else {
     # 停止端口上的旧进程（dev api / 旧 prod 都监听 3000）
     $oldPids = Get-PidOnPort -Port $apiPort
-    foreach ($pid in $oldPids) {
-        try { Stop-Process -Id $pid -Force -ErrorAction Stop } catch { }
-        Write-Log "已停止旧进程 PID $pid" -Level OK -Step "4/6"
+    foreach ($procId in $oldPids) {
+        try { Stop-Process -Id $procId -Force -ErrorAction Stop } catch { }
+        Write-Log "已停止旧进程 PID $procId" -Level OK -Step "4/6"
     }
     if ($oldPids.Count -eq 0) { Write-Log "端口 $apiPort 无旧进程" -Level SKIP -Step "4/6" }
     Start-Sleep -Seconds 1

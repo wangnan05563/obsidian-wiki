@@ -328,7 +328,7 @@ function handleStop() {
     abortController.abort();
     const managerRunId = store.getSessionWriter().managerRunId;
     if (managerRunId) {
-      void authStore.authFetch(API_BASE + '/query/stop', {
+      authStore.authFetch(API_BASE + '/query/stop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runId: managerRunId }),

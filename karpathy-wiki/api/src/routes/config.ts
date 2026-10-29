@@ -77,8 +77,8 @@ async function readConfigForCompare(): Promise<AppConfig | null> {
 export function registerConfigRoute(
   app: FastifyInstance,
   adapter: HarnessAdapter,
-  guards: IsolationGuards = createIsolationGuards(),
   restart: RestartController,
+  guards: IsolationGuards = createIsolationGuards(),
 ) {
   app.get('/api/config', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } }, preHandler: guards.requireAuth }, async (_request, reply) => {
     const config = await loadConfig();

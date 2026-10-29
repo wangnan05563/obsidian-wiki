@@ -39,7 +39,11 @@ const emit = defineEmits<{ (e: 'click', ev: MouseEvent): void }>();
 const tip = computed(() => `${props.name} - ${props.desc}`);
 
 // 图标尺寸随按钮档位变化，保证视觉重心一致
-const iconSize = computed(() => (props.size === 'large' ? 20 : props.size === 'small' ? 14 : 16));
+const iconSize = computed(() => {
+  if (props.size === 'large') return 20;
+  if (props.size === 'small') return 14;
+  return 16;
+});
 </script>
 
 <template>

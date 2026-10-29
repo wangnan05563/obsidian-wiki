@@ -300,7 +300,7 @@ export function restartKeysForChange(
     const key = map[field];
     if (!key) continue;
     const item = findEffectItem(key);
-    if (item && item.effect === 'restart' && !out.includes(key)) out.push(key);
+    if (item?.effect === 'restart' && !out.includes(key)) out.push(key);
   }
   return out;
 }

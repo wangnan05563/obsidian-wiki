@@ -601,8 +601,9 @@ describe('T02818 互斥接线锁（删掉一处 await / 拆掉一条规则就变
       const end = src.indexOf('async function ', start + 10);
       const body = src.slice(start, end === -1 ? src.length : end);
       const collect = body.indexOf('listFiles(');
-      // run_state 走 cleanupFile 助手（内含 fs.unlink），另两条直接 unlink：两种写法都算"执行删除"
-      const del = [body.indexOf('fs.unlink'), body.indexOf('await cleanupFile(')]
+      // run_state 走 cleanupFile 助手（内含 fs.unlink）；run_logs 走 cleanupOldLog 助手（同一删除口径）；
+      // raw_archive 直接 unlink：三种写法都算"执行删除"
+      const del = [body.indexOf('fs.unlink'), body.indexOf('await cleanupFile('), body.indexOf('await cleanupOldLog(')]
         .filter((i) => i >= 0)
         .reduce((a, b) => Math.min(a, b), Number.POSITIVE_INFINITY);
       expect(collect, `${fn} 不再先收集`).toBeGreaterThan(-1);

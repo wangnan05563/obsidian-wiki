@@ -12,7 +12,6 @@
 // 要么被证明落在面外，二者都必须写下来，不存在「没人看过」的第三种结局。
 import path from 'node:path';
 import {
-  AUDIT_LOG_BASENAME,
   COMPILE_CACHE_BASENAME,
   HARNESS_DIR_BASENAME,
   LOGS_DIR_BASENAME,
@@ -65,11 +64,11 @@ export function deletedSurfaceOf(absPath: string): CleanupSurface | null {
   // 编译缓存：`.harness` 直属下的固定文件名，清理是整文件删除（不带 days 过滤）
   if (name === COMPILE_CACHE_BASENAME && parent === HARNESS_DIR_BASENAME) return 'compile_cache';
   // 运行状态：`.harness/state/*.json`，清理**不带 days 过滤**，无差别删除
-  if (parent === STATE_DIR_BASENAME && grand === HARNESS_DIR_BASENAME && RUN_STATE_FILE_PATTERN.test(name)) {
+  if (parent === STATE_DIR_BASENAME && grand === HARNESS_DIR_BASENAME && name.endsWith('.json')) {
     return 'run_state';
   }
   // 运行日志：`.harness/logs/*.log`，带 days 过滤
-  if (parent === LOGS_DIR_BASENAME && grand === HARNESS_DIR_BASENAME && RUN_LOG_FILE_PATTERN.test(name)) {
+  if (parent === LOGS_DIR_BASENAME && grand === HARNESS_DIR_BASENAME && name.endsWith('.log')) {
     return 'run_logs';
   }
   // 原始资料存档：`vault/raw/` 下的内部前缀件，带 days 过滤
@@ -88,4 +87,4 @@ export {
 } from '../cleanup-cross-process.js';
 
 /** 审计日志的文件名（清理自己追加的位置，供矩阵断言它不在删除面内）。 */
-export const CLEANUP_AUDIT_BASENAME = AUDIT_LOG_BASENAME;
+export { AUDIT_LOG_BASENAME as CLEANUP_AUDIT_BASENAME } from './harness-dirs.js';

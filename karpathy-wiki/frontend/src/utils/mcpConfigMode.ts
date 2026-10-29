@@ -36,6 +36,16 @@ export interface McpMergeResult {
  *  3. 重建时按 name 从旧条目带回 JSON 格式里不存在的那三个键；
  *  4. JSON 里的名字若撞上现存非 stdio 条目，报错并原样返回（不静默删远程服务器）。
  */
+/** 把 JSON 格式里不存在的懒加载键从旧条目带回；旧条目不存在时返回空对象 */
+function lazyConfigFrom(previous: McpServerEntry | undefined): Partial<McpServerEntry> {
+  const lazy: Partial<McpServerEntry> = {};
+  if (!previous) return lazy;
+  if (previous.timeoutMs !== undefined) lazy.timeoutMs = previous.timeoutMs;
+  if (previous.triggerKeywords) lazy.triggerKeywords = previous.triggerKeywords;
+  if (previous.placeholderTools) lazy.placeholderTools = previous.placeholderTools;
+  return lazy;
+}
+
 export function mergeMcpJsonIntoServers(existing: McpServerEntry[], parsed: McpJsonFile): McpMergeResult {
   const jsonNames = new Set(Object.keys(parsed.mcpServers ?? {}));
   const servers = existing.filter(
@@ -53,9 +63,7 @@ export function mergeMcpJsonIntoServers(existing: McpServerEntry[], parsed: McpJ
     }
     const previous = previousByName.get(name);
     servers.push({
-      ...(previous?.timeoutMs !== undefined ? { timeoutMs: previous.timeoutMs } : {}),
-      ...(previous?.triggerKeywords ? { triggerKeywords: previous.triggerKeywords } : {}),
-      ...(previous?.placeholderTools ? { placeholderTools: previous.placeholderTools } : {}),
+      ...lazyConfigFrom(previous),
       name,
       transport: 'stdio',
       command: cfg.command,

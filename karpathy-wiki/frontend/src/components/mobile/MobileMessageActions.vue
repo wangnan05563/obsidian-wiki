@@ -17,7 +17,11 @@ const listenQueue = useListenQueueStore();
 const isCurrent = computed(() => ttsStore.currentMsgId === props.message.id);
 const speaking = computed(() => isCurrent.value && ttsStore.state === 'playing');
 const paused = computed(() => isCurrent.value && ttsStore.state === 'paused');
-const speakLabel = computed(() => (speaking.value ? '停止' : paused.value ? '继续' : '朗读'));
+const speakLabel = computed(() => {
+  if (speaking.value) return '停止';
+  if (paused.value) return '继续';
+  return '朗读';
+});
 
 const path = computed(() => `message:${props.message.id}`);
 const inListen = computed(() => listenQueue.has(path.value));

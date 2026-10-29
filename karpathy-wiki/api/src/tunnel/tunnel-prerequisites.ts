@@ -88,136 +88,150 @@ function dnsNameIsTsNet(dnsName: string): boolean {
  * 纯函数：把事实翻译成四项灯（与页面旧清单 1:1 对应，用户不会看到「多了一堆看不懂的检查」）。
  * 顺序即依赖顺序：没装客户端时后面几项一律 unknown —— 这是诚实而不是偷懒。
  */
-export function buildTailscaleItems(f: TailscaleFacts): TunnelPrereqItem[] {
-  const binaryOk = Boolean(f.detectedBinary);
-  const items: TunnelPrereqItem[] = [];
-
+function buildBinaryItem(f: TailscaleFacts): TunnelPrereqItem {
   if (f.configuredPathMissing) {
-    items.push({
+    return {
       id: 'binary',
       label: 'Tailscale 客户端',
       state: 'fail',
       detail: `配置里填的路径已经不存在：${f.configuredPath}`,
       fix: '清空该路径让它自动探测，或重新填写已安装的 tailscale.exe 位置',
       focus: 'binary',
-    });
-  } else if (binaryOk) {
-    items.push({
+    };
+  }
+  if (f.detectedBinary) {
+    return {
       id: 'binary',
       label: 'Tailscale 客户端',
       state: 'ok',
       detail: `已找到：${f.detectedBinary}`,
       fix: '',
       focus: 'binary',
-    });
-  } else {
-    items.push({
-      id: 'binary',
-      label: 'Tailscale 客户端',
-      state: 'fail',
-      detail: '本机没有探测到 tailscale.exe（PATH 与 Program Files 都没找到）',
-      fix: 'Tailscale 是系统级服务，需要你先安装并登录，本程序不会替你装',
-      focus: 'binary',
-      fixUrl: TAILSCALE_DOWNLOAD_URL,
-    });
+    };
   }
+  return {
+    id: 'binary',
+    label: 'Tailscale 客户端',
+    state: 'fail',
+    detail: '本机没有探测到 tailscale.exe（PATH 与 Program Files 都没找到）',
+    fix: 'Tailscale 是系统级服务，需要你先安装并登录，本程序不会替你装',
+    focus: 'binary',
+    fixUrl: TAILSCALE_DOWNLOAD_URL,
+  };
+}
 
-  // 登录态：没装客户端时无从判断
+function loginDetail(f: TailscaleFacts): string {
+  if (f.backendState) return `后台服务状态：${f.backendState}`;
+  if (f.probeError) return `查不到登录状态（${f.probeError}）`;
+  return '查不到登录状态';
+}
+
+function buildLoginItem(f: TailscaleFacts, binaryOk: boolean): TunnelPrereqItem {
   if (!binaryOk) {
-    items.push({
+    return {
       id: 'login',
       label: '已登录 Tailscale 账号',
       state: 'unknown',
       detail: '需要先装好客户端才能判断',
       fix: '完成上一步后点「重新检测」',
       focus: 'login',
-    });
-  } else if (f.backendState === 'Running') {
-    items.push({
+    };
+  }
+  if (f.backendState === 'Running') {
+    return {
       id: 'login',
       label: '已登录 Tailscale 账号',
       state: 'ok',
       detail: '后台服务状态：Running',
       fix: '',
       focus: 'login',
-    });
-  } else {
-    items.push({
-      id: 'login',
-      label: '已登录 Tailscale 账号',
-      state: f.backendState ? 'fail' : 'unknown',
-      detail: f.backendState
-        ? `后台服务状态：${f.backendState}`
-        : f.probeError
-          ? `查不到登录状态（${f.probeError}）`
-          : '查不到登录状态',
-      fix: '在任务栏打开 Tailscale 图标并登录账号，然后回来点「重新检测」',
-      focus: 'login',
-    });
+    };
   }
+  return {
+    id: 'login',
+    label: '已登录 Tailscale 账号',
+    state: f.backendState ? 'fail' : 'unknown',
+    detail: loginDetail(f),
+    fix: '在任务栏打开 Tailscale 图标并登录账号，然后回来点「重新检测」',
+    focus: 'login',
+  };
+}
 
-  // MagicDNS：决定能不能拿到固定 ts.net 地址
+function buildMagicDnsItem(f: TailscaleFacts, binaryOk: boolean): TunnelPrereqItem {
   if (!binaryOk || (!f.dnsName && f.backendState !== 'Running')) {
-    items.push({
+    return {
       id: 'magicDns',
       label: '启用 MagicDNS（拿到固定的 ts.net 地址）',
       state: 'unknown',
       detail: '还查不到这台机器的域名',
       fix: '登录 Tailscale 后点「重新检测」',
       focus: 'magicDns',
-    });
-  } else if (dnsNameIsTsNet(f.dnsName)) {
-    items.push({
+    };
+  }
+  if (dnsNameIsTsNet(f.dnsName)) {
+    return {
       id: 'magicDns',
       label: '启用 MagicDNS（拿到固定的 ts.net 地址）',
       state: 'ok',
       detail: `本机域名：${f.dnsName}`,
       fix: '',
       focus: 'magicDns',
-    });
-  } else {
-    items.push({
-      id: 'magicDns',
-      label: '启用 MagicDNS（拿到固定的 ts.net 地址）',
-      state: 'fail',
-      detail: f.dnsName ? `本机域名不是 ts.net 结尾：${f.dnsName}` : '本机还没有 ts.net 域名',
-      fix: '到 Tailscale 管理后台把 DNS 配置里的 MagicDNS 打开（团队管理员权限）',
-      focus: 'magicDns',
-      fixUrl: TAILSCALE_ADMIN_CONSOLE_URL,
-    });
+    };
   }
+  return {
+    id: 'magicDns',
+    label: '启用 MagicDNS（拿到固定的 ts.net 地址）',
+    state: 'fail',
+    detail: f.dnsName ? `本机域名不是 ts.net 结尾：${f.dnsName}` : '本机还没有 ts.net 域名',
+    fix: '到 Tailscale 管理后台把 DNS 配置里的 MagicDNS 打开（团队管理员权限）',
+    focus: 'magicDns',
+    fixUrl: TAILSCALE_ADMIN_CONSOLE_URL,
+  };
+}
 
-  // Funnel 授权：首次启用会在浏览器里要求确认，属于「启动时才发生」的动作，
-  // 因此未开启时是 unknown 而不是 fail —— 用户点「启动隧道」本来就会走到那一步。
+function funnelDetail(f: TailscaleFacts): string {
+  if (f.funnelAllowed === false) return '当前账号还没有把 Funnel 开关打开';
+  if (f.probeError) return `暂时查不到 Funnel 开关（${f.probeError}）`;
+  return '尚未检测（首次启动隧道时会在浏览器里请你确认一次）';
+}
+
+function buildFunnelAuthItem(f: TailscaleFacts): TunnelPrereqItem {
+  // Funnel 授权是「启动时才发生」的动作，未开启时是 unknown 而不是 fail
   if (f.funnelAllowed === true) {
-    items.push({
+    return {
       id: 'funnelAuth',
       label: '允许公网 Funnel 访问',
       state: 'ok',
       detail: '这台机器已允许 Funnel',
       fix: '',
       focus: 'funnelAuth',
-    });
-  } else {
-    items.push({
-      id: 'funnelAuth',
-      label: '允许公网 Funnel 访问',
-      state: f.funnelAllowed === false ? 'fail' : 'unknown',
-      detail:
-        f.funnelAllowed === false
-          ? '当前账号还没有把 Funnel 开关打开'
-          : f.probeError
-            ? `暂时查不到 Funnel 开关（${f.probeError}）`
-            : '尚未检测（首次启动隧道时会在浏览器里请你确认一次）',
-      fix:
-        f.funnelAllowed === false
-          ? '直接点「启动隧道」，浏览器会弹出授权页；确认后回来重新检测'
-          : '直接点「启动隧道」即可，首次会引导你完成授权',
-      focus: 'funnelAuth',
-    });
+    };
   }
+  const notAllowed = f.funnelAllowed === false;
+  return {
+    id: 'funnelAuth',
+    label: '允许公网 Funnel 访问',
+    state: notAllowed ? 'fail' : 'unknown',
+    detail: funnelDetail(f),
+    fix: notAllowed
+      ? '直接点「启动隧道」，浏览器会弹出授权页；确认后回来重新检测'
+      : '直接点「启动隧道」即可，首次会引导你完成授权',
+    focus: 'funnelAuth',
+  };
+}
 
-  return items;
+/**
+ * 纯函数：把事实翻译成四项灯（与页面旧清单 1:1 对应，用户不会看到「多了一堆看不懂的检查」）。
+ * 顺序即依赖顺序：没装客户端时后面几项一律 unknown —— 这是诚实而不是偷懒。
+ */
+export function buildTailscaleItems(f: TailscaleFacts): TunnelPrereqItem[] {
+  const binaryOk = Boolean(f.detectedBinary);
+  return [
+    buildBinaryItem(f),
+    buildLoginItem(f, binaryOk),
+    buildMagicDnsItem(f, binaryOk),
+    buildFunnelAuthItem(f),
+  ];
 }
 
 /** 采集 Tailscale 事实：全程只读，任何一步失败都只是让对应灯变 unknown */
@@ -321,6 +335,11 @@ async function runTailscaleCli(binary: string, args: string[]): Promise<string> 
  * Cloudflare：quick 模式什么都不用装（二进制会自动下载），named 模式才有证书与 DNS。
  * exists 注入便于单测（不碰真实文件系统）。
  */
+function tunnelItemDetail(config: TunnelConfig, tunnelReady: boolean): string {
+  if (!tunnelReady) return '缺少 tunnel id / 凭证文件（向导第二步创建）';
+  return config.hostname ? `隧道已创建，域名 ${config.hostname}` : '隧道已创建';
+}
+
 export function buildCloudflareItems(
   config: TunnelConfig,
   exists: (p: string) => boolean,
@@ -349,33 +368,33 @@ export function buildCloudflareItems(
     return items;
   }
   const certOk = Boolean(config.certFile) && exists(config.certFile);
-  items.push({
-    id: 'cert',
-    label: 'Cloudflare 账号授权证书',
-    state: certOk ? 'ok' : 'fail',
-    detail: certOk ? '已存在授权证书' : '还没有登录授权证书（命名隧道必需）',
-    fix: '点下面的「三步向导」，第一步就是浏览器登录授权',
-    focus: 'wizard',
-  });
   const tunnelReady = Boolean(config.tunnelId) && Boolean(config.credentialsFile) && exists(config.credentialsFile);
-  items.push({
-    id: 'tunnel',
-    label: '命名隧道与配置文件',
-    state: tunnelReady ? 'ok' : 'fail',
-    detail: tunnelReady
-      ? `隧道已创建${config.hostname ? `，域名 ${config.hostname}` : ''}`
-      : '缺少 tunnel id / 凭证文件（向导第二步创建）',
-    fix: '用「三步向导」第二步创建隧道并下载凭证文件',
-    focus: 'wizard',
-  });
-  items.push({
-    id: 'dns',
-    label: '域名已指向隧道',
-    state: config.hostname ? 'unknown' : 'fail',
-    detail: config.hostname ? `已配置域名 ${config.hostname}，但是否解析生效要到 Cloudflare 看` : '还没有填自己的域名',
-    fix: '向导第三步会写 DNS；已经在 Cloudflare 手工配过的话直接启动即可',
-    focus: 'wizard',
-  });
+  items.push(
+    {
+      id: 'cert',
+      label: 'Cloudflare 账号授权证书',
+      state: certOk ? 'ok' : 'fail',
+      detail: certOk ? '已存在授权证书' : '还没有登录授权证书（命名隧道必需）',
+      fix: '点下面的「三步向导」，第一步就是浏览器登录授权',
+      focus: 'wizard',
+    },
+    {
+      id: 'tunnel',
+      label: '命名隧道与配置文件',
+      state: tunnelReady ? 'ok' : 'fail',
+      detail: tunnelItemDetail(config, tunnelReady),
+      fix: '用「三步向导」第二步创建隧道并下载凭证文件',
+      focus: 'wizard',
+    },
+    {
+      id: 'dns',
+      label: '域名已指向隧道',
+      state: config.hostname ? 'unknown' : 'fail',
+      detail: config.hostname ? `已配置域名 ${config.hostname}，但是否解析生效要到 Cloudflare 看` : '还没有填自己的域名',
+      fix: '向导第三步会写 DNS；已经在 Cloudflare 手工配过的话直接启动即可',
+      focus: 'wizard',
+    },
+  );
   return items;
 }
 

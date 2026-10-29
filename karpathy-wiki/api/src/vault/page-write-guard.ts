@@ -202,6 +202,103 @@ export function checkBodyDeletions(
   return { ok: true, removedHeadings, removedNonEmpty };
 }
 
+/** 显式声明的字段变更（唯一允许改 frontmatter 的入口）：只记真正变了的字段。 */
+function diffExplicitFields(
+  data: Record<string, unknown>,
+  explicit: Record<string, unknown>,
+): FrontmatterChange[] {
+  const applied: FrontmatterChange[] = [];
+  for (const [key, value] of Object.entries(explicit)) {
+    const before = valueText(data[key]);
+    const after = valueText(value);
+    if (before !== after) applied.push({ key, from: key in data ? before : null, to: after });
+  }
+  return applied;
+}
+
+/** 新页面（原页不存在）：没有可比对的基准，内容原样落盘并按显式声明设置 frontmatter。 */
+async function writeNewPage(
+  vault: VaultService,
+  relativePath: string,
+  rawContent: string,
+  explicit: Record<string, unknown>,
+): Promise<GuardedWriteResult> {
+  let content = rawContent;
+  let applied: FrontmatterChange[] = [];
+  if (Object.keys(explicit).length > 0) {
+    const split = splitFrontmatter(content);
+    let header = split.header || `---\n---\n`;
+    for (const [key, value] of Object.entries(explicit)) {
+      header = setHeaderField(header, key, value);
+    }
+    applied = diffExplicitFields(split.data, explicit);
+    content = header + split.body;
+  }
+  await vault.writeFile(relativePath, content);
+  if (applied.length > 0) {
+    await vault.appendLog('health-check', [relativePath], `新建页面并按显式声明设置 frontmatter：${formatChanges(applied)}`);
+  }
+  return { created: true, preservedFrontmatter: false, applied, ignored: [] };
+}
+
+/** 已存在页面写盘后的审计：忽略的候选 frontmatter、显式修改、重构放行各记一条。 */
+async function appendWriteNotes(
+  vault: VaultService,
+  relativePath: string,
+  notes: { ignored: FrontmatterChange[]; applied: FrontmatterChange[]; allowRestructure: boolean; removedNonEmpty: number },
+): Promise<void> {
+  const lines: string[] = [];
+  if (notes.ignored.length > 0) {
+    lines.push(`忽略候选内容中的 frontmatter 变更（以原页为准）：${formatChanges(notes.ignored)}`);
+  }
+  if (notes.applied.length > 0) {
+    lines.push(`按显式声明修改 frontmatter：${formatChanges(notes.applied)}`);
+  }
+  if (notes.allowRestructure) {
+    lines.push(`已按 allowRestructure 放行正文重构（删除非空行 ${notes.removedNonEmpty}）`);
+  }
+  if (lines.length > 0) {
+    await vault.appendLog('health-check', [relativePath], lines.join('；'));
+  }
+}
+
+/** 已存在页面：原 frontmatter 逐字保留 + 候选正文，正文删除受 checkBodyDeletions 约束。 */
+async function writeExistingPage(
+  vault: VaultService,
+  relativePath: string,
+  original: string,
+  rawContent: string,
+  explicit: Record<string, unknown>,
+  allowRestructure: boolean,
+): Promise<GuardedWriteResult> {
+  const orig = splitFrontmatter(original);
+  const cand = splitFrontmatter(rawContent);
+
+  // 候选内容里的 frontmatter 一律不采信（LLM 常整页重写并顺手伪造时间戳）。
+  // 只给正文（无 frontmatter 块）时不构成「字段变更意图」，不做字段级 diff。
+  const ignored = cand.header === '' ? [] : diffFrontmatter(orig.data, cand.data);
+  const applied = diffExplicitFields(orig.data, explicit);
+
+  const guard = checkBodyDeletions(orig.body, cand.body, allowRestructure);
+  if (!guard.ok) throw new Error(guard.reason ?? '写入被拒绝');
+
+  let header = orig.header;
+  for (const [key, value] of Object.entries(explicit)) {
+    header = setHeaderField(header, key, value);
+  }
+
+  const eol = original.includes('\r\n') ? '\r\n' : '\n';
+  const body = normalizeEol(cand.body).replace(/\n/g, eol);
+  await vault.writeFile(relativePath, header + body);
+  await appendWriteNotes(vault, relativePath, {
+    ignored,
+    applied,
+    allowRestructure,
+    removedNonEmpty: guard.removedNonEmpty,
+  });
+  return { created: false, preservedFrontmatter: true, applied, ignored };
+}
+
 /**
  * 带护栏的页面写入（修复工具的唯一落盘入口）。
  * 已存在页面：原 frontmatter 逐字保留 + 候选正文；新页面：内容原样落盘。
@@ -226,66 +323,6 @@ export async function writePageSafely(
     if (code !== 'ENOENT') throw err;
   }
 
-  if (original === null) {
-    let content = rawContent;
-    const applied: FrontmatterChange[] = [];
-    if (Object.keys(explicit).length > 0) {
-      const split = splitFrontmatter(content);
-      let header = split.header || `---\n---\n`;
-      for (const [key, value] of Object.entries(explicit)) {
-        const before = valueText(split.data[key]);
-        const after = valueText(value);
-        if (before !== after) applied.push({ key, from: key in split.data ? before : null, to: after });
-        header = setHeaderField(header, key, value);
-      }
-      content = header + split.body;
-    }
-    await vault.writeFile(relativePath, content);
-    if (applied.length > 0) {
-      await vault.appendLog('health-check', [relativePath], `新建页面并按显式声明设置 frontmatter：${formatChanges(applied)}`);
-    }
-    return { created: true, preservedFrontmatter: false, applied, ignored: [] };
-  }
-
-  const orig = splitFrontmatter(original);
-  const cand = splitFrontmatter(rawContent);
-
-  // 候选内容里的 frontmatter 一律不采信（LLM 常整页重写并顺手伪造时间戳）。
-  // 只给正文（无 frontmatter 块）时不构成「字段变更意图」，不做字段级 diff。
-  const ignored = cand.header === '' ? [] : diffFrontmatter(orig.data, cand.data);
-
-  const applied: FrontmatterChange[] = [];
-  for (const [key, value] of Object.entries(explicit)) {
-    const before = valueText(orig.data[key]);
-    const after = valueText(value);
-    if (before !== after) applied.push({ key, from: key in orig.data ? before : null, to: after });
-  }
-
-  const guard = checkBodyDeletions(orig.body, cand.body, options.allowRestructure === true);
-  if (!guard.ok) throw new Error(guard.reason ?? '写入被拒绝');
-
-  let header = orig.header;
-  for (const [key, value] of Object.entries(explicit)) {
-    header = setHeaderField(header, key, value);
-  }
-
-  const eol = original.includes('\r\n') ? '\r\n' : '\n';
-  const body = normalizeEol(cand.body).replace(/\n/g, eol);
-  await vault.writeFile(relativePath, header + body);
-
-  const notes: string[] = [];
-  if (ignored.length > 0) {
-    notes.push(`忽略候选内容中的 frontmatter 变更（以原页为准）：${formatChanges(ignored)}`);
-  }
-  if (applied.length > 0) {
-    notes.push(`按显式声明修改 frontmatter：${formatChanges(applied)}`);
-  }
-  if (options.allowRestructure === true) {
-    notes.push(`已按 allowRestructure 放行正文重构（删除非空行 ${guard.removedNonEmpty}）`);
-  }
-  if (notes.length > 0) {
-    await vault.appendLog('health-check', [relativePath], notes.join('；'));
-  }
-
-  return { created: false, preservedFrontmatter: true, applied, ignored };
+  if (original === null) return writeNewPage(vault, relativePath, rawContent, explicit);
+  return writeExistingPage(vault, relativePath, original, rawContent, explicit, options.allowRestructure === true);
 }

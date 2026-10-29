@@ -10,8 +10,8 @@ import { getDataDir } from '../utils/runtime.js';
 // 快照瘦身：items 可能上千条（597 项批量 × 每项 target），对外响应只给状态与失败清单，
 // 剩余项由后台作业自身持有，不让大数组在每次轮询/事件流里来回搬。
 function withoutItems<T extends { items: unknown[] }>(snapshot: T): Omit<T, 'items'> {
-  const { items, ...rest } = snapshot;
-  void items;
+  const rest = { ...snapshot };
+  delete (rest as { items?: unknown[] }).items;
   return rest;
 }
 
@@ -35,6 +35,7 @@ export function registerHealthCheckRoute(
   jobsDir: string = path.join(getDataDir(), '.harness', 'batch-fix'),
 ) {
   const batchJobs = new BatchFixJobManager(jobsDir, adapter);
+  batchJobs.startStartupPrune();
 
   app.post('/api/health-check', { preHandler: guards.requireAdmin }, async (_request, reply) => {
     const report = await adapter.healthCheck();

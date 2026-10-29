@@ -218,7 +218,7 @@ export function mergeDuplicateFrontmatter(
     return { data, content, hadDuplicateBlock: false };
   }
   return {
-    data: { ...data, ...(second as Record<string, unknown>) },
+    data: { ...data, ...second },
     content: content.slice(match[0].length),
     hadDuplicateBlock: true,
   };

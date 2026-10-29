@@ -85,6 +85,17 @@ function isByokConfigValid(llmOverride: QueryInput['llmConfig']): boolean {
     && typeof llmOverride.model === 'string' && llmOverride.model.trim() !== '';
 }
 
+// 澄清续答字段归一化：非法值统一降级为 undefined（后续按新提问处理的既有语义）。
+function normalizeClarifyId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeChoiceIndex(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined;
+}
+
 // 注册 POST /api/query 路由。
 // §5.2 改造：请求体扩展 mode/webSearch/attachments/model；SSE 事件扩展 thinking/progress/followups
 // 本地持久化改造：问答会话与记忆通过 ThreadMemoryStore 落盘到 data/threads/{threadId}/，
@@ -219,8 +230,8 @@ export function registerQueryRoute(
       mediaImageConfig: body.imageConfig,
       // 意图澄清续答字段透传：首轮无；用户选择后携带 clarifyId + choiceIndex 重发。
       // 合法性（会话存在/问题一致/选项越界）由澄清门禁校验，非法时按新提问处理。
-      clarifyId: typeof body.clarifyId === 'string' && body.clarifyId.trim() ? body.clarifyId.trim() : undefined,
-      choiceIndex: typeof body.choiceIndex === 'number' ? body.choiceIndex : undefined,
+      clarifyId: normalizeClarifyId(body.clarifyId),
+      choiceIndex: normalizeChoiceIndex(body.choiceIndex),
     };
 
     // ── FR-22 用户停止：请求级终止信号 ──

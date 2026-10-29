@@ -364,7 +364,7 @@ function bufAppendAnswer(b: SessionBuffer, text: string) {
   // FR-23：模型正文可能携带 <think>…</think>，经状态机分流——思考内容进 modelThinking
   // （折叠面板），正式回答进 streamingAnswer（现有 Markdown 渲染管线）。无标签时解析器
   // 原样透传，行为与旧版一致；半开标签由解析器扣留，不污染答案区。
-  if (!b.thinkParser) b.thinkParser = createThinkStreamParser();
+  b.thinkParser ??= createThinkStreamParser();
   const { thinking, answer } = b.thinkParser.feed(text);
   if (thinking) b.modelThinking += thinking;
   b.streamingAnswer += answer;

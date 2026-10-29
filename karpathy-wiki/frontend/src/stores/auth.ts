@@ -51,6 +51,16 @@ function saveToken(t: string | null): void {
   }
 }
 
+// 失败时读取响应里的 {error}（后端 400 一律带原文，如「用户名已存在: foo」）
+async function readAdminError(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = (await res.json()) as { error?: string };
+    return data?.error || fallback;
+  } catch {
+    return `${fallback}（HTTP ${res.status}）`;
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
   // token：localStorage 持久化，刷新后保留登录状态
   const token = ref<string | null>(loadTokenFromStorage());
@@ -288,16 +298,6 @@ export const useAuthStore = defineStore('auth', () => {
   // U7（T02473）：后端 {error} 原文透传给管理页。
   // 为什么单独一个 ref 而不复用 error：error 是登录/注册通道的，用户管理里的失败不该让登录态误报。
   const adminError = ref('');
-
-  // 失败时读取响应里的 {error}（后端 400 一律带原文，如「用户名已存在: foo」）
-  async function readAdminError(res: Response, fallback: string): Promise<string> {
-    try {
-      const data = (await res.json()) as { error?: string };
-      return data?.error || fallback;
-    } catch {
-      return `${fallback}（HTTP ${res.status}）`;
-    }
-  }
 
   // 获取用户列表
   async function listUsers(): Promise<UserInfo[] | null> {

@@ -111,7 +111,7 @@ describe('T02931：MCP / 朗读进行中，一键重启必须被拒绝', () => {
       afterRestart,
       perform: () => 'packaged' as RestartMode,
     };
-    registerConfigRoute(app, {} as HarnessAdapter, guards, controller);
+    registerConfigRoute(app, {} as HarnessAdapter, controller, guards);
     registerTtsRoute(app);
     await app.ready();
   });

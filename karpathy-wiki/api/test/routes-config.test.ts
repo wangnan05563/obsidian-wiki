@@ -74,7 +74,7 @@ async function buildApp(adapter: HarnessAdapter): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   // T02622：重启控制器是必填依赖（生产由 index.ts 注入真实 shutdown），测试给桩。
   const restart: RestartController = { bootId: () => 'test-boot', afterRestart: () => {} };
-  registerConfigRoute(app, adapter, undefined, restart);
+  registerConfigRoute(app, adapter, restart);
   await app.ready();
   return app;
 }

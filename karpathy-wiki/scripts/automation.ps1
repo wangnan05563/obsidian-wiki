@@ -361,16 +361,16 @@ function Action-Stop {
 
     # 部分端口仍被占用，列出占用 PID 供用户手动处理
     if ($apiStillListening) {
-        $pid = Get-PortPid -Port $API_PORT
-        Write-Host "  [WARN] 端口 $API_PORT 仍被占用 (PID=$pid)" -ForegroundColor Yellow
-        Write-Host "         可手动执行：taskkill /F /T /PID $pid" -ForegroundColor Yellow
-        Write-Log -LogAction "stop" -Step "verify-stop" -Result "fail" -Msg "api port=$API_PORT still listening pid=$pid"
+        $apiPid = Get-PortPid -Port $API_PORT
+        Write-Host "  [WARN] 端口 $API_PORT 仍被占用 (PID=$apiPid)" -ForegroundColor Yellow
+        Write-Host "         可手动执行：taskkill /F /T /PID $apiPid" -ForegroundColor Yellow
+        Write-Log -LogAction "stop" -Step "verify-stop" -Result "fail" -Msg "api port=$API_PORT still listening pid=$apiPid"
     }
     if ($webStillListening) {
-        $pid = Get-PortPid -Port $WEB_PORT
-        Write-Host "  [WARN] 端口 $WEB_PORT 仍被占用 (PID=$pid)" -ForegroundColor Yellow
-        Write-Host "         可手动执行：taskkill /F /T /PID $pid" -ForegroundColor Yellow
-        Write-Log -LogAction "stop" -Step "verify-stop" -Result "fail" -Msg "web port=$WEB_PORT still listening pid=$pid"
+        $webPid = Get-PortPid -Port $WEB_PORT
+        Write-Host "  [WARN] 端口 $WEB_PORT 仍被占用 (PID=$webPid)" -ForegroundColor Yellow
+        Write-Host "         可手动执行：taskkill /F /T /PID $webPid" -ForegroundColor Yellow
+        Write-Log -LogAction "stop" -Step "verify-stop" -Result "fail" -Msg "web port=$WEB_PORT still listening pid=$webPid"
     }
 
     Write-Host ""

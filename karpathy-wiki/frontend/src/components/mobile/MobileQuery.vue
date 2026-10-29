@@ -519,17 +519,12 @@ function handleClarifyDismiss() {
   store.clearClarification();
 }
 
-async function sendQuestion(question: string, convId: string, clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null) {
-  activeAbort = new AbortController();
-  // 会话已失效（auth/me 返回 401 触发自动登出）时，直接提示重新登录/配置，
-  // 避免继续打 /api/query 拿到 401/404 等晦涩错误（移动端「会话失效 → 点击发送」的典型崩溃路径）。
-  if (!authStore.isLoggedIn) {
-    // T02914：移动端没有「配置中心」页，旧文案指向一个不存在的入口（错指引）。
-    // 移动端实际可做的动作 = 「我的 → AI 服务」BYOK 卡内填写。
-    ElMessage.warning('会话已失效，请重新登录；如需提问，请在「我的 → AI 服务」填写你自己的 API Key 后再试');
-    activeAbort = null;
-    return;
-  }
+/** 组装 /query 请求体：历史、澄清归属与 BYOK 覆盖项（对齐桌面 Query.vue） */
+async function buildQueryBody(
+  question: string,
+  convId: string,
+  clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null,
+): Promise<Record<string, unknown>> {
   const buf = store.getSessionBuffer(convId);
   const activeThreadId = buf?.currentThreadId ?? null;
   // persist=false（默认部署）下服务端不维护线程记忆，必须由前端每轮透传完整 history
@@ -537,7 +532,7 @@ async function sendQuestion(question: string, convId: string, clarify?: { clarif
   const history = (buf?.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
 
   const body: Record<string, unknown> = { question, stream: store.streamMode };
-  if (history && history.length > 0) {
+  if (history.length > 0) {
     body.history = history;
   }
   // 澄清续答优先使用 clarify 附带的 threadId（后端 clarifyId 归属校验依赖同一线程）
@@ -569,12 +564,55 @@ async function sendQuestion(question: string, convId: string, clarify?: { clarif
     aiCfg = await loadAiUserConfigForPreset(uid, modelStore.selectedPresetKey, activePreset);
   }
   const searchCfg = await loadSearchUserConfig(uid);
-  if (aiCfg && aiCfg.apiKey) {
+  if (aiCfg?.apiKey) {
     body.llmConfig = aiCfg;
   }
-  if (searchCfg && searchCfg.apiKey) {
+  if (searchCfg?.apiKey) {
     body.searchConfig = searchCfg;
   }
+  return body;
+}
+
+/** 发送失败分流：用户中断落「已中断」终态，BYOK 缺配置改指移动端真实入口 */
+function handleSendError(err: unknown, convId: string): void {
+  if ((err as Error).name === 'AbortError') {
+    // FR-22 用户停止：与桌面端 handleQueryFinally 对齐——落「已中断」终态
+    // （writer.stopLoading 追加 [已停止] 后缀 + interrupted 状态）并落盘，
+    // 保证停止后的部分答案在刷新/重进后完整可回看且不自动续答
+    const w = store.getSessionWriter(convId);
+    w.stopLoading('user');
+    conversationsStore.currentConversationId = convId;
+    conversationsStore.persistConversation(
+      store.messagesWithStreamingFor(convId),
+      store.getSessionBuffer(convId)?.currentThreadId ?? undefined,
+    );
+    return;
+  }
+  const errMsg = (err as Error).message;
+  store.getSessionWriter(convId).handleError(errMsg);
+  // FR-22 BYOK 400：缺配置是确定性错误，以 error 级呈现配置引导（不回落、重试无意义）
+  if (!errMsg.includes('配置中心 → AI 服务')) {
+    ElMessage.warning(errMsg);
+    return;
+  }
+  // 后端 BYOK 400 文案（query.ts）是桌面口径；移动端没有配置中心页，展示时替换为
+  // 真实入口「我的 → AI 服务」。检测仍按后端原文匹配：后端文案若变，此处退化为普通
+  // warning 展示原文，不会把移动端没有的入口重新指给用户（T02914）。
+  ElMessage.error(errMsg.replaceAll('配置中心 → AI 服务', '我的 → AI 服务'));
+}
+
+async function sendQuestion(question: string, convId: string, clarify?: { clarifyId: string; choiceIndex: number; threadId?: string | null } | null) {
+  activeAbort = new AbortController();
+  // 会话已失效（auth/me 返回 401 触发自动登出）时，直接提示重新登录/配置，
+  // 避免继续打 /api/query 拿到 401/404 等晦涩错误（移动端「会话失效 → 点击发送」的典型崩溃路径）。
+  if (!authStore.isLoggedIn) {
+    // T02914：移动端没有「配置中心」页，旧文案指向一个不存在的入口（错指引）。
+    // 移动端实际可做的动作 = 「我的 → AI 服务」BYOK 卡内填写。
+    ElMessage.warning('会话已失效，请重新登录；如需提问，请在「我的 → AI 服务」填写你自己的 API Key 后再试');
+    activeAbort = null;
+    return;
+  }
+  const body = await buildQueryBody(question, convId, clarify);
 
   try {
     // X-2 可恢复流式：用带重连的 SSE 消费包装。
@@ -598,30 +636,7 @@ async function sendQuestion(question: string, convId: string, clarify?: { clarif
       });
     await consumeQuerySSEResumable(initialFetch, resumeFetch, writer, activeAbort.signal);
   } catch (err: unknown) {
-    if ((err as Error).name === 'AbortError') {
-      // FR-22 用户停止：与桌面端 handleQueryFinally 对齐——落「已中断」终态
-      // （writer.stopLoading 追加 [已停止] 后缀 + interrupted 状态）并落盘，
-      // 保证停止后的部分答案在刷新/重进后完整可回看且不自动续答
-      const w = store.getSessionWriter(convId);
-      w.stopLoading('user');
-      conversationsStore.currentConversationId = convId;
-      conversationsStore.persistConversation(
-        store.messagesWithStreamingFor(convId),
-        store.getSessionBuffer(convId)?.currentThreadId ?? undefined,
-      );
-      return;
-    }
-    store.getSessionWriter(convId).handleError((err as Error).message);
-    // FR-22 BYOK 400：缺配置是确定性错误，以 error 级呈现配置引导（不回落、重试无意义）
-    const errMsg = (err as Error).message;
-    if (errMsg.includes('配置中心 → AI 服务')) {
-      // 后端 BYOK 400 文案（query.ts）是桌面口径；移动端没有配置中心页，展示时替换为
-      // 真实入口「我的 → AI 服务」。检测仍按后端原文匹配：后端文案若变，此处退化为普通
-      // warning 展示原文，不会把移动端没有的入口重新指给用户（T02914）。
-      ElMessage.error(errMsg.replaceAll('配置中心 → AI 服务', '我的 → AI 服务'));
-    } else {
-      ElMessage.warning(errMsg);
-    }
+    handleSendError(err, convId);
   } finally {
     // 澄清重发流程结束（成功产出答案 / 再次中断 / 失败），复位重发加载态
     clarifyResending.value = false;
@@ -644,7 +659,7 @@ function handleStop() {
     activeAbort = null;
     // FR-22 可恢复流式模式：后端 run 与请求解耦，须显式通知取消（与桌面端 handleStop 一致）
     if (managerRunId) {
-      void apiFetch(`${API_BASE}/query/stop`, {
+      apiFetch(`${API_BASE}/query/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runId: managerRunId }),

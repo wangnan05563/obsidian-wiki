@@ -28,7 +28,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withCompileLock } from '../compile-queue.js';
-import type { EngineAdapter, FixInput } from '../types.js';
+import type { EngineAdapter, FixInput, FixProgressEvent } from '../types.js';
 
 // 作业状态。暂停请求不单独建状态：用 pauseRequested 标记，当前问题跑完落 paused。
 export type BatchFixStatus = 'running' | 'paused' | 'canceled' | 'completed';
@@ -164,6 +164,22 @@ function isTerminal(status: BatchFixStatus): boolean {
   return status === 'canceled' || status === 'completed';
 }
 
+function estimateBasis(samples: number): EstimateResult['basis'] {
+  if (samples === 0) return 'default';
+  if (samples < MEASURED_SAMPLE_THRESHOLD) return 'measured-low';
+  return 'measured';
+}
+
+/** 单项修复的流式终态（跨事件累积，事件处理与收尾判定共用）。 */
+interface FixOutcome {
+  succeeded: boolean;
+  errorMessage: string;
+  doneMessage: string;
+  gotDoneEvent: boolean;
+  harnessSteps: number;
+  tokens: number;
+}
+
 export class BatchFixJobManager {
   private readonly jobsDir: string;
   private readonly statsFile: string;
@@ -171,8 +187,19 @@ export class BatchFixJobManager {
   private readonly jobs = new Map<string, JobEntry>();
   // 串行落盘：同一 job 的并发写入互相覆盖，排队保证后写生效
   private writeChain: Promise<void> = Promise.resolve();
-  // T02888：进程启动时的过期快照回收，公开成 Promise 供测试确定性等待
-  readonly startupPrune: Promise<void>;
+  // T02888：进程启动时的过期快照回收。懒启动（构造函数不发起异步操作），
+  // 由路由注册时调用 startStartupPrune() 或测试首次访问 startupPrune 触发。
+  private prunePromise: Promise<void> | null = null;
+
+  get startupPrune(): Promise<void> {
+    this.prunePromise ??= this.pruneOldSnapshots().catch(() => undefined);
+    return this.prunePromise;
+  }
+
+  /** 启动期回收入口：保持「进程启动即回收」语义，不把异步动作放进构造函数。 */
+  startStartupPrune(): void {
+    this.startupPrune.catch(() => undefined);
+  }
 
   constructor(jobsDir: string, adapter: EngineAdapter) {
     this.jobsDir = jobsDir;
@@ -182,7 +209,6 @@ export class BatchFixJobManager {
     // 终态快照会一直留在盘上，而清理页四类目标都不扫 batch-fix（看不到也删不掉）。
     // 快照是「断点续传/恢复」语义（与 run-state 同族），不并入清理删除面，
     // 改由管理器自己在启动时按同一 TTL 回收，不依赖用户再次使用该功能。
-    this.startupPrune = this.pruneOldSnapshots().catch(() => undefined);
   }
 
   /** 启动一次批量修复：立即返回快照，实际执行在后台排队（withCompileLock 与 compile 互斥）。 */
@@ -301,12 +327,7 @@ export class BatchFixJobManager {
         ? Math.sqrt(Math.max(0, stats.sumSqMs / stats.samples - mean * mean))
         : mean * SINGLE_SAMPLE_SPREAD;
     const estimatedMs = Math.round(mean * count);
-    const basis: EstimateResult['basis'] =
-      stats.samples === 0
-        ? 'default'
-        : stats.samples < MEASURED_SAMPLE_THRESHOLD
-          ? 'measured-low'
-          : 'measured';
+    const basis: EstimateResult['basis'] = estimateBasis(stats.samples);
     return {
       count,
       llmCalls: Math.max(count, Math.round(count * stats.avgSteps)),
@@ -475,105 +496,133 @@ export class BatchFixJobManager {
   private async fixOne(entry: JobEntry, item: BatchFixItem, issueIndex: number): Promise<void> {
     const snap = entry.snapshot;
     const startedAt = Date.now();
-    let succeeded = false;
-    let errorMessage = '';
-    let doneMessage = '';
-    let gotDoneEvent = false;
-    // T02924：终端事件带出的实测往返步数/token（缺省 0 → 不计入 step/token 均值）
-    let harnessSteps = 0;
-    let tokens = 0;
-    try {
-      for await (const ev of this.adapter.healthCheckFix(item.input)) {
-        if (ev.data?.harnessSteps !== undefined) harnessSteps = ev.data.harnessSteps;
-        if (ev.data?.tokens !== undefined) tokens = ev.data.tokens;
-        const wrapped = {
-          ...ev,
-          issueIndex,
-          totalIssues: snap.total,
-          issueKey: item.issueKey,
-          issueDone: ev.step === 'done',
-        };
-        if (ev.step === 'done') {
-          gotDoneEvent = true;
-          succeeded = ev.status === 'done';
-          if (succeeded) doneMessage = ev.message;
-          else {
-            errorMessage = ev.message || '修复失败';
-            this.emit(entry, 'issue_error', wrapped);
-          }
-        } else {
-          this.emit(entry, ev.step === 'fixed' ? 'fixed' : 'progress', wrapped);
-        }
-      }
-    } catch (err: unknown) {
-      succeeded = false;
-      gotDoneEvent = true;
-      errorMessage = err instanceof Error ? err.message : String(err);
-      this.emit(entry, 'issue_error', {
-        step: 'done',
-        status: 'error',
-        message: errorMessage,
-        issueIndex,
-        totalIssues: snap.total,
-        issueKey: item.issueKey,
-        issueDone: true,
-        harnessSteps,
-        tokens,
-      });
-    }
+    const outcome = await this.runFixStream(entry, item, issueIndex);
     // 下限钳 1ms：recordDuration 拒绝 <=0，而瞬时完成的桩流程 Date.now() 差可能为 0
     const ms = Math.max(1, Date.now() - startedAt);
-    if (!gotDoneEvent) errorMessage = '修复流提前结束（未收到完成事件）';
-    if (succeeded) {
-      // 定点复检：确定性检查（零 LLM），裁定问题是否真的消解。
-      // adapter 未实现复检时按消解降级（保持流程成功语义）；复检自身异常按未消解如实上报。
-      let resolved = true;
-      let recheckNote = '';
-      try {
-        resolved = (await this.adapter.recheckIssueResolved?.(item.input)) ?? true;
-      } catch (err: unknown) {
-        resolved = false;
-        recheckNote = `复检失败: ${err instanceof Error ? err.message : String(err)}`;
-      }
-      if (resolved) {
-        snap.successCount++;
-        snap.doneKeys.push(item.issueKey);
-        this.emit(entry, 'issue_done', {
-          step: 'done',
-          status: 'done',
-          message: doneMessage || '已修复',
-          issueIndex,
-          totalIssues: snap.total,
-          issueKey: item.issueKey,
-          issueDone: true,
-          harnessSteps,
-          tokens,
-        });
-      } else {
-        snap.ineffectiveCount++;
-        snap.ineffective.push({ issueKey: item.issueKey, message: recheckNote || '流程完成但问题未消解' });
-        this.emit(entry, 'issue_ineffective', {
-          step: 'done',
-          status: 'done',
-          message: recheckNote || '流程完成但问题未消解（已处理，需复核）',
-          issueIndex,
-          totalIssues: snap.total,
-          issueKey: item.issueKey,
-          issueDone: true,
-          harnessSteps,
-          tokens,
-        });
-      }
+    if (!outcome.gotDoneEvent) outcome.errorMessage = '修复流提前结束（未收到完成事件）';
+    if (outcome.succeeded) {
+      await this.finishSuccessfulFix(entry, item, issueIndex, outcome);
     } else {
       snap.failCount++;
-      snap.failed.push({ issueKey: item.issueKey, message: errorMessage });
+      snap.failed.push({ issueKey: item.issueKey, message: outcome.errorMessage });
     }
     // 耗时样本口径：只要 LLM 流程跑过就计入（成功/未消解/失败都消耗真实时间），
     // 否则无效项白跑 LLM 却不计样本，估算会越跑越乐观。T02924：同时累计 step/token 样本。
-    await this.recordDuration(ms, { steps: harnessSteps, tokens });
+    await this.recordDuration(ms, { steps: outcome.harnessSteps, tokens: outcome.tokens });
     const stats = await this.readStats();
     snap.avgMsPerIssue = stats.avgMs;
     snap.avgStepsPerIssue = Math.round(stats.avgSteps * 10) / 10;
+  }
+
+  // 消费修复流：逐事件转发；抛出异常时补一条终态错误事件，保证订阅端总能收到结束信号。
+  private async runFixStream(
+    entry: JobEntry,
+    item: BatchFixItem,
+    issueIndex: number,
+  ): Promise<FixOutcome> {
+    // T02924：终端事件带出的实测往返步数/token（缺省 0 → 不计入 step/token 均值）
+    const outcome: FixOutcome = {
+      succeeded: false,
+      errorMessage: '',
+      doneMessage: '',
+      gotDoneEvent: false,
+      harnessSteps: 0,
+      tokens: 0,
+    };
+    try {
+      for await (const ev of this.adapter.healthCheckFix(item.input)) {
+        this.emitFixEvent(entry, ev, item, issueIndex, outcome);
+      }
+    } catch (err: unknown) {
+      outcome.succeeded = false;
+      outcome.gotDoneEvent = true;
+      outcome.errorMessage = err instanceof Error ? err.message : String(err);
+      this.emit(entry, 'issue_error', {
+        step: 'done',
+        status: 'error',
+        message: outcome.errorMessage,
+        issueIndex,
+        totalIssues: entry.snapshot.total,
+        issueKey: item.issueKey,
+        issueDone: true,
+        harnessSteps: outcome.harnessSteps,
+        tokens: outcome.tokens,
+      });
+    }
+    return outcome;
+  }
+
+  // 单事件分发：done 是终态（成功/失败），fixed/progress 直接转发。
+  private emitFixEvent(
+    entry: JobEntry,
+    ev: FixProgressEvent,
+    item: BatchFixItem,
+    issueIndex: number,
+    outcome: FixOutcome,
+  ): void {
+    if (ev.data?.harnessSteps !== undefined) outcome.harnessSteps = ev.data.harnessSteps;
+    if (ev.data?.tokens !== undefined) outcome.tokens = ev.data.tokens;
+    const wrapped = {
+      ...ev,
+      issueIndex,
+      totalIssues: entry.snapshot.total,
+      issueKey: item.issueKey,
+      issueDone: ev.step === 'done',
+    };
+    if (ev.step !== 'done') {
+      this.emit(entry, ev.step === 'fixed' ? 'fixed' : 'progress', wrapped);
+      return;
+    }
+    outcome.gotDoneEvent = true;
+    outcome.succeeded = ev.status === 'done';
+    if (outcome.succeeded) {
+      outcome.doneMessage = ev.message;
+      return;
+    }
+    outcome.errorMessage = ev.message || '修复失败';
+    this.emit(entry, 'issue_error', wrapped);
+  }
+
+  // 成功后的定点复检：先裁定「消解/未消解」，再广播终态事件。
+  private async finishSuccessfulFix(
+    entry: JobEntry,
+    item: BatchFixItem,
+    issueIndex: number,
+    outcome: FixOutcome,
+  ): Promise<void> {
+    const snap = entry.snapshot;
+    // 定点复检：确定性检查（零 LLM），裁定问题是否真的消解。
+    // adapter 未实现复检时按消解降级（保持流程成功语义）；复检自身异常按未消解如实上报。
+    let resolved = true;
+    let recheckNote = '';
+    try {
+      resolved = (await this.adapter.recheckIssueResolved?.(item.input)) ?? true;
+    } catch (err: unknown) {
+      resolved = false;
+      recheckNote = `复检失败: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    const base = {
+      step: 'done',
+      status: 'done',
+      issueIndex,
+      totalIssues: snap.total,
+      issueKey: item.issueKey,
+      issueDone: true,
+      harnessSteps: outcome.harnessSteps,
+      tokens: outcome.tokens,
+    };
+    if (resolved) {
+      snap.successCount++;
+      snap.doneKeys.push(item.issueKey);
+      this.emit(entry, 'issue_done', { ...base, message: outcome.doneMessage || '已修复' });
+      return;
+    }
+    snap.ineffectiveCount++;
+    snap.ineffective.push({ issueKey: item.issueKey, message: recheckNote || '流程完成但问题未消解' });
+    this.emit(entry, 'issue_ineffective', {
+      ...base,
+      message: recheckNote || '流程完成但问题未消解（已处理，需复核）',
+    });
   }
 
   private emit(entry: JobEntry, event: string, data: unknown): void {

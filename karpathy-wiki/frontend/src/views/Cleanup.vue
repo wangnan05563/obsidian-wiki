@@ -20,6 +20,7 @@ import {
   previewSwitchHint,
   storageDirRows,
   type CleanupCardKey,
+  type CleanupMode,
 } from '../utils/cleanupPresentation';
 
 // 存储状态
@@ -45,8 +46,9 @@ const preview = ref(true);
 const showAdvanced = ref(false);
 
 const cards = CLEANUP_CARDS;
-const bannerText = computed(() => buildPreviewBanner(preview.value));
-const chip = computed(() => modeChip(preview.value));
+const mode = computed<CleanupMode>(() => (preview.value ? 'preview' : 'live'));
+const bannerText = computed(() => buildPreviewBanner(mode.value));
+const chip = computed(() => modeChip(mode.value));
 // T02887：「高级」面板从「一张静态示意表 + 只有运行状态有真实清单」扩成四类目标各有真实清单。
 // 路径与计数一律直接取后端 status 各卡的 dirs（即后端真正扫描的位置清单），
 // 前端不重排也不改写字符串；techPath 示意降级为口径说明，不再冒充实际位置。
@@ -118,6 +120,43 @@ async function loadStatus() {
   }
 }
 
+/** 409 硬拦截：把后端原因与操作指引落到该卡结果区，并刷新页顶的进行中任务 */
+async function applyBlockedCleanup(
+  key: CleanupCardKey,
+  meta: ReturnType<typeof cardOf>,
+  blocked: CleanupBlockedResponse | null,
+  days: number,
+): Promise<void> {
+  const headline = blocked?.error ?? '后端检测到进行中的任务，已拦截这次真实删除。';
+  const details = (blocked?.reasons ?? []).filter((r) => r !== headline);
+  // 响应体解析失败（blocked 为 null）时拿不到 code，指引只在有 code 时补
+  const guidance = blocked ? BLOCKED_GUIDANCE[blocked.code] : undefined;
+  ElMessage.warning(headline);
+  results.value[key] = {
+    target: meta.target,
+    days,
+    dry_run: false,
+    cleaned: [],
+    errors: [headline, ...details, ...(guidance ? [guidance] : [])],
+    count: 0,
+  };
+  // 立刻刷新：让页顶的「进行中任务」和卡面置灰跟上后端事实
+  await loadStatus();
+}
+
+async function applyCleanupSuccess(key: CleanupCardKey, data: CleanupResult): Promise<void> {
+  results.value[key] = data;
+  if (preview.value) {
+    const n = data.cleaned.length;
+    ElMessage.info(n > 0 ? `预览完成：将处理 ${n} 项` : '预览完成：无需要清理的内容');
+    return;
+  }
+  // 实际执行后刷新状态以反映最新存储情况
+  await loadStatus();
+  const freed = data.total_freed_mb !== undefined ? `，释放 ${data.total_freed_mb} MB` : ''; // NOSONAR: S7735 - 误报，此处 !== undefined 是必要的存在性检查
+  ElMessage.success(`清理完成：处理 ${data.count} 项${freed}`);
+}
+
 async function handleCleanup(key: CleanupCardKey) {
   const meta = cardOf(key);
   // 非预览模式必须二次确认，避免误删（与闲鱼 globalThis.confirm 等价）
@@ -153,36 +192,11 @@ async function handleCleanup(key: CleanupCardKey) {
     // 也不告诉用户要等什么，只会让人再点一次。
     if (res.status === 409) {
       const blocked = (await res.json().catch(() => null)) as CleanupBlockedResponse | null;
-      const headline = blocked?.error ?? '后端检测到进行中的任务，已拦截这次真实删除。';
-      const details = (blocked?.reasons ?? []).filter((r) => r !== headline);
-      // 响应体解析失败（blocked 为 null）时拿不到 code，指引只在有 code 时补
-      const guidance = blocked ? BLOCKED_GUIDANCE[blocked.code] : undefined;
-      ElMessage.warning(headline);
-      results.value[key] = {
-        target: meta.target,
-        days: forms[key].days,
-        dry_run: false,
-        cleaned: [],
-        errors: [headline, ...details, ...(guidance ? [guidance] : [])],
-        count: 0,
-      };
-      // 立刻刷新：让页顶的「进行中任务」和卡面置灰跟上后端事实
-      await loadStatus();
+      await applyBlockedCleanup(key, meta, blocked, forms[key].days);
       return;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: CleanupResult = await res.json();
-    results.value[key] = data;
-
-    if (preview.value) {
-      const n = data.cleaned.length;
-      ElMessage.info(n > 0 ? `预览完成：将处理 ${n} 项` : '预览完成：无需要清理的内容');
-    } else {
-      // 实际执行后刷新状态以反映最新存储情况
-      await loadStatus();
-      const freed = data.total_freed_mb !== undefined ? `，释放 ${data.total_freed_mb} MB` : ''; // NOSONAR: S7735 - 误报，此处 !== undefined 是必要的存在性检查
-      ElMessage.success(`清理完成：处理 ${data.count} 项${freed}`);
-    }
+    await applyCleanupSuccess(key, (await res.json()) as CleanupResult);
   } catch (err) {
     const message = apiErrorMessage('清理失败', err);
     results.value[key] = { errors: [message] } as CleanupResult;
@@ -222,7 +236,7 @@ onMounted(() => {
             data-tip="开启时只会列出会删哪些文件；关闭后本页所有清理按钮都会真实删除"
           />
           <span class="switch-label">仅预览（不实际执行）</span>
-          <span class="preview-hint">{{ previewSwitchHint(preview) }}</span>
+          <span class="preview-hint">{{ previewSwitchHint(mode) }}</span>
           <span :class="['mode-tag', chip.danger ? 'mode-danger' : 'mode-safe']">{{ chip.label }}</span>
           <!-- T02655：活体指示——有任务在跑时才出现，说明为什么有的卡被置灰 -->
           <span
@@ -232,9 +246,9 @@ onMounted(() => {
             data-tip="后端统计的进行中任务；有任务时「运行状态/原始资料」的真实删除会被拒绝"
           >{{ activeHint }}</span>
         </div>
-        <a class="advanced-toggle" href="#" role="button" :aria-expanded="showAdvanced" @click.prevent="showAdvanced = !showAdvanced">
+        <button type="button" class="advanced-toggle" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">
           {{ showAdvanced ? '收起技术细节' : '高级：查看实际路径与技术说明' }}
-        </a>
+        </button>
       </div>
 
       <!-- 关闭预览后的红色横幅：位置在操作卡之前，避免滚下去就看不见 -->
@@ -621,7 +635,11 @@ onMounted(() => {
   font-size: 12px;
   color: var(--neon-purple);
   text-decoration: none;
+  background: none;
+  border: none;
   border-bottom: 1px dashed var(--accent-purple-a40, rgba(168, 85, 247, 0.4));
+  padding: 0;
+  cursor: pointer;
 }
 
 .advanced-toggle:hover {

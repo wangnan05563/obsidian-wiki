@@ -22,7 +22,8 @@ const props = withDefaults(
 const tip = computed(() => {
   if (!props.badge) return '';
   const suffix = props.reason ? `｜${props.reason}` : '';
-  return `${props.badge.label}${props.compact ? '' : ` - ${props.badge.tip}`}${suffix}`;
+  const detail = props.compact ? '' : ` - ${props.badge.tip}`;
+  return `${props.badge.label}${detail}${suffix}`;
 });
 </script>
 

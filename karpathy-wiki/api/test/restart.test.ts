@@ -141,7 +141,7 @@ describe('POST /api/restart：三道门', () => {
       afterRestart,
       perform: perform as unknown as () => RestartMode,
     };
-    registerConfigRoute(app, {} as HarnessAdapter, guards, controller);
+    registerConfigRoute(app, {} as HarnessAdapter, controller, guards);
     await app.ready();
   }
 

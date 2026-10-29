@@ -54,6 +54,40 @@ export async function initAuthModule(config: AuthConfig, vaultPath: string, loca
   startSessionCleanup();
 }
 
+// PUT /api/auth/users/:id 的入参校验：请求体与角色枚举。
+function validateUserUpdateBasics(body: UpdateUserRequest | undefined): { status: number; error: string } | null {
+  if (!body) return { status: 400, error: '请求体为空' };
+  if (body.role && !['admin', 'user', 'guest'].includes(body.role)) {
+    return { status: 400, error: '无效的角色' };
+  }
+  return null;
+}
+
+function validateUpdatePassword(password: string | undefined): { status: number; error: string } | null {
+  if (!password) return null;
+  const pwdCheck = validateNewPassword(password);
+  return pwdCheck.ok ? null : { status: pwdCheck.status, error: pwdCheck.error };
+}
+
+// 用户更新里的两条红线：不能搞死当前登录账户自身；不能搞掉最后一个可用管理员。
+async function findUserUpdateGuardError(
+  request: FastifyRequest,
+  target: UserRecord,
+  body: UpdateUserRequest,
+): Promise<string | null> {
+  const selfLocked = target.id === request.currentUser?.userId
+    && (body.enabled === false || (body.role && body.role !== 'admin'));
+  if (selfLocked) return '不能停用或降级当前登录账户';
+
+  const demotingAdmin = target.role === 'admin'
+    && ((body.role && body.role !== 'admin') || body.enabled === false);
+  if (!demotingAdmin) return null;
+
+  const all = await listUsers();
+  const otherActiveAdmins = all.filter((u) => u.id !== target.id && u.role === 'admin' && u.enabled).length;
+  return otherActiveAdmins === 0 ? '系统至少保留一个启用的管理员账户' : null;
+}
+
 // 注册认证路由
 // 为什么单独导出 registerAuthRoute：遵循项目 register{Name}Route 模式（route-registration-rule）
 export function registerAuthRoute(app: FastifyInstance): void {
@@ -495,37 +529,23 @@ export function registerAuthRoute(app: FastifyInstance): void {
   app.put('/api/auth/users/:id', { preHandler: adminGuard }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
     const body = request.body as UpdateUserRequest;
-    if (!body) {
-      return void reply.code(400).send({ error: '请求体为空' });
-    }
-    if (body.role && !['admin', 'user', 'guest'].includes(body.role)) {
-      return void reply.code(400).send({ error: '无效的角色' });
+    const basicError = validateUserUpdateBasics(body);
+    if (basicError) {
+      return void reply.code(basicError.status).send({ error: basicError.error });
     }
     const target = await findUserById(id);
     if (!target) {
       return void reply.code(404).send({ error: `用户不存在: ${id}` });
     }
-    // 禁止停用/改角色搞死当前登录账户自身（停用会销毁自己的会话 → 立刻被踢出）
-    if (target.id === request.currentUser?.userId && (body.enabled === false || (body.role && body.role !== 'admin'))) {
-      // T02937：被守卫拒绝的尝试同样要留痕（帮助文档承诺越权/用户管理操作都会记审计）
-      audit({ request, action: 'user_update', resource: `/api/auth/users/${id}`, result: 'fail', message: '不能停用或降级当前登录账户' });
-      return void reply.code(400).send({ error: '不能停用或降级当前登录账户' });
+    // T02937：被守卫拒绝的尝试同样要留痕（帮助文档承诺越权/用户管理操作都会记审计）
+    const guardError = await findUserUpdateGuardError(request, target, body);
+    if (guardError) {
+      audit({ request, action: 'user_update', resource: `/api/auth/users/${id}`, result: 'fail', message: guardError });
+      return void reply.code(400).send({ error: guardError });
     }
-    // T02473（PRD U2）：禁止把最后一个可用管理员改角色或停用 —— 与删除同一条锁死红线
-    if (target.role === 'admin' && ((body.role && body.role !== 'admin') || body.enabled === false)) {
-      const all = await listUsers();
-      const otherActiveAdmins = all.filter((u) => u.id !== target.id && u.role === 'admin' && u.enabled).length;
-      if (otherActiveAdmins === 0) {
-        // T02937：守卫拒绝也要写 fail 审计
-        audit({ request, action: 'user_update', resource: `/api/auth/users/${id}`, result: 'fail', message: '系统至少保留一个启用的管理员账户' });
-        return void reply.code(400).send({ error: '系统至少保留一个启用的管理员账户' });
-      }
-    }
-    if (body.password) {
-      const pwdCheck = validateNewPassword(body.password);
-      if (!pwdCheck.ok) {
-        return void reply.code(pwdCheck.status).send({ error: pwdCheck.error });
-      }
+    const pwdError = validateUpdatePassword(body.password);
+    if (pwdError) {
+      return void reply.code(pwdError.status).send({ error: pwdError.error });
     }
     try {
       const updated = await updateUser(id, {

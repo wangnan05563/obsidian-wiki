@@ -130,9 +130,11 @@ describe('P0-1 [N2/REQ-001] 侧栏分组与 15 项全项可达', () => {
     expect(app).toMatch(/const hiddenCount = ref\(0\)/);
     expect(app).toMatch(/还有 \{\{ hiddenCount \}\} 项/);
     expect(app).toMatch(/function scrollMenuDown/);
-    // 提示条必须可点，也可键盘触发（无障碍）
-    expect(app).toMatch(/@click="scrollMenuDown"/);
-    expect(app).toMatch(/@keydown\.enter\.prevent="scrollMenuDown"/);
+    // 提示条必须可点，也可键盘触发（无障碍）：键盘可达性由原生 <button> 提供，
+    // 不再手写 @keydown 分支（S6819 要求可交互元素使用原生 button）
+    const hint = app.match(/<button[^>]*class="nav-scroll-hint"[\s\S]*?<\/button>/)?.[0] ?? '';
+    expect(hint).toContain('@click="scrollMenuDown"');
+    expect(hint).toContain('type="button"');
   });
 
   it('选中态用 aria-current="page"，读屏能说出「当前页」', () => {

@@ -477,7 +477,6 @@ select.mme-input {
   justify-content: space-between;
   width: 100%;
   padding: 12px 10px;
-  border: none;
   border-radius: 10px;
   background: var(--m-surface-2, #ffffff);
   border: 1px solid var(--m-border, #ececee);

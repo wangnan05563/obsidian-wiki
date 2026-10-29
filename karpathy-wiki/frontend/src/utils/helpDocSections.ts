@@ -47,7 +47,7 @@ const CLEANUP_DAYS_TARGETS = CLEANUP_CARDS.filter((c) => c.showDays).map((c) => 
 const CLEANUP_DAYS_TITLES = CLEANUP_CARDS.filter((c) => c.showDays).map((c) => c.title).join(' / ');
 const CLEANUP_FEATURE_TEXT =
   CLEANUP_CARDS.map((c) => `${c.title}＝${c.plain}${c.consequence}`).join('') +
-  `「仅预览」是页级单一开关，默认开启。${buildPreviewBanner(false)}`;
+  `「仅预览」是页级单一开关，默认开启。${buildPreviewBanner('live')}`;
 
 // 页面质量清洗（dataclean 章）：问题分类实名与批量动作来自 ISSUE_CATEGORIES
 const issueDef = (key: IssueKey): (typeof ISSUE_CATEGORIES)[number] => {

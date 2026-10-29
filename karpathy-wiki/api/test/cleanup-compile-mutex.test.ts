@@ -65,6 +65,14 @@ function readSrc(rel: string): string {
   return readFileSync(path.join(srcDir, rel), 'utf8');
 }
 
+/** 取模块级函数体（签名起、到顶格 `}` 止），避免全文 indexOf 跨函数误锚。 */
+function sliceFunction(src: string, signature: string): string {
+  const start = src.indexOf(signature);
+  if (start === -1) return '';
+  const end = src.indexOf('\n}', start);
+  return src.slice(start, end === -1 ? src.length : end);
+}
+
 function stubVault(vaultPath: string): VaultService {
   return { getVaultPath: () => vaultPath } as unknown as VaultService;
 }
@@ -595,16 +603,20 @@ describe('T02774 起跑点接线锁（漏接一处等于整套互斥失效）', 
     const src = readSrc('src/routes/cleanup.ts');
     // T02817 起判定输入是「本进程 + 其它进程」合并的快照；仍锁死这一点，
     // 否则有人会把守卫改回只读进程内计数，跨进程那半边保护当场失效且无人报警。
-    expect(src.indexOf('const active0 = await activeStateAcrossProcesses();')).toBeLessThan(
-      src.indexOf('evaluateCleanupGuard(target, active0)'),
-    );
-    const guardIdx = src.indexOf('evaluateCleanupGuard(target, active0)');
-    const acquireIdx = src.indexOf('acquireCleanup()');
-    expect(guardIdx).toBeGreaterThan(-1);
-    expect(acquireIdx).toBeGreaterThan(guardIdx);
-    // 去掉被拦分支（里面的 writeAudit 是 409 前的收尾，不在主路径上）再看有无 await
-    const segment = src.slice(guardIdx, acquireIdx);
-    expect(stripIfBlock(segment, 'if (verdict.blocked.length > 0)').includes('await')).toBe(false);
+    const guardFn = sliceFunction(src, 'async function blockedByActiveTasks(');
+    const snapshotIdx = guardFn.indexOf('const active = await activeStateAcrossProcesses();');
+    const verdictIdx = guardFn.indexOf('evaluateCleanupGuard(target, active)');
+    expect(snapshotIdx).toBeGreaterThan(-1);
+    expect(verdictIdx).toBeGreaterThan(snapshotIdx);
+    // 守卫与抢锁收在 claimDeletionRights：守卫返回后必须同步抢锁，中间不得再 await
+    const claimFn = sliceFunction(src, 'async function claimDeletionRights(');
+    const guardCall = claimFn.indexOf('const blockedActive = await blockedByActiveTasks(');
+    const guardExit = claimFn.indexOf('if (blockedActive) return { ok: false, blocked: blockedActive };');
+    const acquireIdx = claimFn.indexOf('acquireCleanup()');
+    expect(guardCall).toBeGreaterThan(-1);
+    expect(guardExit).toBeGreaterThan(guardCall);
+    expect(acquireIdx).toBeGreaterThan(guardExit);
+    expect(claimFn.slice(guardExit, acquireIdx)).not.toContain('await');
   });
 
   it('清理路由：release 位于 finally（异常路径不得把锁留在持有态）', () => {
@@ -618,20 +630,3 @@ describe('T02774 起跑点接线锁（漏接一处等于整套互斥失效）', 
     expect(src.slice(Math.max(0, releaseIdx - 300), releaseIdx)).toContain('finally {');
   });
 });
-
-/** 从 segment 中删掉 `if (cond) { ... }` 整块（花括号配对），用于主路径静默性检查。 */
-function stripIfBlock(segment: string, cond: string): string {
-  const start = segment.indexOf(cond);
-  if (start === -1) return segment;
-  const braceStart = segment.indexOf('{', start + cond.length);
-  if (braceStart === -1) return segment;
-  let depth = 0;
-  for (let i = braceStart; i < segment.length; i++) {
-    if (segment[i] === '{') depth += 1;
-    else if (segment[i] === '}') {
-      depth -= 1;
-      if (depth === 0) return segment.slice(0, start) + segment.slice(i + 1);
-    }
-  }
-  return segment;
-}

@@ -882,7 +882,7 @@ function handleStop() {
   // 须显式通知后端取消该 run（内联模式无独立 run，后端随连接断开自动终止）。
   const managerRunId = store.getSessionWriter().managerRunId;
   if (managerRunId) {
-    void authStore.authFetch(API_BASE + '/query/stop', {
+    authStore.authFetch(API_BASE + '/query/stop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ runId: managerRunId }),

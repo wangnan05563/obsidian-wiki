@@ -23,9 +23,9 @@ import {
   addPageToNameIndex,
   createLinkResolver,
   extractWikilinkTargets,
+  type LinkResolver,
   type PageNameIndex,
 } from '../vault/link-parser.js';
-import type { LinkResolver } from '../vault/link-parser.js';
 
 // BYOK per-user 配置覆盖纯函数（轻量模块，运行时零依赖，便于单测）。
 import { applyPerRequestOverride } from './byok-override.js';

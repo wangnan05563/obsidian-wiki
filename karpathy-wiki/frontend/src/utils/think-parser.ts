@@ -34,22 +34,22 @@ export interface ThinkStreamParser {
   thinkingLength(): number;
 }
 
+// 扣留判定：块尾部是标签（或闭合标签）的严格前缀时暂扣
+function pendingIfPartialTag(block: string): { safe: string; pending: string } {
+  const max = Math.max(OPEN_TAG.length, CLOSE_TAG.length) - 1;
+  for (let keep = Math.min(block.length, max); keep > 0; keep--) {
+    const tail = block.slice(block.length - keep);
+    if (OPEN_TAG.startsWith(tail) || CLOSE_TAG.startsWith(tail)) {
+      return { safe: block.slice(0, block.length - keep), pending: tail };
+    }
+  }
+  return { safe: block, pending: '' };
+}
+
 export function createThinkStreamParser(): ThinkStreamParser {
   let inThink = false;
   let pending = ''; // 疑似半开标签的暂扣内容
   let thinkingAll = '';
-
-  // 扣留判定：块尾部是标签（或闭合标签）的严格前缀时暂扣
-  function pendingIfPartialTag(block: string): { safe: string; pending: string } {
-    const max = Math.max(OPEN_TAG.length, CLOSE_TAG.length) - 1;
-    for (let keep = Math.min(block.length, max); keep > 0; keep--) {
-      const tail = block.slice(block.length - keep);
-      if (OPEN_TAG.startsWith(tail) || CLOSE_TAG.startsWith(tail)) {
-        return { safe: block.slice(0, block.length - keep), pending: tail };
-      }
-    }
-    return { safe: block, pending: '' };
-  }
 
   function feed(text: string): ThinkParserResult {
     let buf = pending + text;

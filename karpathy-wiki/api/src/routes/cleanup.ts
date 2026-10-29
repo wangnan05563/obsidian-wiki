@@ -82,8 +82,231 @@ function mergeDirStats(list: DirStats[]): DirStats {
     fileCount: list.reduce((n, s) => n + s.fileCount, 0),
     sizeBytes: list.reduce((n, s) => n + s.sizeBytes, 0),
     // oldest 是 YYYY-MM-DD 字符串，字典序即时间序
-    oldest: list.map((s) => s.oldest).filter((v): v is string => v !== null).sort()[0] ?? null,
+    oldest: list.map((s) => s.oldest).filter((v): v is string => v !== null).sort((a, b) => a.localeCompare(b))[0] ?? null,
   };
+}
+
+type AuditWriter = (entry: Record<string, unknown>) => Promise<void>;
+
+/** 列目录下匹配 pattern 的文件（仅文件，不含子目录） */
+async function listFiles(dir: string, pattern: RegExp): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isFile() && pattern.test(e.name))
+      .map((e) => path.join(dir, e.name));
+  } catch {
+    return [];
+  }
+}
+
+async function directoryExists(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch {
+    // 不存在与无权限都按「没有这个位置」处理：统计侧本来就把 readdir 失败当 0 个文件
+    return false;
+  }
+}
+
+/** 响应体只留公开字段（sizeBytes/oldest 是合并统计的中间量） */
+function toPublicRow(s: CleanupRunStateDir & { sizeBytes: number; oldest: string | null }): CleanupRunStateDir {
+  return { path: s.path, fileCount: s.fileCount, sizeMb: s.sizeMb, role: s.role, exists: s.exists };
+}
+
+/** 活跃任务拦截：命中时落审计并返回 409 响应体，未命中返回 null。 */
+async function blockedByActiveTasks(
+  target: string,
+  days: number,
+  writeAudit: AuditWriter,
+  opts: { errorPrefix?: string; auditExtra?: Record<string, unknown> } = {},
+): Promise<CleanupBlockedResponse | null> {
+  const active = await activeStateAcrossProcesses();
+  const verdict = evaluateCleanupGuard(target, active);
+  if (verdict.blocked.length === 0) return null;
+  const reason = opts.errorPrefix
+    ? `${opts.errorPrefix}：${verdict.reasons.join('；')}`
+    : guardErrorMessage(target, verdict, active);
+  await writeAudit({
+    ts: new Date().toISOString(),
+    target,
+    days,
+    dry_run: false,
+    ...opts.auditExtra,
+    blocked_by_active_task: true,
+    blocked: verdict.blocked,
+    active,
+  });
+  return {
+    error: reason,
+    code: 'cleanup_blocked_by_active_task',
+    target,
+    blocked: verdict.blocked,
+    reasons: opts.errorPrefix ? [reason] : verdict.reasons,
+    active,
+  };
+}
+
+/** 进程内锁已被占用（另一次真实清理仍在删）时的 409。 */
+async function blockedByConcurrentCleanup(
+  target: string,
+  days: number,
+  writeAudit: AuditWriter,
+): Promise<CleanupBlockedResponse> {
+  const active = currentActiveState();
+  const reason = '上一次真实清理仍在进行中（同一时刻只允许一次删除），本次已拒绝执行。';
+  await writeAudit({
+    ts: new Date().toISOString(),
+    target,
+    days,
+    dry_run: false,
+    blocked_by_concurrent_cleanup: true,
+    active,
+  });
+  return {
+    error: reason,
+    code: 'cleanup_blocked_by_concurrent_cleanup',
+    target,
+    blocked: [],
+    reasons: [reason],
+    active,
+  };
+}
+
+type MarkerClaim = { ok: true; markerFile: string } | { ok: false; blocked: CleanupBlockedResponse };
+
+// 统计目录下文件数 + 总大小（字节）+ 最早 mtime
+async function statDir(
+  dir: string,
+  pattern: RegExp,
+): Promise<{ fileCount: number; sizeBytes: number; oldest: string | null }> {
+  const files = await listFiles(dir, pattern);
+  let sizeBytes = 0;
+  let oldestMs: number | null = null;
+  for (const f of files) {
+    try {
+      const stat = await fs.stat(f);
+      sizeBytes += stat.size;
+      if (oldestMs === null || stat.mtimeMs < oldestMs) {
+        oldestMs = stat.mtimeMs;
+      }
+    } catch {
+      // 单文件 stat 失败跳过
+    }
+  }
+  return {
+    fileCount: files.length,
+    sizeBytes,
+    oldest: oldestMs === null ? null : new Date(oldestMs).toISOString().slice(0, 10),
+  };
+}
+
+
+/** 抢跨进程删除标记；无协调目录返回 null（单实例形态），抢不到则落审计并返回 409。 */
+async function claimMarkerForDeletion(
+  target: string,
+  days: number,
+  writeAudit: AuditWriter,
+): Promise<MarkerClaim | null> {
+  const paths = coordinationPaths();
+  if (!paths.markerFile) return null;
+  const lockFile = paths.markerFile;
+  const claim = await claimCleanupMarker({ lockFile, instance: paths.instance, target });
+  if (!claim.ok) {
+    const m = claim.blockedBy.marker;
+    const reason = `另一服务实例正在执行真实删除（pid ${m?.pid ?? '?'} @ ${m?.instance ?? '?'}，目标 ${m?.target ?? '?'}，已持续 ${Math.round(claim.blockedBy.ageMs / 1000)} 秒），本次删除已拒绝。`;
+    const active = await activeStateAcrossProcesses();
+    await writeAudit({
+      ts: new Date().toISOString(),
+      target,
+      days,
+      dry_run: false,
+      blocked_by_other_process: true,
+      other_marker: m ?? null,
+      other_age_ms: claim.blockedBy.ageMs,
+      active,
+    });
+    return {
+      ok: false,
+      blocked: {
+        error: reason,
+        code: 'cleanup_blocked_by_other_process',
+        target,
+        blocked: [],
+        reasons: [reason],
+        active,
+      },
+    };
+  }
+  // 陈旧标记被回收也要留痕：排查时这才不是「莫名其妙的放行」
+  if (claim.purged) {
+    await writeAudit({
+      ts: new Date().toISOString(),
+      target,
+      days,
+      dry_run: false,
+      cleanup_marker_stale_purged: true,
+      stale_reason: claim.purged.reason ?? 'unknown',
+      stale_marker: claim.purged.marker ?? null,
+      stale_age_ms: claim.purged.ageMs,
+    });
+  }
+  return { ok: true, markerFile: lockFile };
+}
+
+// 单个目录的统计行（T02772 合并计数 + T02808 目录清单 + T02887 推广到四类目标）。
+// 为什么合并计数改为由逐目录结果求和，而不是另写一个合并函数：
+// 「卡面计数 = 高级面板各目录计数之和」这条验收从此是结构上的恒等式，
+// 而不是两条代码路径碰巧算出同一个数——T02772 的缺陷正是「两套口径各算一套」。
+// sizeBytes/oldest 只在本函数内参与合并统计，不进响应体。
+async function statDirRow(
+  dir: string,
+  pattern: RegExp,
+  isLegacy: (dir: string) => boolean,
+): Promise<CleanupRunStateDir & { sizeBytes: number; oldest: string | null }> {
+  const s = await statDir(dir, pattern);
+  return {
+    path: dir,
+    fileCount: s.fileCount,
+    sizeMb: bytesToMb(s.sizeBytes),
+    role: isLegacy(dir) ? 'legacy' : 'canonical',
+    exists: await directoryExists(dir),
+    sizeBytes: s.sizeBytes,
+    oldest: s.oldest,
+  };
+}
+
+type DeletionRights = { handle: CleanupHandle; markerFile: string | null };
+
+/** 真删前的三道门：活跃任务 → 进程内锁 → 跨进程标记（拿到标记后再复核一次活跃）。 */
+async function claimDeletionRights(
+  target: string,
+  days: number,
+  writeAudit: AuditWriter,
+): Promise<{ ok: true; rights: DeletionRights } | { ok: false; blocked: CleanupBlockedResponse }> {
+  const blockedActive = await blockedByActiveTasks(target, days, writeAudit);
+  if (blockedActive) return { ok: false, blocked: blockedActive };
+
+  const handle = acquireCleanup();
+  if (!handle) return { ok: false, blocked: await blockedByConcurrentCleanup(target, days, writeAudit) };
+
+  const marker = await claimMarkerForDeletion(target, days, writeAudit);
+  if (marker === null) return { ok: true, rights: { handle, markerFile: null } };
+  if (!marker.ok) {
+    handle.release();
+    return { ok: false, blocked: marker.blocked };
+  }
+
+  const recheck = await blockedByActiveTasks(target, days, writeAudit, {
+    errorPrefix: '取得删除权后发现另一实例刚起跑任务',
+    auditExtra: { blocked_after_marker: true },
+  });
+  if (recheck) {
+    await releaseCleanupMarker(marker.markerFile);
+    handle.release();
+    return { ok: false, blocked: recheck };
+  }
+  return { ok: true, rights: { handle, markerFile: marker.markerFile } };
 }
 
 export type CleanupTestHooks = {
@@ -132,68 +355,6 @@ export function registerCleanupRoute(
 
   // ===== 工具函数 =====
 
-  // 列目录下匹配 pattern 的文件（仅文件，不含子目录）
-  async function listFiles(dir: string, pattern: RegExp): Promise<string[]> {
-    try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      return entries
-        .filter((e) => e.isFile() && pattern.test(e.name))
-        .map((e) => path.join(dir, e.name));
-    } catch {
-      return [];
-    }
-  }
-
-  // 统计目录下文件数 + 总大小（字节）+ 最早 mtime
-  async function statDir(dir: string, pattern: RegExp): Promise<{ fileCount: number; sizeBytes: number; oldest: string | null }> {
-    const files = await listFiles(dir, pattern);
-    let sizeBytes = 0;
-    let oldestMs: number | null = null;
-    for (const f of files) {
-      try {
-        const stat = await fs.stat(f);
-        sizeBytes += stat.size;
-        if (oldestMs === null || stat.mtimeMs < oldestMs) {
-          oldestMs = stat.mtimeMs;
-        }
-      } catch {
-        // 单文件 stat 失败跳过
-      }
-    }
-    return {
-      fileCount: files.length,
-      sizeBytes,
-      oldest: oldestMs === null ? null : new Date(oldestMs).toISOString().slice(0, 10),
-    };
-  }
-
-  // 单个目录的统计行（T02772 合并计数 + T02808 目录清单 + T02887 推广到四类目标）。
-  // 为什么合并计数改为由逐目录结果求和，而不是另写一个合并函数：
-  // 「卡面计数 = 高级面板各目录计数之和」这条验收从此是结构上的恒等式，
-  // 而不是两条代码路径碰巧算出同一个数——T02772 的缺陷正是「两套口径各算一套」。
-  // sizeBytes/oldest 只在本函数内参与合并统计，不进响应体。
-  async function statDirRow(
-    dir: string,
-    pattern: RegExp,
-    isLegacy: (dir: string) => boolean,
-  ): Promise<CleanupRunStateDir & { sizeBytes: number; oldest: string | null }> {
-    const s = await statDir(dir, pattern);
-    return {
-      path: dir,
-      fileCount: s.fileCount,
-      sizeMb: bytesToMb(s.sizeBytes),
-      role: isLegacy(dir) ? 'legacy' : 'canonical',
-      exists: await directoryExists(dir),
-      sizeBytes: s.sizeBytes,
-      oldest: s.oldest,
-    };
-  }
-
-  // 响应体只留公开字段（sizeBytes/oldest 是合并统计的中间量）
-  function toPublicRow(s: CleanupRunStateDir & { sizeBytes: number; oldest: string | null }): CleanupRunStateDir {
-    return { path: s.path, fileCount: s.fileCount, sizeMb: s.sizeMb, role: s.role, exists: s.exists };
-  }
-
   // 编译缓存按根逐个统计（T02887）。fileCount 与卡面 entryCount 同口径——
   // 是这个根缓存文件里的条目数，不是文件个数；exists 指「这个根的缓存文件在不在」，
   // 目录在但还没编译过时面板报 0 条，与「还没有这个位置」区分开。
@@ -221,15 +382,6 @@ export function registerCleanupRoute(
       sizeBytes,
       oldest: null,
     };
-  }
-
-  async function directoryExists(dir: string): Promise<boolean> {
-    try {
-      return (await fs.stat(dir)).isDirectory();
-    } catch {
-      // 不存在与无权限都按「没有这个位置」处理：统计侧本来就把 readdir 失败当 0 个文件
-      return false;
-    }
   }
 
   // 目录标注：遗留目录里的文件必须在结果里一眼看出「它不在规范目录」，
@@ -367,133 +519,10 @@ export function registerCleanupRoute(
     if (!dryRun) {
       // T02817：判定输入换成「本进程 + 其它进程」合并的活跃快照。
       // 原先读的是进程内计数，另一实例的编译/问答对它不可见——那正是本单要收的破口。
-      const active0 = await activeStateAcrossProcesses();
-      const verdict = evaluateCleanupGuard(target, active0);
-      if (verdict.blocked.length > 0) {
-        const active = active0;
-        const blocked: CleanupBlockedResponse = {
-          error: guardErrorMessage(target, verdict, active0),
-          code: 'cleanup_blocked_by_active_task',
-          target,
-          blocked: verdict.blocked,
-          reasons: verdict.reasons,
-          active,
-        };
-        // 被拦也必须落审计：这是「用户在有活跃任务时试图真实删除」的唯一留痕
-        await writeAudit({
-          ts: new Date().toISOString(),
-          target,
-          days,
-          dry_run: false,
-          blocked_by_active_task: true,
-          blocked: verdict.blocked,
-          active,
-        });
-        return void reply.code(409).send(blocked);
-      }
-
-      // 紧跟守卫：拿不到锁说明上一次真实清理还在删（本进程同时只允许一个清理）。
-      // 这里同样是 409 而非排队——两个清理请求并发意味着用户点了两次「真删」，
-      // 让第二个静默排队反而会出现「同一目标被连删两次」的困惑结果。
-      const handle = acquireCleanup();
-      if (!handle) {
-        const active = currentActiveState();
-        const reason = '上一次真实清理仍在进行中（同一时刻只允许一次删除），本次已拒绝执行。';
-        const blocked: CleanupBlockedResponse = {
-          error: reason,
-          code: 'cleanup_blocked_by_concurrent_cleanup',
-          target,
-          blocked: [],
-          reasons: [reason],
-          active,
-        };
-        await writeAudit({
-          ts: new Date().toISOString(),
-          target,
-          days,
-          dry_run: false,
-          blocked_by_concurrent_cleanup: true,
-          active,
-        });
-        return void reply.code(409).send(blocked);
-      }
-      cleanupHandle = handle;
-
-      // T02817：拿到进程内锁之后，再抢跨进程删除标记（原子 wx 创建 = 天然的跨进程独占原语）。
-      // 抢不到说明**另一实例**正在真删：本进程的 held 看不见它，只有文件能说明这件事。
-      // 拿到标记后还要再读一遍活跃声明——起跑侧是「先声明、再读标记」，两侧各完成自己的
-      // 那步才判定（Dekker），才不存在「双方都读到对方还没写」的空档。
-      const paths = coordinationPaths();
-      if (paths.markerFile) {
-        const lockFile = paths.markerFile;
-        const claim = await claimCleanupMarker({ lockFile, instance: paths.instance, target });
-        if (!claim.ok) {
-          const m = claim.blockedBy.marker;
-          const reason = `另一服务实例正在执行真实删除（pid ${m?.pid ?? '?'} @ ${m?.instance ?? '?'}，目标 ${m?.target ?? '?'}，已持续 ${Math.round(claim.blockedBy.ageMs / 1000)} 秒），本次删除已拒绝。`;
-          const active = await activeStateAcrossProcesses();
-          cleanupHandle?.release();
-          cleanupHandle = null;
-          await writeAudit({
-            ts: new Date().toISOString(),
-            target,
-            days,
-            dry_run: false,
-            blocked_by_other_process: true,
-            other_marker: m ?? null,
-            other_age_ms: claim.blockedBy.ageMs,
-            active,
-          });
-          return void reply.code(409).send({
-            error: reason,
-            code: 'cleanup_blocked_by_other_process',
-            target,
-            blocked: [] as string[],
-            reasons: [reason],
-            active,
-          } satisfies CleanupBlockedResponse);
-        }
-        markerClaimed = true;
-        // 陈旧标记被回收也要留痕：排查时这才不是「莫名其妙的放行」
-        if (claim.purged) {
-          await writeAudit({
-            ts: new Date().toISOString(),
-            target,
-            days,
-            dry_run: false,
-            cleanup_marker_stale_purged: true,
-            stale_reason: claim.purged.reason ?? 'unknown',
-            stale_marker: claim.purged.marker ?? null,
-            stale_age_ms: claim.purged.ageMs,
-          });
-        }
-        const afterClaim = await activeStateAcrossProcesses();
-        const recheck = evaluateCleanupGuard(target, afterClaim);
-        if (recheck.blocked.length > 0) {
-          const reason = `取得删除权后发现另一实例刚起跑任务：${recheck.reasons.join('；')}`;
-          await releaseCleanupMarker(lockFile);
-          markerClaimed = false;
-          cleanupHandle?.release();
-          cleanupHandle = null;
-          await writeAudit({
-            ts: new Date().toISOString(),
-            target,
-            days,
-            dry_run: false,
-            blocked_by_active_task: true,
-            blocked_after_marker: true,
-            blocked: recheck.blocked,
-            active: afterClaim,
-          });
-          return void reply.code(409).send({
-            error: reason,
-            code: 'cleanup_blocked_by_active_task',
-            target,
-            blocked: recheck.blocked,
-            reasons: [reason],
-            active: afterClaim,
-          } satisfies CleanupBlockedResponse);
-        }
-      }
+      const claim = await claimDeletionRights(target, days, writeAudit);
+      if (!claim.ok) return void reply.code(409).send(claim.blocked);
+      cleanupHandle = claim.rights.handle;
+      markerClaimed = claim.rights.markerFile !== null;
     }
 
     const result: CleanupResult = {
@@ -572,6 +601,25 @@ export function registerCleanupRoute(
       }
     }
 
+    // 单个日志文件：只在窗口外处理；预览与真删只差文案和是否 unlink
+    async function cleanupOldLog(file: string, dir: string): Promise<void> {
+      const legacy = isLegacyHarnessDir(dir) ? '（旧存放位置）' : '';
+      try {
+        const stat = await fs.stat(file);
+        if (stat.mtimeMs < cutoffMs) {
+          if (dryRun) {
+            result.cleaned.push(`[预览] 将删除日志${legacy} ${path.basename(file)} (${bytesToMb(stat.size)}MB, ${stat.mtime.toISOString().slice(0, 10)})`);
+          } else {
+            await fs.unlink(file);
+            totalFreedBytes += stat.size;
+            result.cleaned.push(`已删除日志${legacy} ${path.basename(file)} (${bytesToMb(stat.size)}MB)`);
+          }
+        }
+      } catch (err: unknown) {
+        result.errors.push(`日志 ${path.basename(file)} 处理失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     // 运行日志清理（按 days）：逐根收集后再判窗口（T02809）
     async function cleanupRunLogs(): Promise<void> {
       const collected: Array<{ file: string; dir: string }> = [];
@@ -585,21 +633,7 @@ export function registerCleanupRoute(
         return;
       }
       for (const { file, dir } of collected) {
-        const legacy = isLegacyHarnessDir(dir) ? '（旧存放位置）' : '';
-        try {
-          const stat = await fs.stat(file);
-          if (stat.mtimeMs < cutoffMs) {
-            if (dryRun) {
-              result.cleaned.push(`[预览] 将删除日志${legacy} ${path.basename(file)} (${bytesToMb(stat.size)}MB, ${stat.mtime.toISOString().slice(0, 10)})`);
-            } else {
-              await fs.unlink(file);
-              totalFreedBytes += stat.size;
-              result.cleaned.push(`已删除日志${legacy} ${path.basename(file)} (${bytesToMb(stat.size)}MB)`);
-            }
-          }
-        } catch (err: unknown) {
-          result.errors.push(`日志 ${path.basename(file)} 处理失败: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        await cleanupOldLog(file, dir);
       }
     }
 
@@ -628,6 +662,26 @@ export function registerCleanupRoute(
       }
     }
 
+    // 单个清理目标的路由（与目标清单解耦，便于主流程只保留遍历）
+    async function dispatchTarget(name: string): Promise<void> {
+      switch (name) {
+        case 'compile_cache':
+          await cleanupCompileCache();
+          break;
+        case 'run_state':
+          await cleanupRunState();
+          break;
+        case 'run_logs':
+          await cleanupRunLogs();
+          break;
+        case 'raw_archive':
+          await cleanupRawArchive();
+          break;
+        default:
+          result.errors.push(`未知清理目标: ${name}`);
+      }
+    }
+
     try {
       // 按目标分发
       const targets = target === 'all'
@@ -635,22 +689,7 @@ export function registerCleanupRoute(
         : [target];
 
       for (const t of targets) {
-        switch (t) {
-          case 'compile_cache':
-            await cleanupCompileCache();
-            break;
-          case 'run_state':
-            await cleanupRunState();
-            break;
-          case 'run_logs':
-            await cleanupRunLogs();
-            break;
-          case 'raw_archive':
-            await cleanupRawArchive();
-            break;
-          default:
-            result.errors.push(`未知清理目标: ${t}`);
-        }
+        await dispatchTarget(t);
       }
 
       result.count = result.cleaned.length;

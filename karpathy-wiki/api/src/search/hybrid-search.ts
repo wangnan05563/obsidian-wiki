@@ -171,6 +171,12 @@ async function lazyIndexPending(dataDir: string, vault: VaultService, embedding:
 // ── RRF 融合（k=60）：score = Σ 1/(k + rank_i)，无需调权重的双路融合公式 ──
 const RRF_K = 60;
 
+function hitSource(sources: Set<string>): HybridHit['source'] {
+  if (sources.has('keyword') && sources.has('semantic')) return 'both';
+  if (sources.has('semantic')) return 'semantic';
+  return 'keyword';
+}
+
 function rrfFuse(
   keywordHits: Array<{ pagePath: string; content: string; heading: string | null }>,
   vectorHits: Array<{ pagePath: string; content: string; heading: string | null }>,
@@ -189,7 +195,7 @@ function rrfFuse(
       pagePath,
       snippet: v.content.slice(0, 120).replaceAll('\n', ' '),
       heading: v.heading,
-      source: (v.sources.has('keyword') && v.sources.has('semantic') ? 'both' : v.sources.has('semantic') ? 'semantic' : 'keyword') as HybridHit['source'],
+      source: hitSource(v.sources),
       score: v.score,
     }))
     .sort((a, b) => b.score - a.score);
@@ -214,7 +220,7 @@ export async function hybridSearch(dataDir: string, vault: VaultService, opts: H
   if (embedding) {
     try {
       const [qv] = await embedTexts(embedding, [opts.query]);
-      vectorHits = await vectorRecall(dataDir, qv, 20);
+      vectorHits = vectorRecall(dataDir, qv, 20);
     } catch {
       vectorHits = []; // 查询向量失败（如 key 无效/限流）：语义路静默关闭，关键词路兜底
     }

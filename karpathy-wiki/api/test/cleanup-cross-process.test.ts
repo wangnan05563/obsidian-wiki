@@ -55,6 +55,14 @@ function stubGuards(): IsolationGuards {
   return { enabled: false, requireAuth: passThrough, requireAdmin: passThrough };
 }
 
+/** 取模块级函数体（签名起、到顶格 `}` 止），避免全文 indexOf 跨函数误锚。 */
+function sliceFunction(src: string, signature: string): string {
+  const start = src.indexOf(signature);
+  if (start === -1) return '';
+  const end = src.indexOf('\n}', start);
+  return src.slice(start, end === -1 ? src.length : end);
+}
+
 // T02836：等待一律走公共工具。原先本文件自带 `const sleep = (ms) => setTimeout(r, ms)`，
 // 参数化时长把裸写数值藏进了变量（`sleep(500)`），守护抓不到——那正是「换了个写法继续赌时长」的口子。
 // 现在让步只有 yieldSlice/contractSleep 两个出口，带终点的场景一律 pollUntil 读真实状态。
@@ -453,21 +461,28 @@ describe('T02817 协调文件的存放位置与接线锁', () => {
 
   it('清理路由：抢到标记之后必须再读一遍活跃声明，且判到任务时先撤标再拒', async () => {
     const src = await fs.readFile(path.resolve(__dirname, '..', 'src', 'routes', 'cleanup.ts'), 'utf8');
-    const claimIdx = src.indexOf('claimCleanupMarker({');
-    const recheckIdx = src.indexOf('const afterClaim = await activeStateAcrossProcesses();');
+    // 三道门已收进 claimDeletionRights：锚在该函数体内，避免全文 indexOf 跨函数误锚
+    const claimFn = sliceFunction(src, 'async function claimDeletionRights(');
+    const claimIdx = claimFn.indexOf('await claimMarkerForDeletion(');
+    const recheckIdx = claimFn.indexOf('blocked_after_marker: true');
     expect(claimIdx).toBeGreaterThan(-1);
     // 起跑侧「先声明后读标记」、清理侧「先占标后读声明」——少了这一遍读，Dekker 只剩半边，
     // 「守卫通过 ~ 删除开始」之间起跑的任务照样被删
     expect(recheckIdx).toBeGreaterThan(claimIdx);
-    const recheckBlock = src.slice(recheckIdx, recheckIdx + 900);
-    expect(recheckBlock).toContain('blocked_after_marker: true');
+    const recheckBlock = claimFn.slice(recheckIdx);
     // 拒绝前必须把刚抢到的标记撤掉：留着 = 全站任务排队等一次并没有在删的清理
-    expect(recheckBlock).toContain('await releaseCleanupMarker(lockFile)');
+    const releaseIdx = recheckBlock.indexOf('await releaseCleanupMarker(marker.markerFile)');
+    const rejectIdx = recheckBlock.indexOf('return { ok: false, blocked: recheck }');
+    expect(releaseIdx).toBeGreaterThan(-1);
+    expect(rejectIdx).toBeGreaterThan(releaseIdx);
   });
 
   it('清理路由：抢到标记必须晚于进程内锁，撤标在 finally 且早于释放锁', async () => {
     const src = await fs.readFile(path.resolve(__dirname, '..', 'src', 'routes', 'cleanup.ts'), 'utf8');
-    expect(src.indexOf('acquireCleanup()')).toBeLessThan(src.indexOf('claimCleanupMarker({'));
+    const claimFn = sliceFunction(src, 'async function claimDeletionRights(');
+    expect(claimFn.indexOf('acquireCleanup()')).toBeLessThan(claimFn.indexOf('await claimMarkerForDeletion('));
+    // 真正抢标记的动作必须在 claimMarkerForDeletion 里（删掉这一行 = 跨进程保护静默失效）
+    expect(src).toContain('claimCleanupMarker({');
     // 锚定在清理收尾的 finally 上：`releaseCleanupMarker(lockFile)` 在「判到任务后撤标」的
     // 分支里也出现一次（位置更早），用全文 indexOf 会锚到那一处，锁就变成假锁。
     const releaseHandle = src.lastIndexOf('cleanupHandle?.release()');

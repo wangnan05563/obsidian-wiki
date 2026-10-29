@@ -118,7 +118,8 @@ export async function detectMisplacedPages(vault: VaultService): Promise<Misplac
     }
   }
   const items: MisplacedPage[] = [];
-  for (const rel of relPaths.sort()) {
+  relPaths.sort((a, b) => a.localeCompare(b));
+  for (const rel of relPaths) {
     const { title, type } = await readPageMeta(vault, rel);
     const suggestedPath = `${resolveTargetDir(type, rel.split('/')[0])}/${path.posix.basename(rel)}`;
     items.push({ path: rel, title, type, suggestedPath, conflict: null });
@@ -162,6 +163,72 @@ async function pruneEmptyDirs(vault: VaultService, oldRel: string): Promise<void
  *   这样调用方无法借归位接口把任意路径写进 vault（路径合法性由 writeFile 的白名单 + 深度校验兜底）。
  * 冲突项一律跳过并说明原因；需要并页请走「页面质量清洗」的重复检测与合并动作。
  */
+/** 归位后的目录索引登记；失败只记错误，不回滚已落位的文件。 */
+async function appendIndexAfterPromote(
+  vault: VaultService,
+  rel: string,
+  item: MisplacedPage,
+  result: MisplacedPromoteResult,
+): Promise<void> {
+  try {
+    await vault.appendIndex(item.title, `错位归位：原位于 ${rel}`);
+  } catch (error_) {
+    result.errors.push(
+      `归位成功但目录索引登记失败 ${item.suggestedPath}：${error_ instanceof Error ? error_.message : String(error_)}`,
+    );
+  }
+}
+
+/** 单条归位：读→写→删；归位成功后清空目录并补登索引。 */
+async function moveMisplacedPage(
+  vault: VaultService,
+  rel: string,
+  item: MisplacedPage,
+  result: MisplacedPromoteResult,
+): Promise<void> {
+  try {
+    // 读侧不拒（存量页必须读得出才谈得上归位）；写侧仍走 writeFile，白名单与深度校验一道不少
+    const content = await vault.readFile(rel);
+    await vault.writeFile(item.suggestedPath, content);
+    await fs.unlink(resolveVaultPath(vault, rel));
+    result.promoted.push({ from: rel, to: item.suggestedPath });
+    await pruneEmptyDirs(vault, rel);
+    // T02844：index.md 的定位是「内容目录，每页一行摘要」（搭建需求规格说明书 AC-01-3），
+    // 归位把页面重新带回库，须补登目录行——否则列表/搜索恢复了，目录索引那一侧仍然隐身。
+    // appendIndex 按 [[页面名]] 行首去重：重复归位、index 已有同名行都只会 skipped，不产生重复行。
+    // 登记失败不回滚归位（文件已安全落位），只把失败原因带回去。
+    await appendIndexAfterPromote(vault, rel, item, result);
+  } catch (err) {
+    result.errors.push(`归位失败 ${rel} → ${item.suggestedPath}：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** 处理一条请求路径：不在检测结果里的、冲突的、预演的一律记入 skipped，其余执行归位。 */
+async function promoteOne(
+  vault: VaultService,
+  raw: string,
+  detected: Map<string, MisplacedPage>,
+  dryRun: boolean,
+  result: MisplacedPromoteResult,
+): Promise<void> {
+  const rel = String(raw ?? '').trim().replaceAll('\\', '/');
+  if (!rel) return;
+  const item = detected.get(rel);
+  if (!item) {
+    result.skipped.push({ path: rel, reason: `这个位置当前没有子目录中的页面（可能已归位或删除）；可归位的页面形如 ${pageDirsSlash()}/<子目录>/<文件名>.md` });
+    return;
+  }
+  if (item.conflict) {
+    result.skipped.push({ path: rel, reason: item.conflict });
+    return;
+  }
+  if (dryRun) {
+    result.promoted.push({ from: rel, to: item.suggestedPath });
+    return;
+  }
+  await moveMisplacedPage(vault, rel, item, result);
+}
+
 export async function promoteMisplacedPages(
   vault: VaultService,
   paths: string[],
@@ -172,42 +239,7 @@ export async function promoteMisplacedPages(
   const byPath = new Map(detected.map((d) => [d.path, d]));
 
   for (const raw of paths) {
-    const rel = String(raw ?? '').trim().replaceAll('\\', '/');
-    if (!rel) continue;
-    const item = byPath.get(rel);
-    if (!item) {
-      result.skipped.push({ path: rel, reason: `这个位置当前没有子目录中的页面（可能已归位或删除）；可归位的页面形如 ${pageDirsSlash()}/<子目录>/<文件名>.md` });
-      continue;
-    }
-    if (item.conflict) {
-      result.skipped.push({ path: rel, reason: item.conflict });
-      continue;
-    }
-    if (dryRun) {
-      result.promoted.push({ from: rel, to: item.suggestedPath });
-      continue;
-    }
-    try {
-      // 读侧不拒（存量页必须读得出才谈得上归位）；写侧仍走 writeFile，白名单与深度校验一道不少
-      const content = await vault.readFile(rel);
-      await vault.writeFile(item.suggestedPath, content);
-      await fs.unlink(resolveVaultPath(vault, rel));
-      result.promoted.push({ from: rel, to: item.suggestedPath });
-      await pruneEmptyDirs(vault, rel);
-      // T02844：index.md 的定位是「内容目录，每页一行摘要」（搭建需求规格说明书 AC-01-3），
-      // 归位把页面重新带回库，须补登目录行——否则列表/搜索恢复了，目录索引那一侧仍然隐身。
-      // appendIndex 按 [[页面名]] 行首去重：重复归位、index 已有同名行都只会 skipped，不产生重复行。
-      // 登记失败不回滚归位（文件已安全落位），只把失败原因带回去。
-      try {
-        await vault.appendIndex(item.title, `错位归位：原位于 ${rel}`);
-      } catch (idxErr) {
-        result.errors.push(
-          `归位成功但目录索引登记失败 ${item.suggestedPath}：${idxErr instanceof Error ? idxErr.message : String(idxErr)}`,
-        );
-      }
-    } catch (err) {
-      result.errors.push(`归位失败 ${rel} → ${item.suggestedPath}：${err instanceof Error ? err.message : String(err)}`);
-    }
+    await promoteOne(vault, raw, byPath, dryRun, result);
   }
   return result;
 }

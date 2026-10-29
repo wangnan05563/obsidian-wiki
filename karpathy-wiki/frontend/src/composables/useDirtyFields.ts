@@ -37,7 +37,7 @@ export function sameSnapshot(a: unknown, b: unknown): boolean {
     const keysA = Object.keys(a);
     const keysB = Object.keys(b);
     if (keysA.length !== keysB.length) return false;
-    return keysA.every((key) => Object.prototype.hasOwnProperty.call(b, key) && sameSnapshot(a[key], b[key]));
+    return keysA.every((key) => Object.hasOwn(b, key) && sameSnapshot(a[key], b[key]));
   }
   return false;
 }

@@ -289,18 +289,15 @@ onBeforeUnmount(() => {
           </template>
         </nav>
         <!-- T02449（N2）：溢出提示条——菜单装不下时出现，点击平滑下滚；无溢出时隐藏 -->
-        <div
+        <button
           v-if="menuOverflow"
+          type="button"
           class="nav-scroll-hint"
-          role="button"
-          tabindex="0"
           title="查看其余菜单"
           @click="scrollMenuDown"
-          @keydown.enter.prevent="scrollMenuDown"
-          @keydown.space.prevent="scrollMenuDown"
         >
           ↓ 还有 {{ hiddenCount }} 项
-        </div>
+        </button>
         <!-- 底部用户区 + 登出 + 折叠按钮：固定在侧栏底端 -->
         <div class="nav-bottom">
           <div class="nav-user">
@@ -530,9 +527,11 @@ onBeforeUnmount(() => {
   gap: 4px;
   font-size: 11px;
   font-weight: 600;
+  font-family: inherit;
   color: var(--text-soft);
   padding: 5px 8px;
   cursor: pointer;
+  border: none;
   border-radius: var(--radius-btn);
   background: linear-gradient(to bottom, rgba(125, 125, 145, 0.02), rgba(125, 125, 145, 0.16));
   z-index: 1;
