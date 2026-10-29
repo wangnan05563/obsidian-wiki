@@ -119,7 +119,9 @@ async function startCompile(payload: IngestPayload) {
     // 为什么用 API_BASE 拼接：vite.config.ts 的 base 为 '/wiki/'，API_BASE='/wiki/api'，
     // 仅 '/api/compile' 会绕过 vite proxy 的 '/wiki/api' 规则导致 dev 模式 404
     const endpoint = store.isBatchMode ? `${API_BASE}/compile/batch` : `${API_BASE}/compile`;
-    const response = await fetch(endpoint, {
+    // 必须走 apiFetch：T03611 原件留存按登录用户归属，裸 fetch 不带 Bearer 时
+    // 后端 currentUser 为空，auth 启用部署下留存记录 ownerId=null，本人列表永远看不到。
+    const response = await apiFetch(endpoint, {
       method: 'POST',
       headers: isFormData ? {} : { 'Content-Type': 'application/json' },
       body: isFormData ? payload : JSON.stringify(payload),

@@ -101,6 +101,17 @@ export async function downloadVaultFile(
   opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
   const url = `${API_BASE}/files/download?path=${encodeURIComponent(relPath)}`;
+  return downloadApiFile(url, fallbackName ?? relPath.split('/').pop() ?? 'download', opts);
+}
+
+// 鉴权下载的通用实现（T03611 抽出）：vault 文件与投递原件共用同一套
+// 「apiFetch 注入 Bearer → Blob → 解析 Content-Disposition → 触发保存」流程。
+// 为什么必须经 apiFetch：鉴权走 localStorage 的 Bearer Token，普通 <a href> 直链不带 Token 会 401。
+export async function downloadApiFile(
+  url: string,
+  fallbackName: string,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<void> {
   // 超时保护：未显式传入 signal 时，按默认/调用方超时构造 AbortSignal（特性检测，旧环境降级为无超时）
   let signal = opts.signal;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
@@ -112,11 +123,10 @@ export async function downloadVaultFile(
     throw new Error(`下载失败：HTTP ${res.status}`);
   }
   const blob = await res.blob();
-  // 落盘文件名优先级：服务端 Content-Disposition（含正确扩展名/中文）> 清洗后的展示名 > 路径 basename
+  // 落盘文件名优先级：服务端 Content-Disposition（含正确扩展名/中文）> 清洗后的展示名 > 兜底名
   const name =
     parseDispositionName(res.headers.get('content-disposition') || '') ||
     (fallbackName ? fallbackName.replace(/[\\/]/g, '_') : null) ||
-    relPath.split('/').pop() ||
     'download';
   const objectUrl = URL.createObjectURL(blob);
   const isIOS =

@@ -26,6 +26,9 @@ import { activityDirIn, cleanupMarkerFileIn, pruneStaleCoordinationFiles, setCoo
 // T02622：受控重启的拉起/等待端口
 import { awaitPortReleaseForRestart, RESTART_EXIT_DELAY_MS } from './restart.js';
 import { registerCompileRoute } from './routes/compile.js';
+// T03611：投递原始文档留存与下载
+import { UploadStore } from './uploads/upload-store.js';
+import { registerUploadsRoute } from './routes/uploads.js';
 import { registerQueryRoute, registerQueryArchiveRoute } from './routes/query.js';
 import { registerHealthCheckRoute } from './routes/health-check.js';
 import { registerFilesRoutes, registerPublicMediaServeRoute } from './routes/files.js';
@@ -533,7 +536,10 @@ export async function buildApp(): Promise<BuiltApp> {
   // persist 由 sessionPersistence.threadsPersist 控制（默认 false：服务端不落盘会话，前端以 history 兜底连续性）
   const threadsPersist = config.sessionPersistence?.threadsPersist ?? false;
   const threadStore = new ThreadMemoryStore(dataDir, threadsPersist);
-  registerCompileRoute(app, adapter, config.batch, config);
+  // T03611：投递原件留存目录 data/uploads/（与 conversations 同级，独立于 vault）
+  const uploadStore = new UploadStore(path.join(dataDir, 'uploads'));
+  registerCompileRoute(app, adapter, config.batch, config, uploadStore);
+  registerUploadsRoute(app, uploadStore, isolationGuards);
   // 上下文记忆治理配置：默认开启，注入 LLM 前主动压缩/清理/重组/淘汰历史
   const governorConfig = config.contextGovernor ?? DEFAULT_GOVERNOR_CONFIG;
   registerQueryRoute(app, adapter, threadStore, governorConfig, isolationGuards, config.enableResumableStream ?? false);
