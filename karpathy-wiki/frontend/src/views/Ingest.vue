@@ -3,11 +3,13 @@ import { API_BASE, apiFetch } from '../utils/apiBase';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
-import { ArrowDown, FolderOpened, UploadFilled, WarningFilled, VideoPlay, Delete, RefreshRight } from '@element-plus/icons-vue';
+import { ArrowDown, FolderOpened, UploadFilled, WarningFilled, VideoPlay, Delete, RefreshRight, Download } from '@element-plus/icons-vue';
 // T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
 import IconActionButton from '../components/IconActionButton.vue';
+import StateBlock from '../components/StateBlock.vue';
 import { useCompileStore } from '../stores/compile';
 import { consumeSSE } from '../utils/sse';
+import { listUploadedDocuments, downloadUploadedDocument, type UploadedDocument } from '../services/uploads';
 import type { ConfigData, QqUploadEvent, DraftCompileEvent, UrlCrawlEvent, UrlCrawlPageSummary, UrlCrawlAttachment } from '../types';
 
 // 使用函数类型写法替代类型字面量（S6598）
@@ -30,6 +32,55 @@ interface BookmarkParseResult {
 const bookmarkResult = ref<BookmarkParseResult | null>(null);
 const bookmarkCompiling = ref(false);
 const selectedFile = ref<File | null>(null);
+
+// ===================== T03611 已投递原始文档 =====================
+// 投递时后端会把原件留存在 data/uploads/，这里只展示「本人」投递的记录（归属由后端过滤）。
+// 后端未升级时 /api/uploads 返回 404，卡片自动隐藏，不影响投递主流程。
+const uploadedDocs = ref<UploadedDocument[]>([]);
+const uploadsLoading = ref(false);
+const uploadsVisible = ref(true);
+const downloadingId = ref('');
+
+async function loadUploads() {
+  if (uploadsLoading.value) return;
+  uploadsLoading.value = true;
+  try {
+    uploadedDocs.value = await listUploadedDocuments();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('HTTP 404')) uploadsVisible.value = false;
+  } finally {
+    uploadsLoading.value = false;
+  }
+}
+
+async function handleDownloadUpload(doc: UploadedDocument) {
+  if (downloadingId.value) return;
+  downloadingId.value = doc.id;
+  try {
+    await downloadUploadedDocument(doc);
+  } catch (err) {
+    ElMessage.error(`下载失败：${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    downloadingId.value = '';
+  }
+}
+
+function formatUploadSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatUploadTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('zh-CN', {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
 
 // ===================== A1 网页捕获（书签捕获）=====================
 // 解决被站点 WAF/出口 IP 黑名单拦截的页面（服务端 fetch 永远 420/黑名单页）：
@@ -171,6 +222,7 @@ async function loadBatchConfig(): Promise<void> {
 onMounted(() => {
   loadBatchConfig();
   setupCaptureListener();
+  loadUploads();
 });
 
 onUnmounted(() => {
@@ -1358,6 +1410,53 @@ function handleUrlInputChange() {
         />
       </div>
     </div>
+
+    <!-- T03611：已投递原始文档（仅本人）。原件在投递时留存，便于事后追溯/重新下载。 -->
+    <div v-if="uploadsVisible" class="glass-card uploaded-docs-card fade-up">
+      <div class="card-deco"></div>
+      <div class="uploaded-docs-head">
+        <div>
+          <h3 class="uploaded-docs-title">已投递原始文档</h3>
+          <p class="uploaded-docs-tip">保留投递时的原始文件（PDF / Word / 图片等），仅显示你本人投递的记录</p>
+        </div>
+        <el-button text :icon="RefreshRight" :loading="uploadsLoading" @click="loadUploads">刷新</el-button>
+      </div>
+      <!-- 首载无内容走 StateBlock（全站方言）；已有内容时重载由「刷新」按钮的 loading 表达 -->
+      <StateBlock
+        v-if="uploadsLoading && uploadedDocs.length === 0"
+        state="loading"
+        loading-text="正在读取已投递的原始文档…"
+      />
+      <el-empty
+        v-else-if="uploadedDocs.length === 0"
+        description="暂无已投递的原始文档（文本粘贴 / URL 投递不产生原始文件）"
+        :image-size="60"
+      />
+      <el-table v-else :data="uploadedDocs" size="small" class="uploaded-docs-table">
+        <el-table-column prop="originalName" label="文件名" min-width="240" show-overflow-tooltip />
+        <el-table-column label="大小" width="100">
+          <template #default="{ row }">{{ formatUploadSize(row.size) }}</template>
+        </el-table-column>
+        <el-table-column label="投递时间" width="150">
+          <template #default="{ row }">{{ formatUploadTime(row.uploadedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="方式" width="90">
+          <template #default="{ row }">{{ row.source === 'batch' ? '文件夹' : '单文件' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="100">
+          <template #default="{ row }">
+            <el-button
+              text
+              type="primary"
+              :icon="Download"
+              :loading="downloadingId === row.id"
+              :disabled="!!downloadingId && downloadingId !== row.id"
+              @click="handleDownloadUpload(row)"
+            >下载</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
   </div>
 </template>
 
@@ -1430,6 +1529,42 @@ function handleUrlInputChange() {
   padding: 28px 32px;
   position: relative;
   overflow: hidden;
+}
+
+/* T03611：已投递原始文档卡片 */
+.uploaded-docs-card {
+  padding: 20px 28px 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.uploaded-docs-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  position: relative;
+  z-index: 1;
+  margin-bottom: 8px;
+}
+
+.uploaded-docs-title {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.uploaded-docs-tip {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.uploaded-docs-table {
+  position: relative;
+  z-index: 1;
 }
 
 /* 卡片装饰：倾斜渐变块 */

@@ -13,6 +13,7 @@ import {
   rawPathKey,
 } from '../compile-idempotency.js';
 import { isRetryableLlmError } from '../utils/llm-error.js';
+import type { UploadStore } from '../uploads/upload-store.js';
 
 // 默认批量编译配置，当 index.ts 未传 config.batch 时回退使用。
 // 为什么需要默认值：避免 config.json 缺失 batch 字段时路由崩溃
@@ -28,12 +29,16 @@ const DEFAULT_BATCH_CONFIG: BatchCompileConfig = {
 const SSE_HEARTBEAT_MS = 15_000;
 
 // 批量文件校验：剥离目录前缀 + 白名单 + 大小校验，独立为纯函数降低 batch 端点认知复杂度
+type UploadedFile = { name: string; buffer: Buffer; mimeType?: string };
+// 通过校验的文件：name 是供临时文件/raw 存档使用的白名单名，displayName 是用户原始名（仅用于原件留存）
+type ValidatedFile = UploadedFile & { displayName: string };
+
 function validateBatchFiles(
-  uploaded: Array<{ name: string; buffer: Buffer }>,
+  uploaded: UploadedFile[],
   batch: BatchCompileConfig,
-): { validFiles: Array<{ name: string; buffer: Buffer }>; rejected: Array<{ name: string; reason: string }> } {
+): { validFiles: ValidatedFile[]; rejected: Array<{ name: string; reason: string }> } {
   const allowedSet = new Set(batch.allowedExtensions.map((e) => e.toLowerCase()));
-  const validFiles: Array<{ name: string; buffer: Buffer }> = [];
+  const validFiles: ValidatedFile[] = [];
   const rejected: Array<{ name: string; reason: string }> = [];
   const maxBytes = batch.maxFileSizeMb * 1024 * 1024;
   for (const f of uploaded) {
@@ -53,7 +58,7 @@ function validateBatchFiles(
       rejected.push({ name: f.name, reason: `超过 ${batch.maxFileSizeMb}MB 上限` });
       continue;
     }
-    validFiles.push({ name: safeName, buffer: f.buffer });
+    validFiles.push({ ...f, name: safeName, displayName: f.name });
   }
   return { validFiles, rejected };
 }
@@ -77,8 +82,32 @@ export function registerCompileRoute(
   batchConfig?: BatchCompileConfig,
   // FR-10-1: 传入完整 config 用于 compile 末尾生成 ai_tags 建议（调用 LLM）
   appConfig?: AppConfig,
+  // T03611：投递时留存原始文档（data/uploads/）。未传则关闭留存，既有单测/部署行为不变。
+  uploadStore?: UploadStore | null,
 ) {
   const batch = batchConfig ?? DEFAULT_BATCH_CONFIG;
+
+  // T03611：留存原始文档。失败只记 warn 不抛出——留档是附加能力，
+  // 不能因为磁盘满/权限问题把一次正常投递变成 500。
+  async function retainOriginal(
+    request: FastifyRequest,
+    file: UploadedFile,
+    source: 'file' | 'batch',
+  ): Promise<void> {
+    if (!uploadStore) return;
+    try {
+      await uploadStore.save({
+        name: file.name,
+        buffer: file.buffer,
+        mimeType: file.mimeType,
+        ownerId: request.currentUser?.userId ?? null,
+        ownerName: request.currentUser?.username ?? null,
+        source,
+      });
+    } catch (err) {
+      request.log.warn({ err, fileName: file.name }, '原始文档留存失败（不影响编译）');
+    }
+  }
   // T03591 幂等表：按内容指纹挡住「同一份内容正在编译」的重复/并发提交。
   // 每个 route 注册对应一个实例（进程内、单测可隔离），语义见 compile-idempotency.ts。
   const idempotency = new CompileIdempotency();
@@ -89,6 +118,8 @@ export function registerCompileRoute(
     let input: CompileInput;
     // T03591 幂等 Key：multipart 按上传字节，JSON 按 type+正文
     let idempotencyKey: string;
+    // T03611：multipart 上传的原件字节，幂等命中时不重复留存（避免同一文件出现多条投递记录）
+    let uploadedFile: UploadedFile | null = null;
 
     const contentType = request.headers['content-type'] ?? '';
     if (contentType.startsWith('multipart/form-data')) {
@@ -102,6 +133,8 @@ export function registerCompileRoute(
       // sanitize filename：防路径穿越，剥离目录前缀并替换非法字符。
       // 白名单保留 Unicode 字母/数字（含中文），避免中文文件名被替换成下划线。
       const safeName = path.basename(file.filename).replaceAll(/[^\p{L}\p{N}._-]/gu, '_');
+      // 留存用原始文件名（下载时尽量还原用户命名），compile 仍用白名单 safeName
+      uploadedFile = { name: file.filename, buffer, mimeType: file.mimetype };
       // 落盘到临时目录，compile-workflow 会读取后存档到 raw/
       const tmp = path.join(os.tmpdir(), `wiki-compile-${Date.now()}-${process.pid}-${safeName}`);
       await fs.writeFile(tmp, buffer);
@@ -148,6 +181,8 @@ export function registerCompileRoute(
       return;
     }
     const idempotencyToken = begun.token;
+    // T03611：幂等命中不算一次新投递，只有真正开始编译才留存原件
+    if (uploadedFile) await retainOriginal(request, uploadedFile, 'file');
     let streamStatus: 'done' | 'failed' = 'failed';
     let lastMessage: string | undefined;
 
@@ -260,12 +295,12 @@ export function registerCompileRoute(
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     // 收集所有上传的文件：request.files() 是 async iterator
-    const uploaded: Array<{ name: string; buffer: Buffer }> = [];
+    const uploaded: UploadedFile[] = [];
     try {
       for await (const f of request.files()) {
         // 字段名约定为 files（复数），忽略其他字段以兼容未来扩展
         if (f.fieldname !== 'files') continue;
-        uploaded.push({ name: f.filename, buffer: await f.toBuffer() });
+        uploaded.push({ name: f.filename, buffer: await f.toBuffer(), mimeType: f.mimetype });
       }
     } catch (err: unknown) {
       request.log.error({ err }, 'batch compile multipart parse error');
@@ -324,6 +359,10 @@ export function registerCompileRoute(
       return;
     }
     const idempotencyToken = begun.token;
+    // T03611：只为通过白名单/大小校验的文件留存原件（被拒绝的文件未构成一次投递）
+    for (const f of validFiles) {
+      await retainOriginal(request, { name: f.displayName || f.name, buffer: f.buffer, mimeType: f.mimeType }, 'batch');
+    }
 
     // 推送文件列表与被拒绝项，前端据此渲染初始分组
     send('batch_start', {
