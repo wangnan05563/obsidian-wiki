@@ -49,7 +49,7 @@ Karpathy Wiki 是一个**本地优先**的智能知识库系统：灵感来自 A
 
 - 🧠 **AI 编译引擎**：ReAct 式工具循环（`read_file` / `write_file` / `append_index` / `append_log`），SSE 流式进度、断点续传（resume）、预算守卫与上下文治理。
 - 📥 **多形态投递**：文本、`.md`、单文件与文件夹批量上传、URL 抓取、书签导入、QQ 群聊导入；投递原件留存于 `raw/` 并可由本人下载。
-- 📚 **Obsidian 风格 Vault**：原生 Markdown + `[[双向链接]]`；页面目录为 `entities / concepts / comparisons / queries / qa / solutions / drafts`，`raw/` 存放投递原件，索引与日志自动维护。
+- 📚 **Obsidian 风格 Vault**：原生 Markdown + `[[双向链接]]`；页面目录为 `entities / concepts / comparisons / queries / qa / solutions`，另有非页面目录 `raw`（投递原件存档）与 `drafts`，索引与日志自动维护。
 - 💬 **知识问答（RAG）**：双路召回（FTS5 BM25 关键词 + BYOK embedding 语义）后流式回答，答案内嵌 `[[页面名]]` 引用，检索结果标注命中来源，支持多会话与线程记忆。
 - 🕸️ **知识图谱**：基于 vis-network 的交互式关联图。
 - 🩺 **知识体检 / 数据清洗**：孤立页、断链、重复标题等健康检查，配套批量修复作业与清理护栏（清理互斥、跨进程锁、写入口矩阵）。
@@ -91,7 +91,7 @@ Karpathy Wiki 是一个**本地优先**的智能知识库系统：灵感来自 A
 
 脚本依次完成依赖安装、Vault 目录初始化与 4 步向导（确认 Vault 路径 → 选模型 + 输入 Key → SCHEMA 提示 → 完成）；未检测到 pnpm 时自动回退 npm。
 
-- Vault 子目录清单取自单一来源 `karpathy-wiki/scripts/vault-dirs.mjs`（与后端 `api/src/vault/page-scope.ts` 同源），脚本不再写死目录名。
+- Vault 子目录清单取自 `karpathy-wiki/scripts/vault-dirs.mjs`（`api/src/vault/page-scope.ts` 的镜像，两者一致性由 `api/test/vault-dirs-single-source.test.ts` 断言），安装脚本不再写死目录名。
 - `SCHEMA.md` 不存在时由 API 首次启动的 `VaultService.init()` 自动生成，也可在「配置」页编辑。
 - 模型与路径配置写入 `api/config.json`（**不含** API Key）。
 - API Key 写入 `api/.env`，该文件已被根 `.gitignore` 排除。
