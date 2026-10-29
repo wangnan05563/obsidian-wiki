@@ -1,7 +1,101 @@
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyRequest, FastifyReply, InjectOptions } from 'fastify';
+import http from 'node:http';
 import { getApiDir } from './utils/runtime.js';
 import { resolveSpaRoot, resolveSpaAsset } from './spa-resolver.js';
+
+// 逐跳头只在单跳连接内有效，代理换一条连接后不能原样转发（RFC 9110 §7.6.1）
+const HOP_BY_HOP = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+// T03646：/wiki/api* 转发必须字节级透传 + 保持流式，app.inject 做不到这两点：
+//   - inject 把响应体解码成字符串（binary 经 utf8 往返体积与内容都变），且只回 content-type
+//   - inject 要等整条响应结束才 resolve（SSE 实测被整体缓冲，进度/日志不再增量）
+// 因此监听态下改走本机回环转发：请求体按原字节（或已解析的 JSON 重新序列化）发出，
+// 响应体 pipe 直通，除逐跳头外原样回传。
+async function forwardApiViaLoopback(
+  app: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  suffix: string,
+): Promise<boolean> {
+  const addr = app.server.address();
+  if (!addr || typeof addr === 'string') return false; // 未监听（单测/启动早期）：交给 inject 兜底
+  // 用实际监听地址回连：host 配置可能是 localhost（解析成 ::1 或 127.0.0.1）或某个具体网卡 IP，
+  // 写死 127.0.0.1 在只绑 ::1 / 指定网卡时会连不上；只有通配地址才落到回环。
+  const listenAddress = addr.address;
+  const loopbackHost = listenAddress === '0.0.0.0' || listenAddress === '::' ? '127.0.0.1' : listenAddress;
+
+  const headers: Record<string, string | string[]> = {};
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (value === undefined) continue;
+    const lower = key.toLowerCase();
+    if (lower === 'host' || HOP_BY_HOP.has(lower)) continue;
+    headers[lower] = value;
+  }
+
+  // 已有解析器（json/urlencoded）吃掉流的请求：用 request.body 重新取字节；
+  // 没有解析器的（multipart）body 为 undefined，直接 pipe 原始请求流。
+  const parsedBody = request.body as unknown;
+  let payload: Buffer | null = null;
+  if (parsedBody !== undefined && parsedBody !== null) {
+    payload = Buffer.isBuffer(parsedBody)
+      ? parsedBody
+      : Buffer.from(typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody), 'utf8');
+    headers['content-length'] = String(payload.length);
+  }
+
+  let hijacked = false;
+  const upstream = http.request(
+    {
+      host: loopbackHost,
+      port: addr.port,
+      method: request.method,
+      path: suffix,
+      headers,
+    },
+    (res) => {
+      hijacked = true;
+      reply.hijack();
+      const resHeaders: Record<string, string | string[]> = {};
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (value === undefined || HOP_BY_HOP.has(key.toLowerCase())) continue;
+        resHeaders[key] = value;
+      }
+      reply.raw.writeHead(res.statusCode ?? 502, resHeaders);
+      // pipe 而非 buffer：SSE 逐条到达即转发，下载流式落地且字节不变
+      res.pipe(reply.raw);
+    },
+  );
+
+  upstream.on('error', (err) => {
+    if (hijacked) {
+      reply.raw.destroy(err);
+      return;
+    }
+    if (!reply.sent) reply.code(502).send({ error: 'Bad Gateway', message: err.message });
+  });
+  // 客户端断开（浏览器取消下载/关闭问答页）时同步掐断上游，避免连接泄漏。
+  // 判据用「响应尚未写完」：正常结束也会触发 close，此时上游已经结束，无需处理。
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableEnded && !upstream.destroyed) upstream.destroy();
+  });
+
+  if (payload) {
+    upstream.end(payload);
+  } else {
+    request.raw.pipe(upstream);
+  }
+  return true;
+}
 
 /**
  * SPA 静态资源托管设置（从 index.ts 抽出为独立模块，便于进程内 app.inject 冒烟测试复用）
@@ -50,6 +144,8 @@ export async function setupSpaStatic(app: FastifyInstance, opts: { spaRoot?: str
     app.all('/wiki/*', async (request: FastifyRequest, reply: FastifyReply) => {
       const suffix = request.url.replace(/^\/wiki/, '');
       if (suffix.startsWith('/api')) {
+        // T03646：监听态走回环转发（字节透传 + 流式）；未监听时退回 inject（本进程冒烟测试）。
+        if (await forwardApiViaLoopback(app, request, reply, suffix)) return reply;
         // Forward API request internally using inject
         // 本项目的 Fastify 类型下 app.inject 返回的是链式 Chain 类型，故将结果显式断言为已解析响应结构；
         // body/query 同样断言，避免 request.body(=unknown) / request.query 与 inject 入参类型不匹配（TS 报错）。
@@ -69,15 +165,24 @@ export async function setupSpaStatic(app: FastifyInstance, opts: { spaRoot?: str
           body: (isMultipart ? request.raw : request.body) as InjectOptions['body'],
           query: request.query as any,
         })) as unknown as { statusCode: number; headers: Record<string, string | undefined>; body: string };
-        // Parse body as JSON to preserve content-type (reply.send(obj) sets application/json)
-        // If parsing fails, send as raw string
-        let responseBody: string | object = res.body;
-        try {
-          responseBody = JSON.parse(res.body);
-        } catch {
-          // Not JSON, send as-is
+        // 兜底路径也保持「原样回传」：不再 JSON.parse 后 reply.send(obj)（会改变字节与空白），
+        // 只转发可安全给出的响应头，正文按 inject 解出的字符串发出。
+        const forwarded = [
+          'content-type',
+          'content-disposition',
+          'cache-control',
+          'etag',
+          'last-modified',
+          'content-language',
+        ] as const;
+        for (const name of forwarded) {
+          const value = res.headers[name];
+          if (value) reply.header(name, value);
         }
-        return reply.status(res.statusCode).header('Content-Type', res.headers['content-type'] || 'application/json').send(responseBody);
+        return reply
+          .status(res.statusCode)
+          .header('Content-Type', res.headers['content-type'] || 'application/json')
+          .send(res.body);
       }
       if (suffix === '' || suffix === '/') {
         return reply.sendFile('index.html');
