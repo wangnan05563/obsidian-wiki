@@ -2,7 +2,7 @@
 import { API_BASE, apiFetch } from '../utils/apiBase';
 import { onMounted, onBeforeUnmount, computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Loading, Check, Close, Lightning, Refresh } from '@element-plus/icons-vue';
+import { Loading, Check, Close, Minus, Lightning, Refresh } from '@element-plus/icons-vue';
 // T01628：图标化操作按钮（仅图标 + 悬浮提示「名称 - 说明」，点击事件逻辑不变）
 import IconActionButton from '../components/IconActionButton.vue';
 // T01629：统一弹窗（居中对话框 / 遮罩 / 动效规格全站一致）
@@ -329,9 +329,11 @@ function stepLabelOf(item: TimelineItem): string {
   return store.stepLabel(item.step) || item.step;
 }
 
-function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
+function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' | 'info' {
   if (item.status === 'done') return 'success';
   if (item.status === 'error') return 'danger';
+  // T03613：已中断用灰色，既不冒充成功也不冒充失败
+  if (item.status === 'interrupted') return 'info';
   return 'primary';
 }
 </script>
@@ -476,6 +478,7 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
               <span class="tl-status" :class="item.status">
                 <el-icon v-if="item.status === 'running'" class="spin-icon"><Loading /></el-icon>
                 <el-icon v-else-if="item.status === 'done'"><Check /></el-icon>
+                <el-icon v-else-if="item.status === 'interrupted'"><Minus /></el-icon>
                 <el-icon v-else><Close /></el-icon>
                 <span>{{ stepStatusLabel(item.status) }}</span>
               </span>
@@ -820,6 +823,13 @@ function dotTypeOf(item: TimelineItem): 'primary' | 'success' | 'danger' {
   background: var(--accent-pink-a15, rgba(255, 62, 201, 0.15));
   color: var(--neon-pink);
   border: 1px solid var(--accent-pink-a40, rgba(255, 62, 201, 0.4));
+}
+
+/* T03613：已中断——灰色中性，避免与「运行中」的转圈或「失败」的红混淆 */
+.tl-status.interrupted {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted, #94a3b8);
+  border: 1px solid rgba(148, 163, 184, 0.4);
 }
 
 .tl-message {

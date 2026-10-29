@@ -59,6 +59,8 @@ export const STEP_LABEL: Record<string, string> = {
   generate_page: '生成页面',
   update_index: '更新索引',
   update_log: '记录日志',
+  // T03613：这一阶段原先只有 running 聚合行、没有中文标签，界面直接裸显 "generate_tags"
+  generate_tags: '生成 AI 标签建议',
   finalize: '收尾'
 };
 
@@ -452,7 +454,12 @@ export const useCompileStore = defineStore('compile', () => {
       if (!state.isCompiling && !state.isDone && !state.isCancelled && !state.errorMessage) {
         return false;
       }
-      timeline.value = state.timeline ?? [];
+      // T03613 兜底：恢复出来的行若仍是 running，说明那条 SSE 早就断了、终态事件不会再来。
+      // 继续转圈就是用户看到的「假死在运行中」；也不能报「失败」——任务可能仍在服务端跑完。
+      // 故降级为「已中断」：状态可读、不谎报结果。
+      timeline.value = (state.timeline ?? []).map((t) =>
+        t.status === 'running' ? { ...t, status: 'interrupted' as const } : t,
+      );
       isCompiling.value = false; // 切回时强制设为 false，避免误触发 startCompile
       isDone.value = state.isDone ?? false;
       isCancelled.value = state.isCancelled ?? false;
@@ -641,6 +648,24 @@ export const useCompileStore = defineStore('compile', () => {
     isCompiling.value = true;
   }
 
+  // T03613：时间线折叠规则（单文件与批量分组共用同一判据）。
+  // 后端一个阶段推的是「聚合 running → 逐条 done/error → 聚合终态」，逐条追加的结果就是
+  // 一条永不收口的「运行中」行留在时间线里——这正是「进度卡在 generate_tags」的观感来源。
+  //  - generate_tags 是聚合阶段：整个阶段只保留一行，逐页明细滚动更新到该行；
+  //  - 其他阶段：末行是同一步且仍为 running 时就地改写（终态覆盖那条开着的行），否则追加。
+  function pushTimeline(list: TimelineItem[], item: TimelineItem): void {
+    const last = list[list.length - 1];
+    if (!last || last.step !== item.step) {
+      list.push(item);
+      return;
+    }
+    if (item.step === 'generate_tags' || last.status === 'running') {
+      list[list.length - 1] = item;
+      return;
+    }
+    list.push(item);
+  }
+
   // 处理单条 SSE 事件，按事件类型分发
   // 批量模式事件：batch_start / file_start / progress(带 fileIndex) / page(带 fileIndex) /
   //              file_done(带 fileIndex) / file_error(带 fileIndex) / file_complete(带 fileIndex) /
@@ -663,7 +688,7 @@ export const useCompileStore = defineStore('compile', () => {
       if (currentStep.value !== p.step) {
         startStage(p.step);
       }
-      timeline.value.push({
+      pushTimeline(timeline.value, {
         step: p.step,
         status: p.status,
         message: p.message,
@@ -698,9 +723,22 @@ export const useCompileStore = defineStore('compile', () => {
         return;
       }
       lastErrorRetryable.value = false;
+      // T03614：这里曾是全前端唯一的赋值点，且把 pages/indexUpdated 写死成空数组与 false，
+      // 于是结果卡无论后端实际做了什么都会显示「索引更新：否」。
+      // 现在改为从时间线推导：update_index 步骤收到过 done，才算索引更新；
+      // 产物清单只取 generate_page（write_file）步带 page 的路径去重——时间线里 extract 等
+      // 读取步同样挂 page（SCHEMA.md、raw/ 原件），全量收集会把「读了什么」当成「产出了什么」。
+      const pagePaths = [
+        ...new Set(
+          timeline.value
+            .filter((t) => t.step === 'generate_page' && t.status === 'done')
+            .map((t) => t.page?.path)
+            .filter((p): p is string => typeof p === 'string' && p.length > 0),
+        ),
+      ];
       result.value = {
-        pages: [],
-        indexUpdated: false,
+        pages: pagePaths,
+        indexUpdated: timeline.value.some((t) => t.step === 'update_index' && t.status === 'done'),
         cached: d.data?.cached,
       };
       // 缓存命中时 message 存在 errorMessage 上会误导，单独存到 doneMessage
@@ -759,7 +797,7 @@ export const useCompileStore = defineStore('compile', () => {
   // 处理 page 事件：同时推送到分组 timeline 与 pages 列表
   function handleBatchPage(group: BatchFileGroup, d: BatchEventData): void {
     const page = extractPage(d.data);
-    group.timeline.push({
+    pushTimeline(group.timeline, {
       step: d.step,
       status: d.status,
       message: d.message,
@@ -795,7 +833,7 @@ export const useCompileStore = defineStore('compile', () => {
   // 处理 progress 事件
   function handleProgressEvent(group: BatchFileGroup, d: BatchEventData): void {
     const page = extractPage(d.data);
-    group.timeline.push({
+    pushTimeline(group.timeline, {
       step: d.step,
       status: d.status,
       message: d.message,
