@@ -13,10 +13,12 @@ import { resolveSpaRoot, resolveSpaAsset } from './spa-resolver.js';
  *            → getApiDir()/../frontend/dist（vite 默认构建产物）
  *            → CWD/public（exe 运行模式）→ getApiDir()/public（开发/api/public 或 SEA/exe/public）
  *            → static/spa（兼容旧路径）
+ *
+ * opts.spaRoot：仅供测试注入固定资源根（避免用例依赖本地是否已构建 SPA）；生产调用不传。
  */
-export async function setupSpaStatic(app: FastifyInstance): Promise<void> {
+export async function setupSpaStatic(app: FastifyInstance, opts: { spaRoot?: string } = {}): Promise<void> {
   const _apiDir = getApiDir();
-  const spaRoot = resolveSpaRoot(_apiDir);
+  const spaRoot = opts.spaRoot ?? resolveSpaRoot(_apiDir);
   if (spaRoot) {
     // 防 stale 缓存：index.html（SPA 壳）每次都重新校验，避免浏览器长期缓存「修复前」的旧包，
     // 导致「代码已修、线上已部署，但用户浏览器仍跑旧逻辑」的复发（编辑重发类问题尤甚）。
@@ -51,11 +53,20 @@ export async function setupSpaStatic(app: FastifyInstance): Promise<void> {
         // Forward API request internally using inject
         // 本项目的 Fastify 类型下 app.inject 返回的是链式 Chain 类型，故将结果显式断言为已解析响应结构；
         // body/query 同样断言，避免 request.body(=unknown) / request.query 与 inject 入参类型不匹配（TS 报错）。
+        //
+        // T03612：multipart 必须按原始字节流透传，不能再走 request.body。
+        // /wiki/* 这个路由上没有 multipart 解析器：@fastify/multipart 的内容类型解析器只把请求
+        // 标记为 multipart、并不消费流 ⇒ request.body 为 undefined，inject 的 body 分支会把整个
+        // 上传体丢掉，下游只能判定「没有 files 字段」→ 经 /wiki/ 入口的上传必然失败。
+        // 传 request.raw 时 content-length / content-type(含 boundary) 原样保留，
+        // 由下游 @fastify/multipart 按同一套字节解析；10MB 等上限仍在下游生效。
+        const contentType = request.headers['content-type'] ?? '';
+        const isMultipart = contentType.toLowerCase().startsWith('multipart/');
         const res = (await app.inject({
           method: request.method as InjectOptions['method'],
           url: suffix,
           headers: Object.fromEntries(Object.entries(request.headers).filter(([k]) => k.toLowerCase() !== 'accept-encoding')),
-          body: request.body as any,
+          body: (isMultipart ? request.raw : request.body) as InjectOptions['body'],
           query: request.query as any,
         })) as unknown as { statusCode: number; headers: Record<string, string | undefined>; body: string };
         // Parse body as JSON to preserve content-type (reply.send(obj) sets application/json)
