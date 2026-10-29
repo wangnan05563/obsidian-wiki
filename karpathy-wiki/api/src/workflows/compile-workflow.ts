@@ -23,6 +23,7 @@ import {
 } from '../utils/harness-dirs.js';
 import { suggestTagsForPage } from './tag-suggest-workflow.js';
 import { mergeDuplicateFrontmatter } from '../data-clean/quality-scanner.js';
+import { parsePage, stringifyPage } from '../utils/frontmatter.js';
 
 // §12.3-6：compile 中途失败时，给已生成的页面标记 status: draft。
 // 决策不回滚——LLM 编译成本高（token 已消耗），半成品保留供用户决策。
@@ -30,11 +31,11 @@ async function markPagesAsDraft(vault: VaultService, pagePaths: string[]): Promi
   for (const rel of pagePaths) {
     try {
       const raw = await vault.readFile(rel);
-      const parsed = matter(raw);
+      const { data, content: body } = parsePage(raw);
       // 已有 status 字段则不覆盖，仅补充缺失的
-      if (!parsed.data.status) {
-        parsed.data.status = 'draft';
-        const updated = matter.stringify({ content: parsed.content }, parsed.data);
+      if (!data.status) {
+        data.status = 'draft';
+        const updated = stringifyPage(body, data);
         await vault.writeFile(rel, updated);
       }
     } catch {
@@ -88,12 +89,13 @@ const DIR_TO_TYPE: Record<string, PageType> = PAGE_DIR_TO_TYPE as Record<string,
 function ensurePageTypeField(pagePath: string, content: string): string {
   let parsed;
   try {
-    parsed = matter(content);
+    parsed = parsePage(content);
   } catch {
     // frontmatter 格式错误时不阻断写入，交给 health-check 兜底
     return content;
   }
-  const currentType = parsed.data.type;
+  const data = parsed.data;
+  const currentType = data.type;
   const isValid = typeof currentType === 'string'
     && (VALID_PAGE_TYPES as readonly string[]).includes(currentType.toLowerCase());
   if (isValid) {
@@ -102,8 +104,8 @@ function ensurePageTypeField(pagePath: string, content: string): string {
   // 按顶层目录推断 type
   const topDir = pagePath.split('/')[0]?.toLowerCase() ?? '';
   const inferredType = DIR_TO_TYPE[topDir] ?? 'concept'; // 兜底到 concept
-  parsed.data.type = inferredType;
-  return matter.stringify({ content: parsed.content }, parsed.data);
+  data.type = inferredType;
+  return stringifyPage(parsed.content, data);
 }
 
 // FR-15-6：校验 frontmatter entities 字段格式与拓扑一致性
@@ -118,24 +120,25 @@ function ensurePageTypeField(pagePath: string, content: string): string {
 function ensureEntitiesField(content: string): string {
   let parsed;
   try {
-    parsed = matter(content);
+    parsed = parsePage(content);
   } catch {
     return content; // frontmatter 格式错误时不阻断写入
   }
-  const rawEntities = parsed.data.entities;
+  const data = parsed.data;
+  const rawEntities = data.entities;
   // fast path 1：entities 字段不存在
   if (rawEntities === undefined || rawEntities === null) {
     return content;
   }
   // 格式校验：必须是数组
   if (!Array.isArray(rawEntities)) {
-    delete parsed.data.entities;
-    return matter.stringify({ content: parsed.content }, parsed.data);
+    delete data.entities;
+    return stringifyPage(parsed.content, data);
   }
   // 空数组：删除字段避免污染
   if (rawEntities.length === 0) {
-    delete parsed.data.entities;
-    return matter.stringify({ content: parsed.content }, parsed.data);
+    delete data.entities;
+    return stringifyPage(parsed.content, data);
   }
   // 收集正文 [[页面名]] 用于校验 entities.name 拓扑一致性（拆掉别名/锚点后的真实目标名）
   const wikilinkNames = new Set(extractWikilinkTargets(parsed.content));
@@ -149,12 +152,12 @@ function ensureEntitiesField(content: string): string {
   });
   // 清理后为空：移除字段
   if (validEntities.length === 0) {
-    delete parsed.data.entities;
-    return matter.stringify({ content: parsed.content }, parsed.data);
+    delete data.entities;
+    return stringifyPage(parsed.content, data);
   }
   // 写回清理后的 entities（过滤掉无效项）
-  parsed.data.entities = validEntities;
-  return matter.stringify({ content: parsed.content }, parsed.data);
+  data.entities = validEntities;
+  return stringifyPage(parsed.content, data);
 }
 
 // FR-18：校验 frontmatter 的 knowledge_class 字段（V4.0 知识时效分类）
@@ -166,26 +169,26 @@ function ensureEntitiesField(content: string): string {
 function ensureKnowledgeClassField(content: string): string {
   let parsed;
   try {
-    parsed = matter(content);
+    parsed = parsePage(content);
   } catch {
     return content; // frontmatter 格式错误时不阻断写入
   }
-  const kc = parsed.data.knowledge_class;
+  const data = parsed.data;
+  const kc = data.knowledge_class;
   if (kc === undefined || kc === null) {
     return content; // 缺失：fast path，不插入默认值
   }
   const VALID_KC = ['timeless', 'dated', 'pointer'];
   if (typeof kc !== 'string' || !VALID_KC.includes(kc.toLowerCase())) {
-    delete parsed.data.knowledge_class; // 非法值：移除，避免脏分类
-    return matter.stringify({ content: parsed.content }, parsed.data);
+    delete data.knowledge_class; // 非法值：移除，避免脏分类
+    return stringifyPage(parsed.content, data);
   }
   // 合法但大小写不规范：规整为小写
   if (kc !== kc.toLowerCase()) {
-    parsed.data.knowledge_class = kc.toLowerCase();
-    return matter.stringify({ content: parsed.content }, parsed.data);
+    data.knowledge_class = kc.toLowerCase();
+    return stringifyPage(parsed.content, data);
   }
-  return content;
-}
+  return content;}
 // 加载 compile prompt 单点存储。Skill 与 harness 共引用，保证两阶段等价（M-3）。
 // 路径解析统一走 runtime.ts，兼容开发模式与 SEA 打包模式
 import { getPromptPath } from '../utils/runtime.js';

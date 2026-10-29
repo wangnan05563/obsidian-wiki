@@ -17,6 +17,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
+import { parsePage, stringifyPage } from '../utils/frontmatter.js';
 import type { VaultService } from '../vault/vault-service.js';
 // T02921：wikilink 解析唯一实现（拆别名/锚点），discover 与 gaps/体检共用同一口径
 import { extractWikilinkTargets } from '../vault/link-parser.js';
@@ -188,19 +189,21 @@ export async function createBidirectionalLink(
   const sourceRaw = await vault.readFile(sourcePath);
   const targetRaw = await vault.readFile(targetPath);
 
-  const sourceParsed = matter(sourceRaw);
-  const targetParsed = matter(targetRaw);
+  const source = parsePage(sourceRaw);
+  const target = parsePage(targetRaw);
+  const sourceData = source.data;
+  const targetData = target.data;
 
   // 提取页面名（不含 .md），用于构造 [[页面名]] 引用
   const sourcePageName = path.basename(sourcePath, '.md');
   const targetPageName = path.basename(targetPath, '.md');
 
   // 获取或初始化 related 数组
-  const sourceRelated: string[] = Array.isArray(sourceParsed.data.related)
-    ? (sourceParsed.data.related as string[])
+  const sourceRelated: string[] = Array.isArray(sourceData.related)
+    ? (sourceData.related as string[])
     : [];
-  const targetRelated: string[] = Array.isArray(targetParsed.data.related)
-    ? (targetParsed.data.related as string[])
+  const targetRelated: string[] = Array.isArray(targetData.related)
+    ? (targetData.related as string[])
     : [];
 
   // 添加双链（幂等：已存在则跳过写入）
@@ -212,24 +215,24 @@ export async function createBidirectionalLink(
 
   if (!sourceRelated.includes(sourceLink)) {
     sourceRelated.push(sourceLink);
-    sourceParsed.data.related = sourceRelated;
-    sourceParsed.data.updated = new Date().toISOString().slice(0, 10);
+    sourceData.related = sourceRelated;
+    sourceData.updated = new Date().toISOString().slice(0, 10);
     sourceChanged = true;
   }
 
   if (!targetRelated.includes(targetLink)) {
     targetRelated.push(targetLink);
-    targetParsed.data.related = targetRelated;
-    targetParsed.data.updated = new Date().toISOString().slice(0, 10);
+    targetData.related = targetRelated;
+    targetData.updated = new Date().toISOString().slice(0, 10);
     targetChanged = true;
   }
 
   // 分别写入（仅当有变更时才写盘，避免无谓 IO）
   if (sourceChanged) {
-    await vault.writeFile(sourcePath, matter.stringify({ content: sourceParsed.content }, sourceParsed.data));
+    await vault.writeFile(sourcePath, stringifyPage(source.content, sourceData));
   }
   if (targetChanged) {
-    await vault.writeFile(targetPath, matter.stringify({ content: targetParsed.content }, targetParsed.data));
+    await vault.writeFile(targetPath, stringifyPage(target.content, targetData));
   }
 
   return { sourceRelated, targetRelated };

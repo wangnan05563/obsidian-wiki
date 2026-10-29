@@ -18,8 +18,8 @@
 //   - 用户在 Browse.vue 审核后通过 PUT /api/tags/confirm 移动到 tags 字段
 
 import fs from 'node:fs/promises';
-import matter from 'gray-matter';
 import type { VaultService, PendingTagPage } from '../vault/vault-service.js';
+import { parsePage, stringifyPage } from '../utils/frontmatter.js';
 import type { AppConfig } from '../types.js';
 import { getEffectiveApiKey } from '../config.js';
 import { getPromptPath } from '../utils/runtime.js';
@@ -133,7 +133,8 @@ export async function suggestTagsForPage(
   config: AppConfig,
 ): Promise<string[]> {
   const raw = await vault.readFile(pagePath);
-  const parsed = matter(raw);
+  // T03647：parsePage 返回与 gray-matter 内容缓存脱钩的深拷贝，改 data 不会串到字节相同的其它页面
+  const { data, content: body } = parsePage(raw);
 
   // 调用 LLM 生成 tag 建议
   const prompt = await loadTagSuggestPrompt();
@@ -143,13 +144,13 @@ export async function suggestTagsForPage(
   // T03615：与已有 ai_tags 合并去重，而不是整段覆盖。
   // 为什么：同一页面被重复编译（或重跑 tag 建议）时，LLM 每次只返回本轮判断的结果，
   // 直接赋值会让后一次建议抹掉前一次——用户审核列表里的历史建议凭空消失。
-  const existingAiTags = ensureStringArray(parsed.data.ai_tags);
+  const existingAiTags = ensureStringArray(data.ai_tags);
   const mergedAiTags = [...new Set([...existingAiTags, ...result.ai_tags])];
-  parsed.data.ai_tags = mergedAiTags;
+  data.ai_tags = mergedAiTags;
   // 同时更新 updated 字段，记录本次修改时间
-  parsed.data.updated = new Date().toISOString().slice(0, 10);
+  data.updated = new Date().toISOString().slice(0, 10);
 
-  const updated = matter.stringify({ content: parsed.content }, parsed.data);
+  const updated = stringifyPage(body, data);
   await vault.writeFile(pagePath, updated);
 
   return mergedAiTags;
@@ -163,10 +164,10 @@ export async function confirmTagForPage(
   tag: string,
 ): Promise<{ tags: string[]; aiTags: string[] }> {
   const raw = await vault.readFile(pagePath);
-  const parsed = matter(raw);
+  const { data, content: body } = parsePage(raw);
 
-  const existingTags = ensureStringArray(parsed.data.tags);
-  const existingAiTags = ensureStringArray(parsed.data.ai_tags);
+  const existingTags = ensureStringArray(data.tags);
+  const existingAiTags = ensureStringArray(data.ai_tags);
 
   // 已存在于 tags 则直接返回当前状态（幂等）
   if (existingTags.includes(tag)) {
@@ -177,16 +178,16 @@ export async function confirmTagForPage(
   const newTags = [...existingTags, tag];
   const newAiTags = existingAiTags.filter((t) => t !== tag);
 
-  parsed.data.tags = newTags;
+  data.tags = newTags;
   if (newAiTags.length > 0) {
-    parsed.data.ai_tags = newAiTags;
+    data.ai_tags = newAiTags;
   } else {
     // ai_tags 清空后移除字段，避免 frontmatter 留下空数组
-    delete parsed.data.ai_tags;
+    delete data.ai_tags;
   }
-  parsed.data.updated = new Date().toISOString().slice(0, 10);
+  data.updated = new Date().toISOString().slice(0, 10);
 
-  const updated = matter.stringify({ content: parsed.content }, parsed.data);
+  const updated = stringifyPage(body, data);
   await vault.writeFile(pagePath, updated);
 
   return { tags: newTags, aiTags: newAiTags };

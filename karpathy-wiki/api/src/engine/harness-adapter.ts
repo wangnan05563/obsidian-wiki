@@ -12,8 +12,8 @@ import { generatePodcast } from '../workflows/podcast-workflow.js';
 import { generateVideo, pollVideoTask } from '../workflows/media-generation-workflow.js';
 // 意图澄清：澄清会话内存存储（跨请求共享同一 store，clarifyId 才能跨轮校验轮次/选项）
 import { ClarifySessionStore } from '../workflows/clarify/clarify-store.js';
-// UMD 默认导出兼容：gray-matter 的默认导出可能是函数或带 .default 的模块对象
-import matter from 'gray-matter';
+// T03647：frontmatter 读→改→写统一走 parsePage/stringifyPage，避免就地改写 gray-matter 内容缓存
+import { parsePage, stringifyPage } from '../utils/frontmatter.js';
 // FR-18 知识时效判定：healthCheck 复检项复用同一判定规则，保证与浏览/问答取值一致
 import { computeKnowledgeStatus } from '../utils/knowledge-status.js';
 // T02686：页面口径单一来源（目录集合 + 测试文件排除规则）
@@ -384,11 +384,12 @@ export class HarnessAdapter implements EngineAdapter {
       try {
         const content = await this.vault.readFile(rel);
         // 跳过非 dated 页面（非 dated 无需复核；复用统一判定可保证防御性）
-        const parsed = matter(content);
-        const kc = typeof parsed.data.knowledge_class === 'string' ? parsed.data.knowledge_class.toLowerCase() : '';
+        const parsed = parsePage(content);
+        const data = parsed.data;
+        const kc = typeof data.knowledge_class === 'string' ? data.knowledge_class.toLowerCase() : '';
         if (kc !== 'dated') continue;
-        parsed.data.reviewed_at = reviewedAt;
-        await this.vault.writeFile(rel, matter.stringify({ content: parsed.content }, parsed.data));
+        data.reviewed_at = reviewedAt;
+        await this.vault.writeFile(rel, stringifyPage(parsed.content, data));
         done++;
       } catch (err: unknown) {
         // 单页失败不阻断其它页面（批量复核应尽力而为）
