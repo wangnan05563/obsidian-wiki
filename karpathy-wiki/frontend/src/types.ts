@@ -1,14 +1,21 @@
 // SSE 事件相关类型定义
 // 后端按 step 推送进度，这里保持与后端字段对齐
 
+// 后端 TOOL_STEP_MAP 与工作流阶段实际推送的 step 全集（原先缺 update_index/update_log/generate_tags，
+// 时间线里这些步只能按字面量比较，改一处就漏一处）。
 export type CompileStep =
   | 'archive'
   | 'read_schema'
   | 'extract'
   | 'generate_page'
+  | 'update_index'
+  | 'update_log'
+  | 'generate_tags'
   | 'finalize';
 
-export type StepStatus = 'running' | 'done' | 'error';
+// interrupted：刷新/恢复时仍停在 running 的行降级而来。不能留 running（转圈永不收口），
+// 也不能报 error（连接断了不代表编译失败，任务可能仍在服务端跑完）。
+export type StepStatus = 'running' | 'done' | 'error' | 'interrupted';
 
 export interface ProgressData {
   step: CompileStep;

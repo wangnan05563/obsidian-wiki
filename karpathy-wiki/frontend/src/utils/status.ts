@@ -11,6 +11,9 @@ export function stepStatusLabel(status: string): string {
       return '失败';
     case 'running':
       return '运行中';
+    case 'interrupted':
+      // T03613：刷新/恢复时仍停在 running 的行——连接断了但任务未必失败，不能报「失败」
+      return '已中断';
     default:
       // 兜底不裸暴漏未知枚举：原样返回，由上层决定是否展示
       return status;

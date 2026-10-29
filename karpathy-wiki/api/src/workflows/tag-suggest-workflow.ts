@@ -126,7 +126,7 @@ export function parseLlmJsonOutput(text: string): LlmTagOutput {
 
 // 为单页面生成 tag 建议，写入 frontmatter.ai_tags 字段
 // 路径校验：调用方负责白名单校验（routes/tags.ts 用 VAULT_PAGE_PATTERN 校验）
-// 返回值：生成的 tag 建议数组（即使为空也写入 frontmatter，标记"已生成过建议"）
+// 返回值：合并后的 ai_tags 数组（即使为空也写入 frontmatter，标记"已生成过建议"）
 export async function suggestTagsForPage(
   vault: VaultService,
   pagePath: string,
@@ -140,14 +140,19 @@ export async function suggestTagsForPage(
   const result = await callLlmForTagSuggest(prompt, raw, config);
 
   // 写入 frontmatter.ai_tags（保留已有 tags 不覆盖，遵循"仅建议不覆盖"原则）
-  parsed.data.ai_tags = result.ai_tags;
+  // T03615：与已有 ai_tags 合并去重，而不是整段覆盖。
+  // 为什么：同一页面被重复编译（或重跑 tag 建议）时，LLM 每次只返回本轮判断的结果，
+  // 直接赋值会让后一次建议抹掉前一次——用户审核列表里的历史建议凭空消失。
+  const existingAiTags = ensureStringArray(parsed.data.ai_tags);
+  const mergedAiTags = [...new Set([...existingAiTags, ...result.ai_tags])];
+  parsed.data.ai_tags = mergedAiTags;
   // 同时更新 updated 字段，记录本次修改时间
   parsed.data.updated = new Date().toISOString().slice(0, 10);
 
   const updated = matter.stringify({ content: parsed.content }, parsed.data);
   await vault.writeFile(pagePath, updated);
 
-  return result.ai_tags;
+  return mergedAiTags;
 }
 
 // 确认 tag：从 ai_tags 移到 tags（合并去重）

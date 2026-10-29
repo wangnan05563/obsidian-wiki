@@ -426,7 +426,10 @@ ${schema}
   // 5. 桥接 harness 到事件流：compile 和 resume 共用此逻辑（§11.2）
   // FR-10-1: generatedPagesRef 由 bridgeHarnessToEvents 填充，编译完成后用于追加 AI tag 建议
   const generatedPagesRef: string[] = [];
-  yield* bridgeHarnessToEvents(
+  // T03613：「编译完成」的 done 事件由 bridge 返回、不再混在流里推送。
+  // 为什么：tag 阶段是编译的一部分——原先 done 在 runPromise.then 里先推，generate_tags 在其后才开始，
+  // 于是前端先看到「编译完成」，再看到一条永远收不了口的「运行中」。
+  const finalEvent = yield* bridgeHarnessToEvents(
     harnessConfig,
     vault,
     (harness) => harness.run({ task, context: { rawPath, schema } }),
@@ -439,15 +442,18 @@ ${schema}
   // FR-10-1: 编译成功完成后，对每个生成的页面追加 AI tag 建议
   // 为什么在 bridgeHarnessToEvents 之后：generator 完成意味着 runPromise 已结束，generatedPagesRef 已填充
   // 为什么 try/catch 包裹：tag 建议失败不阻塞 compile 主流程（与 markPagesAsDraft 同决策：保留半成品）
-  if (appConfig && generatedPagesRef.length > 0) {
+  // 为什么跳过失败态：编译本身失败时页面多为半成品，再花一次 LLM 调用生成 tag 没有价值
+  if (appConfig && finalEvent.status !== 'error' && generatedPagesRef.length > 0) {
     yield {
       step: 'generate_tags',
       status: 'running',
       message: `正在为 ${generatedPagesRef.length} 个页面生成 AI tag 建议`,
     };
+    let taggedPages = 0;
     for (const pagePath of generatedPagesRef) {
       try {
         const aiTags = await suggestTagsForPage(vault, pagePath, appConfig);
+        taggedPages += 1;
         yield {
           step: 'generate_tags',
           status: 'done',
@@ -464,12 +470,24 @@ ${schema}
         };
       }
     }
+    // T03613：聚合终态。原先这个阶段只有 1 条 running + 逐页事件，没有收口行，
+    // 「运行中」在前端永久残留并与「编译完成」并存。
+    yield {
+      step: 'generate_tags',
+      status: taggedPages > 0 ? 'done' : 'error',
+      message: `AI tag 建议已生成 ${taggedPages}/${generatedPagesRef.length} 个页面`,
+    };
   }
+
+  yield finalEvent;
 }
 
 // 通用 harness 事件桥接：构造 afterStep hook → 事件队列 → AsyncGenerator yield。
 // compileWorkflow 传入 harness.run，resumeCompileWorkflow 传入 harness.resume，
 // 两者共享相同的事件推送、draft 标记、日志双写逻辑，避免闭包重建代码重复。
+//
+// T03613：终态 done 事件作为生成器的**返回值**而不是队列里的一条事件——
+// 调用方（compileWorkflow）需要它才能在 tag 阶段之后统一收口；resume 直接透传。
 async function* bridgeHarnessToEvents(
   harnessConfig: HarnessConfig,
   vault: VaultService,
@@ -480,7 +498,7 @@ async function* bridgeHarnessToEvents(
   // FR-10-1: 传出本次生成的页面路径，供调用方追加 AI tag 建议
   // 为什么用 ref 参数：避免重构 generatedPages 内部逻辑，最小侵入式扩展
   generatedPagesRef?: string[],
-): AsyncIterable<ProgressEvent> {
+): AsyncGenerator<ProgressEvent, ProgressEvent, void> {
   // 事件队列：afterStep hook 推入，AsyncGenerator yield 出去。
   // finished 标志避免 generator 提前退出时 harness 仍在写队列导致事件丢失。
   const queue: ProgressEvent[] = [];
@@ -531,9 +549,14 @@ async function* bridgeHarnessToEvents(
           });
           // §12.3-6：收集 write_file 生成的页面路径，用于失败时标记 draft
           if (toolName === 'write_file' && parsedArgs.path) {
-            generatedPages.push(parsedArgs.path);
+            // T03615：LLM 常对同一页面反复 write_file（覆写/修订），这里必须按路径去重。
+            // 为什么放在 hook 内而不是调用方：run 与 resume 共用本桥，去重判据只此一处。
+            // 不去重的后果：tag 阶段同页跑两次 LLM，且第二次建议覆盖第一次。
+            if (!generatedPages.includes(parsedArgs.path)) {
+              generatedPages.push(parsedArgs.path);
+            }
             // FR-10-1: 同步推送到调用方 ref，用于编译末尾追加 AI tag 建议
-            if (generatedPagesRef) {
+            if (generatedPagesRef && !generatedPagesRef.includes(parsedArgs.path)) {
               generatedPagesRef.push(parsedArgs.path);
             }
           }
@@ -552,11 +575,14 @@ async function* bridgeHarnessToEvents(
     },
   });
 
-  // 启动 harness（run 或 resume），完成后 push done 事件 + 记录终态日志
+  // T03613：终态事件暂存到这里，由生成器 return 给调用方统一收口
+  let finalEvent: ProgressEvent | null = null;
+
+  // 启动 harness（run 或 resume），完成后落定终态事件 + 记录终态日志
   const runPromise = runFn(harness)
     .then(async (result) => {
       const isError = result.status === 'failed';
-      pushEvent({
+      finalEvent = {
         step: 'done',
         status: isError ? 'error' : 'done',
         message: isError
@@ -565,7 +591,7 @@ async function* bridgeHarnessToEvents(
         // T03591：失败事件带 rawPath + retryable，前端据此提供「免上传重试」
         data: { path: rawPath || undefined, rawPath: rawPath || undefined },
         retryable: isError ? isRetryableLlmError(result.finalContent ?? '') : undefined,
-      });
+      };
       // §12.3-6：失败时给已生成页面标记 draft，保留半成品供用户决策
       if (isError && generatedPages.length > 0) {
         await markPagesAsDraft(vault, generatedPages);
@@ -590,7 +616,7 @@ async function* bridgeHarnessToEvents(
       const { friendly: friendlyMsg, category } = friendlyLlmError(err);
       // 原始错误信息仍写入日志（便于排查），但 SSE 推送用友好提示
       const rawErrMsg = err instanceof Error ? err.message : String(err);
-      pushEvent({
+      finalEvent = {
         step: 'done',
         status: 'error',
         message: `编译失败: ${friendlyMsg}`,
@@ -600,7 +626,7 @@ async function* bridgeHarnessToEvents(
         retryable: isRetryableLlmError(err),
         // 注意：ProgressEvent 无 error 字段，错误详情已含于 message
         // 完整 rawErrMsg 写入 RunLogger 供事后排查
-      });
+      };
       // §12.3-6：异常分支同样标记 draft
       if (generatedPages.length > 0) {
         await markPagesAsDraft(vault, generatedPages);
@@ -640,6 +666,14 @@ async function* bridgeHarnessToEvents(
   }
 
   await runPromise;
+  // then/catch 必然已写入 finalEvent（finally 只在其后运行）。兜底一条终态是边界保护：
+  // SSE 侧收不到终态就会让前端假死在「运行中」，宁可显式报错也不能不发。
+  return finalEvent ?? {
+    step: 'done',
+    status: 'error',
+    message: '编译失败: 未产生终态事件',
+    data: { path: rawPath || undefined, rawPath: rawPath || undefined },
+  };
 }
 
 // §11.2 断点续传：从中断点恢复编译。
@@ -654,7 +688,9 @@ export async function* resumeCompileWorkflow(
 ): AsyncIterable<ProgressEvent> {
   yield { step: 'archive', status: 'done', message: `正在恢复编译任务: ${runId.slice(0, 8)}` };
 
-  yield* bridgeHarnessToEvents(
+  // T03613：终态改成生成器返回值后，`yield*` 只会转发它 yield 的事件、不转发返回值，
+  // 所以 resume 必须显式补发终态，否则收口事件永远到不了前端。
+  const finalEvent = yield* bridgeHarnessToEvents(
     harnessConfig,
     vault,
     (harness) => harness.resume(runId),
@@ -662,4 +698,5 @@ export async function* resumeCompileWorkflow(
     null,
     null,
   );
+  yield finalEvent;
 }
