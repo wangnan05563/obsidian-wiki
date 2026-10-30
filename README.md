@@ -68,7 +68,7 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 ## 核心功能
 
-八个模块覆盖「资料进来 → 知识成型 → 知识被使用 → 知识库被维护」的完整链路。每个模块末尾的截图标记为待补位（放置约定见文末[界面截图](#界面截图)）。
+八个模块覆盖「资料进来 → 知识成型 → 知识被使用 → 知识库被维护」的完整链路。每个模块末尾配一张真实运行界面截图（画面为演示用示例数据，口径见文末[界面截图](#界面截图)）。
 
 ### 1. 多形态投递：资料不用先整理再入库
 
@@ -76,7 +76,7 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：先把资料收进来，再让 AI 去整理——降低知识库建设的启动门槛。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/ingest.png —— 投递页（多入口上传、批量投递与投递原件列表） -->
+<img src="karpathy-wiki/assets/screenshots/ingest.png" alt="投递页：多入口上传、批量投递与已投递原件列表" width="720">
 
 ### 2. AI 编译引擎：过程可见、可续跑
 
@@ -84,7 +84,7 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：一次投递几十份资料也能看清进行到哪一步，中断后可接着跑。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/progress.png —— 编译进度页（步骤流、工具调用与实时日志） -->
+<img src="karpathy-wiki/assets/screenshots/progress.png" alt="编译进度页：步骤流、各阶段耗时与生成页面" width="720">
 
 ### 3. 浏览与双向链接：知识连成网络
 
@@ -92,7 +92,7 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：同一主题的知识自动互链，新同事顺着链接就能读懂上下文。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/browse.png —— 浏览页（目录树、页面正文与双向链接面板） -->
+<img src="karpathy-wiki/assets/screenshots/browse.png" alt="浏览页：目录树、页面正文与双向链接面板" width="720">
 
 ### 4. 知识问答（RAG）：跨文档提问，答案带引用
 
@@ -100,7 +100,7 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：「我们上次是怎么处理这类问题的？」这类跨文档提问，能问、能答、能核对。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/query.png —— 问答页（流式回答、引用角标与检索命中来源） -->
+<img src="karpathy-wiki/assets/screenshots/query.png" alt="问答页：流式回答、引用角标与检索命中来源" width="720">
 
 ### 5. 知识图谱：一眼看清结构
 
@@ -108,7 +108,7 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：知识库从「一堆文件」变成「一张可探索的地图」。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/graph.png —— 图谱页（页面关联图与按类型筛选） -->
+<img src="karpathy-wiki/assets/screenshots/graph.png" alt="图谱页：页面关联图与按类型筛选" width="720">
 
 ### 6. 知识体检与数据清洗：让知识库不腐化
 
@@ -116,8 +116,8 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：知识库可以长期演进，而不是上线三个月后变成新的垃圾场。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/health.png —— 知识体检页（问题分类） -->
-<!-- 截图待补：karpathy-wiki/assets/screenshots/data-clean.png —— 数据清洗页（批量修复） -->
+<img src="karpathy-wiki/assets/screenshots/health.png" alt="体检中心：问题分类、跨类多选与批量修复" width="720">
+<img src="karpathy-wiki/assets/screenshots/data-clean.png" alt="页面质量清洗：按问题类型筛选与批量补元信息" width="720">
 
 ### 7. 多端与个性化：桌面与手机同一套知识
 
@@ -125,8 +125,8 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：对外演示可换「产品展示」主题，对内使用可换「暗色」；现场用手机也能查。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/mobile.png —— 移动端 Shell -->
-<!-- 截图待补：karpathy-wiki/assets/screenshots/themes.png —— 主题切换面板 -->
+<img src="karpathy-wiki/assets/screenshots/mobile.png" alt="移动端 Shell：手机问答页" width="300">
+<img src="karpathy-wiki/assets/screenshots/themes.png" alt="界面主题：主题选择面板" width="720">
 
 ### 8. 开放集成与安全：既开放，又可控
 
@@ -137,8 +137,8 @@ Karpathy Wiki 把「资料入库」做成一条四步闭环：投递资料 → A
 
 > **价值**：能力可以对外开放，数据与账号边界仍然握在自己手里。
 
-<!-- 截图待补：karpathy-wiki/assets/screenshots/config.png —— 配置页（模型接入与用户权限） -->
-<!-- 截图待补：karpathy-wiki/assets/screenshots/tunnel.png —— 隧道页（公网访问自检） -->
+<img src="karpathy-wiki/assets/screenshots/config.png" alt="配置中心：模型接入、用户权限与系统配置" width="720">
+<img src="karpathy-wiki/assets/screenshots/tunnel.png" alt="内网穿透：公网访问前置条件自检" width="720">
 
 ### 更多能力
 
@@ -299,13 +299,15 @@ cd ../wiki-harness && pnpm test           # Agent 引擎（node --test）
 
 ## 界面截图
 
-[核心功能](#核心功能)各模块末尾留有 `<!-- 截图待补：... -->` 标记，共 11 处（投递、编译进度、浏览、问答、图谱、体检、清洗、移动端、主题、配置与隧道）。仓库当前**不含**运行界面截图，补齐方式：
+[核心功能](#核心功能)各模块末尾共 11 张运行界面截图，图片文件位于 `karpathy-wiki/assets/screenshots/`（投递、编译进度、浏览、问答、图谱、体检、清洗、移动端、主题、配置与隧道），引用一律用仓库内相对路径：
 
-1. 把图片放到 `karpathy-wiki/assets/screenshots/<模块>.png`（文件名沿用标记里给出的路径）。
-2. 将标记整行替换为 `<img src="karpathy-wiki/assets/screenshots/<模块>.png" alt="<模块名>" width="720">`。
-3. 只用仓库内相对路径，确保 GitHub 渲染；提交前确认画面里没有真实业务资料、密钥或个人信息。
+```html
+<img src="karpathy-wiki/assets/screenshots/ingest.png" alt="投递页：多入口上传、批量投递与已投递原件列表" width="720">
+```
 
-不预置截图的原因：示例画面来自本机 Vault，里面是使用者自己的资料；公开仓库不应携带这些内容。文档与演示请用空 Vault 或专门的中立资料截图。
+截图取自构建产物的真实界面（含真实的 SSE 编译流与问答流、路由与权限渲染），接口由本地 mock 提供，库内容为「咖啡冲煮」演示资料：不含真实业务资料、密钥、账号或个人信息。产品介绍 Word 文档（[市场推广版](karpathy-wiki/docs/product/产品介绍-Karpathy-Wiki.docx)）内嵌同一批图片。
+
+换图时保持同名文件与同尺寸比例即可，无需改动正文；提交前请再次确认画面里没有真实业务资料、密钥或个人信息。
 
 ## 术语速查
 
