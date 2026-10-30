@@ -30,18 +30,18 @@ api/public/
 frontend/src/**/*.js
 
 # ---------- 运行时数据（data/） ----------
-# vault 位于 karpathy-wiki/data/vault/，仅保留 concepts/comparisons/SCHEMA.md 作为种子入库
-# raw/（原始输入）、entities/queries/（运行时生成）、log.md（操作日志）、index.md（运行时追加）均忽略
+# 【出仓决定 2026-10-30】data/vault/ 整体不再入库。
+# 这里是知识库的运行时内容（AI 编译产出的 concepts/comparisons/drafts/qa 页面、
+# QQ 导入生成的草稿、raw/ 原始输入、log.md/index.md 操作日志），既含内部业务资料，
+# 又每次编译都在变——把它提交进公开仓库既泄露面大，也让 diff 长期被内容噪声淹没。
+# 唯一保留的是 data/vault/SCHEMA.md：它是目录结构/字段规范的说明文档（属于产品约定，
+# 不是知识内容），vault-service.ts 的注释还引用它作为口径来源。
 #
-# 【待人工复核】data/vault/drafts/（36 个）与 data/vault/qa/（18 个）目前仍在版本控制内，
-# 与上面注释「仅保留 concepts/comparisons/SCHEMA.md」的政策口径不一致：drafts/qa-* 由
-# QQ 导入工作流运行时生成（qq-extract-workflow.ts），qa/ 为已发布问答页。二者都是有价值的
-# 知识资产而非垃圾，是否出仓需知识库 owner 决定，故本文件不做单方面处理、仅在此标注。
-data/vault/raw/
-data/vault/entities/
-data/vault/queries/
-data/vault/log.md
-data/vault/index.md
+# 写法必须用 `data/vault/*` + 反向排除，而不是 `data/vault/`：git 一旦忽略目录本身，
+# 就不会再进目录匹配任何 `!` 规则，SCHEMA.md 的保留会静默失效。
+# 副作用：新克隆的仓库没有 vault 目录，首次启动由后端按 config.vaultPath 自建。
+data/vault/*
+!data/vault/SCHEMA.md
 # 历史会话运行时数据（后端持久化，含用户问答内容，敏感不提交）
 data/conversations/
 # 线程隔离的本地会话/记忆运行时数据（data/threads/{id}/ 含 session.json/memory.json，同属敏感问答内容）
